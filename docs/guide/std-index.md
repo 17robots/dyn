@@ -625,9 +625,8 @@ module's full declarations and comments.
 - `fn encode(arena: *memory.Arena, value: *const Value) []u8`: value as compact JSON, in arena.
 - `fn encode_pretty(arena: *memory.Arena, value: *const Value, indent: usize) []u8`: value as JSON indented by indent spaces per level, in arena.
 - `const MaxDepth: usize = 64`: JSON output into bounded caller storage, without a Value tree.
-- `struct Writer { buffer: format.Buffer, // Per open container: true for an object; whether it holds a member yet. objects: [MaxDepth]bool, members: [MaxDepth]bool, depth: usize, // An object member's key was written and its value is due. keyed: bool, invalid: bool, }`
-- `fn writer(storage: []u8) Writer`
-- `fn failed(target: *const Writer) bool`
+- `struct Writer { buffer: format.Buffer, // Per open container: true for an object; whether it holds a member yet. objects: [MaxDepth]bool, members: [MaxDepth]bool, depth: usize, // An object member's key was written and its value is due. keyed: bool, }`
+- `fn writer(status: *fail.Status, storage: []u8) Writer`
 - `fn output(target: *const Writer) []const u8`: The JSON written so far, or empty when failed or a container is still open.
 - `fn object_begin(target: *Writer)`
 - `fn object_end(target: *Writer)`
@@ -801,6 +800,7 @@ module's full declarations and comments.
 - `fn path_text(failure: *const Failure) []const u8`
 - `fn set(status: *Status, failure: Failure)`: Records failure unless status already holds one;
 - `fn invalid(status: *Status, operation: []const u8, path: []const u8, message: []const u8)`: Records a problem your own code found in its input, such as invalid(&status, "config", path, "port out of range").
+- `fn at(status: *Status, kind: Kind, operation: []const u8, message: []const u8, offset: usize)`: Records a failure of kind at offset bytes into the input being read, such as at(&status, Kind.InvalidInput, "parse config", "expected '='" ...
 - `fn panic_on_failure(context: rawptr, failure: *const Failure)`: For on_failure: ends the program at the first failure, with its description.
 - `fn kind_text(kind: Kind) []const u8`: A short description of kind: "not found", "permission denied".
 - `fn describe(storage: []u8, failure: Failure) []u8`: "operation path: reason" in storage, such as "open /etc/app.conf: no such file or directory" or "parse app.json at 41: expected ','".
@@ -823,16 +823,16 @@ module's full declarations and comments.
 
 ## std/fmt
 
-- `struct Buffer { data: []u8, length: usize, failed: bool }`: failed records the first write that did not fit;
-- `fn buffer(storage: []u8) Buffer`
+- `struct Buffer { data: []u8, length: usize, status: *fail.Status }`: Writes into storage, recording into status: a write that does not fit fails it with Capacity and leaves the buffer as it was before that ...
+- `fn buffer(status: *fail.Status, storage: []u8) Buffer`
 - `fn bytes(state: *const Buffer) []const u8`
 - `fn remaining(state: *const Buffer) usize`
-- `fn clear(state: *Buffer)`: Empties the buffer and clears failed.
+- `fn clear(state: *Buffer)`: Empties the buffer.
 - `fn u64_base(arena: *mem.Arena, value: u64, base: u8, uppercase: bool) []u8`: value in base 2 through 36.
 - `fn u64_decimal(arena: *mem.Arena, value: u64) []u8`
 - `fn i64_decimal(arena: *mem.Arena, value: i64) []u8`
 - `fn f64_decimal(arena: *mem.Arena, value: f64, precision: usize) []u8`: Rounded decimal with up to 15 fractional digits;
-- `fn write(state: *Buffer, value: []const u8)`: Sticky writes: each does nothing once the buffer has failed, and a value that does not fit sets failed and leaves the buffer as it was.
+- `fn write(state: *Buffer, value: []const u8)`: Sticky writes: each does nothing once the status has failed, and a value that does not fit fails it with Capacity and leaves the buffer as ...
 - `fn write_byte(state: *Buffer, value: u8)`
 - `fn write_u64(state: *Buffer, value: u64)`
 - `fn write_i64(state: *Buffer, value: i64)`
@@ -998,14 +998,13 @@ module's full declarations and comments.
 
 - `struct Trusted { bytes: []const u8 }`: Markup the program vouches for: literals and output of other Writers.
 - `fn trusted(markup: []const u8) Trusted`: Marks bytes as markup.
-- `struct Writer { buffer: fmt.Buffer }`: failed records the first write that did not fit;
-- `fn writer(storage: []u8) Writer`
+- `struct Writer { buffer: fmt.Buffer }`: Writes markup into storage, recording into status like fmt.Buffer: a write that does not fit fails status with Capacity, and later writes ...
+- `fn writer(status: *fail.Status, storage: []u8) Writer`
 - `fn markup(destination: *Writer, value: Trusted)`
 - `fn text(destination: *Writer, value: []const u8)`: Escaped text.
 - `fn print(destination: *Writer, template: []const u8, values: ...any)`: Writes template with each {} replaced by the next value: Trusted template as it is, and anything else as fmt writes it, escaped: text ...
 - `fn number(destination: *Writer, value: u64)`
 - `fn signed(destination: *Writer, value: i64)`
-- `fn failed(source: *const Writer) bool`
 - `fn output(source: *const Writer) Trusted`: The page so far, as markup for another Writer or for a response body.
 - `fn write_escaped(buffer: *fmt.Buffer, text: []const u8)`
 - `fn entity(byte: u8) []const u8`: Entity for one byte, or empty when the byte needs no escaping.
@@ -1700,8 +1699,8 @@ module's full declarations and comments.
 - `fn text(status: *fail.Status, response: *Response, code: u16, body: []const u8)`: A plain-text body with status.
 - `fn json(status: *fail.Status, response: *Response, code: u16, body: []const u8)`: A JSON body with status, not cached.
 - `fn redirect(status: *fail.Status, response: *Response, location: []const u8, set_cookie: []const u8)`: 303 See Other to location, with a Set-Cookie when set_cookie is not empty (see set_cookie): the answer to a form post.
-- `fn page_writer(response: *Response, fallback: []u8) html.Writer`: A Writer for an HTML page (see page): over the response's send buffer when it is free, so the page goes out without a copy, else over ...
-- `fn page(status: *fail.Status, response: *Response, code: u16, rendered: *const html.Writer)`: Sends the page from page_writer with status as text/html, not cached, with Content-Security-Policy default-src 'self' and ...
+- `fn page_writer(rendering: *fail.Status, response: *Response, fallback: []u8) html.Writer`: A Writer for an HTML page (see page): over the response's send buffer when it is free, so the page goes out without a copy, else over ...
+- `fn page(status: *fail.Status, response: *Response, code: u16, rendered: *const html.Writer)`: Sends the page from page_writer with code as text/html, not cached, with Content-Security-Policy default-src 'self' and ...
 - `struct Asset { // URL path below the mount, without a leading slash: "css/app.css". path: []const u8, content_type: []const u8, body: []const u8, // Empty when gzip would not be smaller. gzip: []const u8, // Quoted strong validator: "\"0123456789abcdef\"". etag: []const u8, // Unix seconds for Last-Modified, or 0 to leave it out. modified: i64, }`
 - `struct Assets { items: []Asset, count: usize }`: Assets in caller storage;
 - `fn content_type(name: []const u8) []const u8`: Content type for a file name by its extension, ASCII case-insensitive: "app.CSS" is text/css.
@@ -1758,7 +1757,7 @@ module's full declarations and comments.
 ## std/net/http/evented/tls
 
 - `fn transport(context: provider.Context) evented.Transport`
-- `fn offer_http2(context: provider.Context) bool`: Offers HTTP/2 through ALPN on context;
+- `fn offer_http2(status: *fail.Status, context: provider.Context)`: Offers HTTP/2 through ALPN on context;
 - `fn quic_context(arena: *mem.Arena, status: *fail.Status, certificate: []const u8, key: []const u8) provider.Context`: A QUIC server context offering "h3" through ALPN, from PEM files.
 - `fn quic(context: provider.Context) evented.Quic`: The QUIC stack for Config.quic.
 
@@ -1814,12 +1813,12 @@ module's full declarations and comments.
 - `type Context = provider.Context`
 - `type Connection = provider.Connection`
 - `type Certificate = provider.Certificate`
-- `enum Want { Nothing, Read, Write }`: What a nonblocking connection waits for before the call can go on.
-- `struct Attempt { count: usize, want: Want }`: A read or write: the bytes moved, or what the connection waits for.
+- `type Want = provider.Want`: What a nonblocking connection waits for before the call can go on, and a read or write: the bytes moved, or what the connection waits for.
+- `type Attempt = provider.Attempt`
 - `fn set_alpn_protocols(status: *fail.Status, connection: Connection, protocols: []const u8)`: The provider copies the protocol wire bytes during this call.
-- `fn server_alpn(context: Context, preference: *const []const u8) bool`: Server ALPN: each handshake picks the first protocol of preference (wire format, such as "\x02h2\x08http/1.1") the client offers.
+- `fn server_alpn(status: *fail.Status, context: Context, preference: *const []const u8)`: Server ALPN: each handshake picks the first protocol of preference (wire format, such as "\x02h2\x08http/1.1") the client offers.
 - `fn selected_alpn(connection: Connection) []const u8`: Borrows provider connection memory.
-- `fn peer_certificate_owned(connection: Connection) Certificate`
+- `fn peer_certificate_owned(connection: Connection) Certificate`: nil when the peer sent no certificate.
 - `fn certificate_release(certificate: *Certificate)`: Frees the certificate and clears the handle;
 - `fn certificate_subject(arena: *memory.Arena, status: *fail.Status, certificate: Certificate) []u8`: Complete provider-formatted subject copied into arena.
 - `fn handshake(status: *fail.Status, connection: Connection) Want`: Runs the handshake.
@@ -2072,8 +2071,6 @@ module's full declarations and comments.
 
 ## std/parse
 
-- `fn malformed(status: *fail.Status, operation: []const u8, message: []const u8, offset: usize)`: Records that the input went wrong at offset.
-- `fn failed_at(status: *fail.Status, kind: fail.Kind, operation: []const u8, message: []const u8, offset: usize)`: Records a failure of kind at offset into the input.
 - `fn u64_decimal(status: *fail.Status, text: []const u8) u64`: Whole text as a decimal u64: one or more ASCII digits, nothing else (no sign, space or underscore).
 - `fn i64_decimal(status: *fail.Status, text: []const u8) i64`: Whole text as a decimal i64 with an optional leading '-'.
 

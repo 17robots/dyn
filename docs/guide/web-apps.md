@@ -226,7 +226,8 @@ use "std/mem"
 use "std/net/http"
 
 fn greet(status: *fail.Status, response: *http.Response, storage: []u8, name: []const u8) {
-  out := http.page_writer(response, storage)
+  rendering: fail.Status
+  out := http.page_writer(&rendering, response, storage)
   html.print(&out, "<!doctype html><title>Hi</title><p>Hello, <b>{}</b>!</p>", name)
   http.page(status, response, 200, &out)
 }
@@ -234,7 +235,9 @@ fn greet(status: *fail.Status, response: *http.Response, storage: []u8, name: []
 
 `http.page_writer` renders into the send buffer when it is free, so the page
 goes out without a copy, and `http.page` sends it as HTML, not cached, with
-`Content-Security-Policy: default-src 'self'` and `nosniff`.
+`Content-Security-Policy: default-src 'self'` and `nosniff`. The page gets its
+own `rendering` status so that a page too large for its storage still gets an
+answer: `http.page` sends 500 instead.
 
 ## Static files
 
@@ -431,7 +434,7 @@ pool started earlier cannot take the signal.
 
 Set `Config.http2` and every connection may speak HTTP/2 (RFC 9113): TLS
 clients that pick `h2` through ALPN, which browsers do once
-`https.offer_http2(context)` offers it, and cleartext clients that start with
+`https.offer_http2(&status, context)` offers it, and cleartext clients that start with
 the connection preface (prior knowledge, as `curl --http2-prior-knowledge`
 and reverse proxies do). Others keep HTTP/1.1 on the same port.
 

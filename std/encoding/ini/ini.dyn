@@ -1,4 +1,3 @@
-use "std/parse" parse
 use "std/fail"
 use "std/bytes" byte_ops
 use "std/mem"
@@ -37,7 +36,7 @@ fn record(status: *fail.Status, state: *Scanner, line: usize, offset: usize) Nex
     state.error_offset = offset
     state.error_line = line
   }
-  parse.malformed(status, "parse INI", "a line without a section name or key", state.error_offset)
+  fail.at(status, fail.Kind.InvalidInput, "parse INI", "a line without a section name or key", state.error_offset)
   return Next{}
 }
 

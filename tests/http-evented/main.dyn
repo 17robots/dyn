@@ -11,7 +11,6 @@ use "std/mem"
 use "std/net"
 use "std/net/http"
 use "std/net/http/evented"
-use "std/parse"
 use "std/process"
 use "std/sync"
 use "std/time"
@@ -57,7 +56,7 @@ fn limited_close(session: rawptr) { _ = session }
 
 fn user_post(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
   storage: [128]u8
-  page := html.writer(storage[..])
+  page := html.writer(status, storage[..])
   html.markup(&page, html.trusted("user="))
   html.text(&page, http.param(request, "id").value)
   html.markup(&page, html.trusted(" post="))
@@ -138,7 +137,7 @@ fn handle(status: *fail.Status, response: *http.Response, request: *const http.R
       return
     }
     page_storage: [1024]u8
-    page := fmt.buffer(page_storage[..])
+    page := fmt.buffer(status, page_storage[..])
     fmt.write(&page, "<p>")
     html.write_escaped(&page, q.value)
     fmt.write(&page, "</p>")

@@ -181,16 +181,23 @@ with tempfile.TemporaryDirectory(prefix='dyn-tls-results-') as temporary:
     (mock / 'tls/tls.dyn').write_text(wrapper)
     provider = (ROOT / 'vendor/openssl/tls/tls.dyn').read_text()
     provider = replace_body(provider, 'handshake', '''  mode := #cast(usize, connection)
-  detail := ErrorKind.WantRead
-  if mode == 2 { detail = ErrorKind.WantWrite }
-  if mode == 3 { detail = ErrorKind.Verification }
-  if mode == 4 { detail = ErrorKind.Provider }
-  return Result{error: detail, provider_code: 18446744073709551615, provider_status: -7}''')
-    provider = replace_body(provider, 'read', '  _ = destination\nreturn handshake(connection)')
-    provider = replace_body(provider, 'write', '  _ = source\nreturn handshake(connection)')
-    provider = replace_body(provider, 'set_alpn_result', '  _ = connection\n_ = protocols\nreturn Result{}')
-    provider = replace_body(provider, 'shutdown_result', '  _ = connection\nreturn Result{error: ErrorKind.WantRead, provider_status: 0}')
-    provider = replace_body(provider, 'subject_text_owned', '  _ = certificate\nreturn SubjectTextResult{provider_code: 18446744073709551615}')
+  if mode == 1 { return Want.Read }
+  if mode == 2 { return Want.Write }
+  kind := fail.Kind.System
+  if mode == 3 { kind = fail.Kind.PermissionDenied }
+  failure := fail.make(kind, "handshake", "", "mock")
+  failure.native = -1
+  fail.set(status, failure)
+  return Want.Nothing''')
+    provider = replace_body(provider, 'read', '  _ = destination\nreturn Attempt{ want: handshake(status, connection) }')
+    provider = replace_body(provider, 'write', '  _ = source\nreturn Attempt{ want: handshake(status, connection) }')
+    provider = replace_body(provider, 'set_alpn_protocols', '  _ = status\n_ = connection\n_ = protocols')
+    provider = replace_body(provider, 'shutdown', '  _ = status\n_ = connection\nreturn Want.Read')
+    provider = replace_body(provider, 'subject_text_owned', '''  _ = certificate
+  failure := fail.make(fail.Kind.System, "certificate subject", "", "mock")
+  failure.native = -1
+  fail.set(status, failure)
+  return nil''')
     (mock / 'stub').mkdir()
     (mock / 'stub/stub.dyn').write_text(provider)
     for sibling in (ROOT / 'vendor/openssl/tls').glob('*.dyn'):

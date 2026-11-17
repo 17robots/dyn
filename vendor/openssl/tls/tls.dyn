@@ -8,22 +8,20 @@ use "std/mem"
 // OpenSSL 3 TLS adapter. OpenSSL owns Context/Connection allocations;
 // every successful create_owned call requires its matching free_owned call.
 // Network descriptors and all byte/name buffers remain caller-owned.
+//
+// Calls that can fail take a *fail.Status: a bad argument fails with
+// InvalidInput, a failed certificate check with PermissionDenied, anything
+// else OpenSSL reports with System and its error code in failure.native.
+// Waiting for the socket is not a failure: the call returns a Want instead.
 pub type Context = rawptr
 pub type Connection = rawptr
 pub type Certificate = rawptr
 
-pub enum ErrorKind {
-  None,
-  InvalidArgument,
-  Provider,
-  Verification,
-  WantRead,
-  WantWrite,
-}
-
-pub struct ContextResult { value: Context, error: ErrorKind, provider_code: u64 }
-pub struct ConnectionResult { value: Connection, error: ErrorKind, provider_code: u64 }
-pub struct Result { count: usize, error: ErrorKind, provider_code: u64, provider_status: i32 }
+// What a nonblocking connection waits for before the call can go on.
+// Blocking connections never report a want.
+pub enum Want { Nothing, Read, Write }
+// A read or write: the bytes moved, or what the connection waits for.
+pub struct Attempt { count: usize, want: Want }
 
 const VerifyPeer: i32 = 1
 const SetTlsExtensionHostname: i32 = 55
@@ -32,41 +30,51 @@ const FileTypePem: i32 = 1
 const ErrorWantRead: i32 = 2
 const ErrorWantWrite: i32 = 3
 
-
-fn failure(kind: ErrorKind, status: i32) Result {
-  if kind == ErrorKind.InvalidArgument { return Result{ error: kind, provider_status: status } }
-  return Result{ count: 0, error: kind, provider_code: provider_error(), provider_status: status }
+// Records OpenSSL's pending error for operation as a System failure, with its
+// text as the message.
+fn provider_failed(status: *fail.Status, operation: []const u8) {
+  code := provider_error()
+  text: [160]u8
+  message: []const u8 = "OpenSSL failed"
+  if code != 0 {
+    message = error_string(text[..], code)
+  }
+  failure := fail.make(fail.Kind.System, operation, "", message)
+  failure.native = #bitcast(isize, #cast(usize, code))
+  fail.set(status, failure)
 }
 
-fn operation_failure(connection: Connection, status: i32) Result {
-  kind := ErrorKind.Provider
-  code := ssl_error(connection, status)
-  if code == ErrorWantRead {
-    kind = ErrorKind.WantRead
-  } else if code == ErrorWantWrite {
-    kind = ErrorKind.WantWrite
-  }
-  return Result{ count: 0, error: kind, provider_code: provider_error(), provider_status: code }
+// The result of an SSL_* call that returned status: a want when the socket
+// is not ready, else a failure.
+fn stalled(status: *fail.Status, operation: []const u8, connection: Connection, result: i32) Want {
+  code := ssl_error(connection, result)
+  if code == ErrorWantRead { return Want.Read }
+  if code == ErrorWantWrite { return Want.Write }
+  provider_failed(status, operation)
+  return Want.Nothing
 }
 
 // Loads provider-default trust roots and enables peer-certificate verification.
-pub fn context_create_owned() ContextResult {
+pub fn context_create_owned(status: *fail.Status) Context {
+  if status.failed { return nil }
   provider_clear_error()
   method := tls_client_method()
   if method == nil {
-    return ContextResult{ value: nil, error: ErrorKind.Provider, provider_code: provider_error() }
+    provider_failed(status, "create TLS client")
+    return nil
   }
   context := ssl_context_new(method)
   if context == nil {
-    return ContextResult{ value: nil, error: ErrorKind.Provider, provider_code: provider_error() }
+    provider_failed(status, "create TLS client")
+    return nil
   }
   if ssl_context_default_roots(context) != 1 {
-    code := provider_error()
+    provider_failed(status, "create TLS client")
     ssl_context_free(context)
-    return ContextResult{ value: nil, error: ErrorKind.Provider, provider_code: code }
+    return nil
   }
   ssl_context_set_verify(context, VerifyPeer, nil)
-  return ContextResult{ value: context, error: ErrorKind.None, provider_code: 0 }
+  return context
 }
 
 pub fn context_free_owned(context: Context) {
@@ -76,83 +84,101 @@ pub fn context_free_owned(context: Context) {
 }
 
 // Creates a server context and loads PEM certificate chain/private key.
-pub fn server_context_create_owned(certificate: []const u8, key: []const u8,
-  certificate_buffer: []u8, key_buffer: []u8) ContextResult {
-  converting: fail.Status
-  certificate_path := c.string_into(&converting, certificate_buffer, certificate)
-  key_path := c.string_into(&converting, key_buffer, key)
-  if converting.failed { return ContextResult{ error: ErrorKind.InvalidArgument } }
-  return server_context_from_paths(certificate_path, key_path)
+pub fn server_context_create_owned(status: *fail.Status, certificate: []const u8, key: []const u8,
+  certificate_buffer: []u8, key_buffer: []u8) Context {
+  certificate_path := c.string_into(status, certificate_buffer, certificate)
+  key_path := c.string_into(status, key_buffer, key)
+  if status.failed { return nil }
+  return server_context_from_paths(status, certificate_path, key_path)
 }
 
-fn server_context_from_paths(certificate: *const u8, key: *const u8) ContextResult {
+fn server_context_from_paths(status: *fail.Status, certificate: *const u8, key: *const u8) Context {
   provider_clear_error()
   method := tls_server_method()
   if method == nil {
-    return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error() }
+    provider_failed(status, "create TLS server")
+    return nil
   }
   context := ssl_context_new(method)
   if context == nil {
-    return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error() }
+    provider_failed(status, "create TLS server")
+    return nil
   }
   if context_use_certificate(context, certificate) != 1 ||
     context_use_key(context, key, FileTypePem) != 1 || context_check_key(context) != 1 {
-    code := provider_error()
+    provider_failed(status, "create TLS server")
     ssl_context_free(context)
-    return ContextResult{ error: ErrorKind.Provider, provider_code: code }
+    return nil
   }
-  return ContextResult{ value: context }
+  return context
 }
 
 // The arena supplies temporary C strings only; OpenSSL owns the result.
-pub fn server_context_create(arena: *mem.Arena, certificate: []const u8, key: []const u8) ContextResult {
+pub fn server_context_create(arena: *mem.Arena, status: *fail.Status, certificate: []const u8, key: []const u8) Context {
+  if status.failed { return nil }
   mark := mem.arena_mark(arena)
   defer mem.arena_rewind(arena, mark)
-  converting: fail.Status
-  certificate_path := c.string_from_bytes(arena, &converting, certificate)
-  key_path := c.string_from_bytes(arena, &converting, key)
-  if converting.failed { return ContextResult{ error: ErrorKind.InvalidArgument } }
-  return server_context_from_paths(certificate_path, key_path)
+  certificate_path := c.string_from_bytes(arena, status, certificate)
+  key_path := c.string_from_bytes(arena, status, key)
+  if status.failed { return nil }
+  return server_context_from_paths(status, certificate_path, key_path)
 }
 
-pub fn server_connection_create_owned(context: Context, descriptor: i32) ConnectionResult {
+pub fn server_connection_create_owned(status: *fail.Status, context: Context, descriptor: i32) Connection {
+  if status.failed { return nil }
   if context == nil || descriptor < 0 {
-    return ConnectionResult{ error: ErrorKind.InvalidArgument }
+    fail.invalid(status, "create TLS connection", "", "no context, or a negative descriptor")
+    return nil
   }
+  provider_clear_error()
   connection := ssl_new(context)
   if connection == nil {
-    return ConnectionResult{ error: ErrorKind.Provider, provider_code: provider_error() }
+    provider_failed(status, "create TLS connection")
+    return nil
   }
   if ssl_set_fd(connection, descriptor) != 1 {
-    code := provider_error()
+    provider_failed(status, "create TLS connection")
     ssl_free(connection)
-    return ConnectionResult{ error: ErrorKind.Provider, provider_code: code }
+    return nil
   }
-  return ConnectionResult{ value: connection, error: ErrorKind.None }
+  return connection
 }
 
 // protocols is OpenSSL wire format: one length byte followed by each protocol.
 // OpenSSL copies the bytes; the caller retains ownership.
-pub fn set_alpn_protocols(connection: Connection, protocols: []const u8) bool {
-  if connection == nil || #len(protocols) == 0 || #len(protocols) > 4294967295 { return false }
+pub fn set_alpn_protocols(status: *fail.Status, connection: Connection, protocols: []const u8) {
+  if status.failed { return }
+  valid := connection != nil && #len(protocols) != 0 && #len(protocols) <= 4294967295
   index: usize = 0
-  for index < #len(protocols) {
+  for valid && index < #len(protocols) {
     length := #cast(usize, protocols[index])
     index += 1
-    if length == 0 || length > #len(protocols) - index { return false }
+    if length == 0 || length > #len(protocols) - index {
+      valid = false
+    }
     index += length
   }
-  return ssl_set_alpn(connection, &protocols[0], #cast(u32, #len(protocols))) == 0
+  if !valid {
+    fail.invalid(status, "set ALPN", "", "no connection, or protocols not in ALPN wire format")
+    return
+  }
+  provider_clear_error()
+  if ssl_set_alpn(connection, &protocols[0], #cast(u32, #len(protocols))) != 0 {
+    provider_failed(status, "set ALPN")
+  }
 }
 
 // Server side: during each handshake, picks the first protocol of
 // preference that the client offers, in wire format like set_alpn_protocols.
 // preference must outlive the context (a string literal does). No common
 // protocol continues without ALPN.
-pub fn set_server_alpn(context: Context, preference: *const []const u8) bool {
-  if context == nil || preference == nil || #len(preference.*) == 0 { return false }
+pub fn set_server_alpn(status: *fail.Status, context: Context, preference: *const []const u8) {
+  if status.failed { return }
+  if context == nil || preference == nil || #len(preference.*) == 0 {
+    fail.invalid(status, "set server ALPN", "", "no context or no protocols")
+    return
+  }
   ssl_context_alpn_select(context, alpn_select, #cast(rawptr, preference))
-  return true
 }
 
 // SSL_CTX_alpn_select_cb_func: SSL_TLSEXT_ERR_OK (0) with out pointing into
@@ -203,6 +229,7 @@ pub fn selected_alpn(connection: Connection) []const u8 {
 }
 
 // Caller owns the returned reference and must call certificate_free_owned.
+// nil when the peer sent none.
 pub fn peer_certificate_owned(connection: Connection) Certificate {
   if connection == nil { return nil }
   return ssl_peer_certificate(connection)
@@ -212,40 +239,26 @@ pub fn certificate_free_owned(certificate: Certificate) {
     certificate_free(certificate)
   }
 }
-pub fn certificate_subject(destination: []u8, certificate: Certificate) []u8 {
-  if certificate == nil || #len(destination) == 0 || #len(destination) > 2147483647 {
-    return destination[..0]
-  }
-  name := certificate_subject_name(certificate)
-  if name == nil || name_text(name, &destination[0], #cast(i32, #len(destination))) == nil {
-    return destination[..0]
-  }
-  length: usize = 0
-  for length < #len(destination) && destination[length] != 0 {
-    length += 1
-  }
-  return destination[..length]
-}
 
 // Configures both certificate hostname verification and SNI. name_buffer must
 // fit hostname plus NUL and is only borrowed during this call.
-pub fn connection_create_owned(context: Context, descriptor: i32, hostname: []const u8, name_buffer: []u8) ConnectionResult {
+pub fn connection_create_owned(status: *fail.Status, context: Context, descriptor: i32, hostname: []const u8, name_buffer: []u8) Connection {
+  if status.failed { return nil }
   if context == nil || descriptor < 0 || #len(hostname) == 0 {
-    return ConnectionResult{ value: nil, error: ErrorKind.InvalidArgument, provider_code: 0 }
+    fail.invalid(status, "create TLS connection", hostname, "no context or hostname, or a negative descriptor")
+    return nil
   }
-  converting: fail.Status
-  name := c.string_into(&converting, name_buffer, hostname)
-  if converting.failed {
-    return ConnectionResult{ value: nil, error: ErrorKind.InvalidArgument, provider_code: 0 }
-  }
-  return connection_from_name(context, descriptor, name, #len(hostname))
+  name := c.string_into(status, name_buffer, hostname)
+  if status.failed { return nil }
+  return connection_from_name(status, context, descriptor, name, #len(hostname))
 }
 
-fn connection_from_name(context: Context, descriptor: i32, name: *const u8, length: usize) ConnectionResult {
+fn connection_from_name(status: *fail.Status, context: Context, descriptor: i32, name: *const u8, length: usize) Connection {
   provider_clear_error()
   connection := ssl_new(context)
   if connection == nil {
-    return ConnectionResult{ error: ErrorKind.Provider, provider_code: provider_error() }
+    provider_failed(status, "create TLS connection")
+    return nil
   }
   parameters := ssl_get_parameters(connection)
   configured := ssl_set_fd(connection, descriptor) == 1 && parameters != nil
@@ -256,23 +269,24 @@ fn connection_from_name(context: Context, descriptor: i32, name: *const u8, leng
     configured = ssl_control(connection, SetTlsExtensionHostname, HostnameNameType, #cast(rawptr, name)) == 1
   }
   if !configured {
-    code := provider_error()
+    provider_failed(status, "create TLS connection")
     ssl_free(connection)
-    return ConnectionResult{ error: ErrorKind.Provider, provider_code: code }
+    return nil
   }
-  return ConnectionResult{ value: connection }
+  return connection
 }
 
-pub fn connection_create(arena: *mem.Arena, context: Context, descriptor: i32, hostname: []const u8) ConnectionResult {
+pub fn connection_create(arena: *mem.Arena, status: *fail.Status, context: Context, descriptor: i32, hostname: []const u8) Connection {
+  if status.failed { return nil }
   if context == nil || descriptor < 0 || #len(hostname) == 0 {
-    return ConnectionResult{ error: ErrorKind.InvalidArgument }
+    fail.invalid(status, "create TLS connection", hostname, "no context or hostname, or a negative descriptor")
+    return nil
   }
   mark := mem.arena_mark(arena)
   defer mem.arena_rewind(arena, mark)
-  converting: fail.Status
-  name := c.string_from_bytes(arena, &converting, hostname)
-  if converting.failed { return ConnectionResult{ error: ErrorKind.InvalidArgument } }
-  return connection_from_name(context, descriptor, name, #len(hostname))
+  name := c.string_from_bytes(arena, status, hostname)
+  if status.failed { return nil }
+  return connection_from_name(status, context, descriptor, name, #len(hostname))
 }
 
 pub fn connection_free_owned(connection: Connection) {
@@ -281,68 +295,93 @@ pub fn connection_free_owned(connection: Connection) {
   }
 }
 
-pub fn handshake(connection: Connection) Result {
-  if connection == nil { return failure(ErrorKind.InvalidArgument, 0) }
+fn no_connection(status: *fail.Status, operation: []const u8) {
+  fail.invalid(status, operation, "", "no connection")
+}
+
+// Runs the client handshake. On a nonblocking socket it may stop with a want;
+// call it again once the socket is ready. Want.Nothing means it completed.
+// A certificate that does not verify fails with PermissionDenied, the
+// verification code in native.
+pub fn handshake(status: *fail.Status, connection: Connection) Want {
+  if status.failed { return Want.Nothing }
+  if connection == nil {
+    no_connection(status, "handshake")
+    return Want.Nothing
+  }
   provider_clear_error()
   connected := ssl_connect(connection)
-  failed := Result{}
-  if connected != 1 {
-    failed = operation_failure(connection, connected)
-  }
   verified := ssl_verify_result(connection)
   if verified != 0 {
-    return Result{ count: 0, error: ErrorKind.Verification, provider_code: #cast(u64, verified), provider_status: connected }
+    failure := fail.make(fail.Kind.PermissionDenied, "handshake", "", "certificate verification failed")
+    failure.native = #cast(isize, verified)
+    fail.set(status, failure)
+    return Want.Nothing
   }
-  if connected != 1 { return failed }
-  return Result{ count: 0, error: ErrorKind.None, provider_code: 0, provider_status: connected }
+  if connected != 1 { return stalled(status, "handshake", connection, connected) }
+  return Want.Nothing
 }
 
-pub fn server_handshake(connection: Connection) Result {
-  if connection == nil { return failure(ErrorKind.InvalidArgument, 0) }
+pub fn server_handshake(status: *fail.Status, connection: Connection) Want {
+  if status.failed { return Want.Nothing }
+  if connection == nil {
+    no_connection(status, "handshake")
+    return Want.Nothing
+  }
   provider_clear_error()
-  status := ssl_accept(connection)
-  if status != 1 { return operation_failure(connection, status) }
-  return Result{ provider_status: 1 }
+  accepted := ssl_accept(connection)
+  if accepted != 1 { return stalled(status, "handshake", connection, accepted) }
+  return Want.Nothing
 }
 
-pub fn read(connection: Connection, destination: []u8) Result {
-  if connection == nil { return failure(ErrorKind.InvalidArgument, 0) }
-  if #len(destination) == 0 {
-    return Result{ count: 0, error: ErrorKind.None, provider_code: 0, provider_status: 1 }
+// Reads what is available; count 0 with no want is the end of the stream
+// (the peer's close_notify).
+pub fn read(status: *fail.Status, connection: Connection, destination: []u8) Attempt {
+  if status.failed { return Attempt{} }
+  if connection == nil {
+    no_connection(status, "read")
+    return Attempt{}
   }
+  if #len(destination) == 0 { return Attempt{} }
   count: usize = 0
   provider_clear_error()
-  status := ssl_read(connection, #cast(rawptr, &destination[0]), #len(destination), &count)
-  if status != 1 {
-    failed := operation_failure(connection, status)
-    // SSL_ERROR_ZERO_RETURN means authenticated close_notify, not truncation.
-    if failed.provider_status == 6 { return Result{ provider_status: 6 } }
-    return failed
+  result := ssl_read(connection, #cast(rawptr, &destination[0]), #len(destination), &count)
+  if result != 1 {
+    // SSL_ERROR_ZERO_RETURN is an authenticated close, not a truncation.
+    if ssl_error(connection, result) == ErrorZeroReturn { return Attempt{} }
+    return Attempt{ want: stalled(status, "read", connection, result) }
   }
-  return Result{ count: count, error: ErrorKind.None, provider_code: 0, provider_status: status }
+  return Attempt{ count: count }
 }
 
-pub fn write(connection: Connection, source: []const u8) Result {
-  if connection == nil { return failure(ErrorKind.InvalidArgument, 0) }
-  if #len(source) == 0 {
-    return Result{ count: 0, error: ErrorKind.None, provider_code: 0, provider_status: 1 }
+pub fn write(status: *fail.Status, connection: Connection, source: []const u8) Attempt {
+  if status.failed { return Attempt{} }
+  if connection == nil {
+    no_connection(status, "write")
+    return Attempt{}
   }
+  if #len(source) == 0 { return Attempt{} }
   count: usize = 0
   provider_clear_error()
-  status := ssl_write(connection, #cast(rawptr, &source[0]), #len(source), &count)
-  if status != 1 { return operation_failure(connection, status) }
-  return Result{ count: count, error: ErrorKind.None, provider_code: 0, provider_status: status }
+  result := ssl_write(connection, #cast(rawptr, &source[0]), #len(source), &count)
+  if result != 1 { return Attempt{ want: stalled(status, "write", connection, result) } }
+  return Attempt{ count: count }
 }
 
-// May return false when provider requires another bidirectional shutdown call.
-pub fn shutdown(connection: Connection) bool {
-  if connection == nil { return false }
-  return ssl_shutdown(connection) == 1
-}
-
-pub fn error_code(connection: Connection, provider_result: i32) i32 {
-  if connection == nil { return 0 }
-  return ssl_error(connection, provider_result)
+// Sends close_notify. Want.Read means it was sent and the peer's is pending;
+// call again to finish the exchange, or close the socket.
+// https://docs.openssl.org/3.4/man3/SSL_shutdown/
+pub fn shutdown(status: *fail.Status, connection: Connection) Want {
+  if status.failed { return Want.Nothing }
+  if connection == nil {
+    no_connection(status, "shutdown")
+    return Want.Nothing
+  }
+  provider_clear_error()
+  result := ssl_shutdown(connection)
+  if result == 1 { return Want.Nothing }
+  if result == 0 { return Want.Read }
+  return stalled(status, "shutdown", connection, result)
 }
 
 // Writes provider message into caller buffer. Returned slice excludes NUL.
@@ -356,47 +395,30 @@ pub fn error_string(destination: []u8, code: u64) []u8 {
   return destination[..length]
 }
 
-// Complete allocated subject text. Release with subject_text_free_owned.
-// A nil formatting buffer asks OpenSSL to allocate the complete representation.
-pub struct SubjectTextResult { value: *u8, provider_code: u64 }
+// The complete subject text, allocated by OpenSSL; release it with
+// subject_text_free_owned.
 extern fn provider_text_free "CRYPTO_free"(pointer: rawptr, file: *const u8, line: i32)
-pub fn subject_text_owned(certificate: Certificate) SubjectTextResult {
-  if certificate == nil { return SubjectTextResult{} }
+pub fn subject_text_owned(status: *fail.Status, certificate: Certificate) *u8 {
+  if status.failed { return nil }
+  if certificate == nil {
+    fail.invalid(status, "certificate subject", "", "no certificate")
+    return nil
+  }
   provider_clear_error()
   name := certificate_subject_name(certificate)
-  if name == nil { return SubjectTextResult{ provider_code: provider_error() } }
+  if name == nil {
+    provider_failed(status, "certificate subject")
+    return nil
+  }
+  // A nil buffer asks OpenSSL to allocate the complete representation.
   text := name_text(name, nil, 0)
-  if text == nil { return SubjectTextResult{ provider_code: provider_error() } }
-  return SubjectTextResult{ value: text }
+  if text == nil {
+    provider_failed(status, "certificate subject")
+  }
+  return text
 }
 pub fn subject_text_free_owned(text: *u8) {
-  provider_text_free(text, nil, 0)
-}
-// Structured variants preserve retry state and diagnostics; bool APIs above
-// remain available to raw-provider callers.
-pub fn shutdown_result(connection: Connection) Result {
-  if connection == nil { return failure(ErrorKind.InvalidArgument, 0) }
-  provider_clear_error()
-  status := ssl_shutdown(connection)
-  if status == 1 { return Result{ provider_status: status } }
-  if status == 0 { return Result{ error: ErrorKind.WantRead, provider_status: 0 } }
-  return operation_failure(connection, status)
-}
-pub fn set_alpn_result(connection: Connection, protocols: []const u8) Result {
-  if connection == nil || #len(protocols) == 0 || #len(protocols) > 4294967295 {
-    return failure(ErrorKind.InvalidArgument, 0)
+  if text != nil {
+    provider_text_free(text, nil, 0)
   }
-  index: usize = 0
-  for index < #len(protocols) {
-    length := #cast(usize, protocols[index])
-    index += 1
-    if length == 0 || length > #len(protocols) - index {
-      return failure(ErrorKind.InvalidArgument, 0)
-    }
-    index += length
-  }
-  provider_clear_error()
-  status := ssl_set_alpn(connection, &protocols[0], #cast(u32, #len(protocols)))
-  if status != 0 { return failure(ErrorKind.Provider, status) }
-  return Result{}
 }

@@ -1,5 +1,4 @@
 use "std/fail"
-use "std/parse" parse
 use "std/encoding/csv" csv
 use "std/encoding/xml" xml
 use "std/encoding/ini" ini

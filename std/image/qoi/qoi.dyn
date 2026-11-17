@@ -1,4 +1,3 @@
-use "std/parse" parse
 use "std/fail"
 use "std/mem" mem
 pub struct Info { width: usize, height: usize, channels: u8, srgb: bool }
@@ -32,7 +31,7 @@ pub fn inspect(status: *fail.Status, source: []const u8) Info {
   if status.failed { return Info{} }
   info := inspect_info(source)
   if info.width == 0 {
-    parse.malformed(status, "inspect QOI", "malformed QOI header", 0)
+    fail.at(status, fail.Kind.InvalidInput, "inspect QOI", "malformed QOI header", 0)
     return Info{}
   }
   return info

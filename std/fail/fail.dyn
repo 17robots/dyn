@@ -127,6 +127,16 @@ pub fn invalid(status: *Status, operation: []const u8, path: []const u8, message
   set(status, make(Kind.InvalidInput, operation, path, message))
 }
 
+// Records a failure of kind at offset bytes into the input being read, such
+// as at(&status, Kind.InvalidInput, "parse config", "expected '='", 41).
+pub fn at(status: *Status, kind: Kind, operation: []const u8, message: []const u8, offset: usize) {
+  if status.failed { return }
+  failure := make(kind, operation, "", message)
+  failure.offset = offset
+  failure.has_offset = true
+  set(status, failure)
+}
+
 // For on_failure: ends the program at the first failure, with its description.
 pub fn panic_on_failure(context: rawptr, failure: *const Failure) {
   storage: [512]u8

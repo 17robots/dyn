@@ -231,8 +231,11 @@ and `fail.message_text`. `dyn vet` warns about a status that is passed to calls
 but never read, and about an empty result used as the failure test.
 
 Parsers and decoders work the same way: malformed input fails with
-`InvalidInput` and the byte offset where it went wrong, which your own parsers
-record with `parse.malformed(status, "read config", "expected '='", offset)`.
+`InvalidInput` and the byte offset where it went wrong. Your own code records a
+failure one of three ways: `fail.invalid(status, "config", path, "port out of
+range")` for bad input, `fail.at(status, fail.Kind.InvalidInput, "read config",
+"expected '='", offset)` for a place in the input, and `fail.set(status,
+fail.make(kind, operation, path, message))` for anything else.
 
 - **Absence is not failure:** a lookup returns `nil` (`map.get`) or an empty
   stub for tree nodes, and every `find*` returns `#len(text)` on a miss.

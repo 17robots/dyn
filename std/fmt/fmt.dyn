@@ -1,15 +1,28 @@
 // Formatting. Buffer writes into bounded caller-owned storage and rolls back
-// failed compound writes; the free functions return text in an arena.
+// compound writes that do not fit; the free functions return text in an arena.
 
 use "std/mem" mem
 use "std/reflect" reflect
+use "std/fail"
 
-// failed records the first write that did not fit; later writes do nothing,
-// so callers write freely and check failed once at the end. A write that does
-// not fit leaves the buffer as it was before that write.
-pub struct Buffer { data: []u8, length: usize, failed: bool }
-pub fn buffer(storage: []u8) Buffer {
-  return Buffer{ data: storage, length: 0 }
+// Writes into storage, recording into status: a write that does not fit fails
+// it with Capacity and leaves the buffer as it was before that write, and once
+// status has failed (for any reason) writes do nothing. So callers write
+// freely and check status once at the end. A zero Buffer writes nothing.
+pub struct Buffer { data: []u8, length: usize, status: *fail.Status }
+pub fn buffer(status: *fail.Status, storage: []u8) Buffer {
+  return Buffer{ data: storage, length: 0, status: status }
+}
+// Whether writes have stopped: the status failed, or there is none.
+fn stopped(state: *const Buffer) bool {
+  return state.status == nil || state.status.failed
+}
+// Records that a write did not fit; false, for the put functions to return.
+fn full(state: *Buffer) bool {
+  if state.status != nil {
+    fail.set(state.status, fail.make(fail.Kind.Capacity, "format", "", "the text does not fit the buffer"))
+  }
+  return false
 }
 pub fn bytes(state: *const Buffer) []const u8 {
   return state.data[..state.length]
@@ -18,16 +31,14 @@ pub fn remaining(state: *const Buffer) usize {
   if state.length > #len(state.data) { return 0 }
   return #len(state.data) - state.length
 }
-// Empties the buffer and clears failed.
+// Empties the buffer. Its status is the caller's and stays as it is.
 pub fn clear(state: *Buffer) {
   state.length = 0
-  state.failed = false
 }
 
 fn put(state: *Buffer, value: []const u8) bool {
-  if state.failed || state.length > #len(state.data) || #len(value) > #len(state.data) - state.length {
-    state.failed = true
-    return false
+  if stopped(state) || state.length > #len(state.data) || #len(value) > #len(state.data) - state.length {
+    return full(state)
   }
   // Give the copy loop an exact-length local slice. This keeps descriptor
   // loads and redundant destination checks out of the per-byte loop.
@@ -41,9 +52,8 @@ fn put(state: *Buffer, value: []const u8) bool {
 }
 
 fn put_byte(state: *Buffer, value: u8) bool {
-  if state.failed || state.length >= #len(state.data) {
-    state.failed = true
-    return false
+  if stopped(state) || state.length >= #len(state.data) {
+    return full(state)
   }
   state.data[state.length] = value
   state.length += 1
@@ -133,9 +143,8 @@ fn put_bool(state: *Buffer, value: bool) bool {
 }
 
 fn put_padding(state: *Buffer, byte: u8, amount: usize) bool {
-  if state.failed || state.length > #len(state.data) || amount > remaining(state) {
-    state.failed = true
-    return false
+  if stopped(state) || state.length > #len(state.data) || amount > remaining(state) {
+    return full(state)
   }
   for i in 0..amount {
     state.data[state.length + i] = byte
@@ -265,7 +274,9 @@ fn put_values(state: *Buffer, values: ...any) bool {
 fn f64_decimal_into(destination: []u8, value: f64, precision: usize) []u8 {
   if precision > 15 { return destination[..0] }
   scratch: [64]u8
-  state := buffer(scratch[..])
+  // 64 bytes fit every rendering, so this status never fails.
+  unused: fail.Status
+  state := buffer(&unused, scratch[..])
   bits := #bitcast(u64, value)
   negative := (bits >> 63) != 0
   exponent_bits := (bits >> 52) & 2047
@@ -349,9 +360,8 @@ fn put_u64_width(state: *Buffer, value: u64, width: usize, padding: u8) bool {
   if width > length {
     length = width
   }
-  if state.failed || state.length > #len(state.data) || length > remaining(state) {
-    state.failed = true
-    return false
+  if stopped(state) || state.length > #len(state.data) || length > remaining(state) {
+    return full(state)
   }
   _ = put_padding(state, padding, length - #len(rendered))
   return put(state, rendered)
@@ -390,8 +400,8 @@ pub fn f64_decimal(arena: *mem.Arena, value: f64, precision: usize) []u8 {
   return copy_out(arena, f64_decimal_into(storage[..], value, precision))
 }
 
-// Sticky writes: each does nothing once the buffer has failed, and a value
-// that does not fit sets failed and leaves the buffer as it was.
+// Sticky writes: each does nothing once the status has failed, and a value
+// that does not fit fails it with Capacity and leaves the buffer as it was.
 pub fn write(state: *Buffer, value: []const u8) {
   _ = put(state, value)
 }
@@ -444,7 +454,7 @@ pub fn print(state: *Buffer, template: []const u8, arguments: ...any) {
 }
 
 pub fn print_arguments(state: *Buffer, template: []const u8, arguments: []const any) {
-  if state.failed { return }
+  if stopped(state) { return }
   start := state.length
   next_argument: usize = 0
   index: usize = 0
@@ -488,7 +498,7 @@ pub fn print_arguments(state: *Buffer, template: []const u8, arguments: []const 
   }
   if !ok {
     state.length = start
-    state.failed = true
+    _ = full(state)
   }
 }
 
@@ -535,5 +545,5 @@ fn put_value(state: *Buffer, value: any) bool {
   one: [1]any = [value]
   if put_arguments(state, one[..]) { return true }
   // put_arguments rolled back; a type with no text form prints a marker.
-  return !state.failed && put(state, "{?}")
+  return !stopped(state) && put(state, "{?}")
 }

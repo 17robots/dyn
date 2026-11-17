@@ -1,4 +1,3 @@
-use "std/parse" parse
 use "std/fail"
 use "std/mem" mem
 use "std/math" math
@@ -56,7 +55,7 @@ pub fn open(status: *fail.Status, data: []const u8) Face {
     return Face{}
   }
   if #cast(usize, u16be(data, 4)) > (#len(data) - 12) / 16 {
-    parse.failed_at(status, fail.Kind.InvalidInput, "open font", "malformed font", 4)
+    fail.at(status, fail.Kind.InvalidInput, "open font", "malformed font", 4)
     return Face{}
   }
   head := table(data, 0x68656164)
@@ -95,14 +94,14 @@ pub fn open(status: *fail.Status, data: []const u8) Face {
   for i in 0..#cast(usize, glyphs) + 1 {
     current := location(&face, i)
     if current < previous || current > #len(face.glyf) {
-      parse.failed_at(status, fail.Kind.InvalidInput, "open font", "malformed font", loca.offset + i * stride)
+      fail.at(status, fail.Kind.InvalidInput, "open font", "malformed font", loca.offset + i * stride)
       return Face{}
     }
     previous = current
   }
   count := #cast(usize, u16be(cmap.value, 2))
   if count > (#len(cmap.value) - 4) / 8 {
-    parse.failed_at(status, fail.Kind.InvalidInput, "open font", "malformed font", cmap.offset + 2)
+    fail.at(status, fail.Kind.InvalidInput, "open font", "malformed font", cmap.offset + 2)
     return Face{}
   }
   selected: []const u8
@@ -114,13 +113,13 @@ pub fn open(status: *fail.Status, data: []const u8) Face {
     if platform != 0 && !(platform == 3 && (encoding == 1 || encoding == 10)) { continue }
     offset := #cast(usize, u32be(cmap.value, at + 4))
     if !fits(cmap.value, offset, 2) {
-      parse.failed_at(status, fail.Kind.InvalidInput, "open font", "malformed font", cmap.offset + at + 4)
+      fail.at(status, fail.Kind.InvalidInput, "open font", "malformed font", cmap.offset + at + 4)
       return Face{}
     }
     sub := cmap.value[offset..]
     kind := u16be(sub, 0)
     if (kind == 4 || kind == 12) && #len(sub) < 16 {
-      parse.failed_at(status, fail.Kind.InvalidInput, "open font", "malformed font", cmap.offset + offset)
+      fail.at(status, fail.Kind.InvalidInput, "open font", "malformed font", cmap.offset + offset)
       return Face{}
     }
     length: usize = 0
@@ -132,7 +131,7 @@ pub fn open(status: *fail.Status, data: []const u8) Face {
       continue
     }
     if length < 16 || length > #len(sub) {
-      parse.failed_at(status, fail.Kind.InvalidInput, "open font", "malformed font", cmap.offset + offset)
+      fail.at(status, fail.Kind.InvalidInput, "open font", "malformed font", cmap.offset + offset)
       return Face{}
     }
     sub = sub[..length]
@@ -191,13 +190,13 @@ pub fn open(status: *fail.Status, data: []const u8) Face {
   }
   kern := table(data, 0x6b65726e)
   if !kern.ok && kern.offset != 0 {
-    parse.failed_at(status, fail.Kind.InvalidInput, "open font", "malformed font", kern.offset)
+    fail.at(status, fail.Kind.InvalidInput, "open font", "malformed font", kern.offset)
     return Face{}
   }
   if kern.ok {
     checked := validate_kern(kern.value, glyphs)
     if !checked.ok {
-      parse.failed_at(status, fail.Kind.InvalidInput, "open font", "malformed font", kern.offset + checked.offset)
+      fail.at(status, fail.Kind.InvalidInput, "open font", "malformed font", kern.offset + checked.offset)
       return Face{}
     }
     if #len(kern.value) >= 4 && u16be(kern.value, 0) == 0 {

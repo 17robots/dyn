@@ -10,7 +10,6 @@
 use "std/bytes"
 use "std/fail"
 use "std/mem"
-use "std/parse"
 use "std/strings"
 
 // A tagged enum: each variant may carry one value. The first variant
@@ -72,7 +71,7 @@ fn is_name_byte(byte: u8) bool {
 }
 
 fn reject(p: *Parser, offset: usize, message: []const u8) *Expr {
-  parse.malformed(p.status, "parse", message, offset)
+  fail.at(p.status, fail.Kind.InvalidInput, "parse", message, offset)
   return node(p, Expr.Invalid)
 }
 

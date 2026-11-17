@@ -1,4 +1,3 @@
-use "std/parse" parse
 use "std/fail"
 use "std/text/edit" surrounding_edit
 use "vendor/window/events" ordered

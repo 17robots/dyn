@@ -36,7 +36,7 @@ carries on. See [session.txt](session.txt).
   comparison as a value of type `fn(Row, Row) bool`; `print_sorted` passes
   either comparison through.
 - **Tables.** `fmt.write_padding` and `fmt.write_u64_width` line up columns
-  in a `fmt.Buffer`; one `line.failed` check covers every write.
+  in a `fmt.Buffer`; one check of its status covers every write.
 
 ## Exercises
 

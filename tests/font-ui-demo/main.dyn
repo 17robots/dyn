@@ -61,7 +61,8 @@ fn main() {
   _ = ui.checkbox(&context, 3, ui.Rect{ x: 32, y: 152, width: 180, height: 24 }, "GRID", &grid, true)
   _ = ui.slider(&context, 4, ui.Rect{ x: 240, y: 160, width: 192, height: 16 }, &count, 0, 10, true)
   label_bytes: [32]u8
-  label := fmt.buffer(label_bytes[..])
+  label_status: fail.Status
+  label := fmt.buffer(&label_status, label_bytes[..])
   fmt.write(&label, "COUNT ")
   fmt.write_i64(&label, #cast(i64, count))
   ui.label(&context, ui.Rect{ x: 32, y: 64, width: 416, height: 24 }, fmt.bytes(&label), context.style.accent)

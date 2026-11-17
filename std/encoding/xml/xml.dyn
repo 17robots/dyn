@@ -1,5 +1,4 @@
 use "std/io" stream
-use "std/parse" parse
 use "std/fail"
 use "std/unicode/utf8" utf8
 use "std/bytes" bytes
@@ -166,7 +165,7 @@ fn starts(source: []const u8, at: usize, expected: []const u8) bool {
 }
 fn fail_at(status: *fail.Status, state: *Scanner, at: usize) Next {
   state.failed = true
-  parse.malformed(status, "read XML", "malformed XML", at)
+  fail.at(status, fail.Kind.InvalidInput, "read XML", "malformed XML", at)
   return Next{}
 }
 
@@ -348,7 +347,7 @@ pub fn attributes(event: Event) AttributeScanner {
 }
 fn attribute_error(status: *fail.Status, state: *AttributeScanner) Attribute {
   state.failed = true
-  parse.malformed(status, "read XML attributes", "malformed attribute", state.offset)
+  fail.at(status, fail.Kind.InvalidInput, "read XML attributes", "malformed attribute", state.offset)
   return Attribute{}
 }
 pub fn next_attribute(status: *fail.Status, state: *AttributeScanner) Attribute {

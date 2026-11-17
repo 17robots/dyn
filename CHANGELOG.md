@@ -160,7 +160,7 @@ Standard library:
   `certificate`, `x509.inspect`, `aead.seal/open`, `aes`, `signature`,
   `exchange`, `hpack`, `qpack`, `fs/watch` and `ui/software.render`.
   Malformed input fails with `InvalidInput` and the byte offset
-  (`failure.offset` when `has_offset`); `parse.malformed(&status, op, msg,
+  (`failure.offset` when `has_offset`); `fail.at(&status, kind, op, msg,
   offset)` records one. Iterators return `Next{ value, offset, found }`.
   Readers that failed (zip and tar streams, watchers, der cursors) replay
   the same failure. `x509.validate` returns a `Validation` with `valid` and

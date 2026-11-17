@@ -1,4 +1,3 @@
-use "std/parse" parse
 use "std/fail"
 pub struct Element { tag: u8, content: []const u8, encoded: []const u8, constructed: bool }
 // After a failure the cursor stays failed: next fails the same way again.
@@ -17,7 +16,7 @@ fn failed(status: *fail.Status, state: *Cursor, kind: fail.Kind, offset: usize) 
   if kind == fail.Kind.Overflow {
     message = "the length exceeds usize"
   }
-  parse.failed_at(status, kind, "read DER", message, offset)
+  fail.at(status, kind, "read DER", message, offset)
   return Next{ offset: offset }
 }
 // Malformed input fails with InvalidInput, a length past usize with Overflow,

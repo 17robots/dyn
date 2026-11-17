@@ -1,4 +1,3 @@
-use "std/parse" parse
 use "std/mem" mem
 use "std/fail"
 use "std/encoding/base64" base64
@@ -24,7 +23,7 @@ fn append(destination: []u8, at: *usize, source: []const u8) bool {
 
 fn malformed(arena: *mem.Arena, status: *fail.Status, mark: usize, offset: usize) Block {
   mem.arena_rewind(arena, mark)
-  parse.malformed(status, "decode PEM", "malformed PEM", offset)
+  fail.at(status, fail.Kind.InvalidInput, "decode PEM", "malformed PEM", offset)
   return Block{}
 }
 // Decodes the first PEM block. Malformed text fails with InvalidInput at the

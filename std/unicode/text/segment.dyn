@@ -154,7 +154,7 @@ pub fn word_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []
   empty: []usize
   if status.failed { return empty }
   if !utf8.valid(text) {
-    parse.malformed(status, "find word breaks", "invalid UTF-8", first_invalid(text))
+    fail.at(status, fail.Kind.InvalidInput, "find word breaks", "invalid UTF-8", first_invalid(text))
     return empty
   }
   count := utf8.codepoint_count(text)
@@ -409,7 +409,7 @@ pub fn line_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []
   empty: []LineBreak
   if status.failed { return empty }
   if !utf8.valid(text) {
-    parse.malformed(status, "find line breaks", "invalid UTF-8", first_invalid(text))
+    fail.at(status, fail.Kind.InvalidInput, "find line breaks", "invalid UTF-8", first_invalid(text))
     return empty
   }
   count := utf8.codepoint_count(text)

@@ -93,7 +93,8 @@ fn main() {
     }
     io.println("part {} {} {} {}", part.value.name, part.value.filename, part.value.content_type, #len(part.value.body))
   }
-  out := json.writer(storage[..])
+  out_status: fail.Status
+  out := json.writer(&out_status, storage[..])
   json.object_begin(&out)
   json.key(&out, "a")
   json.array_begin(&out)
@@ -110,13 +111,15 @@ fn main() {
   json.object_end(&out)
   json.object_end(&out)
   io.println("{}", json.output(&out))
-  unfinished := json.writer(storage[..])
+  unfinished_status: fail.Status
+  unfinished := json.writer(&unfinished_status, storage[..])
   json.array_begin(&unfinished)
-  io.println("{} {}", json.failed(&unfinished), #len(json.output(&unfinished)))
-  wrong := json.writer(storage[..])
+  io.println("{} {}", unfinished_status.failed, #len(json.output(&unfinished)))
+  wrong_status: fail.Status
+  wrong := json.writer(&wrong_status, storage[..])
   json.object_begin(&wrong)
   json.integer(&wrong, 1)
-  io.println("{}", json.failed(&wrong))
+  io.println("{}", wrong_status.failed)
   buckets: [16]http.Bucket
   limit := http.limiter(buckets[..], 3, 1, 1000)
   allowed: usize = 0
@@ -136,7 +139,8 @@ fn main() {
   address_text: [64]u8
   io.println("{}", net.ip_text(address_text[..], six))
   tiny: [4]u8
-  small := json.writer(tiny[..])
+  small_status: fail.Status
+  small := json.writer(&small_status, tiny[..])
   json.text(&small, "too long")
-  io.println("{}", json.failed(&small))
+  io.println("{}", small_status.failed)
 }

@@ -559,7 +559,7 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *co
     if root != nil {
       message = "trailing data"
     }
-    parse.malformed(status, "parse JSON", message, cursor.at)
+    fail.at(status, fail.Kind.InvalidInput, "parse JSON", message, cursor.at)
     return &nil_value
   }
   return root

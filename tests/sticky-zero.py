@@ -22,28 +22,33 @@ fn check(ok: bool, message: []const u8) {
 }
 fn main() {
   storage: [4]u8
-  out := fmt.buffer(storage[..])
+  out_status: fail.Status
+  out := fmt.buffer(&out_status, storage[..])
   fmt.write(&out, "abc")
   fmt.write(&out, "toolong")
   fmt.write(&out, "d")
-  check(out.failed && mem.equal(fmt.bytes(&out), "abc"), "fmt keeps the first failure")
+  check(out_status.failed && mem.equal(fmt.bytes(&out), "abc"), "fmt keeps the first failure")
+  // clear empties the buffer; the failure stays on the status until reset.
+  out_status = fail.Status{}
   fmt.clear(&out)
   fmt.write(&out, "ok")
-  check(!out.failed, "fmt clear")
+  check(!out_status.failed, "fmt clear")
   fmt.clear(&out)
   fmt.write(&out, "abcd")
   fmt.write(&out, "")
-  check(!out.failed, "fmt exact capacity and empty append")
+  check(!out_status.failed, "fmt exact capacity and empty append")
   fmt.write(&out, "e")
-  check(out.failed && mem.equal(fmt.bytes(&out), "abcd"), "fmt overflow preserves bytes")
+  check(out_status.failed && mem.equal(fmt.bytes(&out), "abcd"), "fmt overflow preserves bytes")
+  out_status = fail.Status{}
   fmt.clear(&out)
   fmt.write(&out, "ab")
   fmt.write(&out, storage[..2])
-  check(!out.failed && mem.equal(fmt.bytes(&out), "abab"), "fmt append from own backing")
-  bad := fmt.buffer(storage[..])
+  check(!out_status.failed && mem.equal(fmt.bytes(&out), "abab"), "fmt append from own backing")
+  bad_status: fail.Status
+  bad := fmt.buffer(&bad_status, storage[..])
   bad.length = 5
   fmt.write(&bad, "")
-  check(bad.failed && bad.length == 5, "fmt invalid cursor fails before slicing")
+  check(bad_status.failed && bad.length == 5, "fmt invalid cursor fails before slicing")
   bytes: [2]u8
   text := builder.from_buffer(bytes[..])
   appended: fail.Status

@@ -17,14 +17,14 @@ The binding uses `SSL_get1_peer_certificate`; OpenSSL 1.1.1 is not supported.
 - `peer_certificate_owned` returns a provider reference requiring `certificate_release(&certificate)`.
 - ALPN input is validated length-prefixed wire format. Selected ALPN bytes borrow the
   connection until renegotiation or destruction. Servers choose with
-  `server_alpn(context, &preference)`: the first protocol of `preference` the
+  `server_alpn(&status, context, &preference)`: the first protocol of `preference` the
   client offers wins; `preference` must outlive the context. Certificate subject/error text uses caller buffers.
 - Arena constructors rewind scratch on every return. Output slices and adapters never own it.
 
-`handshake`, `server_handshake`, `read`, and `write` expose `WantRead`/`WantWrite` for
-nonblocking operations. Retry after the corresponding readiness event, preserving operation
-arguments as required by OpenSSL. `provider_status` records the SSL error classification.
-A clean `close_notify` read succeeds with zero bytes; a truncated connection fails.
+`handshake`, `server_handshake`, `read`, and `write` return a `Want` (`Read` or
+`Write`) for nonblocking operations; waiting is not a failure. Retry after the corresponding readiness event, preserving operation
+arguments as required by OpenSSL. A clean `close_notify` read succeeds with zero bytes;
+a truncated connection fails.
 
 The `reader`/`writer` adapters target blocking sockets. They borrow both the live connection
 and the caller's `Connection` slot; neither may be destroyed while an adapter is used.

@@ -6,7 +6,6 @@
 // Arena rewind/reset/release invalidates affected nodes, text and iterators.
 // Iterator must be zero-initialized or created by iterator(); advance only
 // through next(). Copying an iterator copies its position and borrowed view.
-use "std/parse" parse
 use "std/fail"
 use "std/mem" memory
 use "std/strings" text
@@ -248,7 +247,7 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *co
   if status.failed { return &nil_value }
   mark := memory.arena_mark(arena)
   if #len(source) == 0 {
-    parse.malformed(status, "parse JSON", "empty input", 0)
+    fail.at(status, fail.Kind.InvalidInput, "parse JSON", "empty input", 0)
     return &nil_value
   }
   maximum := #max(usize)
@@ -256,7 +255,7 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *co
   // The smaller complete-document estimate is only an initial capacity hint.
   limit := #len(source)
   if limit > maximum / 16 || #cast(u64, #len(source)) > 0x00ffffffffffffff {
-    parse.failed_at(status, fail.Kind.Overflow, "parse JSON", "input too large", 0)
+    fail.at(status, fail.Kind.Overflow, "parse JSON", "input too large", 0)
     return &nil_value
   }
   if memory.arena_overlaps_unallocated(arena, source) {
@@ -295,7 +294,7 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *co
       message = "trailing data"
     }
     memory.arena_rewind(arena, mark)
-    parse.failed_at(status, kind, "parse JSON", message, offset)
+    fail.at(status, kind, "parse JSON", message, offset)
     return &nil_value
   }
   unused := (#len(state.values) - state.used) * 16

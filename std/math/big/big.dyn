@@ -3,7 +3,6 @@
 // 32-bit, least significant first, with no leading zero limbs; zero has no
 // limbs and is never negative.
 
-use "std/parse" parse
 use "std/fail"
 use "std/mem" mem
 use "std/io" io
@@ -393,12 +392,12 @@ pub fn parse(arena: *mem.Arena, status: *fail.Status, text: []const u8, base: u3
     at += 1
   }
   if at == #len(text) {
-    parse.malformed(status, "parse integer", "expected digits", at)
+    fail.at(status, fail.Kind.InvalidInput, "parse integer", "expected digits", at)
     return Int{}
   }
   for i in at..#len(text) {
     if digit_value(text[i]) >= base {
-      parse.malformed(status, "parse integer", "expected a digit", i)
+      fail.at(status, fail.Kind.InvalidInput, "parse integer", "expected a digit", i)
       return Int{}
     }
   }

@@ -7,7 +7,7 @@ pub struct Grapheme { value: []const u8, found: bool }
 fn invalid(status: *fail.Status, state: *Graphemes, offset: usize) Grapheme {
   state.failed = true
   state.error_offset = offset
-  parse.malformed(status, "split graphemes", "invalid UTF-8", offset)
+  fail.at(status, fail.Kind.InvalidInput, "split graphemes", "invalid UTF-8", offset)
   return Grapheme{}
 }
 pub fn graphemes(source: []const u8) Graphemes {

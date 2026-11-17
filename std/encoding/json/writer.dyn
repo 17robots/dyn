@@ -1,12 +1,14 @@
 use "std/encoding/binary"
 use "std/fmt" format
+use "std/fail"
 use "std/unicode/utf8" utf8
 
 // JSON output into bounded caller storage, without a Value tree. Separators
 // are automatic: write a key before each object member, then its value.
-// Failure is sticky: a write that does not fit, invalid UTF-8, a key outside
-// an object, a value without its key, or nesting past MaxDepth marks the
-// writer failed and later writes do nothing. Check failed once at the end.
+// Failures go on the writer's status and are sticky: a write that does not fit
+// fails it with Capacity; invalid UTF-8, a key outside an object, a value
+// without its key, nesting past MaxDepth or a number JSON cannot hold fail it
+// with InvalidInput. Later writes do nothing. Check the status once at the end.
 pub const MaxDepth: usize = 64
 
 pub struct Writer {
@@ -17,15 +19,20 @@ pub struct Writer {
   depth: usize,
   // An object member's key was written and its value is due.
   keyed: bool,
-  invalid: bool,
 }
 
-pub fn writer(storage: []u8) Writer {
-  return Writer{ buffer: format.buffer(storage) }
+pub fn writer(status: *fail.Status, storage: []u8) Writer {
+  return Writer{ buffer: format.buffer(status, storage) }
 }
 
-pub fn failed(target: *const Writer) bool {
-  return target.invalid || target.buffer.failed
+fn failed(target: *const Writer) bool {
+  return target.buffer.status == nil || target.buffer.status.failed
+}
+// Records misuse or a value JSON cannot hold.
+fn rejected(target: *Writer, message: []const u8) {
+  if target.buffer.status != nil {
+    fail.invalid(target.buffer.status, "write JSON", "", message)
+  }
 }
 
 // The JSON written so far, or empty when failed or a container is still open.
@@ -40,7 +47,7 @@ fn before_value(target: *Writer) bool {
   if failed(target) { return false }
   if target.depth == 0 {
     if target.buffer.length > 0 {
-      target.invalid = true
+      rejected(target, "a second top-level value")
       return false
     }
     return true
@@ -48,7 +55,7 @@ fn before_value(target: *Writer) bool {
   level := target.depth - 1
   if target.objects[level] {
     if !target.keyed {
-      target.invalid = true
+      rejected(target, "an object member without its key")
       return false
     }
     target.keyed = false
@@ -64,7 +71,7 @@ fn before_value(target: *Writer) bool {
 fn open(target: *Writer, object: bool, byte: u8) {
   if !before_value(target) { return }
   if target.depth == MaxDepth {
-    target.invalid = true
+    rejected(target, "nesting deeper than MaxDepth")
     return
   }
   format.write_byte(&target.buffer, byte)
@@ -76,7 +83,7 @@ fn open(target: *Writer, object: bool, byte: u8) {
 fn close(target: *Writer, object: bool, byte: u8) {
   if failed(target) { return }
   if target.depth == 0 || target.objects[target.depth - 1] != object || target.keyed {
-    target.invalid = true
+    rejected(target, "a close that does not match the open container")
     return
   }
   target.depth -= 1
@@ -124,7 +131,7 @@ fn clean_prefix(text: []const u8) usize {
 
 fn quoted(target: *Writer, value: []const u8) {
   if !utf8.valid(value) {
-    target.invalid = true
+    rejected(target, "text is not valid UTF-8")
     return
   }
   digits := "0123456789abcdef"
@@ -163,7 +170,7 @@ fn quoted(target: *Writer, value: []const u8) {
 pub fn key(target: *Writer, name: []const u8) {
   if failed(target) { return }
   if target.depth == 0 || !target.objects[target.depth - 1] || target.keyed {
-    target.invalid = true
+    rejected(target, "a key outside an object, or two keys in a row")
     return
   }
   level := target.depth - 1
@@ -194,10 +201,10 @@ pub fn unsigned(target: *Writer, value: u64) {
   }
 }
 
-// Shortest round-trip form. NaN and infinities have no JSON form: failed.
+// Shortest round-trip form. NaN and infinities have no JSON form and fail.
 pub fn float(target: *Writer, value: f64) {
   if value != value || value - value != 0.0 {
-    target.invalid = true
+    rejected(target, "NaN and infinities have no JSON form")
     return
   }
   if before_value(target) {
@@ -246,7 +253,7 @@ pub fn field(target: *Writer, name: []const u8, value: any) {
     f64 v => { float(target, v) }
     f32 v => { float(target, v) }
     bool v => { boolean(target, v) }
-    _ => { target.invalid = true }
+    _ => { rejected(target, "a value of a type JSON cannot hold") }
   }
 }
 
@@ -309,6 +316,6 @@ fn write_member(target: *Writer, at: usize, type_id: u64) {
   } else if type_id == #typeof(f32).id {
     float(target, #cast(*const f32, at).*)
   } else {
-    target.invalid = true
+    rejected(target, "a value of a type JSON cannot hold")
   }
 }

@@ -34,7 +34,7 @@ CASES = {
   http.add(&status, &router, "GET", "/", for_app)
   _ = http.bind_routes(&router)
   page_storage: [64]u8
-  page := html.writer(page_storage[..])
+  page := html.writer(&status, page_storage[..])
   html.markup(&page, html.trusted("<p>"))
   html.text(&page, "<script>")
 }
@@ -55,7 +55,7 @@ CASES = {
 ''', 'error'),
     'raw markup': ('''fn main() {
   page_storage: [64]u8
-  page := html.writer(page_storage[..])
+  page := html.writer(status, page_storage[..])
   html.markup(&page, "<p>")
 }
 ''', 'error'),

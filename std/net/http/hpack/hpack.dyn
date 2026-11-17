@@ -6,7 +6,6 @@
 // field the simple way: a static-table index when one matches, otherwise a
 // literal the peer does not index, Huffman-coded when that is shorter. The
 // encoder never uses a dynamic table, so it needs no state.
-use "std/parse" parse
 use "std/fail"
 
 // The table size both sides start with (SETTINGS_HEADER_TABLE_SIZE).
@@ -85,7 +84,7 @@ fn failed(status: *fail.Status, kind: fail.Kind, offset: usize) Field {
   if kind == fail.Kind.Capacity {
     message = "the field does not fit scratch"
   }
-  parse.failed_at(status, kind, "decode HPACK", message, offset)
+  fail.at(status, kind, "decode HPACK", message, offset)
   return Field{}
 }
 

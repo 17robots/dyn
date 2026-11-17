@@ -1,4 +1,3 @@
-use "std/parse" parse
 use "std/mem" mem
 use "std/fail"
 use "std/bytes" bytes
@@ -114,7 +113,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8 
   if status.failed { return empty }
   size := decoded_size(source)
   if !size.ok {
-    parse.malformed(status, "decode hex", "invalid hex", size.offset)
+    fail.at(status, fail.Kind.InvalidInput, "decode hex", "invalid hex", size.offset)
     return empty
   }
   // Check borrowed backing before allocation or rewind can modify aliased input.

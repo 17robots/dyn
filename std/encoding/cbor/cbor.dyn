@@ -1,4 +1,3 @@
-use "std/parse" parse
 use "std/enums"
 use "std/mem" mem
 use "std/fail"
@@ -78,7 +77,7 @@ fn failed(status: *fail.Status, state: *Reader, offset: usize, kind: fail.Kind) 
   state.failed = true
   state.error_kind = kind
   state.error_offset = offset
-  parse.failed_at(status, kind, "read CBOR", message_of(kind), offset)
+  fail.at(status, kind, "read CBOR", message_of(kind), offset)
   return Next{ offset: offset }
 }
 fn message_of(kind: fail.Kind) []const u8 {
@@ -292,7 +291,7 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, tokens: []const Token) []
 }
 
 fn unencodable(status: *fail.Status, kind: fail.Kind, index: usize) []u8 {
-  parse.failed_at(status, kind, "encode CBOR", message_of(kind), index)
+  fail.at(status, kind, "encode CBOR", message_of(kind), index)
   empty: []u8
   return empty
 }

@@ -48,14 +48,17 @@ fn measure(atlas: *font.Atlas, text: []const u8) f32 {
 
 const levels: [4][]const u8 = ["INFO ", "WARN ", "DEBUG", "ERROR"]
 
+// A row fits its 96 bytes, so the rendering status never fails.
 fn row_text(storage: []u8, index: usize) []const u8 {
-  state := fmt.buffer(storage)
+  rendering: fail.Status
+  state := fmt.buffer(&rendering, storage)
   fmt.write(&state, levels[index % 4])
   fmt.write(&state, "  request ")
   fmt.write_u64(&state, index)
   fmt.write(&state, " handled in ")
   fmt.write_u64(&state, index * 7919 % 997)
   fmt.write(&state, " ms")
+  _ = rendering
   return fmt.bytes(&state)
 }
 
@@ -92,10 +95,12 @@ fn build(state: *box.State, app: *App) {
     refilter(app)
   }
   storage: [64]u8
-  status := fmt.buffer(storage[..])
-  fmt.write_u64(&status, app.match_count)
-  fmt.write(&status, " rows###status")
-  _ = box.label(state, fmt.bytes(&status))
+  rendering: fail.Status
+  count_text := fmt.buffer(&rendering, storage[..])
+  fmt.write_u64(&count_text, app.match_count)
+  fmt.write(&count_text, " rows###status")
+  _ = rendering
+  _ = box.label(state, fmt.bytes(&count_text))
   box.pop_parent(state)
   row_height := 20.0 * app.zoom * state.scale
   range := box.list_begin(state, "rows", box.percent(1.0, 0.0), box.percent(1.0, 0.0), app.match_count, row_height)
