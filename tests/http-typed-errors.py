@@ -9,18 +9,17 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn')).resolve())
-PRELUDE = '''use "std/html"
+PRELUDE = '''use "std/fail"
+use "std/html"
 use "std/net/http"
 
 struct App { count: i32 }
 struct Other { name: i32 }
 
-fn for_app(response: *http.Response, request: *const http.Request, app: *App) http.Result {
-  return http.Result{}
+fn for_app(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
 }
 
-fn for_other(response: *http.Response, request: *const http.Request, other: *Other) http.Result {
-  return http.Result{}
+fn for_other(status: *fail.Status, response: *http.Response, request: *const http.Request, other: *Other) {
 }
 
 '''
@@ -31,7 +30,8 @@ CASES = {
   _ = http.bind(&typed)
   storage: [4]http.TypedRoute(App)
   router := http.typed_routes(storage[..], &app)
-  _ = http.add(&router, "GET", "/", for_app)
+  status: fail.Status
+  http.add(&status, &router, "GET", "/", for_app)
   _ = http.bind_routes(&router)
   page_storage: [64]u8
   page := html.writer(page_storage[..])
@@ -49,7 +49,8 @@ CASES = {
   app := App{}
   storage: [4]http.TypedRoute(App)
   router := http.typed_routes(storage[..], &app)
-  _ = http.add(&router, "GET", "/", for_other)
+  status: fail.Status
+  http.add(&status, &router, "GET", "/", for_other)
 }
 ''', 'error'),
     'raw markup': ('''fn main() {

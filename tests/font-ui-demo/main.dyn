@@ -20,12 +20,13 @@ fn main() {
     mem.arena_release(output)
     mem.arena_release(frame)
   }
-  arguments := process.arguments(output)
-  if io.failed(arguments.failure) || #len(arguments.value) != 3 {
+  arguments_status: fail.Status
+  arguments := process.arguments(output, &arguments_status)
+  if arguments_status.failed || #len(arguments) != 3 {
     #panic("usage: font-ui-demo FONT.ttf OUTPUT.png")
   }
   bytes_file: fail.Status
-  bytes := fs.read_all(output, &bytes_file, arguments.value[1], 64000000)
+  bytes := fs.read_all(output, &bytes_file, arguments[1], 64000000)
   if bytes_file.failed {
     #panic("cannot read font")
   }
@@ -84,7 +85,7 @@ fn main() {
     #panic("UI demo render")
   }
   encoded := png.encode(output, pixels, 480, 240, 4)
-  if parse.failed(encoded.failure) || !fs_write_file(arguments.value[2], encoded.value) {
+  if parse.failed(encoded.failure) || !fs_write_file(arguments[2], encoded.value) {
     #panic("UI demo output")
   }
 }

@@ -1,5 +1,6 @@
 // A job type larger than Config.job_size: evented.job panics and names the
 // type, the sizes and the fix. Prints "port N" once listening.
+use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/net"
@@ -10,10 +11,13 @@ struct App { unused: u8 }
 
 struct Big { data: [4096]u8 }
 
-fn handle(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+fn handle(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
   job := evented.job(Big, response)
-  if job == nil { return http.text(response, 503, "busy") }
-  return http.text(response, 200, "unreachable")
+  if job == nil {
+    http.text(status, response, 503, "busy")
+    return
+  }
+  http.text(status, response, 200, "unreachable")
 }
 
 fn main() {
@@ -27,12 +31,9 @@ fn main() {
   config.connections_per_worker = 4
   storage := mem.arena_sub(arena, evented.storage_size(config, 1) + mem.MiB)
   address := net.ipv4(127, 0, 0, 1, 0)
-  listened := net.tcp_listen_ipv4(&address, 16)
-  if io.failed(listened.failure) { #panic("listen") }
-  listener := listened.value
-  ran := evented.start(storage, workers[..], &listener, config, binding.handler, binding.context)
-  if io.failed(ran.failure) { #panic("start") }
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  listener := net.tcp_listen_ipv4(&status, &address, 16)
+  _ = evented.start(storage, &status, workers[..], &listener, config, binding.handler, binding.context)
   io.println("port {}", evented.local_port(workers[..]))
-  joined := evented.join(workers[..])
-  if io.failed(joined.failure) { #panic("join") }
+  evented.join(&status, workers[..])
 }

@@ -1,29 +1,24 @@
-use "std/io" io
 #target(kernel: darwin)
 #link("System")
 extern fn clock_read "dyn_time_clock"(clock: i32, value: *Instant) i32
 extern fn clock_sleep "dyn_time_sleep"(request: *const Instant, remaining: *Instant) i32
 extern fn clock_error "dyn_time_error"() *i32
-fn native_clock(monotonic: bool) ClockResult {
+fn native_clock(monotonic: bool) Instant {
   value := Instant{}
   clock: i32 = 0
   if monotonic {
     clock = 6
   }
-  if clock_read(clock, &value) != 0 {
-    code: isize = 0 - #cast(isize, clock_error().*)
-    return ClockResult{ failure: io.darwin_failure(code) }
-  }
-  return ClockResult{ value: value }
+  if clock_read(clock, &value) != 0 { return Instant{} }
+  return value
 }
-fn native_sleep(duration: i64) SleepResult {
+fn native_sleep(duration: i64) {
   request := Instant{ seconds: duration / Second, nanoseconds: duration % Second }
   remaining := Instant{}
   for {
-    if clock_sleep(&request, &remaining) == 0 { return SleepResult{} }
-    code: isize = 0 - #cast(isize, clock_error().*)
-    if code != -4 { return SleepResult{ failure: io.darwin_failure(code) } }
+    if clock_sleep(&request, &remaining) == 0 { return }
+    // Only an interrupted sleep continues; the request is valid by construction.
+    if clock_error().* != 4 { return }
     request = remaining
   }
-  return SleepResult{}
 }

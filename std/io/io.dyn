@@ -132,7 +132,13 @@ pub fn write(status: *fail.Status, writer: Writer, source: []const u8) {
     count := writer.write(writer.data, status, source[total..])
     if status.failed { return }
     if count == 0 || count > #len(source) - total {
-      fail.set(status, fail.make(Kind.System, "write", "", "writer made no progress"))
+      message: []const u8 = "writer made no progress"
+      if count != 0 {
+        message = "writer reported more bytes than it was given"
+      }
+      failure := fail.make(Kind.System, "write", "", message)
+      failure.native = -5
+      fail.set(status, failure)
       return
     }
     total += count

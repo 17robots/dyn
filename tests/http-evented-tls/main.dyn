@@ -3,6 +3,7 @@
 // Prints "port N" once listening on 127.0.0.1; POST /quit stops it.
 use "std/bytes"
 use "std/fmt"
+use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/net"
@@ -22,64 +23,74 @@ struct App {
   big: []u8,
 }
 
-fn text(response: *http.Response, body: []const u8) http.Result {
-  return http.respond(response, body, http.ResponseOptions{ content_type: "text/plain" })
+fn text(status: *fail.Status, response: *http.Response, body: []const u8) {
+  http.respond(status, response, body, http.ResponseOptions{ content_type: "text/plain" })
 }
 
-fn handle(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+fn handle(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
   if bytes.equal(request.path, "/buffered") || bytes.equal(request.path, "/buffered-empty") {
     if #len(http.body_buffer(response, 0)) != 0 || #len(http.body_buffer(response, 0xffffffffffffffff)) != 0 {
       #panic("invalid reservation succeeded")
     }
     body := http.body_buffer(response, BigSize)
     if #len(body) == 0 {
-      if bytes.equal(request.path, "/buffered-empty") { return text(response, "") }
-      return text(response, app.big)
+      if bytes.equal(request.path, "/buffered-empty") {
+        text(status, response, "")
+        return
+      }
+      text(status, response, app.big)
+      return
     }
     if #len(http.body_buffer(response, 1)) != 0 { #panic("second reservation succeeded") }
-    if !io.failed(http.respond_buffered(response, BigSize + 1, http.ResponseOptions{}).failure) {
-      #panic("oversize commit succeeded")
-    }
+    oversize: fail.Status
+    http.respond_buffered(&oversize, response, BigSize + 1, http.ResponseOptions{})
+    if !oversize.failed { #panic("oversize commit succeeded") }
     bad_headers: [1]http.Header = [http.Header{ name: "X-Test", value: "bad\r\nheader" }]
-    if !io.failed(http.respond_buffered(response, 1, http.ResponseOptions{ headers: bad_headers[..] }).failure) {
-      #panic("invalid header succeeded")
-    }
+    invalid: fail.Status
+    http.respond_buffered(&invalid, response, 1, http.ResponseOptions{ headers: bad_headers[..] })
+    if !invalid.failed { #panic("invalid header succeeded") }
     _ = mem.copy(body, app.big)
     length := BigSize
     if bytes.equal(request.path, "/buffered-empty") { length = 0 }
-    result := http.respond_buffered(response, length, http.ResponseOptions{ content_type: "text/plain" })
-    if io.failed(result.failure) { return result }
-    if !io.failed(http.respond_buffered(response, 1, http.ResponseOptions{}).failure) {
-      #panic("second commit succeeded")
-    }
-    return result
+    http.respond_buffered(status, response, length, http.ResponseOptions{ content_type: "text/plain" })
+    if status.failed { return }
+    second: fail.Status
+    http.respond_buffered(&second, response, 1, http.ResponseOptions{})
+    if !second.failed { #panic("second commit succeeded") }
+    return
   }
   if bytes.equal(request.path, "/health") {
-    return text(response, "ok\n")
+    text(status, response, "ok\n")
+    return
   }
   if bytes.equal(request.path, "/echo") {
-    return text(response, request.body)
+    text(status, response, request.body)
+    return
   }
   if bytes.equal(request.path, "/big") {
-    return text(response, app.big)
+    text(status, response, app.big)
+    return
   }
   if bytes.equal(request.path, "/quit") {
     sync.store_u32(&app.quit, 1)
-    return http.respond(response, "bye\n", http.ResponseOptions{ content_type: "text/plain", close_connection: true })
+    http.respond(status, response, "bye\n", http.ResponseOptions{ content_type: "text/plain", close_connection: true })
+    return
   }
-  return http.respond(response, "not found\n", http.ResponseOptions{ status: http.StatusNotFound, content_type: "text/plain" })
+  http.respond(status, response, "not found\n", http.ResponseOptions{ status: http.StatusNotFound, content_type: "text/plain" })
 }
 
 fn main() i32 {
   arena := mem.arena_alloc(64 * mem.MiB)
   defer mem.arena_release(arena)
-  arguments := process.arguments(arena)
-  if io.failed(arguments.failure) || #len(arguments.value) < 3 || #len(arguments.value) > 4 {
+  arguments_status: fail.Status
+  arguments := process.arguments(arena, &arguments_status)
+  if arguments_status.failed || #len(arguments) < 3 || #len(arguments) > 4 {
     io.eprintln("usage: main CERT.pem KEY.pem [h2]")
     return 2
   }
-  context := tls.server_config_create(arena, arguments.value[1], arguments.value[2])
-  if io.failed(context.failure) {
+  status: fail.Status
+  context := tls.server_config_create(arena, &status, arguments[1], arguments[2])
+  if status.failed {
     io.eprintln("cannot load certificate and key")
     return 1
   }
@@ -90,7 +101,7 @@ fn main() i32 {
   }
   typed := http.Typed(App){ state: app, handler: handle }
   binding := http.bind(&typed)
-  transport := https.transport(context.value)
+  transport := https.transport(context)
   config := evented.default_config()
   config.connections_per_worker = 16
   config.receive_size = 4 * mem.KiB
@@ -99,22 +110,22 @@ fn main() i32 {
   config.overflow_send_count = 1
   config.idle_timeout_milliseconds = 500
   config.transport = &transport
-  h3 := #len(arguments.value) == 4 && bytes.equal(arguments.value[3], "h3")
+  h3 := #len(arguments) == 4 && bytes.equal(arguments[3], "h3")
   quic_stack := evented.Quic{}
   if h3 {
     // HTTP/3 needs its own QUIC context with the same certificate.
-    quic_context := https.quic_context(arena, arguments.value[1], arguments.value[2])
-    if io.failed(quic_context.failure) {
+    quic_context := https.quic_context(arena, &status, arguments[1], arguments[2])
+    if status.failed {
       io.eprintln("cannot create the QUIC context")
       return 1
     }
-    quic_stack = https.quic(quic_context.value)
+    quic_stack = https.quic(quic_context)
     config.http3 = true
     config.quic = &quic_stack
   }
-  if #len(arguments.value) == 4 && (bytes.equal(arguments.value[3], "h2") || h3) {
+  if #len(arguments) == 4 && (bytes.equal(arguments[3], "h2") || h3) {
     // HTTP/2 through ALPN; frames need 16 KiB of receive buffer.
-    if !https.offer_http2(context.value) {
+    if !https.offer_http2(context) {
       io.eprintln("cannot offer h2")
       return 1
     }
@@ -124,36 +135,32 @@ fn main() i32 {
     config.http2_slots = 8
   }
   // Without a libc-thread spawner, start refuses the OpenSSL transport.
-  refused := evented.start_shared(arena, mem.push_array(evented.Worker, arena, 1), net.ipv4(127, 0, 0, 1, 0), 1,
+  refused: fail.Status
+  _ = evented.start_shared(arena, &refused, mem.push_array(evented.Worker, arena, 1), net.ipv4(127, 0, 0, 1, 0), 1,
     config, binding.handler, binding.context)
-  if refused.failure.kind != io.Kind.InvalidInput {
+  if refused.failure.kind != fail.Kind.InvalidInput {
     io.eprintln("TLS transport started on raw threads")
     return 1
   }
   spawner := posix.spawner()
   config.spawner = &spawner
   workers := mem.push_array(evented.Worker, arena, 2)
-  started := evented.start_shared(arena, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, binding.handler, binding.context)
-  if io.failed(started.failure) {
+  _ = evented.start_shared(arena, &status, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, binding.handler, binding.context)
+  if status.failed {
     io.eprintln("cannot start workers")
     return 1
   }
-  digits: [20 + mem.ArenaBufferOverhead]u8
-  scratch := mem.arena_from_buffer(digits[..])
-  _ = io.write_transfer(io.stdout(), "port ")
-  _ = io.write_transfer(io.stdout(), fmt.u64_decimal(scratch, #cast(u64, evented.local_port(workers))))
-  _ = io.write_transfer(io.stdout(), "\n")
+  io.println("port {}", evented.local_port(workers))
   for sync.load_u32(&app.quit) == 0 {
-    _ = time.sleep(10 * time.Millisecond)
+    time.sleep(10 * time.Millisecond)
   }
   evented.stop(workers)
-  joined := evented.join(workers)
+  joined: fail.Status
+  evented.join(&joined, workers)
   for worker in workers {
     if worker.send_pool.free_count != config.overflow_send_count { #panic("overflow block leaked") }
   }
-  tls.config_release(&context.value)
-  if io.failed(joined.failure) {
-    return 1
-  }
+  tls.config_release(&context)
+  if joined.failed { return 1 }
   return 0
 }

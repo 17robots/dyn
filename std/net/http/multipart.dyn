@@ -1,5 +1,4 @@
 use "std/bytes" bytes
-use "std/parse" parse
 
 // multipart/form-data request bodies (RFC 7578). Parts borrow the request
 // body; nothing is copied or allocated. The whole body must fit the server's
@@ -24,8 +23,12 @@ pub struct Parts {
   failed: bool,
 }
 
-pub struct PartsResult { value: Parts, failure: parse.Failure }
-pub struct PartResult { value: Part, found: bool, failure: parse.Failure }
+// A part, or found false after the closing delimiter.
+pub struct NextPart { value: Part, found: bool }
+
+fn multipart_failure(status: *fail.Status, message: []const u8) {
+  fail.set(status, fail.make(fail.Kind.InvalidInput, "read multipart body", "", message))
+}
 
 // The boundary parameter of a multipart Content-Type, unquoted.
 fn boundary_of(content_type: []const u8) []const u8 {
@@ -47,17 +50,20 @@ fn boundary_of(content_type: []const u8) []const u8 {
   return content_type[..0]
 }
 
-// Starts reading a multipart/form-data body. Fails with Syntax when the
+// Starts reading a multipart/form-data body. Fails with InvalidInput when the
 // Content-Type is not multipart/form-data or has no valid boundary (1-70
 // bytes), or the body does not start with the first delimiter.
-pub fn multipart(request: *const Request) PartsResult {
+pub fn multipart(status: *fail.Status, request: *const Request) Parts {
+  if status.failed { return Parts{ failed: true } }
   header := request_header(request, "Content-Type")
   if !header.found || #len(header.value) < 19 || !ascii_equal(header.value[..19], "multipart/form-data") {
-    return PartsResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "not multipart/form-data" } }
+    multipart_failure(status, "not multipart/form-data")
+    return Parts{ failed: true }
   }
   boundary := boundary_of(header.value)
   if #len(boundary) == 0 || #len(boundary) > 70 {
-    return PartsResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "bad boundary" } }
+    multipart_failure(status, "bad boundary")
+    return Parts{ failed: true }
   }
   reader := Parts{}
   reader.delimiter[0] = '\r'
@@ -75,12 +81,13 @@ pub fn multipart(request: *const Request) PartsResult {
   if !bytes.starts_with(body, first) {
     found := bytes.find(body, reader.delimiter[..reader.delimiter_length])
     if found == #len(body) {
-      return PartsResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "no first boundary" } }
+      multipart_failure(status, "no first boundary")
+      return Parts{ failed: true }
     }
     at = found + 2
   }
   reader.rest = body[at + #len(first)..]
-  return PartsResult{ value: reader }
+  return reader
 }
 
 // A Content-Disposition parameter such as name="field", unquoted.
@@ -114,20 +121,26 @@ fn disposition_parameter(value: []const u8, wanted: []const u8) HttpHeader {
 }
 
 // The next part. found is false after the closing delimiter. Fails with
-// Syntax on a malformed part or a body cut short; the failure is sticky.
-pub fn next_part(reader: *Parts) PartResult {
-  if reader.failed { return PartResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
-  if reader.done { return PartResult{} }
+// InvalidInput on a malformed part or a body cut short; after that the
+// reader stays failed.
+pub fn next_part(status: *fail.Status, reader: *Parts) NextPart {
+  if status.failed { return NextPart{} }
+  if reader.failed {
+    multipart_failure(status, "an earlier part was malformed")
+    return NextPart{}
+  }
+  if reader.done { return NextPart{} }
   rest := reader.rest
   // After a delimiter: "--" closes, otherwise optional padding and CRLF.
   if bytes.starts_with(rest, "--") {
     reader.done = true
-    return PartResult{}
+    return NextPart{}
   }
   line_end := bytes.find(rest, "\r\n")
   if line_end == #len(rest) || #len(trim_ows(rest[..line_end])) != 0 {
     reader.failed = true
-    return PartResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "bad delimiter line" } }
+    multipart_failure(status, "bad delimiter line")
+    return NextPart{}
   }
   rest = rest[line_end + 2..]
   part := Part{}
@@ -136,7 +149,8 @@ pub fn next_part(reader: *Parts) PartResult {
     end := bytes.find(rest, "\r\n")
     if end == #len(rest) {
       reader.failed = true
-      return PartResult{ failure: parse.Failure{ kind: parse.Kind.Truncated, message: "part headers cut short" } }
+      multipart_failure(status, "part headers cut short")
+      return NextPart{}
     }
     line := rest[..end]
     rest = rest[end + 2..]
@@ -144,14 +158,16 @@ pub fn next_part(reader: *Parts) PartResult {
     colon := bytes.find_byte(line, ':')
     if colon == #len(line) {
       reader.failed = true
-      return PartResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "bad part header" } }
+      multipart_failure(status, "bad part header")
+      return NextPart{}
     }
     field := trim_ows(line[..colon])
     value := trim_ows(line[colon + 1..])
     if ascii_equal(field, "content-disposition") {
       if #len(value) < 9 || !ascii_equal(value[..9], "form-data") {
         reader.failed = true
-        return PartResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "not form-data" } }
+        multipart_failure(status, "not form-data")
+        return NextPart{}
       }
       part.name = disposition_parameter(value, "name").value
       file := disposition_parameter(value, "filename")
@@ -164,15 +180,17 @@ pub fn next_part(reader: *Parts) PartResult {
   }
   if !disposition {
     reader.failed = true
-    return PartResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "part without Content-Disposition" } }
+    multipart_failure(status, "part without Content-Disposition")
+    return NextPart{}
   }
   delimiter := reader.delimiter[..reader.delimiter_length]
   end := bytes.find(rest, delimiter)
   if end == #len(rest) {
     reader.failed = true
-    return PartResult{ failure: parse.Failure{ kind: parse.Kind.Truncated, message: "no closing boundary" } }
+    multipart_failure(status, "no closing boundary")
+    return NextPart{}
   }
   part.body = rest[..end]
   reader.rest = rest[end + #len(delimiter)..]
-  return PartResult{ value: part, found: true }
+  return NextPart{ value: part, found: true }
 }

@@ -1,4 +1,3 @@
-use "std/io" io
 use "std/fail"
 use "std/fs" fs
 use "std/process" process
@@ -6,29 +5,24 @@ use "std/process" process
 // Zone files are small; a larger file is not a zone.
 const tzif_limit: usize = 1048576
 
-fn read_zone(arena: *mem.Arena, name: []const u8, path: []const u8) ZoneResult {
+fn read_zone(arena: *mem.Arena, status: *fail.Status, name: []const u8, path: []const u8) Zone {
   mark := mem.arena_mark(arena)
-  status: fail.Status
-  data := fs.read_all(arena, &status, path, tzif_limit)
+  data := fs.read_all(arena, status, path, tzif_limit)
+  parsed := parse_tzif(arena, status, name, data)
   if status.failed {
-    mem.arena_rewind(arena, mark)
-    return ZoneResult{ failure: io.Failure{ kind: status.failure.kind, native: status.failure.native } }
-  }
-  parsed := parse_tzif(arena, name, data)
-  if io.failed(parsed.failure) {
     mem.arena_rewind(arena, mark)
   }
   return parsed
 }
 
-fn posix_load(arena: *mem.Arena, name: []const u8) ZoneResult {
+fn posix_load(arena: *mem.Arena, status: *fail.Status, name: []const u8) Zone {
   mark := mem.arena_mark(arena)
   path := mem.push_bytes_uninit(arena, #len(zoneinfo_root) + 1 + #len(name))
   _ = mem.copy(path, zoneinfo_root)
   path[#len(zoneinfo_root)] = '/'
   _ = mem.copy(path[#len(zoneinfo_root) + 1..], name)
-  loaded := read_zone(arena, name, path)
-  if io.failed(loaded.failure) {
+  loaded := read_zone(arena, status, name, path)
+  if status.failed {
     mem.arena_rewind(arena, mark)
   }
   return loaded
@@ -48,21 +42,22 @@ fn local_name(arena: *mem.Arena) []const u8 {
   return "localtime"
 }
 
-fn posix_system(arena: *mem.Arena) ZoneResult {
-  variable := process.environment(arena, "TZ")
-  if !io.failed(variable.failure) && variable.found && #len(variable.value) != 0 {
-    text := variable.value[..]
+fn posix_system(arena: *mem.Arena, status: *fail.Status) Zone {
+  text := process.environment_or(arena, "TZ", "")
+  if #len(text) != 0 {
     if text[0] == ':' {
       text = text[1..]
     }
-    if #len(text) != 0 && text[0] == '/' { return read_zone(arena, text, text) }
-    loaded := load(arena, text)
-    if !io.failed(loaded.failure) { return loaded }
-    return parse_posix(arena, text)
+    if #len(text) != 0 && text[0] == '/' { return read_zone(arena, status, text, text) }
+    // A zone name, else a POSIX rule.
+    named: fail.Status
+    loaded := load(arena, &named, text)
+    if !named.failed { return loaded }
+    return parse_posix(arena, status, text)
   }
-  loaded := read_zone(arena, local_name(arena), "/etc/localtime")
-  if io.failed(loaded.failure) && loaded.failure.kind == io.Kind.NotFound {
-    return ZoneResult{ value: utc() }
-  }
+  local: fail.Status
+  loaded := read_zone(arena, &local, local_name(arena), "/etc/localtime")
+  if local.failed && local.failure.kind == fail.Kind.NotFound { return utc() }
+  fail.set(status, local.failure)
   return loaded
 }

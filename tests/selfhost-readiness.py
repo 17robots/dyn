@@ -13,6 +13,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 SOURCE = r'''use "std/bytes"
+use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/process"
@@ -98,14 +99,15 @@ fn expression(p: *Compiler, symbols: *const Symbols, depth: usize) {
 fn main() {
   storage: [16384]u8
   arena := mem.arena_from_buffer(storage[..])
-  arguments := process.arguments(arena)
-  if io.failed(arguments.failure) || #len(arguments.value) != 2 { #panic("arguments") }
+  arguments_status: fail.Status
+  arguments := process.arguments(arena, &arguments_status)
+  if arguments_status.failed || #len(arguments) != 2 { #panic("arguments") }
   symbols := Symbols{}
   if !insert(&symbols, "alpha", '4') || !insert(&symbols, "beta", '7') { #panic("insert") }
   if insert(&symbols, "alpha", '8') || lookup(&symbols, "absent").ok { #panic("symbols") }
   for name in ["c", "d", "e", "f", "g", "h"] { if !insert(&symbols, name, '0') { #panic("capacity") } }
   if insert(&symbols, "full", '0') { #panic("overflow") }
-  p := Compiler{ source: arguments.value[1] }
+  p := Compiler{ source: arguments[1] }
   expression(&p, &symbols, 0)
   space(&p)
   if p.cursor != #len(p.source) { fail(&p, p.cursor) }

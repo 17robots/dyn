@@ -43,8 +43,9 @@ fn main() {
 
   cache: sessions.Cache
   shared := sessions.Shared{}
-  started := sessions.start(arena, 3600)
-  io.println("start {} {} {} {}", started.ok, #len(started.token), #len(started.csrf), started.cookie[..4])
+  random: fail.Status
+  started := sessions.start(arena, &random, 3600)
+  io.println("start {} {} {} {}", !random.failed, #len(started.token), #len(started.csrf), started.cookie[..4])
   io.println("cold {}", sessions.cached(&cache, &shared, started.token, 100).found)
   kept := sessions.remember(&cache, started.token, 7, started.csrf, "ann", 200)
   hit := sessions.cached(&cache, &shared, started.token, 100)

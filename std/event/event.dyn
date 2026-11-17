@@ -1,6 +1,6 @@
 #target(pointer_bits: 64)
 use "std/mem" mem
-use "std/io" io
+use "std/fail"
 use "std/net" net
 use "std/time" clock
 
@@ -9,20 +9,18 @@ pub const Writable: u32 = 4
 pub const Error: u32 = 8
 pub const Hangup: u32 = 16
 pub struct Event { descriptor: isize, token: u64, events: u32 }
-pub struct Result { failure: io.Failure }
-pub type OpenResult = io.Result(Queue)
-pub type WaitResult = io.Result([]Event)
 struct Entry { descriptor: isize, token: u64, events: u32, active: bool }
 // One owner, one thread. Storage belongs to the opening arena. Remove each
 // descriptor before closing/reusing it. A queue never owns its descriptors.
-// A native control failure poisons the queue: close and rebuild it, since a
-// platform may have applied part of a multi-filter update.
+// A native control failure poisons the queue: later calls fail with
+// InvalidState. Close and rebuild it, since a platform may have applied part
+// of a multi-filter update.
 // Lookups are O(1): free entry indices are a stack, and an open-addressed
 // table maps descriptor to entry. wait asks the kernel for at most batch
 // events; level triggering reports the rest on the next call.
 pub struct Queue {
   handle: isize, active: bool, entries: []Entry,
-  failed: bool, kind: io.Kind, error: isize,
+  failed: bool,
   free: []u32, free_count: usize,
   table: []u32, used_slots: usize,
   batch: usize,
@@ -31,20 +29,20 @@ const SlotEmpty: u32 = 0
 const SlotRemoved: u32 = 4294967295
 const MaxBatch: usize = 512
 
-pub fn open(arena: *mem.Arena, capacity: usize) OpenResult {
+pub fn open(arena: *mem.Arena, status: *fail.Status, capacity: usize) Queue {
+  if status.failed { return Queue{} }
   if capacity == 0 || capacity > 2147483647 {
-    return OpenResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+    fail.invalid(status, "open event queue", "", "capacity must be 1 to 2147483647")
+    return Queue{}
   }
-  opened := native_open()
-  if io.failed(opened.failure) {
-    return OpenResult{ failure: io.Failure{ kind: opened.failure.kind, native: opened.failure.native } }
-  }
+  handle := native_open(status)
+  if status.failed { return Queue{} }
   table_size: usize = 8
   for table_size < 2 * capacity {
     table_size *= 2
   }
   queue := Queue{
-    handle: opened.value, active: true, entries: mem.push_array(Entry, arena, capacity),
+    handle: handle, active: true, entries: mem.push_array(Entry, arena, capacity),
     free: mem.push_array(u32, arena, capacity), free_count: capacity,
     table: mem.push_array(u32, arena, table_size), batch: capacity,
   }
@@ -54,7 +52,7 @@ pub fn open(arena: *mem.Arena, capacity: usize) OpenResult {
   for i in 0..capacity {
     queue.free[i] = #cast(u32, capacity - 1 - i)
   }
-  return OpenResult{ value: queue }
+  return queue
 }
 fn slot_start(queue: *const Queue, descriptor: isize) usize {
   // Fibonacci hashing spreads consecutive descriptors.
@@ -102,106 +100,113 @@ fn table_rebuild(queue: *Queue) {
     }
   }
 }
-fn state(queue: *Queue) Result {
-  if !queue.active { return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
-  if queue.failed { return Result{ failure: io.Failure{ kind: queue.kind, native: queue.error } } }
-  return Result{}
+// Whether queue can take a call; records why not.
+fn usable(status: *fail.Status, queue: *Queue, operation: []const u8) bool {
+  if status.failed { return false }
+  if !queue.active {
+    fail.set(status, fail.make(fail.Kind.InvalidState, operation, "", "the queue is closed"))
+    return false
+  }
+  if queue.failed {
+    fail.set(status, fail.make(fail.Kind.InvalidState, operation, "", "an earlier change failed; close and rebuild the queue"))
+    return false
+  }
+  return true
 }
-fn control(queue: *Queue, index: usize, entry: Entry) Result {
-  outcome := native_control(queue, index, entry)
-  if io.failed(outcome.failure) {
+fn control(status: *fail.Status, queue: *Queue, index: usize, entry: Entry) {
+  native_control(status, queue, index, entry)
+  if status.failed {
     queue.failed = true
-    queue.kind = outcome.failure.kind
-    queue.error = outcome.failure.native
-    return outcome
+    return
   }
   queue.entries[index] = entry
-  return outcome
 }
-pub fn add(queue: *Queue, descriptor: isize, events: u32, token: u64) Result {
-  ready := state(queue)
-  if io.failed(ready.failure) { return ready }
+pub fn add(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, token: u64) {
+  if !usable(status, queue, "add") { return }
   if descriptor < 0 || #cast(net.Descriptor, descriptor) != descriptor || events == 0 || (events & ~#cast(u32, 5)) != 0 {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+    fail.invalid(status, "add", "", "events must be Readable and/or Writable on a valid descriptor")
+    return
   }
   if find(queue, descriptor) != #len(queue.entries) {
-    return Result{ failure: io.Failure{ kind: io.Kind.AlreadyExists } }
+    fail.set(status, fail.make(fail.Kind.AlreadyExists, "add", "", "the descriptor is already in the queue"))
+    return
   }
-  if queue.free_count == 0 { return Result{ failure: io.Failure{ kind: io.Kind.Capacity } } }
+  if queue.free_count == 0 {
+    fail.set(status, fail.make(fail.Kind.Capacity, "add", "", "the queue is full"))
+    return
+  }
   index := #cast(usize, queue.free[queue.free_count - 1])
-  added := control(queue, index, Entry{ descriptor: descriptor, token: token, events: events, active: true })
-  if io.failed(added.failure) { return added }
+  control(status, queue, index, Entry{ descriptor: descriptor, token: token, events: events, active: true })
+  if status.failed { return }
   queue.free_count -= 1
   if 4 * (queue.used_slots + 1) > 3 * #len(queue.table) {
     table_rebuild(queue)
   }
   table_place(queue, descriptor, index)
-  return added
 }
-pub fn modify(queue: *Queue, descriptor: isize, events: u32, token: u64) Result {
-  ready := state(queue)
-  if io.failed(ready.failure) { return ready }
+pub fn modify(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, token: u64) {
+  if !usable(status, queue, "modify") { return }
   if events == 0 || (events & ~#cast(u32, 5)) != 0 {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+    fail.invalid(status, "modify", "", "events must be Readable and/or Writable")
+    return
   }
   index := find(queue, descriptor)
-  if index == #len(queue.entries) { return Result{ failure: io.Failure{ kind: io.Kind.NotFound } } }
-  return control(queue, index, Entry{ descriptor: descriptor, token: token, events: events, active: true })
+  if index == #len(queue.entries) {
+    fail.set(status, fail.make(fail.Kind.NotFound, "modify", "", "the descriptor is not in the queue"))
+    return
+  }
+  control(status, queue, index, Entry{ descriptor: descriptor, token: token, events: events, active: true })
 }
-pub fn remove(queue: *Queue, descriptor: isize) Result {
-  ready := state(queue)
-  if io.failed(ready.failure) { return ready }
+pub fn remove(status: *fail.Status, queue: *Queue, descriptor: isize) {
+  if !usable(status, queue, "remove") { return }
   slot := find_slot(queue, descriptor)
-  if slot == #len(queue.table) { return Result{ failure: io.Failure{ kind: io.Kind.NotFound } } }
+  if slot == #len(queue.table) {
+    fail.set(status, fail.make(fail.Kind.NotFound, "remove", "", "the descriptor is not in the queue"))
+    return
+  }
   index := #cast(usize, queue.table[slot] - 1)
-  removed := control(queue, index, Entry{})
-  if io.failed(removed.failure) { return removed }
+  control(status, queue, index, Entry{})
+  if status.failed { return }
   queue.table[slot] = SlotRemoved
   queue.free[queue.free_count] = #cast(u32, index)
   queue.free_count += 1
-  return removed
 }
 // Level-triggered readiness. Use nonblocking descriptors; readiness can become
 // stale before I/O. timeout < 0 waits indefinitely, zero polls. Each call's
 // output and temporary arrays belong to arena; use a separate scratch arena
-// from the queue's storage. No callbacks or hidden threads run here.
-pub fn wait(arena: *mem.Arena, queue: *Queue, timeout_milliseconds: i32) WaitResult {
-  ready := state(queue)
-  if io.failed(ready.failure) {
-    return WaitResult{ failure: io.Failure{ kind: ready.failure.kind, native: ready.failure.native } }
-  }
-  start := clock.ClockResult{}
+// from the queue's storage. No callbacks or hidden threads run here. An
+// interrupted wait continues with the time left; at the end of it the result
+// is empty.
+pub fn wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout_milliseconds: i32) []Event {
+  empty: []Event
+  if !usable(status, queue, "wait") { return empty }
+  start := clock.Instant{}
   if timeout_milliseconds > 0 {
     start = clock.monotonic_now()
-    if io.failed(start.failure) {
-      return WaitResult{ failure: io.Failure{ kind: start.failure.kind, native: start.failure.native } }
-    }
   }
   remaining := timeout_milliseconds
   mark := mem.arena_mark(arena)
-  for true {
-    outcome := native_wait(arena, queue, remaining)
-    if !io.failed(outcome.failure) || outcome.failure.kind != io.Kind.Interrupted { return outcome }
+  for {
+    attempt: fail.Status
+    events := native_wait(arena, &attempt, queue, remaining)
+    if !attempt.failed { return events }
+    if attempt.failure.kind != fail.Kind.Interrupted {
+      fail.set(status, attempt.failure)
+      return empty
+    }
     mem.arena_rewind(arena, mark)
     if timeout_milliseconds > 0 {
-      now := clock.monotonic_now()
-      if io.failed(now.failure) {
-        return WaitResult{ failure: io.Failure{ kind: now.failure.kind, native: now.failure.native } }
-      }
-      elapsed := clock.elapsed(start.value, now.value)
-      if io.failed(elapsed.failure) {
-        return WaitResult{ failure: io.Failure{ kind: elapsed.failure.kind, native: elapsed.failure.native } }
-      }
+      elapsed := clock.elapsed(start, clock.monotonic_now())
       duration := timeout_milliseconds * clock.Millisecond
-      if elapsed.value >= duration { return WaitResult{} }
-      remaining = #cast(i32, ((duration - elapsed.value + clock.Millisecond - 1) / clock.Millisecond))
+      if elapsed >= duration { return empty }
+      remaining = #cast(i32, ((duration - elapsed + clock.Millisecond - 1) / clock.Millisecond))
     }
   }
-  return WaitResult{ failure: io.Failure{ kind: io.Kind.System } }
+  return empty
 }
 pub fn close(queue: *Queue) {
   if !queue.active { return }
-  outcome := native_close(queue.handle)
+  native_close(queue.handle)
   queue.* = Queue{}
 }
 
@@ -211,42 +216,30 @@ pub fn close(queue: *Queue) {
 // fires; any thread may call wake. One wake may cover several posts: drain,
 // then look at everything posted.
 pub struct Waker { descriptor: isize, active: bool }
-pub type WakerResult = io.Result(Waker)
 
-pub fn waker_open() WakerResult {
-  opened := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
-  if io.failed(opened.failure) { return WakerResult{ failure: opened.failure } }
-  descriptor := opened.value
+pub fn waker_open(status: *fail.Status) Waker {
+  descriptor := net.socket(status, net.AddressFamilyIpv4, net.SocketDatagram, 0)
   local := net.ipv4(127, 0, 0, 1, 0)
-  bound := net.bind_ipv4(descriptor, &local)
-  if io.failed(bound.failure) {
-    net.close(descriptor)
-    return WakerResult{ failure: bound.failure }
-  }
+  net.bind_ipv4(status, descriptor, &local)
   address := net.Address{}
-  named := net.local_address(descriptor, &address)
-  if io.failed(named.failure) {
-    net.close(descriptor)
-    return WakerResult{ failure: named.failure }
+  net.local_address(status, descriptor, &address)
+  net.connect(status, descriptor, address.bytes[..address.length])
+  net.nonblocking(status, descriptor, true)
+  if status.failed {
+    if descriptor >= 0 {
+      net.close(descriptor)
+    }
+    return Waker{}
   }
-  connected := net.connect(descriptor, address.bytes[..address.length])
-  if io.failed(connected.failure) {
-    net.close(descriptor)
-    return WakerResult{ failure: connected.failure }
-  }
-  blocking := net.nonblocking(descriptor, true)
-  if io.failed(blocking.failure) {
-    net.close(descriptor)
-    return WakerResult{ failure: blocking.failure }
-  }
-  return WakerResult{ value: Waker{ descriptor: descriptor, active: true } }
+  return Waker{ descriptor: descriptor, active: true }
 }
 
 // Never blocks. A full socket buffer means wakes are already pending.
 pub fn wake(waker: *const Waker) {
   if !waker.active { return }
   signal: [1]u8 = [1]
-  _ = net.send(waker.descriptor, signal[..], 0)
+  ignored: fail.Status
+  _ = net.try_send(&ignored, waker.descriptor, signal[..], 0)
 }
 
 // Discards pending wakes. Call on the owner's thread before reading posts.
@@ -254,8 +247,9 @@ pub fn waker_drain(waker: *const Waker) {
   if !waker.active { return }
   storage: [64]u8
   for i in 0..1024 {
-    received := net.receive(waker.descriptor, storage[..], 0)
-    if io.failed(received.failure) || received.value <= 0 { return }
+    drained: fail.Status
+    received := net.try_receive(&drained, waker.descriptor, storage[..], 0)
+    if drained.failed || received.count == 0 { return }
   }
 }
 

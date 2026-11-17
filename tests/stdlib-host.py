@@ -75,14 +75,15 @@ fn main() {
   require(sync.load_u64(&counter64) == 17, "atomic64 final")
   backing: [131072+mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(backing[..])
-  arguments := process.arguments(arena)
-  require(!errors.failed(arguments.failure) && #len(arguments.value) == 7, "stdlib assertion 49")
-  require(bytes.equal(arguments.value[1], "space argument"), "stdlib assertion 50")
-  require(bytes.equal(arguments.value[2], ""), "stdlib assertion 51")
-  require(bytes.equal(arguments.value[3], "quote\"inside"), "stdlib assertion 52")
-  require(bytes.equal(arguments.value[4], "trailing\\"), "stdlib assertion 53")
-  require(bytes.equal(arguments.value[5], "café 😀"), "stdlib assertion 54")
-  require(bytes.equal(arguments.value[6], "slashes\\\\\"quote"), "stdlib assertion 55")
+  arguments_status: fail.Status
+  arguments := process.arguments(arena, &arguments_status)
+  require(!arguments_status.failed && #len(arguments) == 7, "stdlib assertion 49")
+  require(bytes.equal(arguments[1], "space argument"), "stdlib assertion 50")
+  require(bytes.equal(arguments[2], ""), "stdlib assertion 51")
+  require(bytes.equal(arguments[3], "quote\"inside"), "stdlib assertion 52")
+  require(bytes.equal(arguments[4], "trailing\\"), "stdlib assertion 53")
+  require(bytes.equal(arguments[5], "café 😀"), "stdlib assertion 54")
+  require(bytes.equal(arguments[6], "slashes\\\\\"quote"), "stdlib assertion 55")
   tiny_backing: [1+mem.ArenaBufferOverhead]u8
   tiny_pad := (16-(#cast(usize,&tiny_backing[0])&15))&15
   tiny := mem.arena_from_buffer(tiny_backing[tiny_pad..tiny_pad+mem.ArenaHeader+1])
@@ -165,9 +166,13 @@ fn main() {
   raw_status: fail.Status
   raw_line := bufio.read_until(&raw_status, &raw_input, contents[..], 10)
   require(raw_line.status == bufio.ReadStatus.Complete && !raw_status.failed && bytes.equal(contents[..raw_line.transferred], "a\r"), "stdlib assertion 125")
-  require(process.environment(arena, "").failure.kind == errors.Kind.InvalidInput, "stdlib assertion 126")
+  unnamed: fail.Status
+  _ = process.environment(arena, &unnamed, "")
+  require(unnamed.failure.kind == fail.Kind.InvalidInput, "stdlib assertion 126")
   invalid_child := process.Child{}
-  require(process.wait(&invalid_child, false).failure.kind == errors.Kind.InvalidState, "stdlib assertion 128")
+  unstarted: fail.Status
+  _ = process.wait(&unstarted, &invalid_child, false)
+  require(unstarted.failure.kind == fail.Kind.InvalidState, "stdlib assertion 128")
   minimum: isize = 0 - #cast(isize, (#max(usize) >> 1)) - 1
   require(errors.linux(minimum) == errors.Kind.System, "stdlib assertion 130")
   require(errors.darwin(minimum) == errors.Kind.System, "stdlib assertion 131")
@@ -175,11 +180,11 @@ fn main() {
   require(errors.wasi(minimum) == errors.Kind.System, "stdlib assertion 133")
   started := time.monotonic_now()
   wall := time.realtime_now()
-  require(!errors.failed(started.failure) && !errors.failed(wall.failure) && wall.value.seconds > 1700000000, "stdlib assertion 136")
-  require(!errors.failed(time.sleep(time.Millisecond * 2).failure), "stdlib assertion 137")
+  require(wall.seconds > 1700000000, "stdlib assertion 136")
+  time.sleep(time.Millisecond * 2)
   finished := time.monotonic_now()
-  require(!errors.failed(finished.failure) && time.elapsed(started.value, finished.value).value >= time.Millisecond, "stdlib assertion 139")
-  require(!errors.failed(time.sleep(0).failure), "stdlib assertion 140")
+  require(time.elapsed(started, finished) >= time.Millisecond, "stdlib assertion 139")
+  time.sleep(0)
   printed: fail.Status
   io.println_to(&printed, io.stdout(), "stdlib passed")
   require(!printed.failed, "stdlib assertion 141")

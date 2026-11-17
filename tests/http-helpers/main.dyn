@@ -1,6 +1,7 @@
 // Prints the results of std/net/http and std/encoding/json helpers, one per
 // line, for tests/http-helpers.py to compare.
 use "std/encoding/json"
+use "std/fail"
 use "std/io"
 use "std/net"
 use "std/net/http"
@@ -20,14 +21,15 @@ fn chunk_pieces(message: []const u8) {
   reader := http.chunk_reader()
   at: usize = 0
   state := "more"
+  status: fail.Status
   for at < #len(message) {
-    step := http.chunk_step(&reader, message[at..at + 1])
+    step := http.chunk_step(&status, &reader, message[at..at + 1])
     for byte in step.data {
       output[length] = byte
       length += 1
     }
     at += step.consumed
-    if step.failed {
+    if status.failed {
       state = "failed"
       break
     }
@@ -37,7 +39,8 @@ fn chunk_pieces(message: []const u8) {
     }
   }
   whole := http.chunk_reader()
-  first := http.chunk_step(&whole, message)
+  whole_status: fail.Status
+  first := http.chunk_step(&whole_status, &whole, message)
   io.println("chunks {} {} {} {}", output[..length], state, at, first.consumed)
 }
 
@@ -51,30 +54,41 @@ fn main() {
   storage: [512]u8
   io.println("{}", http.format_date(storage[..], 784111777))
   io.println("{}", http.format_date(storage[..], 951782400))
-  io.println("{}", http.parse_date("Tue, 29 Feb 2000 00:00:00 GMT").value)
-  io.println("{}", http.parse_date("Sunday, 06-Nov-94 08:49:37 GMT").failure.kind)
+  date: fail.Status
+  io.println("{}", http.parse_date(&date, "Tue, 29 Feb 2000 00:00:00 GMT"))
+  _ = http.parse_date(&date, "Sunday, 06-Nov-94 08:49:37 GMT")
+  io.println("{}", date.failure.kind)
   io.println("{}", http.status_reason(304))
   io.println("{}", http.status_reason(599))
-  io.println("{}", http.set_cookie(storage[..], http.Cookie{ name: "sid", value: "abc", path: "/", max_age: 60, http_only: true, secure: true, same_site: http.SameSite.Strict }).value)
-  io.println("{}", http.set_cookie(storage[..], http.Cookie{ name: "sid", value: "", max_age: -1 }).value)
-  io.println("{}", http.set_cookie(storage[..], http.Cookie{ name: "x", value: "a;b" }).failure.kind)
-  io.println("{}", http.set_cookie(storage[..], http.Cookie{ name: "x", value: "1", same_site: http.SameSite.None }).failure.kind)
+  cookies: fail.Status
+  io.println("{}", http.set_cookie(&cookies, storage[..], http.Cookie{ name: "sid", value: "abc", path: "/", max_age: 60, http_only: true, secure: true, same_site: http.SameSite.Strict }))
+  io.println("{}", http.set_cookie(&cookies, storage[..], http.Cookie{ name: "sid", value: "", max_age: -1 }))
+  bad_value: fail.Status
+  _ = http.set_cookie(&bad_value, storage[..], http.Cookie{ name: "x", value: "a;b" })
+  io.println("{}", bad_value.failure.kind)
+  insecure: fail.Status
+  _ = http.set_cookie(&insecure, storage[..], http.Cookie{ name: "x", value: "1", same_site: http.SameSite.None })
+  io.println("{}", insecure.failure.kind)
   with_cookies := request("GET / HTTP/1.1\r\nHost: x\r\nCookie: a=1; theme=\"dark\"\r\nCookie: sid=s3\r\n\r\n")
   io.println("{} {} {}", http.cookie(&with_cookies, "theme").value, http.cookie(&with_cookies, "sid").value, http.cookie(&with_cookies, "nope").found)
-  event := http.sse_event(storage[..], "update", "42", "one\r\ntwo\nthree")
-  io.print("{}", event.value)
-  io.println("{}", http.sse_event(storage[..], "bad\nname", "", "x").failure.kind)
+  events: fail.Status
+  event := http.sse_event(&events, storage[..], "update", "42", "one\r\ntwo\nthree")
+  io.print("{}", event)
+  bad_event: fail.Status
+  _ = http.sse_event(&bad_event, storage[..], "bad\nname", "", "x")
+  io.println("{}", bad_event.failure.kind)
   io.println("{} {} {}", http.content_type("app.JS"), http.content_type("dir.v1/file"), http.content_type("logo.svg"))
   encodings := request("GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding: br;q=1.0, gzip;q=0, *;q=0.5\r\n\r\n")
   io.println("{} {} {}", http.accepts_encoding(&encodings, "gzip"), http.accepts_encoding(&encodings, "br"), http.accepts_encoding(&encodings, "zstd"))
   conditional := request("GET / HTTP/1.1\r\nHost: x\r\nIf-None-Match: \"a\", W/\"b\"\r\n\r\n")
   io.println("{} {} {}", http.etag_matches(&conditional, "\"b\""), http.etag_matches(&conditional, "W/\"a\""), http.etag_matches(&conditional, "\"c\""))
   form := request("POST /up HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: 163\r\n\r\n--B\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nhi\r\n--B\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a.txt\"\r\nContent-Type: text/plain\r\n\r\nx\r\ny\r\n--B--\r\n")
-  parts := http.multipart(&form)
+  reading: fail.Status
+  parts := http.multipart(&reading, &form)
   for true {
-    part := http.next_part(&parts.value)
+    part := http.next_part(&reading, &parts)
     if !part.found {
-      io.println("parts end {}", part.failure.kind)
+      io.println("parts end {}", reading.failure.kind)
       break
     }
     io.println("part {} {} {} {}", part.value.name, part.value.filename, part.value.content_type, #len(part.value.body))

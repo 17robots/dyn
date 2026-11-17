@@ -5,6 +5,7 @@ use "std/bytes"
 use "std/crypto/blake2b"
 use "std/crypto/password"
 use "std/encoding/hex"
+use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/parse"
@@ -18,7 +19,8 @@ fn number(text: []const u8) u32 {
 fn main() {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  arguments := process.arguments(arena).value
+  arguments_status: fail.Status
+  arguments := process.arguments(arena, &arguments_status)
   if bytes.equal(arguments[1], "rfc") {
     secret_password: [32]u8
     salt: [16]u8

@@ -10,6 +10,7 @@ DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/mem"
 use "std/bytes"
 use "std/io" errors
+use "std/fail"
 use "std/encoding"
 use "std/encoding/base32" b32
 use "std/parse" parse
@@ -53,11 +54,12 @@ fn main() {
  check(bytes.equal(hex.decode(f.arena,"68656c6c6f").value,"hello"))
  parsed:=json.parse(f.arena,"{\"answer\":42,\"text\":\"hello\"}")
  check(!parse.failed(parsed.failure) && json.get(i64,parsed.root,"answer")==42)
- chunked:=http.decode_chunked(f.arena,"5\r\nhello\r\n0\r\n\r\n")
- check(!errors.failed(chunked.failure) && bytes.equal(chunked.value,"hello"))
+ status:fail.Status
+ chunked:=http.decode_chunked(f.arena,&status,"5\r\nhello\r\n0\r\n\r\n")
+ check(!status.failed && bytes.equal(chunked.value,"hello"))
  packet:[46]u8=[18,52,129,128,0,1,0,1,0,0,0,0,7,101,120,97,109,112,108,101,4,116,101,115,116,0,0,1,0,1,192,12,0,1,0,1,0,0,0,1,0,4,1,2,3,4]
- answers:=dns.parse_ipv4(f.arena,packet[..],0x1234,"example.test")
- check(!errors.failed(answers.failure) && #len(answers.value)==1 && answers.value[0].a==1 && answers.value[0].d==4)
+ answers:=dns.parse_ipv4(f.arena,&status,packet[..],0x1234,"example.test")
+ check(!status.failed && #len(answers)==1 && answers[0].a==1 && answers[0].d==4)
  key:[32]u8
  nonce:[12]u8
  sealed:=aead.seal(f.arena,aead.Cipher.Aes256Gcm,"hello","",key[..],nonce[..])
@@ -69,7 +71,7 @@ fn main() {
 }
 '''
 def main():
-    source=SOURCE.replace('PROCESS_CASE', 'arguments:[3][]const u8=["/bin/sh","-c","printf chain"]\n captured:=process.capture(f.arena,"/bin/sh",arguments[..],process.Options{},process.CaptureOptions{timeout_milliseconds:2000})\n check(!errors.failed(captured.failure) && captured.exit.code==0 && bytes.equal(captured.output,"chain"))' if sys.platform=='linux' else '_=process.Options{}')
+    source=SOURCE.replace('PROCESS_CASE', 'arguments:[3][]const u8=["/bin/sh","-c","printf chain"]\n captured:=process.capture(f.arena,&status,"/bin/sh",arguments[..],process.Options{},process.CaptureOptions{timeout_milliseconds:2000})\n check(!status.failed && captured.exit.code==0 && bytes.equal(captured.output,"chain"))' if sys.platform=='linux' else '_=process.Options{}')
     with tempfile.TemporaryDirectory(prefix='dyn-chain-producers-') as temporary:
         project=Path(temporary)
         (project/'main.dyn').write_text(source)

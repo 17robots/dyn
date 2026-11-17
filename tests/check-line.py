@@ -33,6 +33,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-check-line-') as temporary:
     overflow = Path(temporary) / 'overflow'
     overflow.mkdir()
     (overflow / 'main.dyn').write_text('''use "std/mem"
+use "std/fail"
 use "std/thread"
 
 fn down(n: u64) u64 {
@@ -49,8 +50,9 @@ fn worker(context: *u8) isize {
 
 fn main() {
   arena := mem.arena_alloc(0)
-  spawned := thread.spawn_with_size(arena, 1048576, worker, nil)
-  _ = thread.join(spawned.value)
+  status: fail.Status
+  spawned := thread.spawn_with_size(arena, &status, 1048576, worker, nil)
+  thread.join(&status, spawned)
 }
 ''')
     for target, emulator in (('x86_64-linux', []), ('aarch64-linux', ['qemu-aarch64']), ('riscv64-linux', ['qemu-riscv64'])):

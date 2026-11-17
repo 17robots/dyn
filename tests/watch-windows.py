@@ -68,7 +68,7 @@ fn main() {
       }
     }
     if seen_first == (watch.Create | watch.MoveFrom | watch.MoveTo | watch.Delete) && seen_second == (watch.Create | watch.Delete) { break }
-    if event.status == watch.Status.Empty { require(!io.failed(time.sleep(10000000).failure)) }
+    if event.status == watch.Status.Empty { time.sleep(10000000) }
   }
   require(seen_first == (watch.Create | watch.MoveFrom | watch.MoveTo | watch.Delete))
   require(seen_second == (watch.Create | watch.Delete))

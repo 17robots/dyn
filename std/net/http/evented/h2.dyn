@@ -182,13 +182,13 @@ struct Slot {
   index: usize,
   job_data: rawptr,
   job_work: fn(rawptr),
-  job_finish: fn(*http.Response, *const http.Request, rawptr) http.Result,
+  job_finish: fn(*fail.Status, *http.Response, *const http.Request, rawptr),
   job_request: http.Request,
   job_running: bool,
   // Large bodies read with receive_body.
   body_data: rawptr,
   body_chunk: fn(rawptr, []const u8) bool,
-  body_finish: fn(*http.Response, *const http.Request, rawptr, BodyEnd) http.Result,
+  body_finish: fn(*fail.Status, *http.Response, *const http.Request, rawptr, BodyEnd),
 }
 
 struct H2Pool {
@@ -1083,7 +1083,9 @@ fn send_answer(worker: *Worker, index: usize, stream_index: usize, status: u16, 
   stream := &h2.streams[stream_index]
   stream.phase = Phase.Answering
   response := h2_response(worker, connection, stream_index)
-  _ = http.respond(&response, body, http.ResponseOptions{ status: status, content_type: "text/plain; charset=utf-8" })
+  // Best effort: finish_stream resets a stream left unanswered.
+  answered: fail.Status
+  http.respond(&answered, &response, body, http.ResponseOptions{ status: status, content_type: "text/plain; charset=utf-8" })
   finish_stream(worker, index, stream_index)
 }
 
@@ -1223,8 +1225,8 @@ fn dispatch(worker: *Worker, index: usize, stream_index: usize) {
   response := h2_response(worker, connection, stream_index)
   worker.requests += 1
   started := log_start(worker)
-  handled := worker.handler(&response, &request)
-  _ = handled
+  worker.handler(&worker.request, &response, &request)
+  _ = handled(worker)
   log_request(worker, &connection.remote, &request, &response, started)
   stream = &h2.streams[stream_index]
   if stream.phase == Phase.Deferred || stream.phase == Phase.Free { return }
@@ -1254,19 +1256,21 @@ fn finish_stream(worker: *Worker, index: usize, stream_index: usize) {
 }
 
 // The response writer: HTTP/1.1 bytes in, frames out.
-fn h2_write(data: rawptr, source: []const u8) io.Transfer {
+fn h2_write_stream(data: rawptr, status: *fail.Status, source: []const u8) usize {
   connection := #cast(*Connection, data)
   worker := connection.worker
   h2 := connection.h2
   if connection.failed || h2 == nil {
-    return io.Transfer{ failure: io.Failure{ kind: io.Kind.InvalidState } }
+    fail.set(status, fail.make(fail.Kind.InvalidState, "write", "", "the connection failed"))
+    return 0
   }
   stream := &h2.streams[h2.current]
-  if stream.reset { return io.Transfer{ transferred: #len(source) } }
+  if stream.reset { return #len(source) }
   if !h2_output(worker, connection, h2.current, source, true) {
-    return io.Transfer{ failure: io.Failure{ kind: io.Kind.WouldBlock } }
+    fail.set(status, fail.make(fail.Kind.WouldBlock, "write", "", "the stream cannot take more output"))
+    return 0
   }
-  return io.Transfer{ transferred: #len(source) }
+  return #len(source)
 }
 
 fn h2_reserve(data: rawptr, capacity: usize) []u8 {
@@ -1276,15 +1280,17 @@ fn h2_reserve(data: rawptr, capacity: usize) []u8 {
   return body[..capacity]
 }
 
-fn h2_commit(data: rawptr, head: []const u8, length: usize) io.Transfer {
+fn h2_commit(data: rawptr, status: *fail.Status, head: []const u8, length: usize) usize {
   connection := #cast(*Connection, data)
   body := connection.worker.h2.body
-  if length > #len(body) { return io.Transfer{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
-  first := h2_write(data, head)
-  if io.failed(first.failure) { return first }
-  second := h2_write(data, body[..length])
-  if io.failed(second.failure) { return second }
-  return io.Transfer{ transferred: #len(head) + length }
+  if status.failed { return 0 }
+  if length > #len(body) {
+    fail.set(status, fail.make(fail.Kind.InvalidState, "respond", "", "the body is past the reserved storage"))
+    return 0
+  }
+  first := h2_write_stream(data, status, head)
+  if status.failed { return 0 }
+  return first + h2_write_stream(data, status, body[..length])
 }
 
 // Turns response bytes into frames for a stream. blocking may wait for flow
@@ -1344,8 +1350,8 @@ fn h2_output(worker: *Worker, connection: *Connection, stream_index: usize, sour
       if end { return true }
       continue
     }
-    step := http.chunk_step(&stream.output_chunks, rest)
-    if step.failed { return false }
+    step := http.chunk_step(&worker.io, &stream.output_chunks, rest)
+    if io_failed(worker) { return false }
     if step.done {
       stream.output = Output.Done
     }
@@ -1537,8 +1543,8 @@ fn wait_window(worker: *Worker, connection: *Connection, stream_index: usize) bo
       if received.status == TransportStatus.WouldWrite {
         wanted = network.PollWritable
       }
-      ready := network.wait(connection.descriptor, wanted, connection.write_timeout)
-      if io.failed(ready.failure) || ready.value == 0 { return false }
+      ready := network.wait(&worker.io, connection.descriptor, wanted, connection.write_timeout)
+      if io_failed(worker) || ready == 0 { return false }
       continue
     }
     if received.status != TransportStatus.Ok || received.count == 0 { return false }
@@ -1615,12 +1621,13 @@ fn h2_job(connection: *Connection) *mem.Arena {
   return slot.jobs
 }
 
-fn h2_run(connection: *Connection, data: rawptr, work: fn(rawptr), finish_job: fn(*http.Response, *const http.Request, rawptr) http.Result) io.Failure {
+fn h2_run(status: *fail.Status, connection: *Connection, data: rawptr, work: fn(rawptr), finish_job: fn(*fail.Status, *http.Response, *const http.Request, rawptr)) {
   worker := connection.worker
   stream := current_stream(connection)
   slot := current_slot(connection)
   if slot == nil || slot.job_running || stream.phase != Phase.Answering {
-    return io.Failure{ kind: io.Kind.InvalidState }
+    job_failure(status, fail.Kind.InvalidState, "not an unanswered stream")
+    return
   }
   slot.job_data = data
   slot.job_work = work
@@ -1629,12 +1636,12 @@ fn h2_run(connection: *Connection, data: rawptr, work: fn(rawptr), finish_job: f
   slot.job_running = true
   if !tasks.submit(worker.config.pool, tasks.Task{ run: h2_job_main, data: slot }) {
     slot.job_running = false
-    return io.Failure{ kind: io.Kind.Capacity }
+    job_failure(status, fail.Kind.Capacity, "the pool's queue is full")
+    return
   }
   stream.phase = Phase.Deferred
   connection.h2.jobs += 1
   worker.jobs_running += 1
-  return io.Failure{}
 }
 
 // On a pool thread.
@@ -1675,7 +1682,8 @@ fn h2_job_done(worker: *Worker, slot_index: usize) {
   request := slot.job_request
   response := h2_response(worker, connection, stream_index)
   started := log_start(worker)
-  _ = slot.job_finish(&response, &request, slot.job_data)
+  slot.job_finish(&worker.request, &response, &request, slot.job_data)
+  _ = handled(worker)
   log_request(worker, &connection.remote, &request, &response, started)
   stream = &connection.h2.streams[stream_index]
   if stream.phase == Phase.Answering {
@@ -1686,13 +1694,13 @@ fn h2_job_done(worker: *Worker, slot_index: usize) {
   }
 }
 
-fn h2_open_stream(connection: *Connection, response: *http.Response, options: http.ResponseOptions, topic: u64) PeerResult {
+fn h2_open_stream(status: *fail.Status, connection: *Connection, response: *http.Response, options: http.ResponseOptions, topic: u64) Peer {
   stream := current_stream(connection)
   if stream.phase != Phase.Answering || response.started || response.finished || response.head_only {
-    return PeerResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
+    return peer_failure(status, fail.Kind.InvalidState, "not a fresh evented response")
   }
-  opened := http.respond_stream(response, options)
-  if io.failed(opened.failure) { return PeerResult{ failure: opened.failure } }
+  _ = http.respond_stream(status, response, options)
+  if status.failed { return Peer{} }
   stream = current_stream(connection)
   stream.phase = Phase.Streaming
   stream.topic = topic
@@ -1704,7 +1712,7 @@ fn h2_open_stream(connection: *Connection, response: *http.Response, options: ht
   give_upload(connection, stream)
   peer := peer_of(connection.worker, connection.index)
   peer.stream = stream.id
-  return PeerResult{ value: peer }
+  return peer
 }
 
 // A push for a stream: DATA, or the end of the stream.
@@ -1775,7 +1783,8 @@ fn large_begin(worker: *Worker, index: usize, stream_index: usize) {
   stream.head_only = bytes.equal(request.method, "HEAD")
   response := h2_response(worker, connection, stream_index)
   worker.requests += 1
-  _ = worker.config.on_large_body(&response, &request)
+  worker.config.on_large_body(&worker.request, &response, &request)
+  _ = handled(worker)
   stream = &connection.h2.streams[stream_index]
   if stream.phase == Phase.Large {
     // Bytes that came before the decision go first.
@@ -1797,19 +1806,19 @@ fn large_begin(worker: *Worker, index: usize, stream_index: usize) {
   finish_stream(worker, index, stream_index)
 }
 
-fn h2_receive_body(connection: *Connection, response: *http.Response, data: rawptr, chunk: fn(rawptr, []const u8) bool,
-  finish_body: fn(*http.Response, *const http.Request, rawptr, BodyEnd) http.Result) io.Failure {
+fn h2_receive_body(status: *fail.Status, connection: *Connection, response: *http.Response, data: rawptr, chunk: fn(rawptr, []const u8) bool,
+  finish_body: fn(*fail.Status, *http.Response, *const http.Request, rawptr, BodyEnd)) {
   stream := current_stream(connection)
   slot := current_slot(connection)
   if slot == nil || stream.phase != Phase.LargeHead || response.started || response.finished {
-    return io.Failure{ kind: io.Kind.InvalidState }
+    job_failure(status, fail.Kind.InvalidState, "receive_body runs only in Config.on_large_body")
+    return
   }
   slot.body_data = data
   slot.body_chunk = chunk
   slot.body_finish = finish_body
   stream.phase = Phase.Large
   response.finished = true
-  return io.Failure{}
 }
 
 fn large_end(worker: *Worker, connection: *Connection, stream_index: usize, outcome: BodyEnd) {
@@ -1828,7 +1837,8 @@ fn large_end(worker: *Worker, connection: *Connection, stream_index: usize, outc
     stream.reset = true
   }
   response := h2_response(worker, connection, stream_index)
-  _ = done(&response, &request, slot.body_data, outcome)
+  done(&worker.request, &response, &request, slot.body_data, outcome)
+  _ = handled(worker)
   stream = &connection.h2.streams[stream_index]
   if stream.phase == Phase.Deferred { return }
   if outcome == BodyEnd.Closed {
@@ -1844,17 +1854,17 @@ fn large_end(worker: *Worker, connection: *Connection, stream_index: usize, outc
 // ---------------------------------------------------------------- WebSockets (RFC 8441)
 
 // upgrade on an HTTP/2 stream: 200, then WebSocket frames in DATA.
-fn h2_upgrade(connection: *Connection, response: *http.Response, topic: u64) PeerResult {
+fn h2_upgrade(status: *fail.Status, connection: *Connection, response: *http.Response, topic: u64) Peer {
   worker := connection.worker
   h2 := connection.h2
   stream := current_stream(connection)
   if stream.phase != Phase.Answering || !stream.websocket_request || response.started || response.finished || stream.slot == 0 {
-    return PeerResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+    return peer_failure(status, fail.Kind.InvalidInput, "not an extended CONNECT WebSocket stream")
   }
   block: [8]u8
   length := hpack.encode_field(block[..], ":status", "200")
   if length == 0 || !send_frame(connection, FrameHeaders, FlagEndHeaders, stream.id, block[..length], true) {
-    return PeerResult{ failure: io.Failure{ kind: io.Kind.Capacity } }
+    return peer_failure(status, fail.Kind.Capacity, "no room for the response head")
   }
   response.started = true
   response.finished = true
@@ -1870,7 +1880,7 @@ fn h2_upgrade(connection: *Connection, response: *http.Response, topic: u64) Pee
   peer := peer_of(worker, connection.index)
   peer.stream = stream.id
   _ = h2
-  return PeerResult{ value: peer }
+  return peer
 }
 
 // One WebSocket frame as DATA, never waiting: a full window fails.
@@ -1914,18 +1924,18 @@ fn websocket_data(worker: *Worker, connection: *Connection, index: usize, data: 
     stream = &connection.h2.streams[index]
     if stream.phase != Phase.WebSocket || stream.close_sent { break }
     start := stream.frames.used
-    frame := websocket.parse_frame(buffer[start..stream.websocket_used])
-    if frame.failure.kind == parse.Kind.Truncated { break }
+    frame := websocket.parse_frame(&worker.io, buffer[start..stream.websocket_used])
+    if !worker.io.failed && !frame.complete { break }
     control: [125]u8
-    received := websocket.receive(&stream.frames, buffer[..start + frame.consumed], control[..], frame)
+    received := websocket.receive(&worker.io, &stream.frames, buffer[..start + frame.consumed], control[..], frame)
+    if io_failed(worker) {
+      websocket_close(worker, connection, index, 1002)
+      return
+    }
     frame_end := start + frame.consumed
     kept := start
     if received.detail == websocket.WebSocketEventKind.None {
       kept = stream.frames.used
-    }
-    if received.detail == websocket.WebSocketEventKind.Error {
-      websocket_close(worker, connection, index, 1002)
-      return
     }
     if received.detail == websocket.WebSocketEventKind.Ping {
       if !websocket_send(worker, connection, index, 10, received.payload) {
@@ -1967,8 +1977,4 @@ fn websocket_data(worker: *Worker, connection: *Connection, index: usize, data: 
 fn field_out(quic: bool, destination: []u8, name: []const u8, value: []const u8) usize {
   if quic { return qpack.encode_field(destination, name, value) }
   return hpack.encode_field(destination, name, value)
-}
-
-fn h2_write_stream(data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return io.from_transfer(status, h2_write(data, source), "write", "")
 }

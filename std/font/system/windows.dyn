@@ -1,20 +1,15 @@
-use "std/io" io
 #target(kernel: windows)
 
 fn font_directories(arena: *mem.Arena, output: [][]const u8) usize {
   count: usize = 0
-  windows := process.environment(arena, "WINDIR")
-  if !io.failed(windows.failure) && windows.found {
-    parts: [2][]const u8 = [windows.value, "Fonts"]
-    output[count] = strings.join(arena, parts[..], "\\")
-  } else {
-    output[count] = "C:\\Windows\\Fonts"
-  }
+  windows := process.environment_or(arena, "WINDIR", "C:\\Windows")
+  parts: [2][]const u8 = [windows, "Fonts"]
+  output[count] = strings.join(arena, parts[..], "\\")
   count += 1
-  local := process.environment(arena, "LOCALAPPDATA")
-  if !io.failed(local.failure) && local.found {
-    parts: [2][]const u8 = [local.value, "Microsoft\\Windows\\Fonts"]
-    output[count] = strings.join(arena, parts[..], "\\")
+  local := process.environment_or(arena, "LOCALAPPDATA", "")
+  if #len(local) != 0 {
+    local_parts: [2][]const u8 = [local, "Microsoft\\Windows\\Fonts"]
+    output[count] = strings.join(arena, local_parts[..], "\\")
     count += 1
   }
   return count

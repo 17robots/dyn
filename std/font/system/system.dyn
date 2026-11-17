@@ -263,9 +263,7 @@ pub fn scan(arena: *mem.Arena, limit: usize) []Entry {
 }
 
 fn home(arena: *mem.Arena) []const u8 {
-  found := process.environment(arena, "HOME")
-  if !io.failed(found.failure) && found.found { return found.value }
-  return ""
+  return process.environment_or(arena, "HOME", "")
 }
 
 fn closeness(entry: *const Entry, weight: u16, italic: bool) u32 {

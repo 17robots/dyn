@@ -23,26 +23,18 @@ fn framing(context: rawptr, input: []const u8) bool {
     if whole.consumed == 0 || whole.consumed > #len(input) || #len(request.method) == 0 {
       return false
     }
-    if #len(request.body) != whole.consumed - request.header_length {
-      return false
-    }
-    if #len(request.path) + #len(request.query) > #len(request.target) {
-      return false
-    }
+    if #len(request.body) != whole.consumed - request.header_length { return false }
+    if #len(request.path) + #len(request.query) > #len(request.target) { return false }
     for cut in 0..whole.consumed {
       prefix := http.frame_request(input[..cut], capacity)
-      if prefix.status == http.FrameStatus.Ready {
-        return false
-      }
+      if prefix.status == http.FrameStatus.Ready { return false }
     }
   }
   return true
 }
 
 fn hex_digit(value: u8) u8 {
-  if value < 10 {
-    return '0' + value
-  }
+  if value < 10 { return '0' + value }
   return 'A' + value - 10
 }
 
@@ -50,46 +42,36 @@ fn hex_digit(value: u8) u8 {
 // input never writes past the destination.
 fn form_round_trip(context: rawptr, input: []const u8) bool {
   encoded: [3 * 256]u8
-  if #len(input) > 256 {
-    return true
-  }
+  if #len(input) > 256 { return true }
   for i in 0..#len(input) {
     encoded[3 * i] = '%'
     encoded[3 * i + 1] = hex_digit(input[i] >> 4)
     encoded[3 * i + 2] = hex_digit(input[i] & 15)
   }
   decoded: [256]u8
-  value := http.form_decode(decoded[..], encoded[..3 * #len(input)])
-  if parse.failed(value.failure) || !bytes.equal(value.value, input) {
-    return false
-  }
+  status: fail.Status
+  value := http.form_decode(&status, decoded[..], encoded[..3 * #len(input)])
+  if status.failed || !bytes.equal(value, input) { return false }
   small: [8]u8
-  raw := http.form_decode(small[..], input)
-  return parse.failed(raw.failure) || #len(raw.value) <= #len(input)
+  raw_status: fail.Status
+  raw := http.form_decode(&raw_status, small[..], input)
+  return raw_status.failed || #len(raw) <= #len(input)
 }
 
 // Splits input at the first zero byte into pattern and path. Captures must be
 // nonempty slices of path, and a match must be repeatable.
 fn path_match(context: rawptr, input: []const u8) bool {
   split := bytes.find_byte(input, 0)
-  if split == #len(input) {
-    return true
-  }
+  if split == #len(input) { return true }
   pattern := input[..split]
   path := input[split + 1..]
   request := http.Request{}
   matched := http.match_path(pattern, path, &request)
-  if !matched {
-    return true
-  }
-  if request.param_count > http.MaxParams {
-    return false
-  }
+  if !matched { return true }
+  if request.param_count > http.MaxParams { return false }
   for i in 0..request.param_count {
     value := request.params[i].value
-    if #len(value) == 0 || bytes.find_byte(value, '/') != #len(value) {
-      return false
-    }
+    if #len(value) == 0 || bytes.find_byte(value, '/') != #len(value) { return false }
   }
   again := http.Request{}
   return http.match_path(pattern, path, &again) && again.param_count == request.param_count
@@ -117,25 +99,20 @@ fn capture_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
 // data can never add a header line.
 fn header_injection(context: rawptr, input: []const u8) bool {
   split := bytes.find_byte(input, ':')
-  if split == #len(input) {
-    return true
-  }
+  if split == #len(input) { return true }
   capture := Capture{}
   response := http.Response{ output: io.Writer{ data: &capture, write: capture_write } }
   headers: [1]http.Header = [http.Header{ name: input[..split], value: input[split + 1..] }]
-  sent := http.respond(&response, "", http.ResponseOptions{ content_type: "text/plain", headers: headers[..] })
-  if io.failed(sent.failure) {
-    return capture.length == 0
-  }
+  sent: fail.Status
+  http.respond(&sent, &response, "", http.ResponseOptions{ content_type: "text/plain", headers: headers[..] })
+  if sent.failed { return capture.length == 0 }
   head := capture.bytes[..capture.length]
   lines: usize = 0
   for i in 0..#len(head) {
     if head[i] == '\n' {
       lines += 1
     }
-    if head[i] == '\r' && (i + 1 >= #len(head) || head[i + 1] != '\n') {
-      return false
-    }
+    if head[i] == '\r' && (i + 1 >= #len(head) || head[i + 1] != '\n') { return false }
   }
   // Status, Content-Type, Content-Length, Date, the header, Connection, blank.
   return lines == 7
@@ -145,9 +122,7 @@ fn header_injection(context: rawptr, input: []const u8) bool {
 // accounted for.
 fn escaping(context: rawptr, input: []const u8) bool {
   storage: [8 * 256]u8
-  if #len(input) > 256 {
-    return true
-  }
+  if #len(input) > 256 { return true }
   page := html.writer(storage[..])
   html.text(&page, input)
   output := html.output(&page).bytes
@@ -160,13 +135,9 @@ fn escaping(context: rawptr, input: []const u8) bool {
       expected += #len(entity)
     }
   }
-  if #len(output) != expected {
-    return false
-  }
+  if #len(output) != expected { return false }
   for byte in output {
-    if byte == '<' || byte == '>' || byte == '"' || byte == '\'' {
-      return false
-    }
+    if byte == '<' || byte == '>' || byte == '"' || byte == '\'' { return false }
   }
   return true
 }
@@ -188,9 +159,10 @@ fn main() {
   arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
   scale: u64 = 1
-  arguments := process.arguments(arena)
-  if !io.failed(arguments.failure) && #len(arguments.value) > 1 {
-    parsed := parse.u64_decimal(arguments.value[1])
+  arguments_status: fail.Status
+  arguments := process.arguments(arena, &arguments_status)
+  if !arguments_status.failed && #len(arguments) > 1 {
+    parsed := parse.u64_decimal(arguments[1])
     if !parse.failed(parsed.failure) && parsed.value > 0 {
       scale = parsed.value
     }

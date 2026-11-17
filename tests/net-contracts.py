@@ -32,87 +32,91 @@ fn main() {
   if #syscall(72, 0, 1, 0) < 0 { #panic("closed stdin") }
 }
 ''',
-    'failed-connection': '''use "std/io" io
+    'failed-connection': '''use "std/fail"
 use "std/net"
-fn check_failed(outcome: *net.ConnectionResult) {
-  if !io.failed(outcome.failure) { #panic("connection unexpectedly succeeded") }
-  net.connection_close(&outcome.value)
+fn check_failed(status: *const fail.Status, connection: *net.Connection) {
+  if !status.failed { #panic("connection unexpectedly succeeded") }
+  net.connection_close(connection)
   if #syscall(72, 0, 1, 0) < 0 { #panic("failed connection closed stdin") }
-  if outcome.value.active { #panic("failed connection active") }
+  if connection.active { #panic("failed connection active") }
 }
 fn main() {
   address := net.ipv4(127, 0, 0, 1, 1)
   address.bytes[0] = 255
-  connected := net.tcp_connect_ipv4(&address)
-  check_failed(&connected)
+  refused: fail.Status
+  connected := net.tcp_connect_ipv4(&refused, &address)
+  check_failed(&refused, &connected)
   listener := net.Listener{}
-  accepted := net.listener_accept(&listener)
-  check_failed(&accepted)
+  closed: fail.Status
+  accepted := net.listener_accept(&closed, &listener)
+  check_failed(&closed, &accepted)
   // Positive descriptor validation must also return an inactive connection.
   listener.descriptor = 2147483647
-  accepted = net.listener_accept(&listener)
-  check_failed(&accepted)
+  listener.active = true
+  invalid: fail.Status
+  accepted = net.listener_accept(&invalid, &listener)
+  check_failed(&invalid, &accepted)
 }
 ''',
-    'failed-listener': '''use "std/io" io
+    'failed-listener': '''use "std/fail"
 use "std/net"
-use "std/io" errors
 fn main() {
   address := net.ipv4(127, 0, 0, 1, 1)
   address.bytes[0] = 255
-  outcome := net.tcp_listen_ipv4(&address, 1)
-  if !errors.failed(outcome.failure) { #panic("listener unexpectedly succeeded") }
-  net.listener_close(&outcome.value)
+  status: fail.Status
+  listener := net.tcp_listen_ipv4(&status, &address, 1)
+  if !status.failed { #panic("listener unexpectedly succeeded") }
+  net.listener_close(&listener)
   if #syscall(72, 0, 1, 0) < 0 { #panic("failed listener closed stdin") }
-  if outcome.value.active { #panic("failed listener active") }
+  if listener.active { #panic("failed listener active") }
 }
 ''',
-    'empty-datagram': '''use "std/io" io
+    'empty-datagram': '''use "std/fail"
 use "std/net"
 fn main() {
-  opened := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
-  if io.failed(opened.failure) { #panic("socket") }
-  descriptor := opened.value
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  descriptor := net.socket(&status, net.AddressFamilyIpv4, net.SocketDatagram, 0)
   defer { net.close(descriptor) }
   address := net.ipv4(127, 0, 0, 1, 0)
-  if io.failed(net.bind_ipv4(descriptor, &address).failure) { #panic("bind") }
+  net.bind_ipv4(&status, descriptor, &address)
   bound := net.Address{}
-  if io.failed(net.local_address(descriptor, &bound).failure) { #panic("local address") }
-  if io.failed(net.nonblocking(descriptor, true).failure) { #panic("nonblocking") }
-  sent := net.send_to(descriptor, "", 0, bound.bytes[..bound.length])
-  if io.failed(sent.failure) || sent.value != 0 { #panic("send empty") }
-  ready := net.wait(descriptor, net.PollReadable, 1000)
-  if io.failed(ready.failure) || ready.value == 0 { #panic("empty datagram dropped") }
+  net.local_address(&status, descriptor, &bound)
+  net.nonblocking(&status, descriptor, true)
+  if net.send_to(&status, descriptor, "", 0, bound.bytes[..bound.length]) != 0 { #panic("send empty") }
+  if net.wait(&status, descriptor, net.PollReadable, 1000) == 0 { #panic("empty datagram dropped") }
   // An empty datagram still validates the destination and socket.
-  if !io.failed(net.send_to(-1, "", 0, bound.bytes[..bound.length]).failure) { #panic("invalid socket accepted") }
-  if !io.failed(net.send_to(descriptor, "", 0, "").failure) { #panic("invalid address accepted") }
+  bad_socket: fail.Status
+  _ = net.send_to(&bad_socket, -1, "", 0, bound.bytes[..bound.length])
+  if !bad_socket.failed { #panic("invalid socket accepted") }
+  bad_address: fail.Status
+  _ = net.send_to(&bad_address, descriptor, "", 0, "")
+  if !bad_address.failed { #panic("invalid address accepted") }
   buffer: [1]u8
   peer: [128]u8
   length: u32 = 0
-  received := net.receive_from(descriptor, buffer[..], 0, peer[..], &length)
-  if io.failed(received.failure) || received.value != 0 || length != 16 { #panic("receive empty") }
-  sent = net.send_to(descriptor, "x", 0, bound.bytes[..bound.length])
-  if io.failed(sent.failure) || sent.value != 1 { #panic("send byte") }
-  ready = net.wait(descriptor, net.PollReadable, 1000)
-  if io.failed(ready.failure) || ready.value == 0 { #panic("byte datagram dropped") }
-  received = net.receive_from(descriptor, buffer[..], 0, peer[..], &length)
-  if io.failed(received.failure) || received.value != 1 || buffer[0] != 'x' { #panic("receive byte") }
+  received := net.receive_from(&status, descriptor, buffer[..], 0, peer[..], &length)
+  if received != 0 || length != 16 { #panic("receive empty") }
+  if net.send_to(&status, descriptor, "x", 0, bound.bytes[..bound.length]) != 1 { #panic("send byte") }
+  if net.wait(&status, descriptor, net.PollReadable, 1000) == 0 { #panic("byte datagram dropped") }
+  received = net.receive_from(&status, descriptor, buffer[..], 0, peer[..], &length)
+  if received != 1 || buffer[0] != 'x' { #panic("receive byte") }
 }
 ''',
 }
 
 for operation, expression in {
-    'send': 'net.send(SOCKET_FD, "x", 0)',
-    'connection-write': 'net.connection_write(&connection, "x")',
-    'send-to': 'net.send_to(SOCKET_FD, "x", 0, address.bytes[..])',
+    'send': 'net.send(&status, SOCKET_FD, "x", 0)',
+    'connection-write': 'net.connection_write(&status, &connection, "x")',
+    'send-to': 'net.send_to(&status, SOCKET_FD, "x", 0, address.bytes[..])',
 }.items():
-    CASES['disconnected-' + operation] = '''use "std/io" io
+    CASES['disconnected-' + operation] = '''use "std/fail"
 use "std/net"
 fn main() {
   connection := net.connection_from_descriptor(SOCKET_FD)
   address := net.ipv4(127, 0, 0, 1, 1)
-  outcome := EXPRESSION
-  if !io.failed(outcome.failure) || outcome.failure.native != -32 { #panic("expected EPIPE") }
+  status: fail.Status
+  _ = EXPRESSION
+  if !status.failed || status.failure.native != -32 { #panic("expected EPIPE") }
 }
 '''.replace('EXPRESSION', expression)
 
@@ -148,7 +152,7 @@ int net_audit_stop(void) {
     return signals;
 }
 """
-WAIT_SOURCE = r'''use "std/io" io
+WAIT_SOURCE = r'''use "std/fail"
 use "std/net"
 use "std/time"
 extern fn start "net_audit_start"(readiness: i32) i32
@@ -156,29 +160,27 @@ extern fn stop "net_audit_stop"() i32
 fn main() {
   descriptor := start(READY)
   if descriptor < 0 { #panic("signal helper") }
-  queue := net.event_queue()
-  if io.failed(queue.failure) { #panic("queue") }
-  defer { net.close(queue.value) }
-  if io.failed(net.event_add(queue.value, #cast(isize, descriptor), net.EventReadable, 42).failure) { #panic("event add") }
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  queue := net.event_queue(&status)
+  defer { net.close(queue) }
+  net.event_add(&status, queue, #cast(isize, descriptor), net.EventReadable, 42)
   items: [1]net.PollDescriptor = [net.PollDescriptor{ descriptor: descriptor, events: net.PollReadable }]
   events: [1]net.Event
   before := time.monotonic_now()
   outcome := OPERATION
   after := time.monotonic_now()
-  if io.failed(before.failure) || io.failed(after.failure) { #panic("clock read") }
-  duration := time.elapsed(before.value, after.value)
+  duration := time.elapsed(before, after)
   signals := stop()
-  if io.failed(outcome.failure) || io.failed(duration.failure) { #panic("wait failed") }
   if TIMEOUT == 100 {
-    if outcome.value != 0 || duration.value < 80000000 || duration.value > 750000000 || signals < 2 {
+    if outcome != 0 || duration < 80000000 || duration > 750000000 || signals < 2 {
       #panic("interrupted wait restarted its deadline")
     }
   }
   else if TIMEOUT == 0 {
-    if outcome.value != 0 || duration.value > 250000000 { #panic("zero timeout blocked") }
+    if outcome != 0 || duration > 250000000 { #panic("zero timeout blocked") }
   }
   else {
-    if outcome.value != 1 || signals < 2 || duration.value > 750000000 { #panic("interrupted readiness lost") }
+    if outcome != 1 || signals < 2 || duration > 750000000 { #panic("interrupted readiness lost") }
     VERIFY
   }
 }
@@ -224,9 +226,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-net-contracts-') as temporary, Exit
     subprocess.run([*shlex.split(os.environ.get('CC', 'cc')), '-std=c11', '-O2', '-shared', '-fPIC',
                     str(helper), '-o', str(library)], check=True, timeout=30)
     for kind, operation, verify in (
-        ('poll', 'net.poll(items[..], TIMEOUT)',
+        ('poll', 'net.poll(&status, items[..], TIMEOUT)',
          'if !net.poll_has(&items[0], net.PollReadable) { #panic("poll readiness") }'),
-        ('epoll', 'net.event_wait(queue.value, events[..], TIMEOUT)',
+        ('epoll', 'net.event_wait(&status, queue, events[..], TIMEOUT)',
          'if net.event_data(&events[0]) != 42 { #panic("epoll readiness") }'),
     ):
         for timeout in (100, 1000, -1, 0):

@@ -66,15 +66,20 @@ fn argument_skip(command: []const u16, at: usize) usize {
   }
   return value
 }
-fn arguments_native(arena: *mem.Arena) ArgumentsResult {
+fn arguments_failed(status: *fail.Status, kind: fail.Kind, message: []const u8) [][]const u8 {
+  fail.set(status, fail.make(kind, "read arguments", "", message))
+  empty: [][]const u8
+  return empty
+}
+fn arguments_native(arena: *mem.Arena, status: *fail.Status) [][]const u8 {
   raw := argument_command()
-  if raw == nil { return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
+  if raw == nil { return arguments_failed(status, fail.Kind.InvalidState, "there is no command line") }
   native := #slice(raw, 32767)
   length: usize = 0
   for length < 32767 && native[length] != 0 {
     length += 1
   }
-  if length == 32767 { return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.Overflow } } }
+  if length == 32767 { return arguments_failed(status, fail.Kind.Overflow, "the command line has no end") }
   command := #slice(raw, length)
   empty: []u8
   count: usize = 0
@@ -82,13 +87,12 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   at := argument_skip(command, 0)
   for at < length {
     token := argument_token(command, at, count == 0, empty, false)
-    if !token.ok { return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
+    if !token.ok { return arguments_failed(status, fail.Kind.InvalidInput, "the command line is not valid UTF-16") }
     size += token.length
     count += 1
     at = argument_skip(command, token.next)
   }
   result := argument_slots(arena, count)
-  if io.failed(result.failure) { return result }
   allocation := mem.arena_push_uninit(arena, size, 1)
   bytes := arena.data[..0]
   if size > 0 {
@@ -99,8 +103,8 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   at = argument_skip(command, 0)
   for at < length {
     copied := argument_token(command, at, index == 0, bytes[used..], true)
-    if !copied.ok { return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
-    result.value[index] = bytes[used..used + copied.length]
+    if !copied.ok { return arguments_failed(status, fail.Kind.InvalidInput, "the command line is not valid UTF-16") }
+    result[index] = bytes[used..used + copied.length]
     used += copied.length
     index += 1
     at = argument_skip(command, copied.next)

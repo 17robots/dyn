@@ -6,6 +6,7 @@
 // Prints one line: requests, rate, p50/p99/max latency in microseconds and
 // errors. Latency is recorded in a log-linear histogram (about 1.5% error).
 use "std/fmt"
+use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/net"
@@ -35,25 +36,19 @@ struct Client {
 
 // Exact below 1024 us; above, 64 steps per power of two.
 fn bucket_of(micros: u64) usize {
-  if micros < 1024 {
-    return #cast(usize, micros)
-  }
+  if micros < 1024 { return #cast(usize, micros) }
   bits: u64 = 10
   for (micros >> (bits + 1)) != 0 && bits < 63 {
     bits += 1
   }
   mantissa := (micros >> (bits - 6)) & 63
   index := 1024 + #cast(usize, bits - 10) * 64 + #cast(usize, mantissa)
-  if index >= BucketCount {
-    return BucketCount - 1
-  }
+  if index >= BucketCount { return BucketCount - 1 }
   return index
 }
 
 fn bucket_value(index: usize) u64 {
-  if index < 1024 {
-    return #cast(u64, index)
-  }
+  if index < 1024 { return #cast(u64, index) }
   bits := #cast(u64, (index - 1024) / 64) + 10
   mantissa := #cast(u64, (index - 1024) % 64)
   return (#cast(u64, 64) + mantissa) << (bits - 6)
@@ -61,49 +56,43 @@ fn bucket_value(index: usize) u64 {
 
 fn now_micros() u64 {
   now := time.monotonic_now()
-  return #cast(u64, now.value.seconds) * 1000000 + #cast(u64, now.value.nanoseconds) / 1000
+  return #cast(u64, now.seconds) * 1000000 + #cast(u64, now.nanoseconds) / 1000
 }
 
 // One request and its full response. False on any error.
 fn exchange(connection: *net.Connection, request: []const u8, storage: []u8) bool {
-  if io.failed(net.connection_write(connection, request).failure) {
-    return false
-  }
+  status: fail.Status
+  _ = net.connection_write(&status, connection, request)
   used: usize = 0
-  for true {
+  for !status.failed {
     if used > 3 {
-      head := http.parse_response(storage[..used])
-      if !parse.failed(head.failure) {
+      // An incomplete head does not parse yet: read more.
+      partial: fail.Status
+      head := http.parse_response(&partial, storage[..used])
+      if !partial.failed {
         total := head.header_length + head.content_length
-        if total > #len(storage) {
-          return false
-        }
-        if used >= total {
-          return true
-        }
+        if total > #len(storage) { return false }
+        if used >= total { return true }
       }
     }
-    if used == #len(storage) {
-      return false
-    }
-    read := net.connection_read(connection, storage[used..])
-    if io.failed(read.failure) || read.value <= 0 {
-      return false
-    }
-    used += #cast(usize, read.value)
+    if used == #len(storage) { return false }
+    read := net.connection_read(&status, connection, storage[used..])
+    if read == 0 { return false }
+    used += read
   }
   return false
 }
 
 fn client_main(client: *Client) isize {
   storage: [ReceiveSize]u8
-  opened := net.tcp_connect_ipv4(&client.shared.address)
-  if io.failed(opened.failure) {
+  status: fail.Status
+  connection := net.tcp_connect_ipv4(&status, &client.shared.address)
+  net.no_delay(&status, connection.descriptor, true)
+  if status.failed {
+    net.connection_close(&connection)
     client.errors += 1
     return 0
   }
-  connection := opened.value
-  _ = net.no_delay(connection.descriptor, true)
   for sync.load_u32(&client.shared.stopping) == 0 {
     started := now_micros()
     if !exchange(&connection, client.shared.request, storage[..]) {
@@ -120,9 +109,7 @@ fn client_main(client: *Client) isize {
 // Zero for a missing or malformed number; callers reject zero.
 fn argument_u64(arguments: [][]const u8, index: usize) u64 {
   parsed := parse.u64_decimal(arguments[index])
-  if parse.failed(parsed.failure) {
-    return 0
-  }
+  if parse.failed(parsed.failure) { return 0 }
   return parsed.value
 }
 
@@ -131,9 +118,7 @@ fn percentile(buckets: []const u64, total: u64, fraction_thousandths: u64) u64 {
   seen: u64 = 0
   for i in 0..#len(buckets) {
     seen += buckets[i]
-    if seen >= target && buckets[i] > 0 {
-      return bucket_value(i)
-    }
+    if seen >= target && buckets[i] > 0 { return bucket_value(i) }
   }
   return 0
 }
@@ -141,12 +126,13 @@ fn percentile(buckets: []const u64, total: u64, fraction_thousandths: u64) u64 {
 fn main() i32 {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  arguments := process.arguments(arena)
-  if io.failed(arguments.failure) || #len(arguments.value) < 5 {
+  arguments_status: fail.Status
+  arguments := process.arguments(arena, &arguments_status)
+  if arguments_status.failed || #len(arguments) < 5 {
     io.eprintln("usage: httpbench PORT PATH CONNECTIONS SECONDS [A.B.C.D]")
     return 2
   }
-  values := arguments.value
+  values := arguments
   port := argument_u64(values, 1)
   connections := argument_u64(values, 3)
   seconds := argument_u64(values, 4)
@@ -188,24 +174,25 @@ fn main() i32 {
   started: usize = 0
   for i in 0..count {
     clients[i].shared = shared
-    spawned := thread.spawn_with_size(arena, ReceiveSize + 128 * 1024, client_main, &clients[i])
-    if io.failed(spawned.failure) {
+    spawning: fail.Status
+    clients[i].thread = thread.spawn_with_size(arena, &spawning, ReceiveSize + 128 * 1024, client_main, &clients[i])
+    if spawning.failed {
       io.eprintln("httpbench: cannot start client threads")
       sync.store_u32(&shared.stopping, 1)
       break
     }
-    clients[i].thread = spawned.value
     started += 1
   }
   begin := now_micros()
-  _ = time.sleep(#cast(i64, seconds) * time.Second)
+  time.sleep(#cast(i64, seconds) * time.Second)
   sync.store_u32(&shared.stopping, 1)
   elapsed := now_micros() - begin
   buckets := mem.push_array(u64, arena, BucketCount)
   requests: u64 = 0
   errors: u64 = 0
   for i in 0..started {
-    _ = thread.join(clients[i].thread)
+    joining: fail.Status
+    thread.join(&joining, clients[i].thread)
     requests += clients[i].requests
     errors += clients[i].errors
     for b in 0..BucketCount {

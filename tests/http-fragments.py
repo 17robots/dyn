@@ -46,10 +46,11 @@ fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8
       feed := Feed{ data: wire, cut: cut, step: #cast(usize, step) }
       arena := mem.arena_alloc(0)
       defer mem.arena_release(arena)
-      got := http.client_do(arena, io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "")
-      if (!io.failed(got.failure)) != valid { #panic("response validity") }
+      status: fail.Status
+      got := http.client_do(arena, &status, io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "")
+      if (!status.failed) != valid { #panic("response validity") }
       if valid && !bytes.equal(got.body, expected) { #panic("response body") }
-      if !valid && got.detail != http.ErrorKind.Invalid { #panic("response error") }
+      if !valid && status.failure.kind != fail.Kind.InvalidInput { #panic("response error") }
     }
   }
 }
@@ -59,12 +60,13 @@ fn server_check(wire: []const u8) {
       feed := Feed{ data: wire, cut: cut, step: #cast(usize, step) }
       storage: [65536]u8
       state := http.server(io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, storage[..])
-      first := http.receive(&state)
-      if io.failed(first.failure) || !bytes.equal(first.request.body, "abc") || !bytes.equal(first.request.target, "/one") { #panic("first request") }
-      second := http.receive(&state)
-      if io.failed(second.failure) || !bytes.equal(second.request.body, "") || !bytes.equal(second.request.target, "/two") { #panic("second request") }
-      last := http.receive(&state)
-      if last.detail != http.ErrorKind.End { #panic("request eof") }
+      status: fail.Status
+      first := http.receive(&status, &state)
+      if status.failed || !bytes.equal(first.request.body, "abc") || !bytes.equal(first.request.target, "/one") { #panic("first request") }
+      second := http.receive(&status, &state)
+      if status.failed || !bytes.equal(second.request.body, "") || !bytes.equal(second.request.target, "/two") { #panic("second request") }
+      last := http.receive(&status, &state)
+      if status.failed || !last.ended { #panic("request eof") }
     }
   }
 }
@@ -72,8 +74,9 @@ fn server_invalid(wire: []const u8) {
   feed := Feed{ data: wire, step: 1 }
   storage: [256]u8
   state := http.server(io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, storage[..])
-  got := http.receive(&state)
-  if !io.failed(got.failure) || got.detail != http.ErrorKind.Invalid { #panic("invalid request") }
+  status: fail.Status
+  _ = http.receive(&status, &state)
+  if status.failure.kind != fail.Kind.InvalidInput { #panic("invalid request") }
 }
 fn main() {
 '''

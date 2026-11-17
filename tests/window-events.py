@@ -121,13 +121,13 @@ fn main() {
  // Wake must interrupt a GUI wait from a real pthread without touching Xlib.
  worker := wake_thread(callback,&host)
  check(worker != nil)
- now := time.monotonic_now().value
+ now := time.monotonic_now()
  found := false
  for !found {
    window.wait(&host,1000)
    check(window.poll(&host).kind == io.Kind.Ok)
    for window.next_event(&host,&event) { if event.kind == events.Kind.Wake { found = true } }
-   check(time.elapsed(now,time.monotonic_now().value).value < 500000000)
+   check(time.elapsed(now,time.monotonic_now()) < 500000000)
  }
  check(join_wake(worker) == 1)
  close_event(host.display,host.handle,host.protocol_atom,host.close_atom)
@@ -156,13 +156,13 @@ fn main(){
  for window.next_event(&host,&event){}
  worker:=wake_thread(callback,&host)
  check(worker!=nil)
- started:=time.monotonic_now().value
+ started:=time.monotonic_now()
  found:=false
  for !found {
   window.wait(&host,1000)
   check(window.poll(&host).kind == io.Kind.Ok)
   for window.next_event(&host,&event){if event.kind==events.Kind.Wake {found=true}}
-  check(time.elapsed(started,time.monotonic_now().value).value<500000000)
+  check(time.elapsed(started,time.monotonic_now())<500000000)
  }
  check(join_wake(worker)==1)
 }
@@ -192,7 +192,7 @@ fn check(ok:bool){if !ok{#panic("XIM commit bounds")}}
 fn main(){
  arena:=mem.arena_alloc(0)
  defer{mem.arena_release(arena)}
- split:=process.environment(arena,"DYN_TEST_SPLIT_COMMIT").found
+ split:=#len(process.environment_or(arena,"DYN_TEST_SPLIT_COMMIT","")) != 0
  host:=window.Window{}
  check(window.open(&host,"XIM commit bounds",64,64).kind == io.Kind.Ok)
  defer{window.close(&host)}

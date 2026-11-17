@@ -33,7 +33,7 @@ pub fn limiter(storage: []Bucket, burst: u32, rate: u32, period_milliseconds: i6
 
 fn now_milliseconds() i64 {
   now := clock.monotonic_now()
-  return now.value.seconds * 1000 + now.value.nanoseconds / clock.Millisecond
+  return now.seconds * 1000 + now.nanoseconds / clock.Millisecond
 }
 
 // Spends one token for key: true when allowed. A limiter without buckets or

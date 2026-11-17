@@ -11,15 +11,16 @@ use "std/time"
 fn main() {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  arguments := process.arguments(arena)
-  level := arguments.value[1][0] - '0'
-  read := fs_read_file(arena, arguments.value[2], 1 << 30)
+  arguments_status: fail.Status
+  arguments := process.arguments(arena, &arguments_status)
+  level := arguments[1][0] - '0'
+  read := fs_read_file(arena, arguments[2], 1 << 30)
   started := time.monotonic_now()
   encoded := gzip.compress(arena, read, level)
   ended := time.monotonic_now()
-  elapsed := time.elapsed(started.value, ended.value)
-  _ = fs_write_file(arguments.value[3], encoded.value)
-  io.println("{} -> {} in {} us", #len(read), #len(encoded.value), elapsed.value / 1000)
+  elapsed := time.elapsed(started, ended)
+  _ = fs_write_file(arguments[3], encoded.value)
+  io.println("{} -> {} in {} us", #len(read), #len(encoded.value), elapsed / 1000)
 }
 
 // Writes data to path; whether it worked.

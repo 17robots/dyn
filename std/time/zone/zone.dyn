@@ -5,7 +5,7 @@
 use "std/time" time
 use "std/mem" mem
 use "std/bytes" bytes
-use "std/io" io
+use "std/fail"
 use "std/strings" strings
 
 // One local-time type: seconds east of UTC, daylight flag and abbreviation.
@@ -33,7 +33,6 @@ pub struct Zone {
   end: Rule,
 }
 
-pub type ZoneResult = io.Result(Zone)
 
 // A local time with the type in effect at that instant.
 pub struct Local { value: time.DateTime, offset: i32, dst: bool, abbreviation: []const u8 }
@@ -146,14 +145,16 @@ fn read_i64(data: []const u8, at: usize) i64 {
   return #bitcast(i64, high << 32 | low)
 }
 
-fn invalid() ZoneResult {
-  return ZoneResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+fn invalid(status: *fail.Status, operation: []const u8, name: []const u8, message: []const u8) Zone {
+  fail.invalid(status, operation, name, message)
+  return Zone{}
 }
 
 // Parses a TZif file (RFC 8536, versions 1 through 4) into arena storage. The
 // result borrows nothing from data. name is copied into the zone.
-pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneResult {
-  if #len(data) < 44 || !bytes.starts_with(data, "TZif") { return invalid() }
+pub fn parse_tzif(arena: *mem.Arena, status: *fail.Status, name: []const u8, data: []const u8) Zone {
+  if status.failed { return Zone{} }
+  if #len(data) < 44 || !bytes.starts_with(data, "TZif") { return invalid(status, "parse", name, "not a valid TZif file") }
   mark := mem.arena_mark(arena)
   version := data[4]
   at: usize = 0
@@ -169,7 +170,7 @@ pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneRes
     character_count := #cast(usize, read_u32(counts, 20))
     at = 44 + transition_count * 5 + type_count * 6 + character_count + leap_count * 8 + standard_count + utc_count
     time_size = 8
-    if at + 44 > #len(data) || !bytes.starts_with(data[at..], "TZif") { return invalid() }
+    if at + 44 > #len(data) || !bytes.starts_with(data[at..], "TZif") { return invalid(status, "parse", name, "not a valid TZif file") }
   }
   counts := data[at + 20..at + 44]
   utc_count := #cast(usize, read_u32(counts, 0))
@@ -180,7 +181,7 @@ pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneRes
   character_count := #cast(usize, read_u32(counts, 20))
   body := at + 44
   size := transition_count * time_size + transition_count + type_count * 6 + character_count + leap_count * (time_size + 4) + standard_count + utc_count
-  if type_count == 0 || type_count > 256 || body + size > #len(data) { return invalid() }
+  if type_count == 0 || type_count > 256 || body + size > #len(data) { return invalid(status, "parse", name, "not a valid TZif file") }
   zone := Zone{ name: strings.clone(arena, name) }
   zone.transitions = mem.push_array(i64, arena, transition_count)
   zone.transition_types = mem.push_array(u8, arena, transition_count)
@@ -197,7 +198,7 @@ pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneRes
     index := data[indexes + i]
     if index >= type_count {
       mem.arena_rewind(arena, mark)
-      return invalid()
+      return invalid(status, "parse", name, "not a valid TZif file")
     }
     zone.transition_types[i] = index
   }
@@ -209,7 +210,7 @@ pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneRes
     designation := #cast(usize, data[entry + 5])
     if designation >= character_count {
       mem.arena_rewind(arena, mark)
-      return invalid()
+      return invalid(status, "parse", name, "not a valid TZif file")
     }
     end := designation
     for end < character_count && characters[end] != 0 {
@@ -225,21 +226,22 @@ pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneRes
         close += 1
       }
       if close < #len(data) && close > footer + 1 {
-        rule := parse_posix(arena, data[footer + 1..close])
-        if io.failed(rule.failure) {
+        rule_status: fail.Status
+        rule := parse_posix(arena, &rule_status, data[footer + 1..close])
+        if rule_status.failed {
           mem.arena_rewind(arena, mark)
-          return invalid()
+          return invalid(status, "parse", name, "the footer rule is not a valid POSIX TZ rule")
         }
         zone.has_rule = true
-        zone.standard = rule.value.standard
-        zone.daylight = rule.value.daylight
-        zone.has_daylight = rule.value.has_daylight
-        zone.start = rule.value.start
-        zone.end = rule.value.end
+        zone.standard = rule.standard
+        zone.daylight = rule.daylight
+        zone.has_daylight = rule.has_daylight
+        zone.start = rule.start
+        zone.end = rule.end
       }
     }
   }
-  return ZoneResult{ value: zone }
+  return zone
 }
 
 struct Cursor { text: []const u8, at: usize, ok: bool }
@@ -356,7 +358,8 @@ fn rule(cursor: *Cursor) Rule {
 
 // Parses a POSIX TZ rule such as "CET-1CEST,M3.5.0,M10.5.0/3" into a zone with
 // no transition table. POSIX offsets count west of UTC; Type offsets count east.
-pub fn parse_posix(arena: *mem.Arena, text: []const u8) ZoneResult {
+pub fn parse_posix(arena: *mem.Arena, status: *fail.Status, text: []const u8) Zone {
+  if status.failed { return Zone{} }
   mark := mem.arena_mark(arena)
   cursor := Cursor{ text: text, ok: true }
   zone := Zone{ name: strings.clone(arena, text), has_rule: true }
@@ -385,23 +388,25 @@ pub fn parse_posix(arena: *mem.Arena, text: []const u8) ZoneResult {
   }
   if !cursor.ok || cursor.at != #len(text) {
     mem.arena_rewind(arena, mark)
-    return invalid()
+    return invalid(status, "parse", text, "not a valid POSIX TZ rule")
   }
-  return ZoneResult{ value: zone }
+  return zone
 }
 
 // The zone named by an IANA name such as "Europe/Berlin", read from the
 // system zoneinfo database. Windows has no database and reports Unsupported.
-pub fn load(arena: *mem.Arena, name: []const u8) ZoneResult {
-  if #len(name) == 0 || name[0] == '/' || bytes.find(name, "..") != #len(name) { return invalid() }
-  return platform_load(arena, name)
+pub fn load(arena: *mem.Arena, status: *fail.Status, name: []const u8) Zone {
+  if status.failed { return Zone{} }
+  if #len(name) == 0 || name[0] == '/' || bytes.find(name, "..") != #len(name) { return invalid(status, "load zone", name, "not a zone name") }
+  return platform_load(arena, status, name)
 }
 
 // The system's local zone. On POSIX systems a TZ variable takes precedence
 // over /etc/localtime; Windows uses the configured zone and its current rule.
 // When nothing is configured the result is UTC.
-pub fn system(arena: *mem.Arena) ZoneResult {
-  return platform_system(arena)
+pub fn system(arena: *mem.Arena, status: *fail.Status) Zone {
+  if status.failed { return Zone{} }
+  return platform_system(arena, status)
 }
 
 const weekday_names: [7][]const u8 = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]

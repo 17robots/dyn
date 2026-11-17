@@ -1,6 +1,7 @@
 #target(kernel: windows)
 
 use "std/io" io
+use "std/fail"
 use "std/os/windows" win
 
 pub struct Thread { native: win.Thread }
@@ -8,32 +9,29 @@ pub struct Thread { native: win.Thread }
 // Windows owns the actual stack; the slice length requests its initial size.
 // Keep the arena, Thread, and context alive/unmoved until successful join.
 // Fixed arena exhaustion panics; native spawn failure restores the arena mark.
-fn spawn_untyped(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
-  return spawn_with_size_untyped(arena, #len(stack), entry, context)
+fn spawn_untyped(arena: *mem.Arena, status: *fail.Status, stack: []u8, entry: fn(rawptr) isize, context: rawptr) *Thread {
+  return spawn_with_size_untyped(arena, status, #len(stack), entry, context)
 }
-fn spawn_with_size_untyped(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
-  if stack_size < 256 || entry == nil {
-    return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
+fn spawn_with_size_untyped(arena: *mem.Arena, status: *fail.Status, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) *Thread {
+  if stack_size < 256 || entry == nil { return spawn_invalid(status, "a thread needs an entry and a stack of at least 256 bytes") }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
   if !win.thread_spawn(&thread.native, stack_size, entry, context) {
     error := win.thread_error()
     mem.arena_rewind(arena, mark)
-    return SpawnResult{ failure: io.windows_failure(error) }
+    fail.set(status, io.from_windows("spawn thread", "", error))
+    return nil
   }
-  return SpawnResult{ value: thread }
+  return thread
 }
 
 // Success clears the native owner. Failure retains it for retry; keep the
 // arena/thread/context alive until success. One caller controls this descriptor.
-pub fn join(thread: *Thread) Result {
-  if thread.native.handle == nil { return Result{} }
+pub fn join(status: *fail.Status, thread: *Thread) {
+  if status.failed || thread.native.handle == nil { return }
   if !win.thread_join(&thread.native) {
-    error := win.thread_error()
-    return Result{ failure: io.windows_failure(error) }
+    fail.set(status, io.from_windows("join thread", "", win.thread_error()))
   }
-  return Result{}
 }
 
 // Identifies an unjoined thread; this is not a portable liveness check.
@@ -43,9 +41,8 @@ pub fn id(thread: *const Thread) u32 {
 }
 
 // SwitchToThread returning false means no other thread ran, not an error.
-pub fn yield_now() Result {
+pub fn yield_now() {
   win.thread_yield()
-  return Result{}
 }
 
 // SYSTEM_INFO: dwNumberOfProcessors is the u32 at byte 32 on 64-bit Windows.

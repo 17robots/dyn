@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Clock failure propagation through std consumers; Linux x86-64 seccomp only."""
+"""A refused clock reads zero and its std consumers keep working; Linux x86-64
+seccomp only."""
 import os
 from pathlib import Path
 import platform
@@ -8,24 +9,18 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 SOURCE = '''use "std/time" time
+use "std/fail"
 use "std/profile" profile
 use "std/testing" testing
 use "std/net" net
 use "std/net/dns" dns
 use "std/process" process
 use "std/mem" mem
-use "std/io" errors
 struct Filter { code: u16, jt: u8, jf: u8, k: u32 }
 struct Program { length: u16, filter: *Filter }
-fn require(ok: bool) { if !ok { #panic("clock consumer failure propagation") } }
+fn require(ok: bool) { if !ok { #panic("clock consumer contract") } }
 fn main() {
   span := profile.begin("clock")
-  synthetic := testing.Benchmark{started:time.ClockResult{failure:errors.Failure{kind:errors.Kind.System}}, iterations:0}
-  synthetic_each := testing.benchmark_nanoseconds_each(&synthetic)
-  require(errors.failed(synthetic_each.failure) && synthetic_each.failure.native == 0 && synthetic_each.failure.kind == errors.Kind.System)
-  synthetic.started = time.ClockResult{}
-  synthetic_replay := testing.benchmark_nanoseconds_each(&synthetic)
-  require(errors.failed(synthetic_replay.failure) && synthetic_replay.failure.native == 0 && synthetic_replay.failure.kind == errors.Kind.System)
   benchmark := testing.benchmark_start(1)
   empty_benchmark := testing.benchmark_start(0)
   events: [1]profile.Event
@@ -34,38 +29,30 @@ fn main() {
   program := Program{length:4,filter:&filters[0]}
   require(#syscall(157,38,1,0,0,0)==0)
   require(#syscall(317,1,0,&program)==0)
-  finished := profile.finish(&trace, span)
-  require(errors.failed(finished.failure) && finished.failure.native == -1 && finished.failure.kind == errors.Kind.PermissionDenied && trace.failed && trace.count == 0)
-  replay := profile.finish(&trace, profile.Span{})
-  require(errors.failed(replay.failure) && replay.failure.native == finished.failure.native && replay.failure.kind == finished.failure.kind)
-  elapsed := testing.benchmark_elapsed(&benchmark)
-  require(errors.failed(elapsed.failure) && elapsed.failure.native == -1 && elapsed.failure.kind == errors.Kind.PermissionDenied)
-  each := testing.benchmark_nanoseconds_each(&benchmark)
-  require(errors.failed(each.failure) && each.failure.native == -1 && each.failure.kind == errors.Kind.PermissionDenied)
+  // The clock now reads zero. Its consumers keep working: nothing fails.
+  profile.finish(&trace, span)
+  profile.finish(&trace, profile.Span{})
+  require(trace.count == 1 && trace.dropped == 1)
+  _ = testing.benchmark_elapsed(&benchmark)
+  require(testing.benchmark_nanoseconds_each(&empty_benchmark) == 0)
+  status: fail.Status
   descriptors: [0]net.PollDescriptor
-  failed_start := testing.benchmark_start(0)
-  empty_failure := testing.benchmark_nanoseconds_each(&failed_start)
-  require(errors.failed(empty_failure.failure) && empty_failure.failure.native == -1 && empty_failure.failure.kind == errors.Kind.PermissionDenied)
-  zero_each := testing.benchmark_nanoseconds_each(&empty_benchmark)
-  require(!errors.failed(zero_each.failure) && zero_each.value == 0)
-  polled := net.poll(descriptors[..], 10)
-  require(errors.failed(polled.failure) && polled.failure.native == -1 && polled.failure.kind == errors.Kind.PermissionDenied)
-  queue := net.event_queue()
-  require(!errors.failed(queue.failure))
-  defer net.close(queue.value)
+  require(net.poll(&status, descriptors[..], 10) == 0)
+  queue := net.event_queue(&status)
+  defer net.close(queue)
   notifications: [1]net.Event
-  waited := net.event_wait(queue.value, notifications[..], 10)
-  require(errors.failed(waited.failure) && waited.failure.native == -1 && waited.failure.kind == errors.Kind.PermissionDenied)
+  require(net.event_wait(&status, queue, notifications[..], 10) == 0 && !status.failed)
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   server := net.ipv4(127,0,0,1,53)
-  resolved := dns.resolve_ipv4(arena, "example.test", &server, 10)
-  require(errors.failed(resolved.failure) && resolved.failure.native == -1 && resolved.failure.kind == errors.Kind.PermissionDenied && #len(resolved.value) == 0 && mem.arena_mark(arena) == mem.arena_start(arena))
+  resolving: fail.Status
+  resolved := dns.resolve_ipv4(arena, &resolving, "example.test", &server, 10)
+  require(resolving.failed && #len(resolved) == 0 && mem.arena_mark(arena) == mem.arena_start(arena))
   arguments: [3][]const u8 = ["sh", "-c", "exit 0"]
-  captured := process.capture(arena, "/bin/sh", arguments[..], process.Options{}, process.CaptureOptions{timeout_milliseconds:10})
-  require(errors.failed(captured.failure) && captured.failure.native == -1 && captured.failure.kind == errors.Kind.PermissionDenied && #len(captured.output) == 0 && #len(captured.errors) == 0 && mem.arena_mark(arena) == mem.arena_start(arena))
-  status: i32 = 0
-  require(#syscall(61,-1,&status,1,0) == -10)
+  captured := process.capture(arena, &status, "/bin/sh", arguments[..], process.Options{}, process.CaptureOptions{timeout_milliseconds:1000})
+  require(!status.failed && captured.exit.finished && captured.exit.code == 0)
+  wait_status: i32 = 0
+  require(#syscall(61,-1,&wait_status,1,0) == -10)
 }
 '''
 
@@ -81,5 +68,5 @@ def main():
             output=root/'probe'
             subprocess.run([DYN,'build',str(root),'--quiet','--no-cache','--'+mode,'--output',str(output)],env=env,check=True,timeout=120)
             subprocess.run([str(output)],check=True,timeout=10)
-            print('PASS clock consumers permission failure, capture rollback/reaping',mode)
+            print('PASS clock consumers with a refused clock: profile, benchmark, poll, events, DNS, capture',mode)
 if __name__=='__main__':main()

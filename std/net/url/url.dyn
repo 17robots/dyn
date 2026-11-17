@@ -1,6 +1,5 @@
-use "std/parse" parse
 use "std/mem" mem
-use "std/io" io
+use "std/fail"
 pub struct URL {
   scheme: []const u8,
   authority: []const u8,
@@ -9,10 +8,18 @@ pub struct URL {
   fragment: []const u8,
 }
 
-pub struct ParseResult { value: URL, offset: usize, failure: parse.Failure }
+fn malformed(status: *fail.Status, operation: []const u8, message: []const u8, offset: usize) {
+  failure := fail.make(fail.Kind.InvalidInput, operation, "", message)
+  failure.offset = offset
+  failure.has_offset = true
+  fail.set(status, failure)
+}
 
-pub fn parse(text: []const u8) ParseResult {
+// Splits text into its parts (RFC 3986), borrowing text. Only the scheme is
+// checked; a bad scheme fails with InvalidInput at its offset.
+pub fn parse(status: *fail.Status, text: []const u8) URL {
   empty := text[0..0]
+  if status.failed { return URL{ scheme: empty, authority: empty, path: empty, query: empty, fragment: empty } }
   result := URL{ scheme: empty, authority: empty, path: empty, query: empty, fragment: empty }
   at: usize = 0
   colon: isize = -1
@@ -26,14 +33,16 @@ pub fn parse(text: []const u8) ParseResult {
   }
   if colon >= 0 {
     if colon == 0 {
-      return ParseResult{ value: result, offset: 0, failure: parse.Failure{ kind: parse.Kind.Syntax } }
+      malformed(status, "parse URL", "empty scheme", 0)
+      return result
     }
     i: usize = 0
     for i < #cast(usize, colon) {
       byte := text[i]
       alpha := (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z')
       if !alpha && (i == 0 || !((byte >= '0' && byte <= '9') || byte == '+' || byte == '-' || byte == '.')) {
-        return ParseResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax } }
+        malformed(status, "parse URL", "invalid scheme", i)
+        return URL{ scheme: empty, authority: empty, path: empty, query: empty, fragment: empty }
       }
       i += 1
     }
@@ -67,10 +76,10 @@ pub fn parse(text: []const u8) ParseResult {
   if at < #len(text) && text[at] == '#' {
     result.fragment = text[at + 1..]
   }
-  return ParseResult{ value: result, offset: 0 }
+  return result
 }
 
-pub struct EncodingResult { value: []u8, offset: usize, failure: parse.Failure }
+struct Encoded { value: []u8, offset: usize, failed: bool }
 fn unreserved(byte: u8) bool {
   return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
     (byte >= '0' && byte <= '9') || byte == '-' || byte == '.' || byte == '_' || byte == '~'
@@ -83,7 +92,7 @@ fn hex_value(byte: u8) isize {
 }
 // Encode one component, including slashes. Source and destination must not overlap.
 // Capacity/validation failures leave destination unchanged.
-fn percent_encode_into(destination: []u8, source: []const u8) EncodingResult {
+fn percent_encode_into(destination: []u8, source: []const u8) Encoded {
   required: usize = 0
   for byte in source {
     amount: usize = 3
@@ -91,7 +100,7 @@ fn percent_encode_into(destination: []u8, source: []const u8) EncodingResult {
       amount = 1
     }
     if amount > #len(destination) - required {
-      return EncodingResult{ value: destination[..0], offset: 0, failure: parse.Failure{ kind: parse.Kind.Syntax } }
+      return Encoded{ value: destination[..0], failed: true }
     }
     required += amount
   }
@@ -108,21 +117,21 @@ fn percent_encode_into(destination: []u8, source: []const u8) EncodingResult {
       at += 3
     }
   }
-  return EncodingResult{ value: destination[..at], offset: 0 }
+  return Encoded{ value: destination[..at] }
 }
 // Percent decoding treats '+' literally; it is not form-urlencoded decoding.
-fn percent_decode_into(destination: []u8, source: []const u8) EncodingResult {
+fn percent_decode_into(destination: []u8, source: []const u8) Encoded {
   required: usize = 0
   i: usize = 0
   for i < #len(source) {
     if source[i] == '%' {
       if #len(source) - i < 3 || hex_value(source[i + 1]) < 0 || hex_value(source[i + 2]) < 0 {
-        return EncodingResult{ value: destination[..0], offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax } }
+        return Encoded{ value: destination[..0], offset: i, failed: true }
       }
       i += 2
     }
     if required == #len(destination) {
-      return EncodingResult{ value: destination[..0], offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax } }
+      return Encoded{ value: destination[..0], offset: i, failed: true }
     }
     required += 1
     i += 1
@@ -139,7 +148,7 @@ fn percent_decode_into(destination: []u8, source: []const u8) EncodingResult {
     }
     at += 1
   }
-  return EncodingResult{ value: destination[..at], offset: 0 }
+  return Encoded{ value: destination[..at] }
 }
 
 // One component percent-encoded, slashes included, in arena.
@@ -151,16 +160,19 @@ pub fn percent_encode(arena: *mem.Arena, source: []const u8) []u8 {
   return encoded.value
 }
 
-// source with %XX escapes decoded, in arena. '+' stays literal. ok is false,
-// with nothing pushed, at a malformed escape.
-pub fn percent_decode(arena: *mem.Arena, source: []const u8) EncodingResult {
+// source with %XX escapes decoded, in arena. '+' stays literal. A malformed
+// escape fails with InvalidInput at its offset, with nothing pushed.
+pub fn percent_decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8 {
+  empty: []u8
+  if status.failed { return empty }
   mark := mem.arena_mark(arena)
   space := mem.push_bytes_uninit(arena, #len(source))
   decoded := percent_decode_into(space, source)
-  if parse.failed(decoded.failure) {
+  if decoded.failed {
     mem.arena_rewind(arena, mark)
-    return EncodingResult{ offset: decoded.offset, failure: parse.Failure{ kind: decoded.failure.kind } }
+    malformed(status, "percent-decode", "malformed %XX escape", decoded.offset)
+    return empty
   }
   mem.arena_rewind(arena, mark + #len(decoded.value))
-  return decoded
+  return decoded.value
 }

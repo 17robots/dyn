@@ -9,58 +9,70 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/event" event
-use "std/io" io
+use "std/fail"
 use "std/net" net
 use "std/mem" mem
-use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("event readiness") } }
+fn kind(status: *const fail.Status) fail.Kind {
+  return status.failure.kind
+}
 fn main() {
   arena := mem.arena_alloc(0)
   scratch := mem.arena_alloc(0)
   defer { mem.arena_release(scratch)
     mem.arena_release(arena) }
-  check(event.open(arena, 0).failure.kind == errors.Kind.InvalidInput)
-  opened := event.open(arena, 1)
-  check(!io.failed(opened.failure))
-  queue := opened.value
-  check(!errors.failed(event.wait(scratch, &queue, 0).failure))
-  socket := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
-  check(!errors.failed(socket.failure))
-  descriptor := socket.value
+  invalid: fail.Status
+  _ = event.open(arena, &invalid, 0)
+  check(kind(&invalid) == fail.Kind.InvalidInput)
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  queue := event.open(arena, &status, 1)
+  _ = event.wait(scratch, &status, &queue, 0)
+  descriptor := net.socket(&status, net.AddressFamilyIpv4, net.SocketDatagram, 0)
   address := net.ipv4(127, 0, 0, 1, 0)
-  check(!errors.failed(net.bind_ipv4(descriptor, &address).failure))
+  net.bind_ipv4(&status, descriptor, &address)
   local := net.Address{}
-  check(!errors.failed(net.local_address(descriptor, &local).failure))
-  check(!errors.failed(net.nonblocking(descriptor, true).failure))
-  check(event.add(&queue, descriptor, 0, 0).failure.kind == errors.Kind.InvalidInput)
-  check(!errors.failed(event.add(&queue, descriptor, event.Readable, 42).failure))
-  check(event.add(&queue, descriptor, event.Readable, 9).failure.kind == errors.Kind.AlreadyExists)
-  other := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
-  check(!io.failed(other.failure))
-  check(event.add(&queue, other.value, event.Readable, 1).failure.kind == errors.Kind.Capacity)
-  net.close(other.value)
-  empty := event.wait(scratch, &queue, 5)
-  check(!errors.failed(empty.failure) && #len(empty.value) == 0)
-  check(!errors.failed(net.send_to(descriptor, "x", 0, local.bytes[..local.length]).failure))
-  ready := event.wait(scratch, &queue, 1000)
-  check(!errors.failed(ready.failure) && #len(ready.value) == 1)
-  check(ready.value[0].descriptor == descriptor && ready.value[0].token == 42 && (ready.value[0].events & event.Readable) != 0)
-  ready = event.wait(scratch, &queue, 0)
-  check(!errors.failed(ready.failure) && #len(ready.value) == 1)
-  check(!errors.failed(event.modify(&queue, descriptor, event.Writable, 18446744073709551615).failure))
-  ready = event.wait(scratch, &queue, 1000)
-  check(!errors.failed(ready.failure) && #len(ready.value) == 1 && ready.value[0].token == 18446744073709551615 && (ready.value[0].events & event.Writable) != 0)
-  check(!errors.failed(event.remove(&queue, descriptor).failure))
-  check(event.remove(&queue, descriptor).failure.kind == errors.Kind.NotFound)
-  check(event.modify(&queue, descriptor, event.Readable, 0).failure.kind == errors.Kind.NotFound)
-  check(!errors.failed(event.wait(scratch, &queue, 0).failure))
-  check(!errors.failed(event.add(&queue, descriptor, event.Readable, 7).failure))
-  ready = event.wait(scratch, &queue, 0)
-  check(!errors.failed(ready.failure) && #len(ready.value) == 1 && ready.value[0].token == 7)
-  check(!errors.failed(event.remove(&queue, descriptor).failure))
+  net.local_address(&status, descriptor, &local)
+  net.nonblocking(&status, descriptor, true)
+  no_events: fail.Status
+  event.add(&no_events, &queue, descriptor, 0, 0)
+  check(kind(&no_events) == fail.Kind.InvalidInput)
+  event.add(&status, &queue, descriptor, event.Readable, 42)
+  twice: fail.Status
+  event.add(&twice, &queue, descriptor, event.Readable, 9)
+  check(kind(&twice) == fail.Kind.AlreadyExists)
+  other := net.socket(&status, net.AddressFamilyIpv4, net.SocketDatagram, 0)
+  full: fail.Status
+  event.add(&full, &queue, other, event.Readable, 1)
+  check(kind(&full) == fail.Kind.Capacity)
+  net.close(other)
+  empty := event.wait(scratch, &status, &queue, 5)
+  check(#len(empty) == 0)
+  _ = net.send_to(&status, descriptor, "x", 0, local.bytes[..local.length])
+  ready := event.wait(scratch, &status, &queue, 1000)
+  check(#len(ready) == 1)
+  check(ready[0].descriptor == descriptor && ready[0].token == 42 && (ready[0].events & event.Readable) != 0)
+  ready = event.wait(scratch, &status, &queue, 0)
+  check(#len(ready) == 1)
+  event.modify(&status, &queue, descriptor, event.Writable, 18446744073709551615)
+  ready = event.wait(scratch, &status, &queue, 1000)
+  check(#len(ready) == 1 && ready[0].token == 18446744073709551615 && (ready[0].events & event.Writable) != 0)
+  event.remove(&status, &queue, descriptor)
+  missing: fail.Status
+  event.remove(&missing, &queue, descriptor)
+  check(kind(&missing) == fail.Kind.NotFound)
+  unknown: fail.Status
+  event.modify(&unknown, &queue, descriptor, event.Readable, 0)
+  check(kind(&unknown) == fail.Kind.NotFound)
+  _ = event.wait(scratch, &status, &queue, 0)
+  event.add(&status, &queue, descriptor, event.Readable, 7)
+  ready = event.wait(scratch, &status, &queue, 0)
+  check(#len(ready) == 1 && ready[0].token == 7)
+  event.remove(&status, &queue, descriptor)
   event.close(&queue)
   event.close(&queue)
-  check(event.wait(scratch, &queue, 0).failure.kind == errors.Kind.InvalidState)
+  closed: fail.Status
+  _ = event.wait(scratch, &closed, &queue, 0)
+  check(kind(&closed) == fail.Kind.InvalidState)
   // The queue never closes registered descriptors.
   net.close(descriptor)
 }
@@ -70,13 +82,15 @@ with tempfile.TemporaryDirectory(prefix='dyn-event-results-') as directory:
     (work / 'main.dyn').write_text(SOURCE.replace('  // The queue never closes registered descriptors.', '  fault(arena, scratch)\n  // The queue never closes registered descriptors.'))
     (work / 'posix.dyn').write_text('''#target(kernel: linux)
 fn fault(arena: *mem.Arena, scratch: *mem.Arena) {
-  opened := event.open(arena, 1)
-  check(!io.failed(opened.failure))
-  queue := opened.value
-  failed := event.add(&queue, 2147483647, event.Readable, 0)
-  check(io.failed(failed.failure) && failed.failure.native != 0)
-  again := event.wait(scratch, &queue, 0)
-  check(io.failed(again.failure) && again.failure.kind == failed.failure.kind && again.failure.native == failed.failure.native)
+  status: fail.Status
+  queue := event.open(arena, &status, 1)
+  check(!status.failed)
+  event.add(&status, &queue, 2147483647, event.Readable, 0)
+  check(status.failed && status.failure.native != 0)
+  // A failed change poisons the queue.
+  again: fail.Status
+  _ = event.wait(scratch, &again, &queue, 0)
+  check(again.failure.kind == fail.Kind.InvalidState)
   event.close(&queue)
 }
 ''')

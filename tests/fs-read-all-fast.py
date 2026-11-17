@@ -28,8 +28,9 @@ fn main() {
  require(mem.arena_mark(zero)==mem.arena_start(zero)+6,"exact mark")
  argv := mem.arena_alloc(0)
  defer mem.arena_release(argv)
- arguments := process.arguments(argv)
- require(!errors.failed(arguments.failure) && #len(arguments.value)>0,"lazy arguments")
+ arguments_status: fail.Status
+ arguments := process.arguments(argv, &arguments_status)
+ require(!arguments_status.failed && #len(arguments)>0,"lazy arguments")
  prefix := mem.push_array(u8,zero,8)
  for i in 0..8 { prefix[i]=77 }
  mark := mem.arena_mark(zero)

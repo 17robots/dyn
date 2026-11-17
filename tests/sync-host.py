@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build'/('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve())
 SOURCE = r'''use "std/sync"
 use "std/thread"
-use "std/io" io
+use "std/fail"
 use "std/mem" mem
 struct Shared {
   mutex: sync.Mutex, condition: sync.Condition, gate: sync.Semaphore,
@@ -45,10 +45,9 @@ fn main() {
   if sync.try_lock(&shared.mutex) { #panic("recursive trylock") }
   sync.unlock(&shared.mutex)
   threads: [4]*thread.Thread
+  status := fail.Status{ on_failure: fail.panic_on_failure }
   for i in 0..4 {
-    spawned:=thread.spawn_with_size(arena,131072,worker,&shared)
-    if io.failed(spawned.failure) { #panic("spawn") }
-    threads[i]=spawned.value
+    threads[i]=thread.spawn_with_size(arena,&status,131072,worker,&shared)
   }
   sync.lock(&shared.mutex)
   for shared.arrived != 4 { sync.condition_wait(&shared.condition, &shared.mutex) }
@@ -58,7 +57,7 @@ fn main() {
   for shared.completed != 4 { sync.condition_wait(&shared.condition, &shared.mutex) }
   if shared.total != 8000 { #panic("lost mutex updates") }
   sync.unlock(&shared.mutex)
-  for i in 0..4 { if io.failed(thread.join(threads[i]).failure) { #panic("join") } }
+  for i in 0..4 { thread.join(&status, threads[i]) }
   if sync.semaphore_try_wait(&shared.gate) || sync.once_begin(&shared.once) { #panic("consumed state") }
   sync.semaphore_post(&shared.gate)
   if !sync.semaphore_try_wait(&shared.gate) { #panic("semaphore try") }
