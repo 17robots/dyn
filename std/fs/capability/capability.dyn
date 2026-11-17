@@ -36,13 +36,13 @@ pub fn read(status: *fail.Status, directory: *const Directory, path: []const u8,
   descriptor := #syscall(sys.Openat2, directory.descriptor, &name[0], &how, #sizeof(OpenHow))
   if descriptor < 0 {
     if directory.events != nil {
-      _ = observe.record(directory.events,
+      observe.record(directory.events,
         observe.Event{kind: observe.Kind.Denied, resource: directory.resource, source: "std/fs/capability"})
     }
     return failure(status, path, descriptor)
   }
   if directory.events != nil {
-    _ = observe.record(directory.events,
+    observe.record(directory.events,
       observe.Event{kind: observe.Kind.ResourceOpened, resource: directory.resource, source: "std/fs/capability"})
   }
   value: isize = 0
@@ -51,7 +51,7 @@ pub fn read(status: *fail.Status, directory: *const Directory, path: []const u8,
   }
   closed := #syscall(sys.Close, descriptor)
   if directory.events != nil {
-    _ = observe.record(directory.events,
+    observe.record(directory.events,
       observe.Event{kind: observe.Kind.ResourceClosed, resource: directory.resource, source: "std/fs/capability"})
   }
   if value < 0 { return failure(status, path, value) }

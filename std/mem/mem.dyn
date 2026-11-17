@@ -344,7 +344,7 @@ fn valid_alignment(alignment: usize) bool {
 
 fn arena_event(arena: *Arena, kind: observe.Kind, value: usize) {
   if arena.events != nil {
-    _ = observe.record(arena.events, observe.Event{kind: kind, resource: arena.event_resource,
+    observe.record(arena.events, observe.Event{kind: kind, resource: arena.event_resource,
       value: value, source: "std/mem"})
   }
 }

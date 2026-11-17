@@ -179,50 +179,6 @@ pub fn cursor_skip(state: *Cursor, amount: usize) bool {
   return true
 }
 
-pub struct Builder {
-  data: []u8,
-  length: usize,
-  failed: bool,
-}
-
-pub fn builder(storage: []u8) Builder {
-  return Builder{ data: storage, length: 0, failed: false }
-}
-
-pub fn builder_bytes(state: *const Builder) []const u8 {
-  return state.data[..state.length]
-}
-pub fn builder_remaining(state: *const Builder) usize {
-  return #len(state.data) - state.length
-}
-
-pub fn builder_write(state: *Builder, value: []const u8) bool {
-  if state.failed || #len(value) > builder_remaining(state) {
-    state.failed = true
-    return false
-  }
-  for i in 0..#len(value) {
-    state.data[state.length + i] = value[i]
-  }
-  state.length += #len(value)
-  return true
-}
-
-pub fn builder_write_byte(state: *Builder, value: u8) bool {
-  if state.failed || state.length == #len(state.data) {
-    state.failed = true
-    return false
-  }
-  state.data[state.length] = value
-  state.length += 1
-  return true
-}
-
-pub fn builder_reset(state: *Builder) {
-  state.length = 0
-  state.failed = false
-}
-
 // Empty slices never overlap. Uses differences so address addition cannot overflow.
 pub fn overlaps(left: []const u8, right: []const u8) bool {
   if #len(left) == 0 || #len(right) == 0 { return false }

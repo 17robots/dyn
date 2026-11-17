@@ -74,13 +74,6 @@ module's full declarations and comments.
 - `fn cursor_rest(state: *const Cursor) []const u8`
 - `fn cursor_read(state: *Cursor, destination: []u8) usize`
 - `fn cursor_skip(state: *Cursor, amount: usize) bool`
-- `struct Builder { data: []u8, length: usize, failed: bool, }`
-- `fn builder(storage: []u8) Builder`
-- `fn builder_bytes(state: *const Builder) []const u8`
-- `fn builder_remaining(state: *const Builder) usize`
-- `fn builder_write(state: *Builder, value: []const u8) bool`
-- `fn builder_write_byte(state: *Builder, value: u8) bool`
-- `fn builder_reset(state: *Builder)`
 - `fn overlaps(left: []const u8, right: []const u8) bool`: Empty slices never overlap.
 
 ## std/bytes/builder
@@ -267,9 +260,9 @@ module's full declarations and comments.
 - `struct Ring { data: []u8, read: usize, length: usize, }`
 - `fn init(backing: []u8) Ring`
 - `fn length(state: *const Ring) usize`
-- `fn push(state: *Ring, byte: u8) bool`
+- `fn push(status: *fail.Status, state: *Ring, byte: u8)`: A full ring fails with Capacity and keeps its bytes.
 - `struct Popped { value: u8, found: bool }`
-- `fn pop(state: *Ring) Popped`: The oldest byte.
+- `fn pop(state: *Ring) Popped`: The oldest byte;
 
 ## std/container/slot_map
 
@@ -294,8 +287,8 @@ module's full declarations and comments.
 
 ## std/crypto/aesgcm
 
-- `fn seal(output: []u8, authentication: []u8, input: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8) bool`: Exact in-place payload operation is allowed.
-- `fn open(output: []u8, input: []const u8, authentication: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8) bool`
+- `fn seal(status: *fail.Status, output: []u8, authentication: []u8, input: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8)`: Exact in-place payload operation is allowed.
+- `fn open(status: *fail.Status, output: []u8, input: []const u8, authentication: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8)`
 
 ## std/crypto/blake2b
 
@@ -313,27 +306,27 @@ module's full declarations and comments.
 
 ## std/crypto/chacha20
 
-- `fn block(destination: []u8, key: []const u8, nonce: []const u8, counter: u32) bool`
-- `fn xor(destination: []u8, input: []const u8, key: []const u8, nonce: []const u8, counter: u32) bool`: IETF ChaCha20.
+- `fn block(status: *fail.Status, destination: []u8, key: []const u8, nonce: []const u8, counter: u32)`: One 64-byte keystream block.
+- `fn xor(status: *fail.Status, destination: []u8, input: []const u8, key: []const u8, nonce: []const u8, counter: u32)`: IETF ChaCha20.
 
 ## std/crypto/chacha20poly1305
 
-- `fn seal(output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool`
-- `fn open(output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool`
+- `fn seal(status: *fail.Status, output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8)`
+- `fn open(status: *fail.Status, output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8)`
 
 ## std/crypto/core
 
 - `struct Sha256 { state: [8]u32, tail: [64]u8, tail_length: usize, length: u64, initialized: bool, failed: bool }`: Zero is an empty SHA-256 stream.
 - `fn sha256_init(context: *Sha256)`
-- `fn sha256_update(context: *Sha256, input: []const u8) bool`: Adds one chunk.
+- `fn sha256_update(context: *Sha256, input: []const u8)`: Adds one chunk.
 - `fn sha256_finish(context: *Sha256, destination: []u8) []u8`: Finishes into 32 caller-owned bytes, or returns an empty slice on failure.
 - `fn sha256(destination: []u8, input: []const u8) []u8`: Writes 32-byte SHA-256 digest.
 - `struct HmacSha256 { inner: Sha256, outer: Sha256 }`: HMAC-SHA256 with the key pads already hashed.
-- `fn hmac_sha256_init(state: *HmacSha256, key: []const u8) bool`: False, leaving state unusable, when a key longer than a block cannot be hashed (beyond SHA-256's input limit).
+- `fn hmac_sha256_init(state: *HmacSha256, key: []const u8)`: A key longer than a block that cannot be hashed (beyond SHA-256's input limit) leaves the state failed, and sums then give an empty MAC.
 - `fn hmac_sha256_sum(state: *const HmacSha256, destination: []u8, message: []const u8) []u8`
 - `fn hmac_sha256(destination: []u8, key: []const u8, message: []const u8) []u8`
 - `fn equal_constant_time(left: []const u8, right: []const u8) bool`
-- `fn secure_random(destination: []u8) bool`: Linux getrandom.
+- `fn secure_random(status: *fail.Status, destination: []u8)`: Linux getrandom, filling all of destination;
 
 ## std/crypto/curve25519
 
@@ -363,8 +356,8 @@ module's full declarations and comments.
 
 ## std/crypto/ed25519
 
-- `fn public_key(output: []u8, key: []const u8) bool`: Destination/input overlaps are rejected, including destination tails.
-- `fn sign(output: []u8, message: []const u8, key: []const u8) bool`
+- `fn public_key(status: *fail.Status, output: []u8, key: []const u8)`: Destination/input overlaps are rejected, including destination tails.
+- `fn sign(status: *fail.Status, output: []u8, message: []const u8, key: []const u8)`
 - `fn valid_public_key(key: []const u8) bool`
 - `fn verify(signature: []const u8, message: []const u8, key: []const u8) bool`
 
@@ -383,31 +376,31 @@ module's full declarations and comments.
 ## std/crypto/kdf
 
 - `fn hkdf_extract(destination: []u8, salt: []const u8, input_key_material: []const u8) []u8`
-- `fn hkdf_expand(destination: []u8, pseudorandom_key: []const u8, info: []const u8, scratch: []u8) bool`: scratch needs 32 + len(info) + 1 bytes.
-- `fn hkdf(destination: []u8, salt: []const u8, input_key_material: []const u8, info: []const u8, scratch: []u8) bool`
+- `fn hkdf_expand(status: *fail.Status, destination: []u8, pseudorandom_key: []const u8, info: []const u8, scratch: []u8)`: scratch needs 32 + len(info) + 1 bytes.
+- `fn hkdf(status: *fail.Status, destination: []u8, salt: []const u8, input_key_material: []const u8, info: []const u8, scratch: []u8)`
 
 ## std/crypto/p256
 
 - `fn valid_public_key(public_key: []const u8) bool`
 - `fn verify_hash(signature: []const u8, digest: []const u8, public_key: []const u8) bool`
 - `fn verify(signature: []const u8, message: []const u8, public_key: []const u8) bool`
-- `fn public_key(output: []u8, private_key: []const u8) bool`
-- `fn sign_hash(output: []u8, digest: []const u8, private_key: []const u8) bool`: RFC6979 deterministic ECDSA.
-- `fn sign(output: []u8, message: []const u8, private_key: []const u8) bool`
+- `fn public_key(status: *fail.Status, output: []u8, private_key: []const u8)`
+- `fn sign_hash(status: *fail.Status, output: []u8, digest: []const u8, private_key: []const u8)`: RFC6979 deterministic ECDSA.
+- `fn sign(status: *fail.Status, output: []u8, message: []const u8, private_key: []const u8)`
 
 ## std/crypto/password
 
 - `struct Argon2Parameters { // Memory in KiB blocks, at least 8 per lane. memory: u32, iterations: u32, parallelism: u32, }`
 - `const Argon2Recommended: Argon2Parameters = Argon2Parameters{ memory: 19456, iterations: 2, parallelism: 1 }`: OWASP's first Argon2id configuration: 19 MiB, two passes, one lane.
 - `fn argon2id_workspace_words(parameters: Argon2Parameters) usize`: u64 words of workspace argon2id needs for parameters.
-- `fn argon2id_keyed(destination: []u8, password: []const u8, salt: []const u8, secret: []const u8, associated: []const u8, parameters: Argon2Parameters, workspace: []u64) bool`: Argon2id of password with salt (at least 8 bytes), and optional secret and associated data, into all of destination (4 bytes or more).
-- `fn argon2id(destination: []u8, password: []const u8, salt: []const u8, parameters: Argon2Parameters, workspace: []u64) bool`
+- `fn argon2id_keyed(status: *fail.Status, destination: []u8, password: []const u8, salt: []const u8, secret: []const u8, associated: []const u8, parameters: Argon2Parameters, workspace: []u64)`: Argon2id of password with salt (at least 8 bytes), and optional secret and associated data, into all of destination (4 bytes or more).
+- `fn argon2id(status: *fail.Status, destination: []u8, password: []const u8, salt: []const u8, parameters: Argon2Parameters, workspace: []u64)`
 - `fn argon2id_encode(destination: []u8, parameters: Argon2Parameters, salt: []const u8, hash: []const u8) []u8`: The PHC string for a hash: "$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>", salt and hash in unpadded base64.
-- `struct Argon2Hash { parameters: Argon2Parameters, salt: []u8, hash: []u8, valid: bool }`
-- `fn argon2id_decode(encoded: []const u8, storage: []u8) Argon2Hash`: Parses a PHC string from argon2id_encode;
-- `fn argon2id_verify_words(encoded: []const u8) usize`: u64 words verify needs for encoded, or 0 when encoded is not valid.
-- `fn argon2id_verify(encoded: []const u8, password: []const u8, workspace: []u64) bool`: Whether password matches encoded, comparing in constant time.
-- `fn pbkdf2_sha256(destination: []u8, password: []const u8, salt: []const u8, iterations: u32, scratch: []u8) bool`: PBKDF2-HMAC-SHA256.
+- `struct Argon2Hash { parameters: Argon2Parameters, salt: []u8, hash: []u8 }`
+- `fn argon2id_decode(status: *fail.Status, encoded: []const u8, storage: []u8) Argon2Hash`: Parses a PHC string from argon2id_encode;
+- `fn argon2id_verify_words(status: *fail.Status, encoded: []const u8) usize`: u64 words verify needs for encoded.
+- `fn argon2id_verify(status: *fail.Status, encoded: []const u8, password: []const u8, workspace: []u64) bool`: Whether password matches encoded, comparing in constant time.
+- `fn pbkdf2_sha256(status: *fail.Status, destination: []u8, password: []const u8, salt: []const u8, iterations: u32, scratch: []u8)`: PBKDF2-HMAC-SHA256.
 
 ## std/crypto/pem
 
@@ -416,23 +409,22 @@ module's full declarations and comments.
 
 ## std/crypto/poly1305
 
-- `struct State { r: [5]u64, h: [5]u64, pad: [4]u32, buffer: [16]u8, used: usize, valid: bool }`: RFC 8439 section 2.5.
-- `struct Tag { value: [16]u8, valid: bool }`
-- `fn init(key: []const u8) State`
-- `fn update(state: *State, input: []const u8) bool`
-- `fn finish(state: *State) Tag`: finish consumes the state.
-- `fn authenticate(message: []const u8, key: []const u8) Tag`
+- `struct State { r: [5]u64, h: [5]u64, pad: [4]u32, buffer: [16]u8, used: usize, keyed: bool }`: RFC 8439 section 2.5.
+- `fn init(status: *fail.Status, key: []const u8) State`: A key that is not 32 bytes fails with InvalidInput.
+- `fn update(state: *State, input: []const u8)`: Adds input.
+- `fn finish(status: *fail.Status, state: *State) [16]u8`: The 16-byte tag.
+- `fn authenticate(status: *fail.Status, message: []const u8, key: []const u8) [16]u8`
 - `fn equal(left: []const u8, right: []const u8) bool`: Fixed 16-byte comparison;
 
 ## std/crypto/random
 
-- `fn fill(destination: []u8) bool`
+- `fn fill(status: *fail.Status, destination: []u8)`: Fills destination with cryptographically secure random bytes.
 
 ## std/crypto/sha2
 
 - `type Sha256 = crypto_core.Sha256`
 - `fn init(context: *Sha256)`
-- `fn update(context: *Sha256, input: []const u8) bool`
+- `fn update(context: *Sha256, input: []const u8)`
 - `fn finish(context: *Sha256, destination: []u8) []u8`
 - `fn sum256(destination: []u8, input: []const u8) []u8`
 - `fn equal_constant_time(left: []const u8, right: []const u8) bool`
@@ -441,7 +433,7 @@ module's full declarations and comments.
 
 - `struct State { words: [8]u64, buffer: [128]u8, used: usize, low: u64, high: u64, initialized: bool, failed: bool }`
 - `fn init() State`
-- `fn update(state: *State, input: []const u8) bool`
+- `fn update(state: *State, input: []const u8)`: Adds input.
 - `fn finish(state: *State, destination: []u8) []u8`
 - `fn digest(destination: []u8, input: []const u8) []u8`
 
@@ -456,8 +448,8 @@ module's full declarations and comments.
 
 ## std/crypto/x25519
 
-- `fn shared(destination: []u8, private_key: []const u8, peer: []const u8) bool`: RFC 7748.
-- `fn public_key(destination: []u8, private_key: []const u8) bool`
+- `fn shared(status: *fail.Status, destination: []u8, private_key: []const u8, peer: []const u8)`: RFC 7748.
+- `fn public_key(status: *fail.Status, destination: []u8, private_key: []const u8)`
 
 ## std/crypto/x509
 
@@ -742,7 +734,7 @@ module's full declarations and comments.
 - `fn namespaces(bindings: []NamespaceBinding, frames: []NamespaceFrame, storage: []u8) Namespaces`
 - `fn namespace_resolve(status: *fail.Status, state: *const Namespaces, name: []const u8, attribute: bool) ExpandedName`: The expanded name of an element or attribute name in the current scope.
 - `fn namespace_enter(status: *fail.Status, state: *Namespaces, event: Event) ExpandedName`: Enter every Start, including self-closing tags;
-- `fn namespace_leave(state: *Namespaces, name: []const u8) bool`
+- `fn namespace_leave(status: *fail.Status, state: *Namespaces, name: []const u8)`: Leaves element name;
 - `enum NodeKind { Missing, Document, Element, Text, Comment, Processing, Cdata }`: Arena-owned links, borrowed source slices.
 - `struct Node { kind: NodeKind, name: []const u8, text: []const u8, attributes: []const u8, first: *Node, last: *Node, next: *Node, parent: *Node, }`
 - `const nil_node: Node = Node{}`
@@ -1888,7 +1880,7 @@ module's full declarations and comments.
 - `struct Event { kind: Kind, resource: u64, value: u64, source: []const u8, line: usize }`
 - `struct Log { events: []Event, count: usize, dropped: usize }`
 - `fn log(events: []Event) Log`
-- `fn record(destination: *Log, event: Event) bool`: Full logs drop new events;
+- `fn record(destination: *Log, event: Event)`: Full logs drop new events and count them in dropped;
 - `fn recorded(value: *const Log) []const Event`
 - `fn clear(value: *Log)`
 
@@ -2158,8 +2150,8 @@ module's full declarations and comments.
 - `struct Progress { nodes: []Node, length: usize, dropped: usize }`
 - `fn progress(storage: []Node) Progress`
 - `fn begin(state: *Progress, name: []const u8, total: u64) usize`
-- `fn advance(state: *Progress, index: usize, amount: u64) bool`
-- `fn end(state: *Progress, index: usize) bool`
+- `fn advance(state: *Progress, index: usize, amount: u64)`: A dropped or ended node (see begin) is ignored.
+- `fn end(state: *Progress, index: usize)`
 - `fn reset(state: *Progress)`
 
 ## std/rand
@@ -2516,7 +2508,7 @@ module's full declarations and comments.
 - `struct Task { run: fn(rawptr), data: rawptr }`: One unit of work.
 - `struct Pool { lock: sync.Mutex, ready: sync.Condition, idle: sync.Condition, tasks: []Task, head: usize, count: usize, running: usize, stopping: bool, workers: []*thread.Thread, // Handles from spawner instead of workers, when started by start_spawned. natives: []rawptr, spawner: *const thread.Spawner, started: usize, }`: Pools live in the caller's arena and must not move.
 - `fn start(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: usize, stack_size: usize) *Pool`: Starts workers threads, each with an owned stack of stack_size bytes, and a queue of capacity tasks.
-- `fn submit(pool: *Pool, task: Task) bool`: Queues task.
+- `fn submit(pool: *Pool, task: Task) bool`: Whether task was queued: false, queuing nothing, when the queue is full or the pool is stopping, so the caller can retry or run it ...
 - `fn wait(pool: *Pool)`: Blocks until every queued task has finished, including tasks submitted by running tasks.
 - `fn start_spawned(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: usize, stack_size: usize, spawner: *const thread.Spawner) *Pool`: Like start, with threads from spawner, such as std/thread/posix spawner() for tasks that call C libraries.
 - `fn stop(status: *fail.Status, pool: *Pool)`: Finishes queued tasks, then joins every worker.

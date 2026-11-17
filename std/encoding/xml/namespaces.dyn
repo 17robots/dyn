@@ -214,12 +214,16 @@ pub fn namespace_enter(status: *fail.Status, state: *Namespaces, event: Event) E
   }
   return result
 }
-pub fn namespace_leave(state: *Namespaces, name: []const u8) bool {
-  if state.depth == 0 { return false }
+// Leaves element name; an end tag that does not match the open element fails
+// with InvalidInput.
+pub fn namespace_leave(status: *fail.Status, state: *Namespaces, name: []const u8) {
+  if status.failed { return }
+  if state.depth == 0 || !bytes.equal(state.frames[state.depth - 1].name, name) {
+    fail.invalid(status, "leave XML element", name, "the end tag does not match the open element")
+    return
+  }
   frame := state.frames[state.depth - 1]
-  if !bytes.equal(frame.name, name) { return false }
   state.depth -= 1
   state.count = frame.bindings
   state.used = frame.used
-  return true
 }
