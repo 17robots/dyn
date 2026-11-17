@@ -48,8 +48,18 @@ fn run(status: *fail.Status, app: *App, workers: []evented.Worker) {
 ```
 
 `http.text`, `http.json` and `http.redirect` are the usual replies: plain
-text, JSON with `Cache-Control: no-store`, and a 303 with an optional
-`Set-Cookie`. `http.respond` takes any status, type and headers.
+text, JSON with `Cache-Control: no-store`, and a 303 that can set cookies.
+`http.respond` takes any status, type, headers and cookies
+(`ResponseOptions.cookies`, a list of `http.Cookie`). `http.query_has(request,
+"debug")` says whether the query names a parameter, with or without a value.
+
+A handler that fails before it responds gets a `500 internal server error`
+from the server, and the failure goes to `Config.access_log`; the connection
+closes after. So a handler never has to answer its own failures: it passes
+its status to every call, and the first failure ends the request. A second
+response to the same request fails with `InvalidState`, "already responded".
+`Config.on_too_large` and `Config.on_busy` replace the server's own 413 and
+503 replies with your handlers, such as a JSON error body for an API.
 
 Each worker has a request arena, reset before every request:
 `evented.arena(response)` is scratch for a page, copied column text or a
@@ -98,15 +108,17 @@ fn current(cache: *sessions.Cache, shared: *sessions.Shared, request: *const htt
 ```
 
 `sessions.start(arena, &status, seconds)` makes a token, a CSRF secret and the
-`Set-Cookie` value (`sid`, HttpOnly, SameSite=Lax) for a new session to
-store. After deleting one from the store, `sessions.forget(&shared)` empties
-every worker's cache and returns the cookie that clears it.
+cookie (`sid`, HttpOnly, SameSite=Lax) for a new session to store: pass
+`started.cookie` in `ResponseOptions.cookies` or to `http.redirect`. After
+deleting one from the store, `sessions.forget(&shared)` empties every worker's
+cache and returns the cookie that clears it.
 `sessions.csrf_ok(&session, presented)` compares a form field or
 `X-CSRF-Token` header in constant time; require it on every state-changing
 request. `data` (up to 64 bytes) is yours, such as the user's name.
 
-Underneath, `http.cookie` reads cookies and `http.set_cookie` writes them. It
-refuses names that are not tokens, values outside the cookie octets,
+Underneath, `http.cookie` reads cookies, and `respond` writes each
+`http.Cookie` as a `Set-Cookie` header (`http.set_cookie` formats one into a
+buffer for other uses). It refuses names that are not tokens, values outside the cookie octets,
 attributes with `;` or control bytes, and `SameSite=None` without `Secure`.
 A negative `max_age` deletes the cookie.
 
@@ -226,8 +238,7 @@ use "std/mem"
 use "std/net/http"
 
 fn greet(status: *fail.Status, response: *http.Response, storage: []u8, name: []const u8) {
-  rendering: fail.Status
-  out := http.page_writer(&rendering, response, storage)
+  out := http.page_writer(status, response, storage)
   html.print(&out, "<!doctype html><title>Hi</title><p>Hello, <b>{}</b>!</p>", name)
   http.page(status, response, 200, &out)
 }
@@ -235,9 +246,8 @@ fn greet(status: *fail.Status, response: *http.Response, storage: []u8, name: []
 
 `http.page_writer` renders into the send buffer when it is free, so the page
 goes out without a copy, and `http.page` sends it as HTML, not cached, with
-`Content-Security-Policy: default-src 'self'` and `nosniff`. The page gets its
-own `rendering` status so that a page too large for its storage still gets an
-answer: `http.page` sends 500 instead.
+`Content-Security-Policy: default-src 'self'` and `nosniff`. A page too large
+for its storage fails the status, and the server answers 500.
 
 ## Static files
 

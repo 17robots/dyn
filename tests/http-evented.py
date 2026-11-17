@@ -150,10 +150,27 @@ def exercise(port, pooled=False):
 
     # Invalid and oversized requests are answered, then closed.
     assert raw(port, b'NOT HTTP\r\n\r\n').startswith(b'HTTP/1.1 400 Bad Request\r\n')
+    # Config.on_too_large answers 413 with its own JSON body.
     huge_body = b'POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 100000\r\n\r\n'
-    assert raw(port, huge_body).startswith(b'HTTP/1.1 413 Content Too Large\r\n')
+    reply = raw(port, huge_body)
+    assert reply.startswith(b'HTTP/1.1 413 Content Too Large\r\n') and b'Connection: close' in reply, reply
+    assert reply.endswith(b'{"error":"too large"}'), reply
     huge_head = b'GET /health HTTP/1.1\r\nX-Fill: ' + b'y' * 8000 + b'\r\n\r\n'
-    assert raw(port, huge_head).startswith(b'HTTP/1.1 413 Content Too Large\r\n')
+    reply = raw(port, huge_head)
+    assert reply.startswith(b'HTTP/1.1 413 Content Too Large\r\n') and reply.endswith(b'{"error":"too large"}'), reply
+    # A handler that fails before responding gets 500, and the connection closes.
+    reply = raw(port, b'GET /fail HTTP/1.1\r\nHost: x\r\n\r\n')
+    assert reply.startswith(b'HTTP/1.1 500 Internal Server Error\r\n') and b'Connection: close' in reply, reply
+    assert reply.endswith(b'internal server error\n'), reply
+    # A second response is refused ("already responded"); the first stands.
+    reply = raw(port, b'GET /twice HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n')
+    assert reply.count(b'HTTP/1.1 200 OK') == 1 and reply.endswith(b'once\n'), reply
+    # ResponseOptions.cookies and query_has.
+    reply = raw(port, b'GET /cookies?debug HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n')
+    assert b'\r\nSet-Cookie: theme=dark; Path=/\r\n' in reply and b'\r\nSet-Cookie: sid=abc; HttpOnly; SameSite=Lax\r\n' in reply, reply
+    assert reply.endswith(b'debug\n'), reply
+    reply = raw(port, b'GET /cookies HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n')
+    assert reply.endswith(b'plain\n'), reply
     # Chunked bodies are decoded in place; a malformed chunk is 400.
     chunked = b'POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n0\r\n\r\n'
     reply = raw(port, chunked)

@@ -50,14 +50,17 @@ fn main() {
   shared := sessions.Shared{}
   random: fail.Status
   started := sessions.start(arena, &random, 3600)
-  io.println("start {} {} {} {}", !random.failed, #len(started.token), #len(started.csrf), started.cookie[..4])
+  io.println("start {} {} {} {}", !random.failed, #len(started.token), #len(started.csrf), started.cookie.name)
   io.println("cold {}", sessions.cached(&cache, &shared, started.token, 100).found)
   kept := sessions.remember(&cache, started.token, 7, started.csrf, "ann", 200)
   hit := sessions.cached(&cache, &shared, started.token, 100)
   io.println("remembered {} hit {} user {} data {} csrf {} {}", kept.found, hit.found, hit.user, hit.data,
     sessions.csrf_ok(&hit, started.csrf), sessions.csrf_ok(&hit, "nope"))
   io.println("expired {}", sessions.cached(&cache, &shared, started.token, 200).found)
-  io.println("forget {}", sessions.forget(&shared))
+  cleared := sessions.forget(&shared)
+  cookie_text: [128]u8
+  formatting: fail.Status
+  io.println("forget {}", http.set_cookie(&formatting, cookie_text[..], cleared))
   io.println("after forget {}", sessions.cached(&cache, &shared, started.token, 100).found)
 
   assets := http.assets_of(arena, "app.js", "let x = 1", "app.css", "p { }", "dangling")

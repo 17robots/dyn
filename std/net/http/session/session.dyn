@@ -33,7 +33,7 @@ pub struct Cache { slots: [Slots]Slot, copy: versions.Copy }
 pub struct Shared { sessions: versions.Shared }
 
 // A new session to store: token, csrf, and the Set-Cookie value.
-pub struct New { token: []const u8, csrf: []const u8, cookie: []const u8 }
+pub struct New { token: []const u8, csrf: []const u8, cookie: http.Cookie }
 
 // The request's session token, or empty when it has none of the right form.
 pub fn token(request: *const http.Request) []const u8 {
@@ -70,9 +70,10 @@ pub fn remember(cache: *Cache, token: []const u8, user: i64, csrf: []const u8, d
   return Session{ found: true, user: user, csrf: slot.csrf[..], data: slot.data[..slot.data_length] }
 }
 
-// A fresh token and CSRF secret in arena, and a Set-Cookie value for a
-// session of seconds (HttpOnly, SameSite=Lax, Path=/). Fails with System
-// when the system has no randomness.
+// A fresh token and CSRF secret in arena, and the cookie that carries the
+// token for a session of seconds (HttpOnly, SameSite=Lax, Path=/): pass it in
+// ResponseOptions.cookies or to http.redirect. Fails with System when the
+// system has no randomness.
 pub fn start(arena: *mem.Arena, status: *fail.Status, seconds: i64) New {
   if status.failed { return New{} }
   raw: [32]u8
@@ -82,17 +83,15 @@ pub fn start(arena: *mem.Arena, status: *fail.Status, seconds: i64) New {
   random.fill(status, raw[..16])
   if status.failed { return New{} }
   csrf := hex.encode(arena, raw[..16], false)
-  storage := mem.push_bytes_uninit(arena, 160)
-  cookie := http.set_cookie(status, storage, http.Cookie{ name: CookieName, value: token, path: "/", max_age: seconds, http_only: true,
-    same_site: http.SameSite.Lax })
+  cookie := http.Cookie{ name: CookieName, value: token, path: "/", max_age: seconds, http_only: true, same_site: http.SameSite.Lax }
   return New{ token: token, csrf: csrf, cookie: cookie }
 }
 
 // After the app deleted a session from its store: every worker's cache
-// forgets what it holds. Returns the Set-Cookie value that clears the cookie.
-pub fn forget(shared: *Shared) []const u8 {
+// forgets what it holds. Returns the cookie that clears the session cookie.
+pub fn forget(shared: *Shared) http.Cookie {
   versions.changed(&shared.sessions)
-  return "sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+  return http.Cookie{ name: CookieName, path: "/", max_age: -1, http_only: true, same_site: http.SameSite.Lax }
 }
 
 // Whether presented (a form field or header) is the session's CSRF secret,

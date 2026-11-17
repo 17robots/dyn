@@ -85,6 +85,11 @@ def exercise(port, certificate, work):
         finally:
             events.terminate()
             events.wait()
+    # A failing handler gets 500 on its stream; the connection goes on.
+    out = h3(port, certificate, '/fail', '-w', ' %{http_code}')
+    assert out == b'internal server error\n 500', out
+    head = h3(port, certificate, '/cookies?debug', '-i').decode().replace('\r', '')
+    assert 'set-cookie: theme=dark; Path=/' in head and head.endswith('debug\n'), head
     # Closed connections give their slots back (8 per worker here).
     for _ in range(30):
         assert h3(port, certificate, '/health') == b'ok\n'

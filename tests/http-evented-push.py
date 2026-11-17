@@ -417,7 +417,8 @@ def exercise(port):
         held.append(sock)
     began = time.perf_counter()
     status, headers, body = request(port, 'GET', '/health')
-    assert (status, body, headers.get('retry-after')) == (503, b'server busy\n', '1'), (status, body)
+    # Config.on_busy answers in place of the server's own 503.
+    assert (status, body, headers.get('retry-after')) == (503, b'busy, try again\n', '2'), (status, body)
     assert time.perf_counter() - began < 1
     for sock in held:
         sock.close()

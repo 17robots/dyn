@@ -172,12 +172,45 @@ fn handle(status: *fail.Status, response: *http.Response, request: *const http.R
     text(status, response, http.StatusOk, name.value)
     return
   }
+  if bytes.equal(request.path, "/fail") {
+    // Fails before responding: the server answers 500 and closes.
+    fail.invalid(status, "fail route", "", "failing on purpose")
+    return
+  }
+  if bytes.equal(request.path, "/twice") {
+    text(status, response, http.StatusOk, "once\n")
+    second: fail.Status
+    text(&second, response, http.StatusOk, "twice\n")
+    if second.failure.kind != fail.Kind.InvalidState || !bytes.equal(fail.message_text(&second.failure), "already responded") {
+      #panic("a second response was not refused")
+    }
+    return
+  }
+  if bytes.equal(request.path, "/cookies") {
+    cookies: [2]http.Cookie = [
+      http.Cookie{ name: "theme", value: "dark", path: "/" },
+      http.Cookie{ name: "sid", value: "abc", http_only: true, same_site: http.SameSite.Lax },
+    ]
+    body: []const u8 = "plain\n"
+    if http.query_has(request, "debug") {
+      body = "debug\n"
+    }
+    http.respond(status, response, body, http.ResponseOptions{ content_type: "text/plain", cookies: cookies[..] })
+    return
+  }
   if bytes.equal(request.target, "/quit") {
     sync.store_u32(&app.quit, 1)
     http.respond(status, response, "bye\n", http.ResponseOptions{ content_type: "text/plain", close_connection: true })
     return
   }
   text(status, response, http.StatusNotFound, "not found\n")
+}
+
+// The server's 413 replaced by a JSON body.
+fn too_large(status: *fail.Status, response: *http.Response, request: *const http.Request) {
+  _ = request
+  http.respond(status, response, "{\"error\":\"too large\"}", http.ResponseOptions{ status: http.StatusPayloadTooLarge,
+    content_type: "application/json" })
 }
 
 fn main() {
@@ -199,6 +232,7 @@ fn main() {
   config.receive_size = 4 * mem.KiB
   config.send_size = 4 * mem.KiB
   config.idle_timeout_milliseconds = 500
+  config.on_too_large = too_large
   arguments_status: fail.Status
   arguments := process.arguments(arena, &arguments_status)
   shared := !arguments_status.failed && #len(arguments) > 1 && bytes.equal(arguments[1], "shared")
