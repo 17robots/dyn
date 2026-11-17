@@ -14,6 +14,9 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+Breaking: see [docs/migrations/0.1.0-preview.40.md](docs/migrations/0.1.0-preview.40.md),
+and run `dyn fix` first.
+
 Language (2026-11-16 cleanup; see `docs/guide/rules.md`):
 
 - A `for` with no condition and no `break` leaves only by `return` or a
