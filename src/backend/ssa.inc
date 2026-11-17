@@ -1643,9 +1643,12 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
     if (i < fixed || !packed) {
       const DynIrExpr *named = &ir->expressions[ir->items[e->item_start + i].expression];
       uint32_t local;
-      s->stable_argument = named->kind == DYN_EXPR_NAME && named->integer >= s->f->local_start &&
-                           named->integer - s->f->local_start < s->f->local_count &&
-                           ssa_local_index(s, named->integer, &local) && !s->address_exposed[local];
+      /* A call's result lands in a fresh temporary that nothing else
+         names, so later arguments cannot change it either. */
+      s->stable_argument = (named->kind == DYN_EXPR_NAME && named->integer >= s->f->local_start &&
+                            named->integer - s->f->local_start < s->f->local_count &&
+                            ssa_local_index(s, named->integer, &local) && !s->address_exposed[local]) ||
+                           named->kind == DYN_EXPR_CALL || named->kind == DYN_EXPR_INDIRECT_CALL;
     }
     ssa_pass(s, &list, type, value, length, parts, count, &stack);
     s->stable_argument = false;
@@ -9661,6 +9664,17 @@ static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
       continue;
     }
     ssa_transfer(e, L_REG, X_R10, from.src_kind, from.src, SC_INT, X_R11);
+    if (bytes >= 64) {
+      /* Large copies use rep movsb with RSI, RDI and RCX saved around it:
+         they may hold arguments already. The pushes move RSP by 24. */
+      CODE(0x56, 0x57, 0x51);                                      /* push rsi; push rdi; push rcx */
+      CODE(0x4c, 0x89, 0xd6);                                      /* mov rsi, r10 */
+      CODE(0x48, 0x8d, 0xbc, 0x24); word(ctx, (uint32_t)(location - SSA_STACK + 24)); /* lea rdi, [rsp + 24 + at] */
+      byte(ctx, 0xb9); word(ctx, (uint32_t)bytes);                 /* mov ecx, bytes */
+      CODE(0xf3, 0xa4);                                            /* rep movsb */
+      CODE(0x59, 0x5f, 0x5e);                                      /* pop rcx; pop rdi; pop rsi */
+      continue;
+    }
     for (int32_t at = 0; at < bytes;) {
       unsigned width = bytes - at >= 8 ? 8 : bytes - at >= 4 ? 4 : bytes - at >= 2 ? 2 : 1;
       int prefix = width == 2 ? 0x66 : -1;

@@ -330,6 +330,14 @@ Compiler speed of generated code:
   snapshot. A 64-byte struct passed by value to an inlined function costs no
   copy (0.046 to 0.030 s on `tools/bench/bodies`), and an out-of-line call
   one copy instead of three.
+- Smaller code where failures are recorded. A function that takes, returns
+  or keeps a struct over 192 bytes by value (such as `fail.make` and
+  `fail.set`) is no longer inlined, x86-64 copies a large stack argument with
+  `rep movsb` instead of one move per eight bytes, and a call's result is
+  passed on without a second copy. A site that records a failure is 181
+  bytes of code instead of 386, and the example programs are 5-23% smaller
+  than before this change (all now smaller than on preview 39). Kernel
+  speed is unchanged.
 - `tools/bench/run.py` also builds each kernel with Zig (ReleaseFast and
   ReleaseSafe); see PERFORMANCE.md.
 

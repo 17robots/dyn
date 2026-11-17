@@ -784,6 +784,22 @@ static bool inline_small_type(const DynIrProgram *ir, DynType type) {
   }
   return type < DYN_TYPE_ARRAY_BASE;
 }
+/* A function that returns, takes or keeps a struct this large by value is
+   not inlined: its body is mostly the struct's zeroing and copying, so each
+   inlined copy adds that code to the caller and saves only the call. Such
+   functions are usually failure paths (fail.make, fail.set). */
+static bool inline_large_value(const DynIrProgram *ir, DynType type) {
+  if (!dyn_type_is_struct(type)) return false;
+  size_t index = type - DYN_TYPE_STRUCT_BASE;
+  return index < ir->struct_count && ir->structs[index].size > 192;
+}
+static bool inline_holds_large_value(const DynIrProgram *ir, const DynIrFunction *f) {
+  if (inline_large_value(ir, f->return_type)) return true;
+  if ((uint64_t)f->local_start + f->local_count > ir->local_count) return true;
+  for (uint32_t i = 0; i < f->local_count; ++i)
+    if (inline_large_value(ir, ir->locals[f->local_start + i].type)) return true;
+  return false;
+}
 static bool inline_leaf(const DynIrProgram *ir, const DynIrFunction *f) {
   if (f->body_count != 1 || f->param_count > 4 ||
       f->local_count != f->param_count ||
@@ -908,9 +924,10 @@ static bool inline_admits(const Inline *b, const InlineScope *scope, uint64_t id
                           uint32_t count, unsigned depth, uint32_t node) {
   if (!scope->expand || id >= b->in->function_count || depth > 16 || b->active[id])
     return false;
+  const DynIrFunction *f = &b->in->functions[id];
+  if (inline_holds_large_value(b->in, f)) return false;
   /* A planned site expands exactly when the plan chose it. */
   if (node) return b->plan[node].chosen && b->plan[node].function == id;
-  const DynIrFunction *f = &b->in->functions[id];
   if (f->foreign || f->generic || f->variadic || f->is_main ||
       f->local_count > 128 || count != f->param_count ||
       (uint64_t)f->param_start + f->param_count > b->in->param_count)
