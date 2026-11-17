@@ -16,7 +16,7 @@ fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
 fn measure(data: *u8, text: []const u8) f32 {
   _ = data
   check(utf8.valid(text), "measure receives complete UTF8")
-  return #cast(f32, utf8.codepoint_count(text).value) * 8.0
+  return #cast(f32, utf8.codepoint_count(text)) * 8.0
 }
 struct App { storage: [64]u8, edit: box.Edit, field: *box.Box, submitted: bool, x: f32 }
 fn frame(state: *box.State, arena: *mem.Arena, app: *App, input: box.Input) {

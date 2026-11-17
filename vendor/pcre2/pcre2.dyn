@@ -7,7 +7,8 @@ pub const Utf: u32 = 524288
 pub const Ucp: u32 = 131072
 pub const Caseless: u32 = 8
 pub const NoMatch: i32 = -1
-pub struct Span { start: usize, end: usize, set: bool }
+// found is false for a group that did not take part in the match.
+pub struct Span { start: usize, end: usize, found: bool }
 extern fn native_error_message "pcre2_get_error_message_8"(code: i32, buffer: *u8, size: usize) i32
 
 // Records PCRE2's message for code, keeping the code in native.
@@ -81,7 +82,7 @@ pub fn capture(data: MatchData, index: u32) Span {
   pair := #slice(offsets, #cast(usize, native_count(data)) * 2)
   start := pair[#cast(usize, index) * 2]
   end := pair[#cast(usize, index) * 2 + 1]
-  return Span{ start: start, end: end, set: start != #cast(usize, -1) && end != #cast(usize, -1) }
+  return Span{ start: start, end: end, found: start != #cast(usize, -1) && end != #cast(usize, -1) }
 }
 extern fn native_compile "pcre2_compile_8"(pattern: *const u8, length: usize, options: u32, code: *i32, offset: *usize, context: rawptr) Pattern
 extern fn native_code_free "pcre2_code_free_8"(pattern: Pattern)

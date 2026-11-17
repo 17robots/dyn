@@ -89,8 +89,7 @@ module's full declarations and comments.
 ## std/bytes/search
 
 - `struct Pattern { needle: []const u8, table: []const usize }`: Prepared, allocation-free KMP search.
-- `struct Prepared { pattern: Pattern, valid: bool }`
-- `fn prepare(needle: []const u8, table: []usize) Prepared`: Capacity failure leaves table untouched.
+- `fn prepare(status: *fail.Status, needle: []const u8, table: []usize) Pattern`: A table shorter than needle fails with Capacity and is left untouched.
 - `fn find(pattern: Pattern, text: []const u8) usize`: First byte offset, or #len(text) on a miss.
 
 ## std/c
@@ -810,7 +809,7 @@ module's full declarations and comments.
 
 - `enum Kind { Bool, String, Integer, Float, Choice }`: Command-line parser.
 - `struct Option { name: []const u8, short: u8, kind: Kind, required: bool, default_value: []const u8, choices: [][]const u8 }`
-- `struct Value { text: []const u8, present: bool, occurrences: usize }`
+- `struct Value { text: []const u8, found: bool, occurrences: usize }`
 - `struct Parsed { values: []Value, positionals: [][]const u8 }`
 - `fn bool_option(name: []const u8, short: u8) Option`
 - `fn string_option(name: []const u8, short: u8) Option`
@@ -1055,8 +1054,8 @@ module's full declarations and comments.
 
 ## std/image/png
 
-- `struct Info { width: usize, height: usize, channels: u8, valid: bool }`
-- `struct Image { info: Info, pixels: []u8 }`: Info.valid is true inside successful values.
+- `struct Info { width: usize, height: usize, channels: u8 }`
+- `struct Image { info: Info, pixels: []u8 }`: Malformed data fails with InvalidInput (at its offset when known), an impossible size with Overflow, data past the codec's working limits ...
 - `fn inspect(status: *fail.Status, source: []const u8) Info`: The header's description of the image, without decoding it.
 - `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image`
 - `fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8) []u8`
@@ -1071,8 +1070,8 @@ module's full declarations and comments.
 
 ## std/image/qoi
 
-- `struct Info { width: usize, height: usize, channels: u8, srgb: bool, valid: bool }`
-- `struct Image { info: Info, pixels: []u8 }`: Info.valid is true inside successful values.
+- `struct Info { width: usize, height: usize, channels: u8, srgb: bool }`
+- `struct Image { info: Info, pixels: []u8 }`: Malformed data fails with InvalidInput (at its offset when known), an impossible size with Overflow, data past the codec's working limits ...
 - `fn inspect(status: *fail.Status, source: []const u8) Info`: The header's description of the image, without decoding it.
 - `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image`
 - `fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) []u8`
@@ -1231,35 +1230,31 @@ module's full declarations and comments.
 - `struct Mat3 { c0: Vec3, c1: Vec3, c2: Vec3 }`
 - `struct Mat4 { c0: Vec4, c1: Vec4, c2: Vec4, c3: Vec4 }`
 - `struct Quat { x: f32, y: f32, z: f32, w: f32 }`
-- `struct Mat3Result { value: Mat3, valid: bool }`
-- `struct Mat4Result { value: Mat4, valid: bool }`
-- `struct QuatResult { value: Quat, valid: bool }`
-- `struct RotationVectorResult { value: Vec3, valid: bool }`
 - `fn mat3_identity() Mat3`
 - `fn mat3_mul_vec3(a: Mat3, v: Vec3) Vec3`
 - `fn mat3_mul(a, b: Mat3) Mat3`
 - `fn mat3_transpose(a: Mat3) Mat3`
-- `fn mat3_inverse(a: Mat3) Mat3Result`
+- `fn mat3_inverse(a: Mat3) Mat3`
 - `fn mat4_identity() Mat4`
 - `fn mat4_mul_vec4(a: Mat4, v: Vec4) Vec4`
 - `fn mat4_mul(a, b: Mat4) Mat4`
 - `fn mat4_transpose(a: Mat4) Mat4`
-- `fn mat4_inverse(a: Mat4) Mat4Result`
-- `fn mat3_translate(v: Vec2) Mat3Result`
-- `fn mat3_scale(v: Vec2) Mat3Result`
-- `fn mat3_rotate(angle: f32) Mat3Result`
-- `fn mat4_translate(v: Vec3) Mat4Result`
-- `fn mat4_scale(v: Vec3) Mat4Result`
+- `fn mat4_inverse(a: Mat4) Mat4`
+- `fn mat3_translate(v: Vec2) Mat3`
+- `fn mat3_scale(v: Vec2) Mat3`
+- `fn mat3_rotate(angle: f32) Mat3`
+- `fn mat4_translate(v: Vec3) Mat4`
+- `fn mat4_scale(v: Vec3) Mat4`
 - `fn quat_identity() Quat`
 - `fn quat_mul(a, b: Quat) Quat`
-- `fn quat_normalize(q: Quat) QuatResult`
-- `fn quat_from_rotation_vector(v: Vec3) QuatResult`
-- `fn quat_to_rotation_vector(q: Quat) RotationVectorResult`
-- `fn quat_to_mat3(q: Quat) Mat3Result`
-- `fn mat4_rotate(axis: Vec3, angle: f32) Mat4Result`: Axis normalization uses f64, including very large or subnormal f32 axes.
-- `fn mat4_look_at(eye, target, up: Vec3) Mat4Result`
-- `fn mat4_perspective(fov_y, aspect, near, far: f32) Mat4Result`
-- `fn mat4_orthographic(left, right, bottom, top, near, far: f32) Mat4Result`
+- `fn quat_normalize(q: Quat) Quat`
+- `fn quat_from_rotation_vector(v: Vec3) Quat`
+- `fn quat_to_rotation_vector(q: Quat) Vec3`
+- `fn quat_to_mat3(q: Quat) Mat3`
+- `fn mat4_rotate(axis: Vec3, angle: f32) Mat4`: Axis normalization uses f64, including very large or subnormal f32 axes.
+- `fn mat4_look_at(eye, target, up: Vec3) Mat4`
+- `fn mat4_perspective(fov_y, aspect, near, far: f32) Mat4`
+- `fn mat4_orthographic(left, right, bottom, top, near, far: f32) Mat4`
 - `struct Rng1u64 { min: u64, max: u64 }`
 - `fn rng1u64_empty(r: Rng1u64) bool`
 - `fn rng1u64_contains(r: Rng1u64, value: u64) bool`
@@ -1359,13 +1354,12 @@ module's full declarations and comments.
 ## std/math/big
 
 - `struct Int { limbs: []const u32, negative: bool }`
-- `struct Division { quotient: Int, remainder: Int, valid: bool }`
+- `struct Division { quotient: Int, remainder: Int }`
 - `fn zero() Int`
 - `fn from_u64(arena: *mem.Arena, value: u64) Int`
 - `fn from_i64(arena: *mem.Arena, value: i64) Int`
 - `fn is_zero(value: Int) bool`
-- `struct U64Result { value: u64, valid: bool }`: The value as a u64;
-- `fn to_u64(value: Int) U64Result`
+- `fn to_u64(status: *fail.Status, value: Int) u64`: The value as a u64.
 - `fn negate(value: Int) Int`
 - `fn absolute(value: Int) Int`
 - `fn compare(a: Int, b: Int) i32`: -1, 0 or 1 as a is less than, equal to or greater than b.
@@ -1373,12 +1367,11 @@ module's full declarations and comments.
 - `fn add(arena: *mem.Arena, a: Int, b: Int) Int`
 - `fn subtract(arena: *mem.Arena, a: Int, b: Int) Int`
 - `fn multiply(arena: *mem.Arena, a: Int, b: Int) Int`
-- `fn divide(arena: *mem.Arena, a: Int, b: Int) Division`: Truncated division: the quotient rounds toward zero and the remainder has the sign of a.
+- `fn divide(arena: *mem.Arena, status: *fail.Status, a: Int, b: Int) Division`: Truncated division: the quotient rounds toward zero and the remainder has the sign of a.
 - `fn shift_left(arena: *mem.Arena, value: Int, bits: usize) Int`
 - `fn shift_right(arena: *mem.Arena, value: Int, bits: usize) Int`: Shifts the magnitude right;
 - `fn bit_length(value: Int) usize`
-- `struct ModResult { value: Int, valid: bool }`: base^exponent mod modulus by square and multiply.
-- `fn power_mod(arena: *mem.Arena, base: Int, exponent: Int, modulus: Int) ModResult`
+- `fn power_mod(arena: *mem.Arena, status: *fail.Status, base: Int, exponent: Int, modulus: Int) Int`: base^exponent mod modulus by square and multiply.
 - `fn gcd(arena: *mem.Arena, a: Int, b: Int) Int`: Greatest common divisor, never negative.
 - `fn parse(arena: *mem.Arena, status: *fail.Status, text: []const u8, base: u32) Int`: Parses an optional sign and digits in base 2 through 36.
 - `fn format(arena: *mem.Arena, value: Int, base: u32) []u8`: The value's digits in base 2 through 36, lowercase, with a leading '-' when negative.
@@ -1719,7 +1712,7 @@ module's full declarations and comments.
 - `fn load_directory(arena: *memory.Arena, status: *fail.Status, root: []const u8, storage: []Asset, maximum: usize) Assets`: Every regular file below root, recursively, read into arena as assets in storage, sorted.
 - `fn accepts_encoding(request: *const Request, coding: []const u8) bool`: Whether the request's Accept-Encoding allows coding (RFC 9110 12.5.3): it is listed, or "*" is, with a q-value above zero.
 - `fn etag_matches(request: *const Request, etag: []const u8) bool`: If-None-Match against etag: "*" or a listed tag, comparing weakly (W/ prefixes ignored), as RFC 9110 13.1.2 requires for GET and HEAD.
-- `struct ByteRange { start: usize, end: usize, present: bool, satisfiable: bool }`: A single byte range of a representation length bytes long, from a Range header (RFC 9110 14.1.2): bytes=first-last, bytes=first- or ...
+- `struct ByteRange { start: usize, end: usize, found: bool, satisfiable: bool }`: A single byte range of a representation length bytes long, from a Range header (RFC 9110 14.1.2): bytes=first-last, bytes=first- or ...
 - `fn byte_range(request: *const Request, length: usize) ByteRange`
 - `fn serve_asset(status: *fail.Status, response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8)`: Answers request with asset: 304 when If-None-Match matches (or, without If-None-Match, when If-Modified-Since is not older than modified);
 
@@ -1781,7 +1774,7 @@ module's full declarations and comments.
 - `fn decoder(storage: []u8, entries: []Entry) Decoder`: Storage bounds the table: limit is #len(storage) bytes, and at most EntryOverhead bytes per entry (see entries_for).
 - `fn entries_for(storage_size: usize) usize`: Entries a decoder needs for storage bytes of table.
 - `fn decode_begin(decoder: *Decoder)`: Starts a header block: a size update is allowed again before its first field.
-- `struct Decoded { length: usize, ok: bool }`
+- `struct Decoded { length: usize, valid: bool }`
 - `fn huffman_decode(source: []const u8, destination: []u8) Decoded`: Huffman-decodes source into destination (RFC 7541 5.2): padding must be at most 7 one bits, and EOS never appears.
 - `fn huffman_length(source: []const u8) usize`: Bytes huffman_encode writes for source.
 - `fn huffman_encode(source: []const u8, destination: []u8) usize`: Huffman-codes source into destination, which must hold huffman_length bytes.
@@ -1792,7 +1785,7 @@ module's full declarations and comments.
 
 - `const StaticCount: usize = 99`
 - `struct Field { name: []const u8, value: []const u8, consumed: usize }`: One decoded field line;
-- `struct Prefix { consumed: usize, ok: bool }`
+- `struct Prefix { consumed: usize, valid: bool }`
 - `fn decode_prefix(section: []const u8) Prefix`: Reads the field section prefix (RFC 9204 4.5.1).
 - `fn decode_field(status: *fail.Status, section: []const u8, scratch: []u8) Field`: Decodes the field line at the start of section into scratch.
 - `fn encode_prefix(destination: []u8) usize`: The prefix of a section that uses no dynamic table: two zero bytes.
@@ -2086,7 +2079,6 @@ module's full declarations and comments.
 
 ## std/path
 
-- `struct Result { value: []u8, valid: bool }`: Slash-separated lexical paths.
 - `fn basename(path: []const u8) []const u8`
 - `fn dirname(path: []const u8) []const u8`
 - `fn extension(path: []const u8) []const u8`
@@ -2095,10 +2087,10 @@ module's full declarations and comments.
 - `struct Component { value: []const u8, offset: usize, found: bool }`: ok is false after the last component.
 - `fn components(text: []const u8) Components`
 - `fn component_next(state: *Components) Component`
-- `fn join(arena: *mem.Arena, left: []const u8, right: []const u8) Result`: left and right joined by one slash, in arena.
-- `fn clean(arena: *mem.Arena, path: []const u8) Result`: path with .
-- `fn safe_join(arena: *mem.Arena, root: []const u8, child: []const u8) Result`: root joined with a relative child that cannot climb out of root, in arena.
-- `fn relative(arena: *mem.Arena, base: []const u8, target: []const u8) Result`: The path from base to target, in arena.
+- `fn join(arena: *mem.Arena, left: []const u8, right: []const u8) []u8`: left and right joined by one slash, in arena.
+- `fn clean(arena: *mem.Arena, path: []const u8) []u8`: path with .
+- `fn safe_join(arena: *mem.Arena, status: *fail.Status, root: []const u8, child: []const u8) []u8`: root joined with a relative child that cannot climb out of root, in arena.
+- `fn relative(arena: *mem.Arena, status: *fail.Status, base: []const u8, target: []const u8) []u8`: The path from base to target, in arena.
 
 ## std/process
 
@@ -2412,8 +2404,8 @@ module's full declarations and comments.
 - `struct PropertyOptions { seed: u64, cases: usize, shrink_checks: usize }`
 - `struct PropertyResult { passed: bool, seed: u64, iteration: usize, example: []const u8, checks: usize, shrink_exhausted: bool, }`
 - `fn check_property(options: PropertyOptions, work: []u8, predicate: fn(rawptr, []const u8) bool, context: rawptr) PropertyResult`: Property must be deterministic and must not retain its input.
-- `struct Samples { count: usize, minimum, median, p90, maximum: i64, valid: bool }`
-- `fn summarize(samples: []i64) Samples`: Sorts caller-owned nanosecond samples in place;
+- `struct Samples { count: usize, minimum, median, p90, maximum: i64 }`
+- `fn summarize(status: *fail.Status, samples: []i64) Samples`: Sorts caller-owned nanosecond samples in place;
 - `struct TemporaryDirectory { path: []const u8, active: bool }`
 - `fn temporary_directory(arena: *mem.Arena, status: *fail.Status, prefix: []const u8) TemporaryDirectory`: Reserves a private 0700 directory.
 - `fn remove_temporary(status: *fail.Status, directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8)`
@@ -2545,8 +2537,7 @@ module's full declarations and comments.
 - `fn deadline_expired(deadline: *const Deadline) bool`
 - `fn deadline_remaining(deadline: *const Deadline) i64`: Nanoseconds left before deadline;
 - `fn valid(value: *const DateTime) bool`
-- `struct Parsed { value: DateTime, valid: bool }`
-- `fn parse_iso8601(input: []const u8) Parsed`: Parses YYYY-MM-DDTHH:MM:SSZ.
+- `fn parse_iso8601(status: *fail.Status, input: []const u8) DateTime`: Parses YYYY-MM-DDTHH:MM:SSZ.
 - `fn format_iso8601(arena: *mem.Arena, value: *const DateTime) []u8`: value as YYYY-MM-DDTHH:MM:SSZ in arena, or "" when value is not a valid date in years 0 through 9999.
 - `enum Weekday { Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday }`
 - `fn days_from_civil(year: i32, month: u8, day: u8) i64`: Days since 1970-01-01 for a proleptic Gregorian date (Hinnant's days_from_civil).
@@ -2630,7 +2621,6 @@ module's full declarations and comments.
 - `struct Input { x: f32, y: f32, down: bool, // Scroll in pixels this frame, positive scrolls content up and left. scroll_x: f32, scroll_y: f32, // UTF-8 text typed this frame, and editing keys pressed this frame. text: []const u8, backspace: bool, delete: bool, left: bool, right: bool, home: bool, end: bool, enter: bool, escape: bool, tab: bool, shift: bool, control: bool, select_all: bool, copy: bool, cut: bool, paste: bool, // The clipboard text offered for paste this frame. clipboard: []const u8, // The input method's in-progress composition (preedit), shown at the focused // text field's caret but not yet inserted. composition_cursor is a byte // offset into it, or -1. composition: []const u8, composition_cursor: i32, // Editing/navigation keys in this poll were consumed by the input method, // including the poll that clears preedit. Committed text still inserts. composition_handled: bool, // One complete correction as its own ordered input step. Do not combine it // with unrelated keyboard/text input. Stale or invalid corrections fail closed. correction: *const text_edits.Replacement, }`
 - `struct Signal { box: *Box, hovered: bool, pressed: bool, released: bool, clicked: bool, dragging: bool, // Pointer movement since the press while dragging. drag_x: f32, drag_y: f32, }`
 - `struct State { arena: *mem.Arena, frame: *mem.Arena, buckets: []*Box, free: *Box, frame_index: u64, root: *Box, parents: [parent_limit]*Box, depth: usize, input: Input, previous_down: bool, press_x: f32, press_y: f32, hot: u64, next_hot: u64, active: u64, dt: f32, // Text measurement in pixels, and the line height used for Text sizes. measure: fn(rawptr, []const u8) f32, measure_data: rawptr, line_height: f32, // Seconds for animations to close half their remaining distance. half_life: f32, // Keyboard focus, and text that a copy or cut this frame produced. focused: u64, focus_claimed: bool, // Snap animations instead of easing them, for users who ask for reduced // motion. reduced_motion: bool, // Display scale applied to pixel sizes and text padding. Pass a font // rasterized at the same scale. scale: f32, copied: []const u8, // Owned previous preedit for change-driven redraw; native snapshots cap256. composition_text: [256]u8, composition_length: usize, composition_cursor: i32, // Set during building when a focused text field wants text input: pass // text_input and text_input_rect (x, y, width, height in window pixels) to // the window so the input method places its candidates at the caret. text_input: bool, text_input_rect: [4]f32, text_input_anchor: *Box, // Publish this bounded context to a native input method before enabling the // focused field. Tracker lifetime must match one window, not one widget. text_context: text_edits.Context, text_context_error: fail.Kind, text_tracker: text_edits.Tracker, }`
-- `struct StateResult { value: *State, valid: bool }`
 - `fn push_state(arena: *mem.Arena, measure: fn(*$C, []const u8) f32, measure_data: *$C, line_height: f32) *State`: A state in arena.
 - `fn display_text(label: []const u8) []const u8`: The visible part of a label: text before "##" is shown, the whole label is hashed.
 - `fn key(seed: u64, label: []const u8) u64`
@@ -2715,19 +2705,17 @@ module's full declarations and comments.
 - `fn decode(source: []const u16, offset: usize) Decode`
 - `fn encode(destination: []u16, codepoint: u32) usize`
 - `fn valid(source: []const u16) bool`
-- `struct Count { value: usize, valid: bool }`
-- `fn codepoint_count(source: []const u16) Count`: Code points in source.
+- `fn codepoint_count(source: []const u16) usize`: Code points in source, counting each unit of invalid UTF-16 (an unpaired surrogate) as one.
 
 ## std/unicode/utf8
 
 - `struct Decode { codepoint: u32, width: usize, valid: bool, }`
 - `fn decode(text: []const u8, offset: usize) Decode`
 - `fn valid(text: []const u8) bool`
-- `struct Count { value: usize, valid: bool }`
-- `fn codepoint_count(text: []const u8) Count`: Code points in text.
+- `fn codepoint_count(text: []const u8) usize`: Code points in text, counting each byte of invalid UTF-8 as one (the U+FFFD it would decode to).
 - `fn encoded_width(codepoint: u32) usize`
 - `fn encode(destination: []u8, codepoint: u32) usize`
 - `struct Iterator { text: []const u8, offset: usize, }`
 - `fn iterator(text: []const u8) Iterator`
-- `struct Next { value: u32, valid: bool }`
-- `fn next(state: *Iterator) Next`: The next code point.
+- `struct Next { value: u32, found: bool }`
+- `fn next(state: *Iterator) Next`: The next code point;

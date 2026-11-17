@@ -1,12 +1,17 @@
+use "std/fail"
 // Prepared, allocation-free KMP search. Preparation O(needle length); each
 // search O(text length). Both slices remain borrowed and immutable until reuse.
 // The table must not overlap needle storage. Re-prepare after changing either.
 pub struct Pattern { needle: []const u8, table: []const usize }
-pub struct Prepared { pattern: Pattern, valid: bool }
 
-// Capacity failure leaves table untouched. Empty needles need no storage.
-pub fn prepare(needle: []const u8, table: []usize) Prepared {
-  if #len(table) < #len(needle) { return Prepared{} }
+// A table shorter than needle fails with Capacity and is left untouched.
+// Empty needles need no storage.
+pub fn prepare(status: *fail.Status, needle: []const u8, table: []usize) Pattern {
+  if status.failed { return Pattern{} }
+  if #len(table) < #len(needle) {
+    fail.set(status, fail.make(fail.Kind.Capacity, "prepare search", "", "the table is shorter than the needle"))
+    return Pattern{}
+  }
   matched: usize = 0
   for index in 0..#len(needle) {
     if index == 0 {
@@ -21,7 +26,7 @@ pub fn prepare(needle: []const u8, table: []usize) Prepared {
       table[index] = matched
     }
   }
-  return Prepared{ pattern: Pattern{needle: needle, table: table[..#len(needle)]}, valid: true }
+  return Pattern{ needle: needle, table: table[..#len(needle)] }
 }
 
 // First byte offset, or #len(text) on a miss. Empty needle matches at zero.

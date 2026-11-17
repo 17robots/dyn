@@ -9,7 +9,7 @@ use "std/mem" mem
 use "std/io" io
 pub struct Int { limbs: []const u32, negative: bool }
 
-pub struct Division { quotient: Int, remainder: Int, valid: bool }
+pub struct Division { quotient: Int, remainder: Int }
 
 fn trimmed(limbs: []u32, negative: bool) Int {
   length := #len(limbs)
@@ -44,16 +44,23 @@ pub fn is_zero(value: Int) bool {
   return #len(value.limbs) == 0
 }
 
-// The value as a u64; ok is false when it is negative or does not fit.
-pub struct U64Result { value: u64, valid: bool }
-
-pub fn to_u64(value: Int) U64Result {
-  if value.negative || #len(value.limbs) > 2 { return U64Result{} }
+// The value as a u64. A negative value fails with InvalidInput, one past
+// u64 with Overflow.
+pub fn to_u64(status: *fail.Status, value: Int) u64 {
+  if status.failed { return 0 }
+  if value.negative {
+    fail.invalid(status, "convert to u64", "", "the value is negative")
+    return 0
+  }
+  if #len(value.limbs) > 2 {
+    fail.set(status, fail.make(fail.Kind.Overflow, "convert to u64", "", "the value does not fit in u64"))
+    return 0
+  }
   result: u64 = 0
   for i in 0..#len(value.limbs) {
     result |= #cast(u64, value.limbs[i]) << #cast(u64, 32 * i)
   }
-  return U64Result{ value: result, valid: true }
+  return result
 }
 
 pub fn negate(value: Int) Int {
@@ -249,10 +256,18 @@ fn divide_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32, quotient:
 }
 
 // Truncated division: the quotient rounds toward zero and the remainder has
-// the sign of a. ok is false, with zero results, when b is zero.
-pub fn divide(arena: *mem.Arena, a: Int, b: Int) Division {
-  if is_zero(b) { return Division{} }
-  if compare_magnitude(a.limbs, b.limbs) < 0 { return Division{ remainder: a, valid: true } }
+// the sign of a. A zero b fails with InvalidInput.
+pub fn divide(arena: *mem.Arena, status: *fail.Status, a: Int, b: Int) Division {
+  if status.failed { return Division{} }
+  if is_zero(b) {
+    fail.invalid(status, "divide", "", "division by zero")
+    return Division{}
+  }
+  return divided(arena, a, b)
+}
+// divide for a nonzero b.
+fn divided(arena: *mem.Arena, a: Int, b: Int) Division {
+  if compare_magnitude(a.limbs, b.limbs) < 0 { return Division{ remainder: a } }
   quotient := mem.push_array(u32, arena, #len(a.limbs) - #len(b.limbs) + 1)
   if #len(b.limbs) == 1 {
     divisor := #cast(u64, b.limbs[0])
@@ -266,13 +281,13 @@ pub fn divide(arena: *mem.Arena, a: Int, b: Int) Division {
     }
     remainder := mem.push_array(u32, arena, 1)
     remainder[0] = #cast(u32, rest)
-    return Division{ quotient: trimmed(quotient, a.negative != b.negative), remainder: trimmed(remainder, a.negative), valid: true }
+    return Division{ quotient: trimmed(quotient, a.negative != b.negative), remainder: trimmed(remainder, a.negative) }
   }
   remainder := mem.push_array(u32, arena, #len(b.limbs))
   mark := mem.arena_mark(arena)
   divide_magnitude(arena, a.limbs, b.limbs, quotient, remainder)
   mem.arena_rewind(arena, mark)
-  return Division{ quotient: trimmed(quotient, a.negative != b.negative), remainder: trimmed(remainder, a.negative), valid: true }
+  return Division{ quotient: trimmed(quotient, a.negative != b.negative), remainder: trimmed(remainder, a.negative) }
 }
 
 pub fn shift_left(arena: *mem.Arena, value: Int, bits: usize) Int {
@@ -315,19 +330,21 @@ pub fn bit_length(value: Int) usize {
 
 // The non-negative remainder of value modulo a positive modulus.
 fn reduce(arena: *mem.Arena, value: Int, modulus: Int) Int {
-  divided := divide(arena, value, modulus)
-  if divided.remainder.negative { return add(arena, divided.remainder, modulus) }
-  return divided.remainder
+  division := divided(arena, value, modulus)
+  if division.remainder.negative { return add(arena, division.remainder, modulus) }
+  return division.remainder
 }
 
-// base^exponent mod modulus by square and multiply. ok is false for a
-// modulus below one or a negative exponent. Not constant time.
-pub struct ModResult { value: Int, valid: bool }
-
-pub fn power_mod(arena: *mem.Arena, base: Int, exponent: Int, modulus: Int) ModResult {
-  if modulus.negative || is_zero(modulus) || exponent.negative { return ModResult{} }
+// base^exponent mod modulus by square and multiply. A modulus below one or a
+// negative exponent fails with InvalidInput. Not constant time.
+pub fn power_mod(arena: *mem.Arena, status: *fail.Status, base: Int, exponent: Int, modulus: Int) Int {
+  if status.failed { return Int{} }
+  if modulus.negative || is_zero(modulus) || exponent.negative {
+    fail.invalid(status, "power mod", "", "the modulus must be at least one and the exponent not negative")
+    return Int{}
+  }
   one := from_u64(arena, 1)
-  if equal(modulus, one) { return ModResult{ valid: true } }
+  if equal(modulus, one) { return Int{} }
   result := one
   current := reduce(arena, base, modulus)
   bits := bit_length(exponent)
@@ -339,7 +356,7 @@ pub fn power_mod(arena: *mem.Arena, base: Int, exponent: Int, modulus: Int) ModR
       current = reduce(arena, multiply(arena, current, current), modulus)
     }
   }
-  return ModResult{ value: result, valid: true }
+  return result
 }
 
 // Greatest common divisor, never negative.
@@ -347,9 +364,9 @@ pub fn gcd(arena: *mem.Arena, a: Int, b: Int) Int {
   x := absolute(a)
   y := absolute(b)
   for !is_zero(y) {
-    divided := divide(arena, x, y)
+    division := divided(arena, x, y)
     x = y
-    y = divided.remainder
+    y = division.remainder
   }
   return x
 }

@@ -62,19 +62,21 @@ pub fn valid(text: []const u8) bool {
   return true
 }
 
-pub struct Count { value: usize, valid: bool }
-
-// Code points in text. ok is false when text is not valid UTF-8.
-pub fn codepoint_count(text: []const u8) Count {
+// Code points in text, counting each byte of invalid UTF-8 as one (the
+// U+FFFD it would decode to). Use valid to reject invalid text.
+pub fn codepoint_count(text: []const u8) usize {
   offset: usize = 0
   total: usize = 0
   for offset < #len(text) {
     decoded := decode(text, offset)
-    if !decoded.valid { return Count{} }
-    offset += decoded.width
+    if decoded.valid {
+      offset += decoded.width
+    } else {
+      offset += 1
+    }
     total += 1
   }
-  return Count{ value: total, valid: true }
+  return total
 }
 
 pub fn encoded_width(codepoint: u32) usize {
@@ -121,13 +123,17 @@ pub fn iterator(text: []const u8) Iterator {
   return Iterator{ text: text, offset: 0 }
 }
 
-pub struct Next { value: u32, valid: bool }
+pub struct Next { value: u32, found: bool }
 
-// The next code point. ok is false at the end or at invalid UTF-8.
+// The next code point; found is false at the end. A byte of invalid UTF-8
+// gives U+FFFD and is skipped. Use valid to reject invalid text.
 pub fn next(state: *Iterator) Next {
   if state.offset >= #len(state.text) { return Next{} }
   decoded := decode(state.text, state.offset)
-  if !decoded.valid { return Next{} }
+  if !decoded.valid {
+    state.offset += 1
+    return Next{ value: 0xfffd, found: true }
+  }
   state.offset += decoded.width
-  return Next{ value: decoded.codepoint, valid: true }
+  return Next{ value: decoded.codepoint, found: true }
 }

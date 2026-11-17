@@ -302,7 +302,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
   resolving: fail.Status
   resolved:=bidi.resolve(work, &resolving, bidi_api, text, options.base)
   if resolving.failed { return resolving.failure.kind }
-  count:=utf8.codepoint_count(text).value
+  count:=utf8.codepoint_count(text)
   clusters:=mem.push_array(Cluster, work, count)
   used:usize=0
   scalar:usize=0
@@ -326,7 +326,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
       at+=cp.width
     }
     clusters[used]=Cluster{start:start, end:iterator.offset, scalar:scalar, level:resolved.levels[scalar], script:script, face:face, tab:utf8.decode(text, start).codepoint==9}
-    scalar+=utf8.codepoint_count(grapheme.value).value
+    scalar+=utf8.codepoint_count(grapheme.value)
     used+=1
   }
   clusters=clusters[..used]

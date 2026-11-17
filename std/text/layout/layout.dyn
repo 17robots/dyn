@@ -64,8 +64,8 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
   breaks := unicode.line_breaks(arena, status, text)
   if status.failed { return Layout{} }
   count := utf8.codepoint_count(text)
-  work := mem.push_array(Glyph, arena, count.value)
-  clusters := mem.push_array(Cluster, arena, count.value)
+  work := mem.push_array(Glyph, arena, count)
+  clusters := mem.push_array(Cluster, arena, count)
   used: usize = 0
   cluster_count: usize = 0
   break_index: usize = 0

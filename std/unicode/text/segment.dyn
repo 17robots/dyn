@@ -153,12 +153,12 @@ fn mid_num_q(class: u8) bool {
 pub fn word_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []usize {
   empty: []usize
   if status.failed { return empty }
-  count := utf8.codepoint_count(text)
-  if !count.valid {
+  if !utf8.valid(text) {
     parse.malformed(status, "find word breaks", "invalid UTF-8", first_invalid(text))
     return empty
   }
-  n := count.value
+  count := utf8.codepoint_count(text)
+  n := count
   if n == 0 { return empty }
   result := mem.push_array(usize, arena, n)
   mark := mem.arena_mark(arena)
@@ -408,12 +408,12 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
 pub fn line_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []LineBreak {
   empty: []LineBreak
   if status.failed { return empty }
-  count := utf8.codepoint_count(text)
-  if !count.valid {
+  if !utf8.valid(text) {
     parse.malformed(status, "find line breaks", "invalid UTF-8", first_invalid(text))
     return empty
   }
-  n := count.value
+  count := utf8.codepoint_count(text)
+  n := count
   if n == 0 { return empty }
   result := mem.push_array(LineBreak, arena, n)
   mark := mem.arena_mark(arena)

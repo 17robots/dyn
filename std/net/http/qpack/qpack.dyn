@@ -13,15 +13,15 @@ pub const StaticCount: usize = 99
 // One decoded field line; name and value point into scratch.
 pub struct Field { name: []const u8, value: []const u8, consumed: usize }
 
-pub struct Prefix { consumed: usize, ok: bool }
+pub struct Prefix { consumed: usize, valid: bool }
 
-struct Integer { value: usize, consumed: usize, ok: bool }
+struct Integer { value: usize, consumed: usize, valid: bool }
 
 fn read_integer(block: []const u8, prefix: u8) Integer {
   if #len(block) == 0 { return Integer{} }
   mask := (#cast(usize, 1) << #cast(usize, prefix)) - 1
   value := block[0] & mask
-  if value < mask { return Integer{ value: value, consumed: 1, ok: true } }
+  if value < mask { return Integer{ value: value, consumed: 1, valid: true } }
   shift: usize = 0
   at: usize = 1
   for at < #len(block) {
@@ -29,13 +29,13 @@ fn read_integer(block: []const u8, prefix: u8) Integer {
     at += 1
     value += (#cast(usize, byte) & 127) << shift
     shift += 7
-    if (byte & 128) == 0 { return Integer{ value: value, consumed: at, ok: true } }
+    if (byte & 128) == 0 { return Integer{ value: value, consumed: at, valid: true } }
     if shift > 21 { return Integer{} }
   }
   return Integer{}
 }
 
-struct Text { length: usize, consumed: usize, ok: bool }
+struct Text { length: usize, consumed: usize, valid: bool }
 
 // A string literal whose length has an N-bit prefix, with the Huffman flag
 // just above it.
@@ -43,18 +43,18 @@ fn read_string(block: []const u8, prefix: u8, destination: []u8) Text {
   if #len(block) == 0 { return Text{} }
   huffman := (block[0] & (#cast(u8, 1) << prefix)) != 0
   length := read_integer(block, prefix)
-  if !length.ok || length.value > #len(block) - length.consumed { return Text{} }
+  if !length.valid || length.value > #len(block) - length.consumed { return Text{} }
   encoded := block[length.consumed..length.consumed + length.value]
   if huffman {
     decoded := hpack.huffman_decode(encoded, destination)
-    if !decoded.ok { return Text{} }
-    return Text{ length: decoded.length, consumed: length.consumed + length.value, ok: true }
+    if !decoded.valid { return Text{} }
+    return Text{ length: decoded.length, consumed: length.consumed + length.value, valid: true }
   }
   if #len(encoded) > #len(destination) { return Text{} }
   for i in 0..#len(encoded) {
     destination[i] = encoded[i]
   }
-  return Text{ length: #len(encoded), consumed: length.consumed + length.value, ok: true }
+  return Text{ length: #len(encoded), consumed: length.consumed + length.value, valid: true }
 }
 
 fn static_name(index: usize) []const u8 {
@@ -90,10 +90,10 @@ fn copy_into(destination: []u8, source: []const u8) bool {
 // the Required Insert Count must be zero; the base is then unused.
 pub fn decode_prefix(section: []const u8) Prefix {
   count := read_integer(section, 8)
-  if !count.ok || count.value != 0 { return Prefix{} }
+  if !count.valid || count.value != 0 { return Prefix{} }
   base := read_integer(section[count.consumed..], 7)
-  if !base.ok { return Prefix{} }
-  return Prefix{ consumed: count.consumed + base.consumed, ok: true }
+  if !base.valid { return Prefix{} }
+  return Prefix{ consumed: count.consumed + base.consumed, valid: true }
 }
 
 // Decodes the field line at the start of section into scratch. A reference
@@ -105,7 +105,7 @@ pub fn decode_field(status: *fail.Status, section: []const u8, scratch: []u8) Fi
   if (first & 0x80) != 0 {
     // Indexed field line; T (0x40) selects the static table.
     index := read_integer(section, 6)
-    if (first & 0x40) == 0 || !index.ok || index.value >= StaticCount {
+    if (first & 0x40) == 0 || !index.valid || index.value >= StaticCount {
       return failed(status, fail.Kind.InvalidInput, 0)
     }
     name := static_name(index.value)
@@ -118,22 +118,22 @@ pub fn decode_field(status: *fail.Status, section: []const u8, scratch: []u8) Fi
   if (first & 0xc0) == 0x40 {
     // Literal with a name reference; T (0x10) selects the static table.
     index := read_integer(section, 4)
-    if (first & 0x10) == 0 || !index.ok || index.value >= StaticCount {
+    if (first & 0x10) == 0 || !index.valid || index.value >= StaticCount {
       return failed(status, fail.Kind.InvalidInput, 0)
     }
     name := static_name(index.value)
     if !copy_into(scratch, name) { return failed(status, fail.Kind.Capacity, 0) }
     value := read_string(section[index.consumed..], 7, scratch[#len(name)..])
-    if !value.ok { return failed(status, fail.Kind.InvalidInput, index.consumed) }
+    if !value.valid { return failed(status, fail.Kind.InvalidInput, index.consumed) }
     return Field{ name: scratch[..#len(name)], value: scratch[#len(name)..#len(name) + value.length],
       consumed: index.consumed + value.consumed }
   }
   if (first & 0xe0) == 0x20 {
     // Literal with a literal name: H at 0x08, a 3-bit length.
     name := read_string(section, 3, scratch)
-    if !name.ok { return failed(status, fail.Kind.InvalidInput, 0) }
+    if !name.valid { return failed(status, fail.Kind.InvalidInput, 0) }
     value := read_string(section[name.consumed..], 7, scratch[name.length..])
-    if !value.ok { return failed(status, fail.Kind.InvalidInput, name.consumed) }
+    if !value.valid { return failed(status, fail.Kind.InvalidInput, name.consumed) }
     return Field{ name: scratch[..name.length], value: scratch[name.length..name.length + value.length],
       consumed: name.consumed + value.consumed }
   }

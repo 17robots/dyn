@@ -83,26 +83,28 @@ fn main() {
     show(arena, big.add(arena, a, b))
     show(arena, big.subtract(arena, a, b))
     show(arena, big.multiply(arena, a, b))
-    divided := big.divide(arena, a, b)
-    if divided.valid {
+    division: fail.Status
+    divided := big.divide(arena, &division, a, b)
+    if !division.failed {
       show(arena, divided.quotient)
       show(arena, divided.remainder)
     }
     else {
       io.print("none none ")
     }
-    shift_bits := big.divide(arena, big.absolute(b), big.from_u64(arena, 300)).remainder
-    shift := big.to_u64(shift_bits).value
+    shift_bits := big.divide(arena, &numbers, big.absolute(b), big.from_u64(arena, 300)).remainder
+    shift := big.to_u64(&numbers, shift_bits)
     show(arena, big.shift_left(arena, a, #cast(usize, shift)))
     show(arena, big.shift_right(arena, a, #cast(usize, shift)))
     io.print("{} {} ", big.compare(a, b), big.bit_length(a))
     io.print("{} {} ", big.format(arena, a, 16), big.format(arena, a, 2))
     show(arena, big.from_bytes(arena, big.to_bytes(arena, a)))
     show(arena, big.gcd(arena, a, b))
-    exponent := big.divide(arena, big.absolute(a), big.from_u64(arena, 4096)).remainder
-    powered := big.power_mod(arena, a, exponent, big.absolute(b))
-    if powered.valid {
-      io.println("{}", big.format(arena, powered.value, 10))
+    exponent := big.divide(arena, &numbers, big.absolute(a), big.from_u64(arena, 4096)).remainder
+    modular: fail.Status
+    powered := big.power_mod(arena, &modular, a, exponent, big.absolute(b))
+    if !modular.failed {
+      io.println("{}", big.format(arena, powered, 10))
     }
     else {
       io.println("none")

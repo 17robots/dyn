@@ -6,20 +6,20 @@
 // (OpenGL depth), with perspective w = -view.z. No perspective divide here.
 // Zero structs are valid: zero matrices are singular, zero Quat is not a
 // rotation. Quat is Hamilton (x,y,z vector part, w scalar); a*b applies b first.
-// Fallible functions return {value,ok}; failure always has a zero value.
-// Constructors reject nonfinite inputs/results, zero rotation axes, coincident
-// eye/target, parallel up/view, invalid frusta. Perspective requires
+// Degenerate input gives the zero value, never a failure: constructors give
+// zero for nonfinite inputs/results, zero rotation axes, coincident
+// eye/target, parallel up/view and invalid frusta. Perspective requires
 // 0 < fov_y < pi, aspect > 0, 0 < near < far; orthographic requires
 // left < right, bottom < top, 0 <= near < far. Scale may be zero/singular.
 // Finite constructor coefficients round to f32; extreme parameters may
-// underflow coefficients and produce singular matrices even when ok is true.
+// underflow coefficients and produce singular matrices.
 // Quaternion normalization accepts every finite nonzero quaternion, using
 // f64 norm arithmetic to avoid f32 overflow/underflow. Rotation vectors have
 // axis direction and angle magnitude; zero is identity. Conversion back uses
 // the shortest angle [0,pi], choosing the quaternion sign with w >= 0.
 // Inverses use f64 Gauss-Jordan elimination with largest-absolute partial
 // pivoting. Nonfinite input, an exactly zero computed pivot, or a result
-// outside finite f32 fails. No epsilon cutoff, condition-number guarantee,
+// outside finite f32 gives the zero matrix. No epsilon cutoff, condition-number guarantee,
 // exact singularity oracle, or global error bound is implied; ill-conditioned
 // inputs can return inaccurate finite answers. Camera basis cross products
 // use f32: a rounded zero cross product is treated as degenerate; no exact
@@ -30,10 +30,6 @@
 pub struct Mat3 { c0: Vec3, c1: Vec3, c2: Vec3 }
 pub struct Mat4 { c0: Vec4, c1: Vec4, c2: Vec4, c3: Vec4 }
 pub struct Quat { x: f32, y: f32, z: f32, w: f32 }
-pub struct Mat3Result { value: Mat3, valid: bool }
-pub struct Mat4Result { value: Mat4, valid: bool }
-pub struct QuatResult { value: Quat, valid: bool }
-pub struct RotationVectorResult { value: Vec3, valid: bool }
 
 pub fn mat3_identity() Mat3 {
   return Mat3{ c0: Vec3{ x: 1.0 }, c1: Vec3{ y: 1.0 }, c2: Vec3{ z: 1.0 } }
@@ -50,8 +46,8 @@ pub fn mat3_transpose(a: Mat3) Mat3 {
 fn mat3_finite(a: Mat3) bool {
   return is_finite(a.c0.x) && is_finite(a.c0.y) && is_finite(a.c0.z) && is_finite(a.c1.x) && is_finite(a.c1.y) && is_finite(a.c1.z) && is_finite(a.c2.x) && is_finite(a.c2.y) && is_finite(a.c2.z)
 }
-pub fn mat3_inverse(a: Mat3) Mat3Result {
-  if !mat3_finite(a) { return Mat3Result{} }
+pub fn mat3_inverse(a: Mat3) Mat3 {
+  if !mat3_finite(a) { return Mat3{} }
   t: [18]f64
   t[0] = a.c0.x
   t[1] = a.c1.x
@@ -75,7 +71,7 @@ pub fn mat3_inverse(a: Mat3) Mat3Result {
       }
       r += 1
     }
-    if t[pivot*6+k] == 0.0 { return Mat3Result{} }
+    if t[pivot*6+k] == 0.0 { return Mat3{} }
     j: i32 = 0
     for j < 6 {
       swap := t[k*6+j]
@@ -104,8 +100,8 @@ pub fn mat3_inverse(a: Mat3) Mat3Result {
     k += 1
   }
   value := Mat3{ c0: Vec3{ x: #cast(f32, t[3]), y: #cast(f32, t[9]), z: #cast(f32, t[15]) }, c1: Vec3{ x: #cast(f32, t[4]), y: #cast(f32, t[10]), z: #cast(f32, t[16]) }, c2: Vec3{ x: #cast(f32, t[5]), y: #cast(f32, t[11]), z: #cast(f32, t[17]) } }
-  if !mat3_finite(value) { return Mat3Result{} }
-  return Mat3Result{ value: value, valid: true }
+  if !mat3_finite(value) { return Mat3{} }
+  return value
 }
 
 pub fn mat4_identity() Mat4 {
@@ -123,8 +119,8 @@ pub fn mat4_transpose(a: Mat4) Mat4 {
 fn mat4_finite(a: Mat4) bool {
   return is_finite(a.c0.x) && is_finite(a.c0.y) && is_finite(a.c0.z) && is_finite(a.c0.w) && is_finite(a.c1.x) && is_finite(a.c1.y) && is_finite(a.c1.z) && is_finite(a.c1.w) && is_finite(a.c2.x) && is_finite(a.c2.y) && is_finite(a.c2.z) && is_finite(a.c2.w) && is_finite(a.c3.x) && is_finite(a.c3.y) && is_finite(a.c3.z) && is_finite(a.c3.w)
 }
-pub fn mat4_inverse(a: Mat4) Mat4Result {
-  if !mat4_finite(a) { return Mat4Result{} }
+pub fn mat4_inverse(a: Mat4) Mat4 {
+  if !mat4_finite(a) { return Mat4{} }
   t: [32]f64
   t[0] = a.c0.x
   t[1] = a.c1.x
@@ -156,7 +152,7 @@ pub fn mat4_inverse(a: Mat4) Mat4Result {
       }
       r += 1
     }
-    if t[pivot*8+k] == 0.0 { return Mat4Result{} }
+    if t[pivot*8+k] == 0.0 { return Mat4{} }
     j: i32 = 0
     for j < 8 {
       swap := t[k*8+j]
@@ -185,38 +181,38 @@ pub fn mat4_inverse(a: Mat4) Mat4Result {
     k += 1
   }
   value := Mat4{ c0: Vec4{ x: #cast(f32, t[4]), y: #cast(f32, t[12]), z: #cast(f32, t[20]), w: #cast(f32, t[28]) }, c1: Vec4{ x: #cast(f32, t[5]), y: #cast(f32, t[13]), z: #cast(f32, t[21]), w: #cast(f32, t[29]) }, c2: Vec4{ x: #cast(f32, t[6]), y: #cast(f32, t[14]), z: #cast(f32, t[22]), w: #cast(f32, t[30]) }, c3: Vec4{ x: #cast(f32, t[7]), y: #cast(f32, t[15]), z: #cast(f32, t[23]), w: #cast(f32, t[31]) } }
-  if !mat4_finite(value) { return Mat4Result{} }
-  return Mat4Result{ value: value, valid: true }
+  if !mat4_finite(value) { return Mat4{} }
+  return value
 }
 
-pub fn mat3_translate(v: Vec2) Mat3Result {
+pub fn mat3_translate(v: Vec2) Mat3 {
   value := mat3_identity()
   value.c2.x = v.x
   value.c2.y = v.y
-  if !mat3_finite(value) { return Mat3Result{} }
-  return Mat3Result{ value: value, valid: true }
+  if !mat3_finite(value) { return Mat3{} }
+  return value
 }
-pub fn mat3_scale(v: Vec2) Mat3Result {
+pub fn mat3_scale(v: Vec2) Mat3 {
   value := Mat3{ c0: Vec3{ x: v.x }, c1: Vec3{ y: v.y }, c2: Vec3{ z: 1.0 } }
-  if !mat3_finite(value) { return Mat3Result{} }
-  return Mat3Result{ value: value, valid: true }
+  if !mat3_finite(value) { return Mat3{} }
+  return value
 }
-pub fn mat3_rotate(angle: f32) Mat3Result {
-  if !is_finite(angle) { return Mat3Result{} }
+pub fn mat3_rotate(angle: f32) Mat3 {
+  if !is_finite(angle) { return Mat3{} }
   c := cos(angle)
   s := sin(angle)
-  return Mat3Result{ value: Mat3{ c0: Vec3{ x: c, y: s }, c1: Vec3{ x: -s, y: c }, c2: Vec3{ z: 1.0 } }, valid: true }
+  return Mat3{ c0: Vec3{ x: c, y: s }, c1: Vec3{ x: -s, y: c }, c2: Vec3{ z: 1.0 } }
 }
-pub fn mat4_translate(v: Vec3) Mat4Result {
+pub fn mat4_translate(v: Vec3) Mat4 {
   value := mat4_identity()
   value.c3 = Vec4{ x: v.x, y: v.y, z: v.z, w: 1.0 }
-  if !mat4_finite(value) { return Mat4Result{} }
-  return Mat4Result{ value: value, valid: true }
+  if !mat4_finite(value) { return Mat4{} }
+  return value
 }
-pub fn mat4_scale(v: Vec3) Mat4Result {
+pub fn mat4_scale(v: Vec3) Mat4 {
   value := Mat4{ c0: Vec4{ x: v.x }, c1: Vec4{ y: v.y }, c2: Vec4{ z: v.z }, c3: Vec4{ w: 1.0 } }
-  if !mat4_finite(value) { return Mat4Result{} }
-  return Mat4Result{ value: value, valid: true }
+  if !mat4_finite(value) { return Mat4{} }
+  return value
 }
 pub fn quat_identity() Quat {
   return Quat{ w: 1.0 }
@@ -228,29 +224,29 @@ pub fn quat_mul(a, b: Quat) Quat {
     z: a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
     w: a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z }
 }
-pub fn quat_normalize(q: Quat) QuatResult {
+pub fn quat_normalize(q: Quat) Quat {
   x := #cast(f64, q.x)
   y := #cast(f64, q.y)
   z := #cast(f64, q.z)
   w := #cast(f64, q.w)
   length := sqrt64(x*x+y*y+z*z+w*w)
-  if length == 0.0 || !is_finite(length) { return QuatResult{} }
-  return QuatResult{ value: Quat{ x: #cast(f32, x/length), y: #cast(f32, y/length), z: #cast(f32, z/length), w: #cast(f32, w/length) }, valid: true }
+  if length == 0.0 || !is_finite(length) { return Quat{} }
+  return Quat{ x: #cast(f32, x/length), y: #cast(f32, y/length), z: #cast(f32, z/length), w: #cast(f32, w/length) }
 }
-pub fn quat_from_rotation_vector(v: Vec3) QuatResult {
+pub fn quat_from_rotation_vector(v: Vec3) Quat {
   x := #cast(f64, v.x)
   y := #cast(f64, v.y)
   z := #cast(f64, v.z)
   angle := sqrt64(x*x+y*y+z*z)
-  if !is_finite(angle) { return QuatResult{} }
-  if angle == 0.0 { return QuatResult{ value: quat_identity(), valid: true } }
+  if !is_finite(angle) { return Quat{} }
+  if angle == 0.0 { return quat_identity() }
   factor := sin(angle*0.5)/angle
   return quat_normalize(Quat{ x: #cast(f32, x*factor), y: #cast(f32, y*factor), z: #cast(f32, z*factor), w: #cast(f32, cos(angle*0.5)) })
 }
-pub fn quat_to_rotation_vector(q: Quat) RotationVectorResult {
+pub fn quat_to_rotation_vector(q: Quat) Vec3 {
   normalized := quat_normalize(q)
-  if !normalized.valid { return RotationVectorResult{} }
-  n := normalized.value
+  if quat_zero(normalized) { return Vec3{} }
+  n := normalized
   if n.w < 0.0 {
     n = Quat{ x: -n.x, y: -n.y, z: -n.z, w: -n.w }
   }
@@ -258,81 +254,85 @@ pub fn quat_to_rotation_vector(q: Quat) RotationVectorResult {
   y := #cast(f64, n.y)
   z := #cast(f64, n.z)
   length := sqrt64(x*x+y*y+z*z)
-  if length == 0.0 { return RotationVectorResult{ valid: true } }
+  if length == 0.0 { return Vec3{} }
   factor := 2.0*atan2(length, #cast(f64, n.w))/length
-  return RotationVectorResult{ value: Vec3{ x: #cast(f32, x*factor), y: #cast(f32, y*factor), z: #cast(f32, z*factor) }, valid: true }
+  return Vec3{ x: #cast(f32, x*factor), y: #cast(f32, y*factor), z: #cast(f32, z*factor) }
 }
-pub fn quat_to_mat3(q: Quat) Mat3Result {
+pub fn quat_to_mat3(q: Quat) Mat3 {
   normalized := quat_normalize(q)
-  if !normalized.valid { return Mat3Result{} }
-  n := normalized.value
+  if quat_zero(normalized) { return Mat3{} }
+  n := normalized
   x := n.x
   y := n.y
   z := n.z
   w := n.w
-  return Mat3Result{ value: Mat3{
+  return Mat3{
     c0: Vec3{ x: 1.0-2.0*(y*y+z*z), y: 2.0*(x*y+z*w), z: 2.0*(x*z-y*w) },
     c1: Vec3{ x: 2.0*(x*y-z*w), y: 1.0-2.0*(x*x+z*z), z: 2.0*(y*z+x*w) },
-    c2: Vec3{ x: 2.0*(x*z+y*w), y: 2.0*(y*z-x*w), z: 1.0-2.0*(x*x+y*y) } }, valid: true }
+    c2: Vec3{ x: 2.0*(x*z+y*w), y: 2.0*(y*z-x*w), z: 1.0-2.0*(x*x+y*y) } }
 }
 // Axis normalization uses f64, including very large or subnormal f32 axes.
-pub fn mat4_rotate(axis: Vec3, angle: f32) Mat4Result {
+pub fn mat4_rotate(axis: Vec3, angle: f32) Mat4 {
   x := #cast(f64, axis.x)
   y := #cast(f64, axis.y)
   z := #cast(f64, axis.z)
   length := sqrt64(x*x+y*y+z*z)
-  if length == 0.0 || !is_finite(length) || !is_finite(angle) { return Mat4Result{} }
+  if length == 0.0 || !is_finite(length) || !is_finite(angle) { return Mat4{} }
   factor := sin(#cast(f64, angle)*0.5)/length
-  rotation := quat_to_mat3(Quat{ x: #cast(f32, x*factor), y: #cast(f32, y*factor), z: #cast(f32, z*factor), w: #cast(f32, cos(#cast(f64, angle)*0.5)) })
-  if !rotation.valid { return Mat4Result{} }
-  m := rotation.value
-  return Mat4Result{ value: Mat4{
+  // A nonzero axis and a finite angle give a nonzero quaternion.
+  m := quat_to_mat3(Quat{ x: #cast(f32, x*factor), y: #cast(f32, y*factor), z: #cast(f32, z*factor), w: #cast(f32, cos(#cast(f64, angle)*0.5)) })
+  return Mat4{
     c0: Vec4{ x: m.c0.x, y: m.c0.y, z: m.c0.z },
     c1: Vec4{ x: m.c1.x, y: m.c1.y, z: m.c1.z },
-    c2: Vec4{ x: m.c2.x, y: m.c2.y, z: m.c2.z }, c3: Vec4{ w: 1.0 } }, valid: true }
+    c2: Vec4{ x: m.c2.x, y: m.c2.y, z: m.c2.z }, c3: Vec4{ w: 1.0 } }
 }
-// Reject a zero or nonfinite direction, normalize with the quaternion norm.
-fn matrix_unit(v: Vec3) RotationVectorResult {
+fn quat_zero(q: Quat) bool {
+  return q.x == 0.0 && q.y == 0.0 && q.z == 0.0 && q.w == 0.0
+}
+fn vec3_zero(v: Vec3) bool {
+  return v.x == 0.0 && v.y == 0.0 && v.z == 0.0
+}
+// The unit vector along v; zero for a zero or nonfinite direction. Uses the
+// quaternion norm.
+fn matrix_unit(v: Vec3) Vec3 {
   q := quat_normalize(Quat{ x: v.x, y: v.y, z: v.z })
-  return RotationVectorResult{ value: Vec3{ x: q.value.x, y: q.value.y, z: q.value.z }, valid: q.valid }
+  return Vec3{ x: q.x, y: q.y, z: q.z }
 }
-pub fn mat4_look_at(eye, target, up: Vec3) Mat4Result {
+pub fn mat4_look_at(eye, target, up: Vec3) Mat4 {
   // Differences and norm in f64 avoid f32 subtraction overflow/underflow.
   x := #cast(f64, target.x)-#cast(f64, eye.x)
   y := #cast(f64, target.y)-#cast(f64, eye.y)
   z := #cast(f64, target.z)-#cast(f64, eye.z)
   length := sqrt64(x*x+y*y+z*z)
-  if length == 0.0 || !is_finite(length) { return Mat4Result{} }
-  forward := RotationVectorResult{ value: Vec3{ x: #cast(f32, x/length), y: #cast(f32, y/length), z: #cast(f32, z/length) }, valid: true }
+  if length == 0.0 || !is_finite(length) { return Mat4{} }
+  f := Vec3{ x: #cast(f32, x/length), y: #cast(f32, y/length), z: #cast(f32, z/length) }
   up_unit := matrix_unit(up)
-  if !forward.valid || !up_unit.valid { return Mat4Result{} }
-  side := matrix_unit(vec3_cross(forward.value, up_unit.value))
-  if !side.valid { return Mat4Result{} }
-  u := vec3_cross(side.value, forward.value)
-  f := forward.value
-  r := side.value
+  if vec3_zero(up_unit) { return Mat4{} }
+  r := matrix_unit(vec3_cross(f, up_unit))
+  if vec3_zero(r) { return Mat4{} }
+  u := vec3_cross(r, f)
   value := Mat4{
     c0: Vec4{ x: r.x, y: u.x, z: -f.x },
     c1: Vec4{ x: r.y, y: u.y, z: -f.y },
     c2: Vec4{ x: r.z, y: u.z, z: -f.z },
     c3: Vec4{ x: -vec3_dot(r, eye), y: -vec3_dot(u, eye), z: vec3_dot(f, eye), w: 1.0 } }
-  if !mat4_finite(value) { return Mat4Result{} }
-  return Mat4Result{ value: value, valid: true }
+  if !mat4_finite(value) { return Mat4{} }
+  return value
 }
-pub fn mat4_perspective(fov_y, aspect, near, far: f32) Mat4Result {
+pub fn mat4_perspective(fov_y, aspect, near, far: f32) Mat4 {
   if !is_finite(fov_y) || !is_finite(aspect) || !is_finite(near) || !is_finite(far) || fov_y <= 0.0 || fov_y >= pi || aspect <= 0.0 || near <= 0.0 || far <= near {
-    return Mat4Result{}
+    return Mat4{}
   }
   n := #cast(f64, near)
   f := #cast(f64, far)
   y := 1.0/tan(#cast(f64, fov_y)*0.5)
   value := Mat4{ c0: Vec4{ x: #cast(f32, y/aspect) }, c1: Vec4{ y: #cast(f32, y) }, c2: Vec4{ z: #cast(f32, -(f+n)/(f-n)), w: -1.0 }, c3: Vec4{ z: #cast(f32, -2.0*f*n/(f-n)) } }
-  if !mat4_finite(value) { return Mat4Result{} }
-  return Mat4Result{ value: value, valid: true }
+  if !mat4_finite(value) { return Mat4{} }
+  return value
 }
-pub fn mat4_orthographic(left, right, bottom, top, near, far: f32) Mat4Result {
+pub fn mat4_orthographic(left, right, bottom, top, near, far: f32) Mat4 {
   if !is_finite(left) || !is_finite(right) || !is_finite(bottom) || !is_finite(top) || !is_finite(near) || !is_finite(far) || left >= right || bottom >= top || near < 0.0 || far <= near {
-    return Mat4Result{}
+    return Mat4{}
   }
   l := #cast(f64, left)
   r := #cast(f64, right)
@@ -341,6 +341,6 @@ pub fn mat4_orthographic(left, right, bottom, top, near, far: f32) Mat4Result {
   n := #cast(f64, near)
   f := #cast(f64, far)
   value := Mat4{ c0: Vec4{ x: #cast(f32, 2.0/(r-l)) }, c1: Vec4{ y: #cast(f32, 2.0/(t-b)) }, c2: Vec4{ z: #cast(f32, -2.0/(f-n)) }, c3: Vec4{ x: #cast(f32, -(r+l)/(r-l)), y: #cast(f32, -(t+b)/(t-b)), z: #cast(f32, -(f+n)/(f-n)), w: 1.0 } }
-  if !mat4_finite(value) { return Mat4Result{} }
-  return Mat4Result{ value: value, valid: true }
+  if !mat4_finite(value) { return Mat4{} }
+  return value
 }

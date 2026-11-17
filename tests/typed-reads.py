@@ -80,11 +80,13 @@ fn main() {
   bad: fail.Status
   _ = hex.decode(arena, &bad, "abc")
   check(!status.failed && #len(decoded) == 2 && decoded[0] == 171 && bad.failed, "hex decode")
-  check(utf8.codepoint_count("h\xc3\xa9").value == 2 && !utf8.codepoint_count("\xff").valid, "codepoints")
-  walker := utf8.iterator("\xc3\xa9")
-  check(utf8.next(&walker).value == 233 && !utf8.next(&walker).valid, "utf8 next")
-  date := time.parse_iso8601("2024-02-29T12:34:56Z")
-  check(date.valid && date.value.day == 29 && !time.parse_iso8601("2024-02-30").valid, "iso8601")
+  check(utf8.codepoint_count("h\xc3\xa9") == 2 && utf8.codepoint_count("a\xff") == 2, "codepoints")
+  walker := utf8.iterator("\xc3\xa9\xff")
+  check(utf8.next(&walker).value == 233 && utf8.next(&walker).value == 0xfffd && !utf8.next(&walker).found, "utf8 next")
+  date := time.parse_iso8601(&status, "2024-02-29T12:34:56Z")
+  impossible: fail.Status
+  _ = time.parse_iso8601(&impossible, "2024-02-30")
+  check(!status.failed && date.day == 29 && impossible.failed, "iso8601")
   state := rand.State{ value: 1 }
   check(rand.below(&state, 10) < 10, "rand below")
 }
