@@ -12,18 +12,10 @@ pub struct ConnectionResult { value: Connection, detail: ErrorKind, provider_cod
 pub struct Result { count: usize, detail: ErrorKind, provider_code: u64, provider_status: i32, failure: io.Failure }
 pub struct TextResult { value: []u8, provider_code: u64, failure: io.Failure }
 fn portable(detail: ErrorKind) io.Kind {
-  if detail == ErrorKind.None {
-    return io.Kind.Ok
-  }
-  if detail == ErrorKind.InvalidArgument {
-    return io.Kind.InvalidInput
-  }
-  if detail == ErrorKind.WantRead || detail == ErrorKind.WantWrite {
-    return io.Kind.WouldBlock
-  }
-  if detail == ErrorKind.Verification {
-    return io.Kind.PermissionDenied
-  }
+  if detail == ErrorKind.None { return io.Kind.Ok }
+  if detail == ErrorKind.InvalidArgument { return io.Kind.InvalidInput }
+  if detail == ErrorKind.WantRead || detail == ErrorKind.WantWrite { return io.Kind.WouldBlock }
+  if detail == ErrorKind.Verification { return io.Kind.PermissionDenied }
   return io.Kind.System
 }
 fn result(value: provider.Result) Result {
@@ -33,6 +25,12 @@ fn result(value: provider.Result) Result {
 // The provider copies the protocol wire bytes during this call.
 pub fn set_alpn_protocols(connection: Connection, protocols: []const u8) Result {
   return result(provider.set_alpn_result(connection, protocols))
+}
+// Server ALPN: each handshake picks the first protocol of preference (wire
+// format, such as "\x02h2\x08http/1.1") the client offers. preference must
+// outlive the context; a string literal does.
+pub fn server_alpn(context: Context, preference: *const []const u8) bool {
+  return provider.set_server_alpn(context, preference)
 }
 // Borrows provider connection memory. Invalid after connection_release or a
 // renegotiation that replaces the negotiated protocol; copy before either.
@@ -53,9 +51,7 @@ pub fn certificate_release(certificate: *Certificate) {
 // Failure publishes an empty value and consumes no arena bytes. Exhaustion panics.
 // https://github.com/openssl/openssl/blob/master/crypto/x509/x509_obj.c
 pub fn certificate_subject(arena: *memory.Arena, certificate: Certificate) TextResult {
-  if certificate == nil {
-    return TextResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
+  if certificate == nil { return TextResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
   formatted := provider.subject_text_owned(certificate)
   if io.failed(formatted.failure) {
     return TextResult{ provider_code: formatted.provider_code, failure: io.Failure{ kind: io.Kind.System } }

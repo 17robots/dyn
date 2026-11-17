@@ -300,8 +300,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-math-matrix-') as tmp:
     original_matrix = (module/'matrix.dyn').read_text()
     controls = {
         'smallangle-identity': ('if angle == 0.0 {', 'if angle < 1e-6 {'),
-        'smallangle-zero': ('if length == 0.0 {\n    return RotationVectorResult{ valid: true }',
-                            'if length < 1e-6 {\n    return RotationVectorResult{ valid: true }'),
+        'smallangle-zero': ('if length == 0.0 { return RotationVectorResult{ valid: true }',
+                            'if length < 1e-6 { return RotationVectorResult{ valid: true }'),
         'negative-w-correction': ('  if n.w < 0.0 {\n    n = Quat{ x: -n.x, y: -n.y, z: -n.z, w: -n.w }\n  }\n', ''),
     }
     for name, (before, after) in controls.items():

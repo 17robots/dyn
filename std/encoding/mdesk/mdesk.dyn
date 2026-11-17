@@ -81,9 +81,7 @@ pub fn child(node: *const Node, name: []const u8) *Node {
   if !is_nil(node) {
     current := node.first
     for current != nil {
-      if bytes.equal(current.string, name) {
-        return current
-      }
+      if bytes.equal(current.string, name) { return current }
       current = current.next
     }
   }
@@ -96,9 +94,7 @@ pub fn child_at(node: *const Node, index: usize) *Node {
     current := node.first
     at: usize = 0
     for current != nil {
-      if at == index {
-        return current
-      }
+      if at == index { return current }
       at += 1
       current = current.next
     }
@@ -123,9 +119,7 @@ pub fn tag(node: *const Node, name: []const u8) *Node {
   if !is_nil(node) {
     current := node.first_tag
     for current != nil {
-      if bytes.equal(current.string, name) {
-        return current
-      }
+      if bytes.equal(current.string, name) { return current }
       current = current.next
     }
   }
@@ -140,9 +134,7 @@ pub fn has_tag(node: *const Node, name: []const u8) bool {
 pub fn line_of(source: []const u8, offset: usize) usize {
   line: usize = 1
   for i in 0..#len(source) {
-    if i >= offset {
-      return line
-    }
+    if i >= offset { return line }
     if source[i] == '\n' {
       line += 1
     }
@@ -223,9 +215,7 @@ fn read_string(parser: *Parser, node: *Node, quote: u8) {
       parser.at += 2
       continue
     }
-    if width == 1 && byte == '\n' {
-      break
-    }
+    if width == 1 && byte == '\n' { break }
     closed := byte == quote
     if width == 3 {
       closed = parser.at + 2 < #len(source) && byte == quote && source[parser.at + 1] == quote && source[parser.at + 2] == quote
@@ -286,9 +276,7 @@ fn parse_children(parser: *Parser, parent: *Node, close: u8) {
   }
   for true {
     skip(parser, true)
-    if parse.failed(parser.failure) {
-      return
-    }
+    if parse.failed(parser.failure) { return }
     if parser.at >= #len(parser.source) {
       if close != 0 {
         fail(parser, parse.Kind.Truncated, "unclosed scope", start)
@@ -343,9 +331,7 @@ fn parse_node(parser: *Parser) *Node {
     append_tag(node, tag_node)
     skip(parser, false)
   }
-  if parse.failed(parser.failure) {
-    return node
-  }
+  if parse.failed(parser.failure) { return node }
   if parser.at >= #len(source) || closer(source[parser.at]) || source[parser.at] == ':' {
     fail(parser, parse.Kind.Syntax, "unexpected token", parser.at)
     return node

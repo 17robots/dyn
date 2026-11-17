@@ -26,9 +26,7 @@ fn index_of(E: type, tag: u64) usize {
 pub fn from_int(E: type, value: u64) E {
   #assert(#typeof(E).kind == TypeKind.Enum, "enums.from_int: E must be an enum without payloads")
   result: E
-  if index_of(E, value) == count(E) {
-    return result
-  }
+  if index_of(E, value) == count(E) { return result }
   // The tag is the enum's backing integer: write it at the enum's own width.
   size := #sizeof(E)
   if size == 1 {
@@ -47,8 +45,6 @@ pub fn from_int(E: type, value: u64) E {
 pub fn name(value: $E) []const u8 {
   index := index_of(E, #cast(u64, value))
   info := #typeof(E)
-  if index == #len(info.variants) {
-    return ""
-  }
+  if index == #len(info.variants) { return "" }
   return info.variants[index].name
 }

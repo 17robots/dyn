@@ -1,0 +1,37 @@
+// evented.serve: answers until SIGTERM, then stops, joins and returns. Pools
+// started first (raw and libc threads) must not take the signal. Each request
+// is logged to stderr (Config.access_log).
+use "std/fmt"
+use "std/io"
+use "std/log"
+use "std/mem"
+use "std/net"
+use "std/net/http"
+use "std/net/http/evented"
+use "std/thread/pool"
+use "std/thread/posix"
+
+fn hello(response: *http.Response, request: *const http.Request) http.Result {
+  return http.text(response, 200, "hello\n")
+}
+
+fn main() i32 {
+  config := evented.default_config()
+  config.connections_per_worker = 16
+  logger := log.logger(io.stderr(), log.Level.Info)
+  config.access_log = &logger
+  arena := mem.arena_alloc(evented.storage_size(config, 2) + 2 * mem.MiB)
+  defer mem.arena_release(arena)
+  raw := pool.start(arena, 2, 16, 64 * mem.KiB)
+  spawner := posix.spawner()
+  libc := pool.start_spawned(arena, 2, 16, 64 * mem.KiB, &spawner)
+  if io.failed(raw.failure) || io.failed(libc.failure) { return 1 }
+  workers: [2]evented.Worker
+  // Port 18097: the test connects there.
+  result := evented.serve(arena, workers[..], net.ipv4(127, 0, 0, 1, 18097), config, hello, nil)
+  if io.failed(result.failure) { return 1 }
+  _ = pool.stop(raw.value)
+  _ = pool.stop(libc.value)
+  io.println("stopped {}", result.started)
+  return 0
+}

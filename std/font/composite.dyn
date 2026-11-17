@@ -13,31 +13,23 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
   instructions := false
   component_number: usize = 0
   for true {
-    if !fits(data, at, 4) {
-      return Outline{ kind: parse.Kind.Syntax }
-    }
+    if !fits(data, at, 4) { return Outline{ kind: parse.Kind.Syntax } }
     flags := u16be(data, at)
     index := u16be(data, at + 2)
     at += 4
-    if (flags & 0xe010) != 0 {
-      return Outline{ kind: parse.Kind.Syntax }
-    }
+    if (flags & 0xe010) != 0 { return Outline{ kind: parse.Kind.Syntax } }
     forms := flags & 0xc8
     if forms != 0 && forms != 8 && forms != 64 && forms != 128 {
       return Outline{ kind: parse.Kind.Syntax }
     }
     words := (flags & 1) != 0
     xy := (flags & 2) != 0
-    if !xy && component_number == 0 {
-      return Outline{ kind: parse.Kind.Syntax }
-    }
+    if !xy && component_number == 0 { return Outline{ kind: parse.Kind.Syntax } }
     length: usize = 2
     if words {
       length = 4
     }
-    if !fits(data, at, length) {
-      return Outline{ kind: parse.Kind.Syntax }
-    }
+    if !fits(data, at, length) { return Outline{ kind: parse.Kind.Syntax } }
     a: i32 = 0
     b: i32 = 0
     if words {
@@ -67,9 +59,7 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
       if forms == 128 {
         size = 8
       }
-      if !fits(data, at, size) {
-        return Outline{ kind: parse.Kind.Syntax }
-      }
+      if !fits(data, at, size) { return Outline{ kind: parse.Kind.Syntax } }
       matrix.xx = f2dot14(data, at)
       matrix.yy = matrix.xx
       if forms == 64 {
@@ -83,9 +73,7 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
       at += size
     }
     child := read_outline(arena, face, index, depth + 1, budget)
-    if !child.ok {
-      return child
-    }
+    if !child.ok { return child }
     for *point in child.points {
       point.* = transformed(point.*, matrix)
     }
@@ -138,18 +126,12 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
     result.ends = ends
     instructions = instructions || (flags & 256) != 0
     component_number += 1
-    if (flags & 32) == 0 {
-      break
-    }
+    if (flags & 32) == 0 { break }
   }
   if instructions {
-    if !fits(data, at, 2) {
-      return Outline{ kind: parse.Kind.Syntax }
-    }
+    if !fits(data, at, 2) { return Outline{ kind: parse.Kind.Syntax } }
     length := #cast(usize, u16be(data, at))
-    if !fits(data, at + 2, length) {
-      return Outline{ kind: parse.Kind.Syntax }
-    }
+    if !fits(data, at + 2, length) { return Outline{ kind: parse.Kind.Syntax } }
   }
   result.ok = true
   return result

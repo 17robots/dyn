@@ -23,9 +23,7 @@ fn shader(api: *const gl.Api, kind: u32, source: []const u8) u32 {
   id := api.create_shader(kind)
   pointer := &source[0]
   length := #cast(i32, #len(source))
-  if id == 0 {
-    return 0
-  }
+  if id == 0 { return 0 }
   api.shader_source(id, 1, &pointer, &length)
   api.compile_shader(id)
   valid: i32 = 0
@@ -93,9 +91,7 @@ pub fn open(renderer: *Renderer, api: gl.Api) Result {
   return Result{}
 }
 pub fn close(renderer: *Renderer) {
-  if renderer.program == 0 {
-    return
-  }
+  if renderer.program == 0 { return }
   renderer.api.delete_program(renderer.program)
   renderer.api.delete_vertex_arrays(1, &renderer.vao)
   renderer.api.delete_buffers(1, &renderer.buffer)
@@ -109,19 +105,13 @@ fn quad(renderer: *Renderer, x, y, right, bottom: f32, tint: ui.Color) {
   renderer.api.draw_arrays(gl.Triangles, 0, 6)
 }
 fn glyph(renderer: *Renderer, clip: ui.Rect, tint: ui.Color, font: software.Font, codepoint: u32, x, y: i64) i64 {
-  if font.glyph == nil || font.line_height <= 0 {
-    return -1
-  }
+  if font.glyph == nil || font.line_height <= 0 { return -1 }
   if x < #cast(i64, clip.x)-4294967296 || x > #cast(i64, clip.x)+#cast(i64, clip.width)+4294967296 || y < #cast(i64, clip.y)-4294967296 || y > #cast(i64, clip.y)+#cast(i64, clip.height)+4294967296 {
     return 0
   }
   bitmap := font.glyph(font.data, codepoint)
-  if bitmap.width < 0 || bitmap.height < 0 || bitmap.advance < 0 {
-    return -1
-  }
-  if bitmap.width == 0 || bitmap.height == 0 {
-    return bitmap.advance
-  }
+  if bitmap.width < 0 || bitmap.height < 0 || bitmap.advance < 0 { return -1 }
+  if bitmap.width == 0 || bitmap.height == 0 { return bitmap.advance }
   if bitmap.stride < #cast(usize, bitmap.width) || bitmap.stride > 2147483647 || #cast(usize, bitmap.width) > #len(bitmap.pixels) {
     return -1
   }
@@ -151,9 +141,7 @@ fn glyph(renderer: *Renderer, clip: ui.Rect, tint: ui.Color, font: software.Font
   }
   cropped_width := #cast(i32, right-gx)
   cropped_height := #cast(i32, bottom-gy)
-  if cropped_width > renderer.max_texture || cropped_height > renderer.max_texture {
-    return -2
-  }
+  if cropped_width > renderer.max_texture || cropped_height > renderer.max_texture { return -2 }
   // Upload only visible rows, without requiring final-row atlas padding.
   renderer.api.tex_image_2d(gl.Texture2d, 0, #cast(i32, gl.R8), cropped_width, cropped_height, 0, gl.Red, gl.UnsignedByte, nil)
   for row in 0..cropped_height {
@@ -172,9 +160,7 @@ pub fn render(renderer: *Renderer, commands: *const ui.Command, width, height: i
   if width < 0 || height < 0 {
     return Result{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
-  if width == 0 || height == 0 {
-    return Result{}
-  }
+  if width == 0 || height == 0 { return Result{} }
   api := &renderer.api
   if !healthy(api) {
     return Result{ kind:io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }

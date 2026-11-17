@@ -1,6 +1,8 @@
 use "std/mem" mem
 use "std/compress/deflate" deflate
 use "std/io" stream
+use "std/hash" hash
+use "std/parse" parse
 
 pub type Result = deflate.Result
 pub type Decoder = deflate.Decoder
@@ -21,4 +23,52 @@ pub fn decoder(input: stream.Reader, compressed_bytes: []u8, history: []u8) Deco
 }
 pub fn decoder_reader(state: *Decoder) stream.Reader {
   return deflate.decoder_reader(state)
+}
+
+pub type Encoder = deflate.Encoder
+pub type Encoded = deflate.Encoded
+
+// Destination bytes that always hold write's output for size bytes.
+pub fn compress_bound(size: usize) usize {
+  return deflate.deflate_bound(size) + 18
+}
+
+// One gzip member (RFC 1952) holding source, compressed at level (1-9, see
+// std/compress/deflate) into destination. Fails with Capacity when destination
+// is shorter than needed; compress_bound always suffices.
+pub fn write(destination: []u8, source: []const u8, level: u8, encoder: *Encoder) Encoded {
+  if #len(destination) < 18 {
+    return Encoded{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
+  }
+  header: [10]u8 = [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255]
+  if level >= 9 {
+    header[8] = 2
+  } else if level <= 1 {
+    header[8] = 4
+  }
+  for i in 0..10 {
+    destination[i] = header[i]
+  }
+  body := deflate.deflate(destination[10..#len(destination) - 8], source, level, encoder)
+  if parse.failed(body.failure) { return body }
+  at := 10 + #len(body.value)
+  crc := hash.crc32(source)
+  size := #cast(u32, #len(source))
+  for i in 0..4 {
+    destination[at + i] = #cast(u8, crc >> #cast(u32, 8 * i))
+    destination[at + 4 + i] = #cast(u8, size >> #cast(u32, 8 * i))
+  }
+  return Encoded{ value: destination[..at + 8] }
+}
+
+// write with output in arena. The encoder workspace is taken from
+// arena and given back; only the output stays.
+pub fn compress(arena: *mem.Arena, source: []const u8, level: u8) Encoded {
+  output := mem.push_bytes_uninit(arena, compress_bound(#len(source)))
+  mark := mem.arena_mark(arena)
+  encoder := #cast(*Encoder, mem.arena_push_uninit(arena, #sizeof(Encoder), #alignof(Encoder)))
+  encoded := write(output, source, level, encoder)
+  mem.arena_rewind(arena, mark)
+  if parse.failed(encoded.failure) { return encoded }
+  return encoded
 }

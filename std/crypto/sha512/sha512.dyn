@@ -78,9 +78,7 @@ pub fn update(state: *State, input: []const u8) bool {
   if !state.initialized {
     state.*=init()
   }
-  if state.failed {
-    return false
-  }
+  if state.failed { return false }
   // Count bytes in 125 bits, so the 128-bit bit count cannot overflow.
   before:=state.low
   state.low=state.low+#len(input)
@@ -118,9 +116,7 @@ pub fn finish(state: *State, destination: []u8) []u8 {
   if !state.initialized {
     state.*=init()
   }
-  if state.failed || #len(destination)<64 {
-    return destination[..0]
-  }
+  if state.failed || #len(destination)<64 { return destination[..0] }
   tail: [256]u8
   for i in 0..state.used {
     tail[i]=state.buffer[i]
@@ -144,8 +140,6 @@ pub fn finish(state: *State, destination: []u8) []u8 {
 }
 pub fn digest(destination: []u8, input: []const u8) []u8 {
   state:=init()
-  if !update(&state, input) {
-    return destination[..0]
-  }
+  if !update(&state, input) { return destination[..0] }
   return finish(&state, destination)
 }

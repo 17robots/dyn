@@ -46,12 +46,8 @@ pub fn wait(state: *Watch) Next {
 // Restores default signal behavior and releases the handle. Closing a zero
 // Watch succeeds.
 pub fn close(state: *Watch) {
-  if state == nil {
-    return
-  }
-  if !state.active {
-    return
-  }
+  if state == nil { return }
+  if !state.active { return }
   closed := platform_close(state)
   if !io.failed(closed.failure) {
     state.* = Watch{}

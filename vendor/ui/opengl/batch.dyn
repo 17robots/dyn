@@ -95,9 +95,7 @@ pub fn open_batch(batch: *Batch, api: gl.Api) Result {
 }
 
 pub fn close_batch(batch: *Batch) {
-  if batch.program == 0 {
-    return
-  }
+  if batch.program == 0 { return }
   batch.api.delete_program(batch.program)
   batch.api.delete_vertex_arrays(1, &batch.vao)
   batch.api.delete_buffers(1, &batch.buffer)
@@ -138,9 +136,7 @@ fn push_quad(stream: *Stream, x0, y0, x1, y1, u0, v0, u1, v1: f32, tint: ui.Colo
 }
 
 fn flush(batch: *Batch, stream: *Stream) {
-  if stream.count == 0 {
-    return
-  }
+  if stream.count == 0 { return }
   batch.api.buffer_data(gl.ArrayBuffer, #cast(isize, stream.count * vertex_floats * 4), &stream.data[0], gl.DynamicDraw)
   batch.api.draw_arrays(gl.Triangles, 0, #cast(i32, stream.count))
   batch.draw_calls += 1
@@ -187,17 +183,13 @@ fn cached(batch: *Batch, font: software.Font, codepoint: u32) Cached {
       }
       return Cached{ entry: entry }
     }
-    if entry.codepoint == codepoint {
-      return Cached{ entry: entry }
-    }
+    if entry.codepoint == codepoint { return Cached{ entry: entry } }
   }
   return Cached{ full: true, failure: io.Failure{ kind: io.Kind.System } }
 }
 
 fn glyph_quad(_batch: *Batch, stream: *Stream, entry: *const Entry, x, y: i64, tint: ui.Color, clip: ui.Rect) {
-  if entry.width == 0 || entry.height == 0 {
-    return
-  }
+  if entry.width == 0 || entry.height == 0 { return }
   // Crop the glyph to clip in whole pixels, shifting texture coordinates.
   left := x + entry.x_offset
   top := y + entry.y_offset
@@ -219,9 +211,7 @@ fn glyph_quad(_batch: *Batch, stream: *Stream, entry: *const Entry, x, y: i64, t
   if y1 > #cast(i64, clip.y) + #cast(i64, clip.height) {
     y1 = #cast(i64, clip.y) + #cast(i64, clip.height)
   }
-  if x1 <= x0 || y1 <= y0 {
-    return
-  }
+  if x1 <= x0 || y1 <= y0 { return }
   scale := 1.0 / #cast(f32, atlas_size)
   u0 := #cast(f32, entry.x + x0 - left) * scale
   v0 := #cast(f32, entry.y + y0 - top) * scale
@@ -235,12 +225,8 @@ struct Drawn { advance: i64, full: bool, failure: io.Failure }
 
 fn batch_glyph(batch: *Batch, stream: *Stream, font: software.Font, codepoint: u32, x, y: i64, tint: ui.Color, clip: ui.Rect) Drawn {
   found := cached(batch, font, codepoint)
-  if found.full {
-    return Drawn{ full: true, failure: io.Failure{ kind: io.Kind.System } }
-  }
-  if io.failed(found.failure) {
-    return Drawn{ failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if found.full { return Drawn{ full: true, failure: io.Failure{ kind: io.Kind.System } } }
+  if io.failed(found.failure) { return Drawn{ failure: io.Failure{ kind: io.Kind.System } } }
   if stream.count + 6 > #len(stream.data) / vertex_floats {
     flush(batch, stream)
   }
@@ -259,9 +245,7 @@ pub fn render_batch(batch: *Batch, commands: *const ui.Command, width, height: i
   if width < 0 || height < 0 || #len(vertices) < 6 * vertex_floats || font.glyph == nil || font.line_height <= 0 {
     return Result{ kind: io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
-  if width == 0 || height == 0 {
-    return Result{}
-  }
+  if width == 0 || height == 0 { return Result{} }
   api := &batch.api
   if !healthy(api) {
     return Result{ kind: io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }

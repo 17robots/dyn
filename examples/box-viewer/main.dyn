@@ -269,8 +269,6 @@ fn main() {
       save(&loaded.api, frame_arena, screenshot, width, height)
     }
     _ = window.swap(&host)
-    if frames != 0 && drawn >= frames {
-      break
-    }
+    if frames != 0 && drawn >= frames { break }
   }
 }

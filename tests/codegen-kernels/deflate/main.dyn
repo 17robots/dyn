@@ -1,0 +1,26 @@
+// gzip level 6 over 8 MiB of semi-repetitive text, 4 times.
+use "std/compress/gzip"
+use "std/io"
+use "std/mem"
+
+fn main() {
+  arena := mem.arena_alloc(256 * mem.MiB)
+  defer mem.arena_release(arena)
+  size := 8 * mem.MiB
+  text := mem.push_bytes_uninit(arena, size)
+  words := "the quick brown fox jumps over the lazy dog while chirp serves pages "
+  seed: u64 = 7
+  for i in 0..size {
+    seed = seed * 6364136223846793005 + 1442695040888963407
+    text[i] = words[(i + #cast(usize, seed >> 60)) % #len(words)]
+  }
+  total: usize = 0
+  for round in 0..4 {
+    mark := mem.arena_mark(arena)
+    encoded := gzip.compress(arena, text, 6)
+    total += #len(encoded.value)
+    mem.arena_rewind(arena, mark)
+    _ = round
+  }
+  io.println("{}", total)
+}

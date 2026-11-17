@@ -139,9 +139,7 @@ fn reader_read(data: rawptr, destination: []u8) io.Transfer {
       if state.kind != io.Kind.Ok {
         return io.Transfer{ transferred: total, failure: io.Failure{ kind: state.kind, native: state.error } }
       }
-      if state.ended {
-        return io.Transfer{ transferred: total, status: io.Status.End }
-      }
+      if state.ended { return io.Transfer{ transferred: total, status: io.Status.End } }
       if #len(state.storage) == 0 {
         direct := io.read(state.source, destination[total..])
         if (direct.status == io.Status.Complete && !io.failed(direct.failure)) && direct.transferred == 0 {
@@ -208,9 +206,7 @@ fn read_record(state: *Reader, destination: []u8, delimiter: u8, line: bool) Rea
   if state.kind != io.Kind.Ok {
     return ReadResult{ failure: io.Failure{ kind: state.kind, native: state.error } }
   }
-  if #len(destination) == 0 {
-    return ReadResult{ status: ReadStatus.More }
-  }
+  if #len(destination) == 0 { return ReadResult{ status: ReadStatus.More } }
   total: usize = 0
   byte: [1]u8
   for {
@@ -223,16 +219,12 @@ fn read_record(state: *Reader, destination: []u8, delimiter: u8, line: bool) Rea
     }
     // A source may return bytes alongside an error or EOF. This call may
     // consume returned bytes; a sticky error stops subsequent reads.
-    if byte[0] == delimiter {
-      return ReadResult{ transferred: total, status: ReadStatus.Complete }
-    }
+    if byte[0] == delimiter { return ReadResult{ transferred: total, status: ReadStatus.Complete } }
     if line && byte[0] == 13 {
       next: [1]u8
       peek := io.read(reader_adapter(state), next[..])
       if peek.transferred > 0 {
-        if next[0] == 10 {
-          return ReadResult{ transferred: total, status: ReadStatus.Complete }
-        }
+        if next[0] == 10 { return ReadResult{ transferred: total, status: ReadStatus.Complete } }
         unread(state, next[0])
       }
     }

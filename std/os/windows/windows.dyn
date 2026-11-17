@@ -51,13 +51,9 @@ pub struct PollDescriptor { descriptor: usize, events: i16, returned: i16 }
 pub const has_native_threads: bool = true
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
-  if #len(path) == 0 {
-    return nil
-  }
+  if #len(path) == 0 { return nil }
   result := cstrings.string_into(storage, path)
-  if parse.failed(result.failure) {
-    return nil
-  }
+  if parse.failed(result.failure) { return nil }
   return result.value
 }
 pub fn file_open(path: []const u8, write_access: bool, create: bool) IoResult {
@@ -65,9 +61,7 @@ pub fn file_open(path: []const u8, write_access: bool, create: bool) IoResult {
   // not depend on compiler-rt. Win32 legacy paths are bounded at 260 bytes.
   storage: [260 + mem.ArenaBufferOverhead]u8
   name := terminated(path, storage[..])
-  if name == nil {
-    return IoResult{ value: -1, failure: io.windows_failure(206) }
-  }
+  if name == nil { return IoResult{ value: -1, failure: io.windows_failure(206) } }
   access: u32 = 2147483648
   creation: u32 = 3
   if write_access {
@@ -90,22 +84,14 @@ pub fn file_close(handle: isize) IoResult {
   return IoResult{ value: 0 }
 }
 pub fn thread_spawn(thread: *Thread, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) bool {
-  if thread.handle != nil {
-    return false
-  }
-  if entry == nil {
-    return false
-  }
+  if thread.handle != nil { return false }
+  if entry == nil { return false }
   thread.handle = thread_spawn_raw(stack_size, entry, context, &thread.id)
   return thread.handle != nil
 }
 pub fn thread_join(thread: *Thread) bool {
-  if thread.handle == nil {
-    return false
-  }
-  if wait_raw(thread.handle, 4294967295) != 0 {
-    return false
-  }
+  if thread.handle == nil { return false }
+  if wait_raw(thread.handle, 4294967295) != 0 { return false }
   result := close_handle_raw(thread.handle) != 0
   if result {
     thread.handle = nil
@@ -121,9 +107,7 @@ pub fn thread_yield() {
 }
 pub fn socket_open(family: i32, kind: i32, protocol: i32) IoResult {
   startup := socket_initialize()
-  if startup != 0 {
-    return IoResult{ value: -1, failure: io.windows_failure(startup) }
-  }
+  if startup != 0 { return IoResult{ value: -1, failure: io.windows_failure(startup) } }
   value := socket_raw(family, kind, protocol)
   if value == 18446744073709551615 {
     return IoResult{ value: -1, failure: io.windows_failure(socket_error_raw()) }
@@ -137,18 +121,12 @@ pub fn socket_close(socket: usize) bool {
   return socket_close_raw(socket) == 0
 }
 pub fn socket_connect(socket: usize, address: []const u8) bool {
-  if #len(address) == 0 {
-    return false
-  }
+  if #len(address) == 0 { return false }
   return socket_connect_raw(socket, &address[0], #cast(i32, #len(address))) == 0
 }
 pub fn event_poll(items: []PollDescriptor, milliseconds: i32) isize {
-  if #len(items) == 0 {
-    return 0
-  }
+  if #len(items) == 0 { return 0 }
   value := socket_poll_raw(&items[0], #cast(u32, #len(items)), milliseconds)
-  if value < 0 {
-    return 0 - #cast(isize, socket_error_raw())
-  }
+  if value < 0 { return 0 - #cast(isize, socket_error_raw()) }
   return value
 }

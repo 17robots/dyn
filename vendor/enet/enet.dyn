@@ -57,9 +57,7 @@ pub fn send_channel(peer: Peer, channel: u8, bytes: []const u8) bool {
 pub fn packet_bytes(packet: Packet) []const u8 {
   data := native_data(packet)
   size := native_size(packet)
-  if data == nil {
-    return ""
-  }
+  if data == nil { return "" }
   return #slice(data, size)
 }
 pub fn packet_destroy(packet: Packet) {
@@ -87,9 +85,7 @@ extern fn native_disconnect "enet_peer_disconnect"(peer: Peer, data: u32)
 // channels must be 1..255. No DNS lookup or hidden filesystem/network work.
 pub fn listen_at_owned(ip: []const u8, port: u16, peers: usize, channels: usize, buffer: []u8) Host {
   encoded := c.string_into(buffer, ip)
-  if parse.failed(encoded.failure) {
-    return nil
-  }
+  if parse.failed(encoded.failure) { return nil }
   return native_host(encoded.value, port, peers, channels)
 }
 pub fn client_channels_owned(peers: usize, channels: usize) Host {
@@ -97,9 +93,7 @@ pub fn client_channels_owned(peers: usize, channels: usize) Host {
 }
 pub fn connect_channels(host: Host, ip: []const u8, port: u16, channels: usize, buffer: []u8) Peer {
   encoded := c.string_into(buffer, ip)
-  if parse.failed(encoded.failure) {
-    return nil
-  }
+  if parse.failed(encoded.failure) { return nil }
   return native_connect(host, encoded.value, port, channels)
 }
 // Graceful disconnect is asynchronous. Continue service until Disconnected or

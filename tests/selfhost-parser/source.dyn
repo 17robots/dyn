@@ -466,6 +466,9 @@ fn src_statement_body(p: *Parser) u32 {
     return None
   }
   start := p.token.start
+  if token_is(p, "{") {
+    return src_block(p)
+  }
   if token_is(p, "if") {
     return src_if(p)
   }

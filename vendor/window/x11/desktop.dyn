@@ -219,9 +219,7 @@ fn compose_snapshot(desktop: *Desktop) {
       caret_bytes = #cast(i32, used)
     }
     width := utf8.encoded_width(desktop.preedit[i])
-    if width == 0 || width > #len(composition.text) - used {
-      break
-    }
+    if width == 0 || width > #len(composition.text) - used { break }
     used += utf8.encode(composition.text[used..], desktop.preedit[i])
     emitted += 1
   }
@@ -270,9 +268,7 @@ fn preedit_done(_context: rawptr, data: rawptr, _call: rawptr) {
 }
 
 fn preedit_caret(_context: rawptr, data: rawptr, call: *PreeditCaret) {
-  if call == nil {
-    return
-  }
+  if call == nil { return }
   desktop := #cast(*Desktop, data)
   position := #cast(usize, math.clamp(desktop.preedit_caret, 0, #cast(i32, desktop.preedit_count)))
   if call.direction == 0 && position < desktop.preedit_count {
@@ -315,9 +311,7 @@ fn preedit_caret(_context: rawptr, data: rawptr, call: *PreeditCaret) {
 // Replaces change_length code points at change_first with the new text.
 fn preedit_draw(_context: rawptr, data: rawptr, call: *PreeditDraw) {
   desktop := #cast(*Desktop, data)
-  if call == nil {
-    return
-  }
+  if call == nil { return }
   first := #cast(usize, math.max(call.change_first, 0))
   remove := #cast(usize, math.max(call.change_length, 0))
   if first > desktop.preedit_count {
@@ -362,9 +356,7 @@ fn preedit_draw(_context: rawptr, data: rawptr, call: *PreeditDraw) {
         point: u32 = 0
         result := decode_multibyte(&point, #offset(bytes, at), 1, &state)
         at += 1
-        if result == #cast(usize, -2) {
-          continue
-        }
+        if result == #cast(usize, -2) { continue }
         if result == 0 || result == #cast(usize, -1) || utf8.encoded_width(point) == 0 {
           desktop_loss(desktop)
           return
@@ -428,9 +420,7 @@ pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) 
       compose_snapshot(desktop)
     }
   }
-  if desktop.context == nil {
-    return
-  }
+  if desktop.context == nil { return }
   if enabled && (x != desktop.spot_x || y + height != desktop.spot_y) {
     desktop.spot_x = x
     desktop.spot_y = y + height
@@ -471,13 +461,9 @@ fn desktop_close(window: *Window) {
 // Xft.dpi from the resource database, relative to 96; 1 when unset.
 fn read_scale(display: rawptr) f32 {
   raw := resources(display)
-  if raw == nil {
-    return 1.0
-  }
+  if raw == nil { return 1.0 }
   found := c.bytes_from_string(raw, 1048576)
-  if parse.failed(found.failure) {
-    return 1.0
-  }
+  if parse.failed(found.failure) { return 1.0 }
   text := found.value
   key := "Xft.dpi:"
   at: usize = 0
@@ -499,9 +485,7 @@ fn read_scale(display: rawptr) f32 {
         value = value * 10.0 + (text[at] - '0')
         at += 1
       }
-      if value > 0.0 {
-        return value / 96.0
-      }
+      if value > 0.0 { return value / 96.0 }
       return 1.0
     }
     at += 1
@@ -639,9 +623,7 @@ fn desktop_key(window: *Window, event: *Event) {
 }
 
 fn desktop_pointer(window: *Window, kind: i32, button: u32) {
-  if kind != 4 {
-    return
-  }
+  if kind != 4 { return }
   step: f32 = 48.0 * window.desktop.scale
   if button == 4 {
     window.desktop.scroll_y -= step
@@ -662,9 +644,7 @@ fn clipboard_error(display: rawptr, event: rawptr) i32 {
     clipboard_error_seen = true
     return 0
   }
-  if clipboard_previous_handler != nil {
-    return clipboard_previous_handler(display, event)
-  }
+  if clipboard_previous_handler != nil { return clipboard_previous_handler(display, event) }
   return 0
 }
 // Foreign requestors can disappear between a property deletion and our next
@@ -717,9 +697,7 @@ fn clipboard_deliver(window: *Window) {
 }
 
 pub fn paste_status(window: *const Window) Result {
-  if window.desktop.paste_pending {
-    return Result{kind:io.Kind.InvalidState}
-  }
+  if window.desktop.paste_pending { return Result{kind:io.Kind.InvalidState} }
   return window.desktop.paste_result
 }
 
@@ -773,9 +751,7 @@ pub fn request_paste_snapshot(window: *Window) {
   clipboard_request(window, false)
 }
 fn clipboard_request(window: *Window, emit_ordered: bool) {
-  if window.display == nil {
-    return
-  }
+  if window.display == nil { return }
   desktop := &window.desktop
   if desktop.paste_pending {
     desktop_loss(desktop)
@@ -879,9 +855,7 @@ fn clipboard_property(window: *Window, event: *Event) {
   if property.window == window.handle && property.atom == desktop.property_atom && property.state == 0 && desktop.paste_pending && desktop.incoming {
     clipboard_read(window, true)
   }
-  if property.state != 1 {
-    return
-  }
+  if property.state != 1 { return }
   for i in 0..clipboard_transfers {
     transfer := &desktop.outgoing[i]
     if transfer.requestor != 0 && transfer.requestor == property.window && transfer.property == property.atom {
@@ -1001,9 +975,7 @@ fn desktop_selection(window: *Window, event: *Event) {
       clipboard_finish(window, false)
       return
     }
-    if notify.property != desktop.property_atom {
-      return
-    }
+    if notify.property != desktop.property_atom { return }
     clipboard_read(window, false)
   }
 }
@@ -1011,19 +983,11 @@ fn desktop_selection(window: *Window, event: *Event) {
 // Offers an owned snapshot up to 16 MiB. Rejects before changing ownership or
 // bytes; in-flight INCR transfers retain their own independent snapshots.
 pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
-  if window.display == nil {
-    return Result{kind:io.Kind.InvalidState}
-  }
-  if #len(text) > clipboard_limit {
-    return Result{kind:io.Kind.Capacity}
-  }
-  if !utf8.valid(text) {
-    return Result{kind:io.Kind.InvalidInput}
-  }
+  if window.display == nil { return Result{kind:io.Kind.InvalidState} }
+  if #len(text) > clipboard_limit { return Result{kind:io.Kind.Capacity} }
+  if !utf8.valid(text) { return Result{kind:io.Kind.InvalidInput} }
   for byte in text {
-    if byte == 0 {
-      return Result{kind:io.Kind.InvalidInput}
-    }
+    if byte == 0 { return Result{kind:io.Kind.InvalidInput} }
   }
   arena := clipboard_arena(#len(text))
   owned := mem.push_bytes_uninit(arena, #len(text))
@@ -1049,9 +1013,7 @@ pub fn set_clipboard(window: *Window, text: []const u8) {
 }
 
 pub fn set_cursor(window: *Window, cursor: Cursor) {
-  if window.display == nil || window.desktop.cursor == cursor {
-    return
-  }
+  if window.display == nil || window.desktop.cursor == cursor { return }
   window.desktop.cursor = cursor
   _ = define_cursor(window.display, window.handle, window.desktop.cursors[#cast(u8, cursor)])
   _ = flush(window.display)
@@ -1059,9 +1021,7 @@ pub fn set_cursor(window: *Window, cursor: Cursor) {
 
 // Display scale relative to 96 DPI.
 pub fn scale(window: *const Window) f32 {
-  if window.desktop.scale <= 0.0 {
-    return 1.0
-  }
+  if window.desktop.scale <= 0.0 { return 1.0 }
   return window.desktop.scale
 }
 
@@ -1107,20 +1067,12 @@ pub fn box_input(window: *const Window) box.Input {
 
 // GUI-thread window metadata changes. Dimensions remain bounded before Xlib.
 pub fn set_title(window: *Window, title: []const u8) Result {
-  if window.display == nil || window.handle == 0 {
-    return Result{kind:io.Kind.InvalidState}
-  }
-  if #len(title)>4095 {
-    return Result{kind:io.Kind.Capacity}
-  }
-  if !utf8.valid(title) {
-    return Result{kind:io.Kind.InvalidInput}
-  }
+  if window.display == nil || window.handle == 0 { return Result{kind:io.Kind.InvalidState} }
+  if #len(title)>4095 { return Result{kind:io.Kind.Capacity} }
+  if !utf8.valid(title) { return Result{kind:io.Kind.InvalidInput} }
   storage: [4096]u8
   name := c.string_into(storage[..], title)
-  if parse.failed(name.failure) {
-    return Result{kind:io.Kind.InvalidInput}
-  }
+  if parse.failed(name.failure) { return Result{kind:io.Kind.InvalidInput} }
   _ = store_name(window.display, window.handle, name.value)
   modern := atom(window.display, "_NET_WM_NAME\x00")
   unicode := atom(window.display, "UTF8_STRING\x00")
@@ -1129,9 +1081,7 @@ pub fn set_title(window: *Window, title: []const u8) Result {
 }
 extern fn resize_window "XResizeWindow"(display:rawptr, window:usize, width, height:u32) i32
 pub fn set_size(window:*Window, width, height:i32) Result {
-  if window.display==nil || window.handle==0 {
-    return Result{kind:io.Kind.InvalidState}
-  }
+  if window.display==nil || window.handle==0 { return Result{kind:io.Kind.InvalidState} }
   if width<=0 || height<=0 || width>16384 || height>16384 {
     return Result{kind:io.Kind.InvalidInput}
   }
@@ -1141,9 +1091,7 @@ pub fn set_size(window:*Window, width, height:i32) Result {
 }
 
 fn clipboard_incoming_used(desktop: *Desktop) usize {
-  if desktop.incoming_arena == nil {
-    return 0
-  }
+  if desktop.incoming_arena == nil { return 0 }
   return mem.arena_used(desktop.incoming_arena)
 }
 
@@ -1153,8 +1101,6 @@ fn clipboard_arena(size: usize) *mem.Arena {
 }
 fn clipboard_bytes(arena: *const mem.Arena) []u8 {
   empty: []u8
-  if arena == nil {
-    return empty
-  }
+  if arena == nil { return empty }
   return arena.data[mem.ArenaHeader..mem.ArenaHeader + mem.arena_used(arena)]
 }

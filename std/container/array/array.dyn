@@ -80,9 +80,7 @@ pub fn push_all(a: *Array($T), values: []const $T) {
 
 // The element at index, or nil past the end.
 pub fn get(a: *const Array($T), index: usize) *T {
-  if index >= #len(a.items) {
-    return nil
-  }
+  if index >= #len(a.items) { return nil }
   return &a.items[index]
 }
 
@@ -92,9 +90,7 @@ pub struct Popped(T) { value: T, found: bool }
 pub fn pop(a: *Array($T)) Popped(T) {
   result: Popped(T)
   count := #len(a.items)
-  if count == 0 {
-    return result
-  }
+  if count == 0 { return result }
   result.value = a.items[count - 1]
   result.found = true
   a.items = a.items[..count - 1]

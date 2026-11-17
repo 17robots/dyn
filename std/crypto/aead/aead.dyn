@@ -9,30 +9,20 @@ pub struct SealResult { value: Sealed, provider_code: u64, failure: parse.Failur
 pub struct OpenResult { value: []u8, valid: bool, provider_code: u64, failure: parse.Failure }
 
 fn valid(kind: Cipher, count: usize, additional: []const u8, key: []const u8, nonce: []const u8) bool {
-  if kind != Cipher.Aes256Gcm && kind != Cipher.Chacha20Poly1305 {
-    return false
-  }
+  if kind != Cipher.Aes256Gcm && kind != Cipher.Chacha20Poly1305 { return false }
   if #len(key) != 32 || #len(nonce) == 0 || #len(nonce) > 2147483647 || count > 2147483647 || #len(additional) > 2147483647 {
     return false
   }
   // Preserve the established GCM nonce and payload limits; ChaCha fixes IV12.
-  if kind == Cipher.Aes256Gcm && #len(nonce) > 128 {
-    return false
-  }
-  if kind == Cipher.Chacha20Poly1305 && #len(nonce) != 12 {
-    return false
-  }
+  if kind == Cipher.Aes256Gcm && #len(nonce) > 128 { return false }
+  if kind == Cipher.Chacha20Poly1305 && #len(nonce) != 12 { return false }
   return true
 }
 fn overlaps(left: []const u8, right: []const u8) bool {
-  if #len(left) == 0 || #len(right) == 0 {
-    return false
-  }
+  if #len(left) == 0 || #len(right) == 0 { return false }
   a := #cast(usize, &left[0])
   b := #cast(usize, &right[0])
-  if a <= b {
-    return b - a < #len(left)
-  }
+  if a <= b { return b - a < #len(left) }
   return a - b < #len(right)
 }
 // Reject unused backing before allocations can overwrite borrowed inputs.

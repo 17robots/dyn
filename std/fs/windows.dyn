@@ -28,9 +28,7 @@ fn last_error() isize {
   return 0 - #cast(isize, win_error())
 }
 fn limit(length: usize) u32 {
-  if length > 4294967295 {
-    return 4294967295
-  }
+  if length > 4294967295 { return 4294967295 }
   return #cast(u32, length)
 }
 // Paths are borrowed UTF-8, converted into bounded stack storage; no hidden allocation.
@@ -38,18 +36,14 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   storage: [32768]u16
   at: usize = 0
   used: usize = 0
-  if #len(path) == 0 {
-    return FileResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
+  if #len(path) == 0 { return FileResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
   for at < #len(path) {
     codepoint := utf8.decode(path, at)
     if !codepoint.valid || codepoint.codepoint == 0 {
       return FileResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
     }
     width := utf16.encode(storage[used..32767], codepoint.codepoint)
-    if width == 0 {
-      return FileResult{ failure: io.Failure{ kind: io.Kind.Capacity } }
-    }
+    if width == 0 { return FileResult{ failure: io.Failure{ kind: io.Kind.Capacity } } }
     used += width
     at += codepoint.width
   }
@@ -74,21 +68,15 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   return FileResult{ value: owned_file(handle) }
 }
 fn native_close(handle: isize) isize {
-  if win_close(pointer(handle)) == 0 {
-    return last_error()
-  }
+  if win_close(pointer(handle)) == 0 { return last_error() }
   return 0
 }
 fn native_read(handle: isize, destination: []u8) isize {
   done: u32 = 0
   if win_read(pointer(handle), &destination[0], limit(#len(destination)), &done, nil) == 0 {
     error := win_error()
-    if error == 38 || error == 109 {
-      return #cast(isize, done)
-    }
-    if error == 234 && done > 0 {
-      return #cast(isize, done)
-    }
+    if error == 38 || error == 109 { return #cast(isize, done) }
+    if error == 234 && done > 0 { return #cast(isize, done) }
     return 0 - #cast(isize, error)
   }
   return #cast(isize, done)
@@ -102,15 +90,11 @@ fn native_write(handle: isize, source: []const u8) isize {
 }
 fn native_seek(handle: isize, offset: isize, origin: usize) isize {
   position: i64 = 0
-  if win_seek(pointer(handle), offset, &position, #cast(u32, origin)) == 0 {
-    return last_error()
-  }
+  if win_seek(pointer(handle), offset, &position, #cast(u32, origin)) == 0 { return last_error() }
   return #cast(isize, position)
 }
 fn native_sync(handle: isize) isize {
-  if win_sync(pointer(handle)) == 0 {
-    return last_error()
-  }
+  if win_sync(pointer(handle)) == 0 { return last_error() }
   return 0
 }
 
@@ -118,23 +102,17 @@ fn native_sync(handle: isize) isize {
 // mapping handle closes at once.
 fn native_map(handle: isize, _size: usize) isize {
   mapping := win_map_create(pointer(handle), nil, 2, 0, 0, nil)
-  if mapping == nil {
-    return last_error()
-  }
+  if mapping == nil { return last_error() }
   view := win_map_view(mapping, 4, 0, 0, 0)
   failed: isize = 0
   if view == nil {
     failed = last_error()
   }
   _ = win_close(mapping)
-  if view == nil {
-    return failed
-  }
+  if view == nil { return failed }
   return #cast(isize, #cast(usize, view))
 }
 fn native_unmap(address: usize, _size: usize) isize {
-  if win_map_release(#cast(rawptr, address)) == 0 {
-    return last_error()
-  }
+  if win_map_release(#cast(rawptr, address)) == 0 { return last_error() }
   return 0
 }

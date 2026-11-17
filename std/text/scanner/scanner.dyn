@@ -14,9 +14,7 @@ pub fn rest(state: *const Scanner) []const u8 {
 }
 
 pub fn advance(state: *Scanner, amount: usize) bool {
-  if amount > #len(state.source) - state.offset {
-    return false
-  }
+  if amount > #len(state.source) - state.offset { return false }
   end := state.offset + amount
   for state.offset < end {
     if state.source[state.offset] == '\n' {
@@ -34,9 +32,7 @@ pub struct Scanned { value: []const u8, found: bool }
 
 // The next line without its \n or \r\n. ok is false at the end.
 pub fn next_line(state: *Scanner) Scanned {
-  if finished(state) {
-    return Scanned{}
-  }
+  if finished(state) { return Scanned{} }
   start := state.offset
   for state.offset < #len(state.source) && state.source[state.offset] != '\n' {
     state.offset += 1
@@ -59,20 +55,14 @@ pub fn next_line(state: *Scanner) Scanned {
 pub fn next_field(state: *Scanner) Scanned {
   for state.offset < #len(state.source) {
     byte := state.source[state.offset]
-    if byte != ' ' && byte != '\t' && byte != '\n' && byte != '\r' {
-      break
-    }
+    if byte != ' ' && byte != '\t' && byte != '\n' && byte != '\r' { break }
     _ = advance(state, 1)
   }
-  if finished(state) {
-    return Scanned{}
-  }
+  if finished(state) { return Scanned{} }
   start := state.offset
   for state.offset < #len(state.source) {
     field_byte := state.source[state.offset]
-    if field_byte == ' ' || field_byte == '\t' || field_byte == '\n' || field_byte == '\r' {
-      break
-    }
+    if field_byte == ' ' || field_byte == '\t' || field_byte == '\n' || field_byte == '\r' { break }
     _ = advance(state, 1)
   }
   return Scanned{ value: state.source[start..state.offset], found: true }

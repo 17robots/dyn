@@ -46,9 +46,7 @@ fn rows(totals: *const map.Map([]const u8, Total), arena: *mem.Arena) []Row {
 
 // Functions are values: sort.sort_by takes the comparison as an argument.
 fn larger_amount(a: Row, b: Row) bool {
-  if a.total.amount != b.total.amount {
-    return a.total.amount > b.total.amount
-  }
+  if a.total.amount != b.total.amount { return a.total.amount > b.total.amount }
   return bytes.compare(a.name, b.name) < 0     // ties in name order
 }
 

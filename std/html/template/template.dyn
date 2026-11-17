@@ -42,20 +42,14 @@ fn write_escaped(destination: io.Writer, source: []const u8) RenderResult {
     if #len(replacement) > 0 {
       if i > start {
         literal_result := write(destination, source[start..i])
-        if literal_result.failure.kind != parse.StreamKind.Ok {
-          return literal_result
-        }
+        if literal_result.failure.kind != parse.StreamKind.Ok { return literal_result }
       }
       replacement_result := write(destination, replacement)
-      if replacement_result.failure.kind != parse.StreamKind.Ok {
-        return replacement_result
-      }
+      if replacement_result.failure.kind != parse.StreamKind.Ok { return replacement_result }
       start = i + 1
     }
   }
-  if start < #len(source) {
-    return write(destination, source[start..])
-  }
+  if start < #len(source) { return write(destination, source[start..]) }
   return RenderResult{}
 }
 

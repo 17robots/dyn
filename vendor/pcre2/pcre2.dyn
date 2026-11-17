@@ -27,9 +27,7 @@ pub fn pattern_destroy_owned(pattern: Pattern) {
   }
 }
 pub fn match_data_create_owned(pattern: Pattern) MatchData {
-  if pattern == nil {
-    return nil
-  }
+  if pattern == nil { return nil }
   return native_data_create(pattern, nil)
 }
 pub fn match_data_destroy_owned(data: MatchData) {
@@ -52,9 +50,7 @@ pub fn match(pattern: Pattern, data: MatchData, subject: []const u8, start: usiz
   return MatchResult{ code: code, matched: code >= 0, failure: io.failure_if(!(code >= 0 || code == NoMatch)) }
 }
 pub fn capture(data: MatchData, index: u32) Span {
-  if data == nil || index >= native_count(data) {
-    return Span{}
-  }
+  if data == nil || index >= native_count(data) { return Span{} }
   offsets := native_offsets(data)
   pair := #slice(offsets, #cast(usize, native_count(data)) * 2)
   start := pair[#cast(usize, index) * 2]

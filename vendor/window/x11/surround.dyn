@@ -5,12 +5,8 @@
 // that only works under a synthetic test: see the source evidence in
 // docs/internals/xim-surrounding-support.md. Preedit remains independent.
 pub fn set_surrounding_text(window: *Window, text: []const u8, cursor, anchor: usize, token: u64) Result {
-  if window.display == nil || window.handle == 0 {
-    return Result{ kind: io.Kind.InvalidState }
-  }
-  if #len(text) > 4096 {
-    return Result{ kind: io.Kind.Capacity }
-  }
+  if window.display == nil || window.handle == 0 { return Result{ kind: io.Kind.InvalidState } }
+  if #len(text) > 4096 { return Result{ kind: io.Kind.Capacity } }
   if token == 0 || cursor > #len(text) || anchor > #len(text) || !utf8.valid(text) {
     return Result{ kind: io.Kind.InvalidInput }
   }
@@ -18,12 +14,8 @@ pub fn set_surrounding_text(window: *Window, text: []const u8, cursor, anchor: u
     return Result{ kind: io.Kind.InvalidInput }
   }
   for byte in text {
-    if byte == 0 {
-      return Result{ kind: io.Kind.InvalidInput }
-    }
+    if byte == 0 { return Result{ kind: io.Kind.InvalidInput } }
   }
-  if !window.events_enabled {
-    return Result{ kind: io.Kind.InvalidState }
-  }
+  if !window.events_enabled { return Result{ kind: io.Kind.InvalidState } }
   return Result{ kind: io.Kind.Unsupported }
 }

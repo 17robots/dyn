@@ -5,9 +5,7 @@ struct Coordinate { value: i64, ok: bool }
 fn coordinate(value: f64) Coordinate {
   // Origins farther away cannot intersect any i32 rectangle even with the
   // most extreme i32 glyph bearings/dimensions. Never clamp ink into view.
-  if value != value || value < -8589934592.0 || value > 8589934592.0 {
-    return Coordinate{}
-  }
+  if value != value || value < -8589934592.0 || value > 8589934592.0 { return Coordinate{} }
   return Coordinate{ value: #cast(i64, math.floor64(value + 0.5)), ok: true }
 }
 // Layout and text need survive only this call; draw commands copy positions

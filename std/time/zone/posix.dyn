@@ -41,9 +41,7 @@ fn local_name(arena: *mem.Arena) []const u8 {
     target := storage[..#cast(usize, length)]
     marker := "zoneinfo/"
     at := bytes.find(target, marker)
-    if at != #len(target) {
-      return strings.clone(arena, target[at + #len(marker)..])
-    }
+    if at != #len(target) { return strings.clone(arena, target[at + #len(marker)..]) }
   }
   return "localtime"
 }
@@ -55,13 +53,9 @@ fn posix_system(arena: *mem.Arena) ZoneResult {
     if text[0] == ':' {
       text = text[1..]
     }
-    if #len(text) != 0 && text[0] == '/' {
-      return read_zone(arena, text, text)
-    }
+    if #len(text) != 0 && text[0] == '/' { return read_zone(arena, text, text) }
     loaded := load(arena, text)
-    if !io.failed(loaded.failure) {
-      return loaded
-    }
+    if !io.failed(loaded.failure) { return loaded }
     return parse_posix(arena, text)
   }
   loaded := read_zone(arena, local_name(arena), "/etc/localtime")

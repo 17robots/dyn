@@ -1,0 +1,435 @@
+// HPACK (RFC 7541), the header compression of HTTP/2.
+//
+// A Decoder keeps the peer's dynamic table in caller storage and decodes one
+// field representation at a time; names and values are written to caller
+// scratch, so they stay valid while the table changes. encode_field writes a
+// field the simple way: a static-table index when one matches, otherwise a
+// literal the peer does not index, Huffman-coded when that is shorter. The
+// encoder never uses a dynamic table, so it needs no state.
+use "std/parse" parse
+
+// The table size both sides start with (SETTINGS_HEADER_TABLE_SIZE).
+pub const DefaultTableSize: usize = 4096
+// Bytes each entry adds to a table's size besides its name and value.
+pub const EntryOverhead: usize = 32
+pub const StaticCount: usize = 61
+
+pub struct Entry { offset: usize, name_length: usize, value_length: usize }
+
+// Entry bytes live in storage[start..end], oldest first; entries is a ring,
+// oldest at first. size is the RFC 7541 4.1 size; max_size the current limit,
+// at most limit (the size we advertised).
+pub struct Table {
+  storage: []u8,
+  start: usize,
+  end: usize,
+  entries: []Entry,
+  first: usize,
+  count: usize,
+  size: usize,
+  max_size: usize,
+  limit: usize,
+}
+
+pub struct Decoder {
+  table: Table,
+  // A field was decoded since decode_begin: size updates must come first.
+  fields: bool,
+}
+
+// One decoded representation. name and value point into scratch. update is
+// set for a dynamic table size update, which has no field. consumed bytes of
+// the block were read.
+pub struct Field {
+  name: []const u8,
+  value: []const u8,
+  consumed: usize,
+  update: bool,
+  // A never-indexed literal: intermediaries must not compress it.
+  sensitive: bool,
+  failure: parse.Failure,
+}
+
+// Storage bounds the table: limit is #len(storage) bytes, and at most
+// EntryOverhead bytes per entry (see entries_for). Advertise it as
+// SETTINGS_HEADER_TABLE_SIZE; it must be at least DefaultTableSize, which a
+// peer may use before it sees the setting.
+pub fn decoder(storage: []u8, entries: []Entry) Decoder {
+  // An entry takes at least EntryOverhead bytes of size.
+  limit := #len(storage)
+  if limit > #len(entries) * EntryOverhead {
+    limit = #len(entries) * EntryOverhead
+  }
+  size := limit
+  if size > DefaultTableSize {
+    size = DefaultTableSize
+  }
+  table := Table{ storage: storage, entries: entries, max_size: size, limit: limit }
+  return Decoder{ table: table }
+}
+
+// Entries a decoder needs for storage bytes of table.
+pub fn entries_for(storage_size: usize) usize {
+  return storage_size / EntryOverhead
+}
+
+// Starts a header block: a size update is allowed again before its first field.
+pub fn decode_begin(decoder: *Decoder) {
+  decoder.fields = false
+}
+
+fn failed(kind: parse.Kind, offset: usize) Field {
+  return Field{ failure: parse.Failure{ kind: kind, offset: offset } }
+}
+
+struct Integer { value: usize, consumed: usize, ok: bool }
+
+// An integer with an N-bit prefix (RFC 7541 5.1), at most 2^28 or so.
+fn read_integer(block: []const u8, prefix: u8) Integer {
+  if #len(block) == 0 { return Integer{} }
+  mask := (#cast(usize, 1) << #cast(usize, prefix)) - 1
+  value := #cast(usize, block[0]) & mask
+  if value < mask { return Integer{ value: value, consumed: 1, ok: true } }
+  shift: usize = 0
+  at: usize = 1
+  for at < #len(block) {
+    byte := block[at]
+    at += 1
+    value += (#cast(usize, byte) & 127) << shift
+    shift += 7
+    if (byte & 128) == 0 { return Integer{ value: value, consumed: at, ok: true } }
+    if shift > 21 { return Integer{} }
+  }
+  return Integer{}
+}
+
+struct Text { length: usize, consumed: usize, ok: bool }
+
+// A string literal (RFC 7541 5.2) decoded into destination.
+fn read_string(block: []const u8, destination: []u8) Text {
+  if #len(block) == 0 { return Text{} }
+  huffman := (block[0] & 0x80) != 0
+  length := read_integer(block, 7)
+  if !length.ok || length.value > #len(block) - length.consumed { return Text{} }
+  encoded := block[length.consumed..length.consumed + length.value]
+  if !huffman {
+    if #len(encoded) > #len(destination) { return Text{} }
+    for i in 0..#len(encoded) {
+      destination[i] = encoded[i]
+    }
+    return Text{ length: #len(encoded), consumed: length.consumed + length.value, ok: true }
+  }
+  decoded := huffman_decode(encoded, destination)
+  if !decoded.ok { return Text{} }
+  return Text{ length: decoded.length, consumed: length.consumed + length.value, ok: true }
+}
+
+pub struct Decoded { length: usize, ok: bool }
+
+// Huffman-decodes source into destination (RFC 7541 5.2): padding must be at
+// most 7 one bits, and EOS never appears.
+pub fn huffman_decode(source: []const u8, destination: []u8) Decoded {
+  code: u32 = 0
+  length: usize = 0
+  written: usize = 0
+  for byte in source {
+    for bit in 0..8 {
+      code = (code << 1) | ((#cast(u32, byte) >> #cast(u32, 7 - bit)) & 1)
+      length += 1
+      count := #cast(u32, LengthCount[length])
+      first := FirstCode[length]
+      if count != 0 && code >= first && code - first < count {
+        symbol := DecodeSymbols[#cast(usize, FirstIndex[length]) + #cast(usize, code - first)]
+        if symbol == 256 || written == #len(destination) { return Decoded{} }
+        destination[written] = #cast(u8, symbol)
+        written += 1
+        code = 0
+        length = 0
+      } else if length == 30 { return Decoded{} }
+    }
+  }
+  if length > 7 || code != (#cast(u32, 1) << #cast(u32, length)) - 1 { return Decoded{} }
+  return Decoded{ length: written, ok: true }
+}
+
+// Bytes huffman_encode writes for source.
+pub fn huffman_length(source: []const u8) usize {
+  bits: usize = 0
+  for byte in source {
+    bits += #cast(usize, HuffmanLengths[byte])
+  }
+  return (bits + 7) / 8
+}
+
+// Huffman-codes source into destination, which must hold huffman_length bytes.
+pub fn huffman_encode(source: []const u8, destination: []u8) usize {
+  pending: u64 = 0
+  bits: usize = 0
+  written: usize = 0
+  for byte in source {
+    length := #cast(usize, HuffmanLengths[byte])
+    pending = (pending << #cast(u64, length)) | #cast(u64, HuffmanCodes[byte])
+    bits += length
+    for bits >= 8 {
+      bits -= 8
+      destination[written] = #cast(u8, pending >> #cast(u64, bits))
+      written += 1
+    }
+  }
+  if bits > 0 {
+    // Pad with the most significant bits of EOS: ones.
+    destination[written] = #cast(u8, (pending << #cast(u64, 8 - bits)) | ((#cast(u64, 1) << #cast(u64, 8 - bits)) - 1))
+    written += 1
+  }
+  return written
+}
+
+fn static_name(index: usize) []const u8 {
+  start := #cast(usize, StaticNameStart[index - 1])
+  return StaticText[start..start + #cast(usize, StaticNameLength[index - 1])]
+}
+
+fn static_value(index: usize) []const u8 {
+  start := #cast(usize, StaticValueStart[index - 1])
+  return StaticText[start..start + #cast(usize, StaticValueLength[index - 1])]
+}
+
+// Dynamic entry index (1 is the newest).
+fn dynamic_entry(table: *const Table, index: usize) Entry {
+  position := (table.first + table.count - index) % #len(table.entries)
+  return table.entries[position]
+}
+
+fn evict_oldest(table: *Table) {
+  oldest := table.entries[table.first]
+  table.size -= oldest.name_length + oldest.value_length + EntryOverhead
+  table.start = oldest.offset + oldest.name_length + oldest.value_length
+  table.first = (table.first + 1) % #len(table.entries)
+  table.count -= 1
+  if table.count == 0 {
+    table.start = 0
+    table.end = 0
+  }
+}
+
+fn shrink(table: *Table, size: usize) {
+  for table.count > 0 && table.size > size {
+    evict_oldest(table)
+  }
+}
+
+// Adds a field (RFC 7541 4.4); one larger than the table empties it.
+fn insert(table: *Table, name: []const u8, value: []const u8) {
+  bytes := #len(name) + #len(value)
+  if bytes + EntryOverhead > table.max_size {
+    shrink(table, 0)
+    return
+  }
+  shrink(table, table.max_size - bytes - EntryOverhead)
+  if table.end + bytes > #len(table.storage) {
+    // Compact: live bytes are contiguous, oldest first.
+    live := table.end - table.start
+    for i in 0..live {
+      table.storage[i] = table.storage[table.start + i]
+    }
+    for i in 0..table.count {
+      position := (table.first + i) % #len(table.entries)
+      table.entries[position].offset -= table.start
+    }
+    table.start = 0
+    table.end = live
+  }
+  at := table.end
+  for i in 0..#len(name) {
+    table.storage[at + i] = name[i]
+  }
+  for i in 0..#len(value) {
+    table.storage[at + #len(name) + i] = value[i]
+  }
+  table.end += bytes
+  position := (table.first + table.count) % #len(table.entries)
+  table.entries[position] = Entry{ offset: at, name_length: #len(name), value_length: #len(value) }
+  table.count += 1
+  table.size += bytes + EntryOverhead
+}
+
+struct Named { name: []const u8, value: []const u8, ok: bool }
+
+// Field index (RFC 7541 2.3.3): static first, then dynamic.
+fn lookup(table: *const Table, index: usize) Named {
+  if index == 0 { return Named{} }
+  if index <= StaticCount {
+    return Named{ name: static_name(index), value: static_value(index), ok: true }
+  }
+  if index - StaticCount > table.count { return Named{} }
+  entry := dynamic_entry(table, index - StaticCount)
+  name := table.storage[entry.offset..entry.offset + entry.name_length]
+  value := table.storage[entry.offset + entry.name_length..entry.offset + entry.name_length + entry.value_length]
+  return Named{ name: name, value: value, ok: true }
+}
+
+fn copy_into(destination: []u8, source: []const u8) bool {
+  if #len(source) > #len(destination) { return false }
+  for i in 0..#len(source) {
+    destination[i] = source[i]
+  }
+  return true
+}
+
+// Decodes the representation at the start of block. Name and value are
+// copied or decoded into scratch, so a table change cannot move them. Fails
+// with Syntax for malformed input (a COMPRESSION_ERROR) and Capacity when
+// scratch is too small.
+pub fn decode_field(decoder: *Decoder, block: []const u8, scratch: []u8) Field {
+  if #len(block) == 0 { return failed(parse.Kind.Truncated, 0) }
+  first := block[0]
+  table := &decoder.table
+  if (first & 0x80) != 0 {
+    index := read_integer(block, 7)
+    named := lookup(table, index.value)
+    if !index.ok || !named.ok { return failed(parse.Kind.Syntax, 0) }
+    if !copy_into(scratch, named.name) || !copy_into(scratch[#len(named.name)..], named.value) {
+      return failed(parse.Kind.Capacity, 0)
+    }
+    decoder.fields = true
+    name_length := #len(named.name)
+    return Field{ name: scratch[..name_length], value: scratch[name_length..name_length + #len(named.value)], consumed: index.consumed }
+  }
+  if (first & 0xe0) == 0x20 {
+    size := read_integer(block, 5)
+    if !size.ok || size.value > table.limit || decoder.fields {
+      return failed(parse.Kind.Syntax, 0)
+    }
+    table.max_size = size.value
+    shrink(table, size.value)
+    return Field{ consumed: size.consumed, update: true }
+  }
+  indexing := (first & 0xc0) == 0x40
+  prefix: u8 = 4
+  if indexing {
+    prefix = 6
+  }
+  index := read_integer(block, prefix)
+  if !index.ok { return failed(parse.Kind.Syntax, 0) }
+  at := index.consumed
+  name_length: usize = 0
+  if index.value == 0 {
+    name := read_string(block[at..], scratch)
+    if !name.ok { return failed(parse.Kind.Syntax, at) }
+    at += name.consumed
+    name_length = name.length
+  } else {
+    named := lookup(table, index.value)
+    if !named.ok { return failed(parse.Kind.Syntax, 0) }
+    if !copy_into(scratch, named.name) { return failed(parse.Kind.Capacity, 0) }
+    name_length = #len(named.name)
+  }
+  value := read_string(block[at..], scratch[name_length..])
+  if !value.ok { return failed(parse.Kind.Syntax, at) }
+  at += value.consumed
+  name := scratch[..name_length]
+  text := scratch[name_length..name_length + value.length]
+  if indexing {
+    insert(table, name, text)
+  }
+  decoder.fields = true
+  return Field{ name: name, value: text, consumed: at, sensitive: (first & 0xf0) == 0x10 }
+}
+
+// ---------------------------------------------------------------- encoding
+
+// Appends an integer with an N-bit prefix; the prefix bits of destination[0]
+// above it are kept from flags. 0 when it does not fit.
+fn write_integer(destination: []u8, flags: u8, prefix: u8, value: usize) usize {
+  if #len(destination) == 0 { return 0 }
+  mask := (#cast(usize, 1) << #cast(usize, prefix)) - 1
+  if value < mask {
+    destination[0] = flags | #cast(u8, value)
+    return 1
+  }
+  destination[0] = flags | #cast(u8, mask)
+  rest := value - mask
+  at: usize = 1
+  for rest >= 128 {
+    if at == #len(destination) { return 0 }
+    destination[at] = #cast(u8, rest & 127) | 128
+    rest >>= 7
+    at += 1
+  }
+  if at == #len(destination) { return 0 }
+  destination[at] = #cast(u8, rest)
+  return at + 1
+}
+
+fn lower(byte: u8) u8 {
+  if byte >= 'A' && byte <= 'Z' { return byte + 32 }
+  return byte
+}
+
+// A string literal, Huffman-coded when shorter; lowercase folds ASCII letters
+// (header names). 0 when it does not fit.
+fn write_string(destination: []u8, text: []const u8, lowercase: bool) usize {
+  folded: [256]u8
+  source := text
+  if lowercase && #len(text) <= #len(folded) {
+    for i in 0..#len(text) {
+      folded[i] = lower(text[i])
+    }
+    source = folded[..#len(text)]
+  }
+  coded := huffman_length(source)
+  if coded < #len(source) {
+    head := write_integer(destination, 0x80, 7, coded)
+    if head == 0 || coded > #len(destination) - head { return 0 }
+    return head + huffman_encode(source, destination[head..])
+  }
+  head := write_integer(destination, 0, 7, #len(source))
+  if head == 0 || #len(source) > #len(destination) - head { return 0 }
+  for i in 0..#len(source) {
+    destination[head + i] = source[i]
+  }
+  return head + #len(source)
+}
+
+fn equal_folded(name: []const u8, known: []const u8) bool {
+  if #len(name) != #len(known) { return false }
+  for i in 0..#len(name) {
+    if lower(name[i]) != known[i] { return false }
+  }
+  return true
+}
+
+// Writes one field to destination and returns its length, or 0 when it does
+// not fit. Names are lowercased, as HTTP/2 requires; names longer than 256
+// bytes must already be lowercase.
+pub fn encode_field(destination: []u8, name: []const u8, value: []const u8) usize {
+  name_index: usize = 0
+  for index in 1..StaticCount + 1 {
+    if !equal_folded(name, static_name(index)) { continue }
+    if name_index == 0 {
+      name_index = index
+    }
+    known := static_value(index)
+    if #len(known) > 0 && #len(known) == #len(value) && copy_equal(known, value) {
+      return write_integer(destination, 0x80, 7, index)
+    }
+  }
+  // Literal without indexing (RFC 7541 6.2.2).
+  at := write_integer(destination, 0, 4, name_index)
+  if at == 0 { return 0 }
+  if name_index == 0 {
+    written := write_string(destination[at..], name, true)
+    if written == 0 { return 0 }
+    at += written
+  }
+  written := write_string(destination[at..], value, false)
+  if written == 0 { return 0 }
+  return at + written
+}
+
+fn copy_equal(left: []const u8, right: []const u8) bool {
+  for i in 0..#len(left) {
+    if left[i] != right[i] { return false }
+  }
+  return true
+}

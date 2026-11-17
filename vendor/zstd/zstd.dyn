@@ -35,9 +35,7 @@ pub fn decompress(destination: []u8, source: []const u8) Result {
   return result_from_code(code)
 }
 pub fn frame_size(source: []const u8) SizeResult {
-  if #len(source) == 0 {
-    return SizeResult{ failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if #len(source) == 0 { return SizeResult{ failure: io.Failure{ kind: io.Kind.System } } }
   size := zstd_frame_content_size(#cast(rawptr, &source[0]), #len(source))
   if size == ContentSizeError {
     return SizeResult{ size: size, failure: io.Failure{ kind: io.Kind.System } }
@@ -46,17 +44,13 @@ pub fn frame_size(source: []const u8) SizeResult {
 }
 pub fn error_name(code: usize, maximum: usize) []const u8 {
   pointer := zstd_error_name(code)
-  if pointer == nil {
-    return ""
-  }
+  if pointer == nil { return "" }
   bytes := #slice(pointer, maximum)
   length: usize = 0
   for length < maximum && bytes[length] != 0 {
     length += 1
   }
-  if length == maximum {
-    return ""
-  }
+  if length == maximum { return "" }
   return bytes[..length]
 }
 
@@ -73,15 +67,11 @@ fn result_from_code(code: usize) Result {
 pub struct StreamContext { value: rawptr, provider_code: usize, failure: io.Failure }
 pub struct StreamResult { written: usize, consumed: usize, provider_code: usize, ended: bool, failure: io.Failure }
 pub fn stream_workspace_size(window_log: u32) usize {
-  if window_log < 10 || window_log > 30 {
-    return 0
-  }
+  if window_log < 10 || window_log > 30 { return 0 }
   window: usize = 1
   window <<= window_log
   size := zstd_estimate_dstream_size(window)
-  if zstd_is_error(size) != 0 || size > #cast(usize, -1) - 7 {
-    return 0
-  }
+  if zstd_is_error(size) != 0 || size > #cast(usize, -1) - 7 { return 0 }
   return size + 7
 }
 pub fn stream_context(workspace: []u8, window_log: u32) StreamContext {
@@ -93,9 +83,7 @@ pub fn stream_context(workspace: []u8, window_log: u32) StreamContext {
   eight: usize = 8
   padding := (eight - (address & 7)) & 7
   value := zstd_init_static_dstream(#cast(rawptr, &workspace[padding]), #len(workspace) - padding)
-  if value == nil {
-    return StreamContext{ failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if value == nil { return StreamContext{ failure: io.Failure{ kind: io.Kind.System } } }
   code := zstd_dctx_set_parameter(value, 100, #cast(i32, window_log))
   if zstd_is_error(code) != 0 {
     return StreamContext{ provider_code: code, failure: io.Failure{ kind: io.Kind.System } }

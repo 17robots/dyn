@@ -76,7 +76,7 @@ def exercise(port):
     # Malformed and oversized requests get a reply before the connection closes.
     assert raw(port, b'NOT HTTP\r\n\r\n').startswith(b'HTTP/1.1 400 Bad Request\r\n')
     huge = b'POST /notes HTTP/1.1\r\nHost: x\r\nContent-Length: 100000\r\n\r\n'
-    assert raw(port, huge).startswith(b'HTTP/1.1 413 Payload Too Large\r\n')
+    assert raw(port, huge).startswith(b'HTTP/1.1 413 Content Too Large\r\n')
 
     client = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
     client.request('POST', '/quit')

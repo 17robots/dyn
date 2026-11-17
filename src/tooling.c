@@ -28,6 +28,7 @@ typedef struct {
   FormatInsert *items;
   size_t count, capacity;
   bool failed;
+  bool join; /* the second pass: join guards, measuring final indentation */
 } FormatEdits;
 
 static void format_insert(FormatEdits *edits, size_t offset, unsigned indent) {
@@ -78,12 +79,56 @@ static bool format_holds_block(const ExpNode *nodes, uint32_t id) {
   return false;
 }
 
+/* Joined guards stay within this many columns. */
+#define FORMAT_GUARD_WIDTH 100
+
+static bool format_blank(const char *text, size_t from, size_t to) {
+  for (size_t i = from; i < to; ++i)
+    if (!strchr(" \t\r\n", text[i])) return false;
+  return true;
+}
+
+/* A guard, `if cond {` + one return, break or continue + `}`, goes on one
+   line: `if cond { return x }`. Only with nothing but whitespace around the
+   statement (no comment is lost), the statement on one line, no else, and
+   the result within FORMAT_GUARD_WIDTH columns. */
+static bool format_join_guard(FormatEdits *edits, const FormatTree *t, uint32_t id) {
+  const ExpNode *nodes = t->tree->nodes, *node = &nodes[id];
+  if (!edits->join || node->kind != SRC_IF) return false;
+  uint32_t condition = node->first;
+  uint32_t block = condition == UINT32_MAX ? UINT32_MAX : nodes[condition].next;
+  if (block == UINT32_MAX || nodes[block].kind != SRC_BLOCK || nodes[block].next != UINT32_MAX) return false;
+  uint32_t only = nodes[block].first;
+  if (only == UINT32_MAX || nodes[only].next != UINT32_MAX) return false;
+  unsigned kind = nodes[only].kind;
+  if (kind != SRC_RETURN && kind != SRC_BREAK && kind != SRC_CONTINUE) return false;
+  if (format_holds_block(nodes, only)) return false;
+  const char *text = edits->text;
+  size_t open = nodes[block].start, close = nodes[block].end - 1;
+  if (text[open] != '{' || text[close] != '}') return false;
+  size_t first = nodes[only].start, last = nodes[only].end;
+  if (format_row(t, first) != format_row(t, last - 1) || format_row(t, node->start) != format_row(t, open)) return false;
+  if (!format_blank(text, open + 1, first) || !format_blank(text, last, close)) return false;
+  /* Already one line. */
+  if (format_row(t, open) == format_row(t, close)) return true;
+  size_t line = node->start;
+  while (line && text[line - 1] != '\n') --line;
+  size_t width = (open + 1 - line) + 1 + (last - first) + 2;
+  if (width > FORMAT_GUARD_WIDTH) return false;
+  format_insert(edits, open + 1, UINT_MAX);
+  if (!edits->failed) edits->items[edits->count - 1].end = first;
+  format_insert(edits, last, UINT_MAX);
+  if (!edits->failed) edits->items[edits->count - 1].end = close;
+  return true;
+}
+
 /* Same rules as the grammar walk: commas are found lexically, and every
    child of a block is a statement because comments are not tree nodes. */
 static void format_layout_compact(FormatEdits *edits, const FormatTree *t,
                                   uint32_t id, uint32_t anchor_row,
                                   unsigned anchor_indent) {
   const ExpNode *nodes = t->tree->nodes, *node = &nodes[id];
+  if (format_join_guard(edits, t, id)) return;
   if (node->kind != SRC_BLOCK) {
     for (uint32_t child = node->first, previous = UINT32_MAX; child != UINT32_MAX;
          previous = child, child = nodes[child].next) {
@@ -335,8 +380,8 @@ static char *format_reindent(const char *text, size_t length, size_t *result_len
    indentation, LF line endings, no trailing horizontal whitespace, and a final
    newline. Malformed
    sources receive only the whitespace rules. */
-bool dyn_format_source(const DynSource *s, char **result, size_t *length) {
-  FormatEdits edits = {.text = s->text};
+static bool format_pass(const DynSource *s, bool join, char **result, size_t *length) {
+  FormatEdits edits = {.text = s->text, .join = join};
   format_compact(&edits, s);
   size_t extra = 0;
   for (size_t i = 0; i < edits.count; ++i)
@@ -399,6 +444,20 @@ bool dyn_format_source(const DynSource *s, char **result, size_t *length) {
   *result = out;
   *length = at;
   return true;
+}
+
+/* Two passes: the first settles indentation, so the second measures joined
+   guards at the columns they end up in. */
+bool dyn_format_source(const DynSource *s, char **result, size_t *length) {
+  char *first = NULL;
+  size_t first_length = 0;
+  if (!format_pass(s, false, &first, &first_length)) return false;
+  DynSource settled = *s;
+  settled.text = first;
+  settled.length = first_length;
+  bool ok = format_pass(&settled, true, result, length);
+  free(first);
+  return ok;
 }
 
 static int replace_file(const DynSource *s, const char *text, size_t length) {

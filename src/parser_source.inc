@@ -255,6 +255,7 @@ static bool src_primary_kind(unsigned kind) {
 static uint32_t src_statement_body(Parser *p) {
   if (p->tree->error) return NONE;
   uint32_t start = p->token.start;
+  if (is(p, "{")) return src_block(p);
   if (is(p, "if")) return src_if(p);
   if (is(p, "case")) return src_case(p);
   if (is(p, "for")) return src_for(p);

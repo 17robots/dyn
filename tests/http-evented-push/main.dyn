@@ -1,0 +1,391 @@
+// Evented server push and offload: run (pool jobs), open_stream (SSE),
+// upgrade (WebSocket), publish, send, close_peer, overflow eviction and 503.
+// Prints "port N" once listening; POST /quit stops it.
+use "std/bytes"
+use "std/crypto/password"
+use "std/encoding/json"
+use "std/fmt"
+use "std/io"
+use "std/mem"
+use "std/net"
+use "std/net/http"
+use "std/net/http/evented"
+use "std/net/http/evented/tls" https
+use "std/parse"
+use "std/process"
+use "std/sync"
+use "std/thread/pool"
+use "std/thread/posix"
+use "std/time"
+
+const WorkerCount: usize = 2
+const EventsTopic: u64 = 1
+const ChatTopic: u64 = 2
+
+struct App {
+  quit: sync.AtomicU32,
+  // Large bodies whose client left mid-upload.
+  abandoned: sync.AtomicU32,
+  workers: []evented.Worker,
+  assets: http.Assets,
+  router: http.Routes(App),
+  route_storage: [19]http.TypedRoute(App),
+  // Requests deferred with later on each worker in the current pass, and the
+  // size of the batch the last finish closed.
+  pending: [WorkerCount]usize,
+  batch: [WorkerCount]usize,
+  big: [300 * 1024]u8,
+}
+
+struct Hash { input: [64]u8, length: usize, digest: [32]u8, ok: bool }
+
+fn text(response: *http.Response, status: u16, body: []const u8) http.Result {
+  return http.respond(response, body, http.ResponseOptions{ status: status, content_type: "text/plain" })
+}
+
+fn health(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  return text(response, 200, "ok\n")
+}
+
+// The request arena: 4 KiB per call, never freed; the server empties it
+// before each handler, so thousands of calls fit a 1 MiB arena.
+fn scratch(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  arena := evented.arena(response)
+  if arena == nil { return text(response, 500, "no arena") }
+  block := mem.push_bytes_uninit(arena, 4096)
+  out := json.writer(block)
+  json.object_begin(&out)
+  json.field(&out, "worker", evented.worker_index(response))
+  json.field(&out, "path", request.path)
+  json.field(&out, "ok", true)
+  json.object_end(&out)
+  return http.json(response, 200, json.output(&out))
+}
+
+// Larger than a 64 KiB HTTP/2 window: the handler waits for WINDOW_UPDATE.
+fn big(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  return text(response, 200, app.big[..])
+}
+
+// A dynamic JSON body, gzipped when the client accepts it; ?n= sets its rows.
+fn report(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  storage: [64 * mem.KiB]u8
+  page := fmt.buffer(storage[..])
+  count_storage: [8]u8
+  count := http.query_value(request, "n", count_storage[..])
+  rows := 400
+  if count.found && bytes.equal(count.value, "2") {
+    rows = 2
+  }
+  fmt.write(&page, "[")
+  for i in 0..rows {
+    if i > 0 {
+      fmt.write(&page, ",")
+    }
+    fmt.print(&page, "{{\"id\":{},\"name\":\"row {}\"}}", i, i)
+  }
+  fmt.write(&page, "]")
+  cache: [1]http.Header = [http.Header{ name: "Cache-Control", value: "no-store" }]
+  return evented.respond_compressed(response, request, fmt.bytes(&page), http.ResponseOptions{ content_type: "application/json", headers: cache[..] })
+}
+
+fn hash_work(job: *Hash) {
+  scratch: [20]u8
+  salt: [16]u8
+  job.ok = password.pbkdf2_sha256(job.digest[..], job.input[..job.length], salt[..], 20000, scratch[..])
+}
+
+fn hash_finish(response: *http.Response, request: *const http.Request, job: *Hash) http.Result {
+  if !job.ok { return text(response, 500, "hash failed\n") }
+  storage: [80]u8
+  out := fmt.buffer(storage[..])
+  digits := "0123456789abcdef"
+  for byte in job.digest {
+    fmt.write_byte(&out, digits[byte >> 4])
+    fmt.write_byte(&out, digits[byte & 15])
+  }
+  fmt.write_byte(&out, '\n')
+  return text(response, 200, fmt.bytes(&out))
+}
+
+struct Tally { app: *App, worker: usize, number: usize }
+
+// The first finish of a pass closes the batch; every reply names its size.
+fn later_finish(response: *http.Response, request: *const http.Request, job: *Tally) http.Result {
+  app := job.app
+  if app.pending[job.worker] > 0 {
+    app.batch[job.worker] = app.pending[job.worker]
+    app.pending[job.worker] = 0
+  }
+  storage: [64]u8
+  out := fmt.buffer(storage[..])
+  fmt.print(&out, "later {} of {}\n", job.number, app.batch[job.worker])
+  return text(response, 200, fmt.bytes(&out))
+}
+
+fn deferred(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  job := evented.job(Tally, response)
+  if job == nil { return text(response, 500, "no job storage\n") }
+  worker := evented.worker_index(response)
+  app.pending[worker] += 1
+  job.* = Tally{ app: app, worker: worker, number: app.pending[worker] }
+  if io.failed(evented.later(response, job, later_finish)) { return text(response, 500, "later failed\n") }
+  return http.Result{}
+}
+
+fn hash(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  job := evented.job(Hash, response)
+  if job == nil || #len(request.body) > #len(job.input) {
+    return text(response, 500, "no job storage\n")
+  }
+  job.length = mem.copy(job.input[..], request.body)
+  ran := evented.run(response, job, hash_work, hash_finish)
+  if io.failed(ran) { return text(response, 503, "pool busy\n") }
+  return http.Result{}
+}
+
+fn events(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  headers: [1]http.Header = [http.Header{ name: "Cache-Control", value: "no-store" }]
+  opened := evented.open_stream(response, http.ResponseOptions{ content_type: "text/event-stream", headers: headers[..] }, EventsTopic)
+  if io.failed(opened.failure) { return text(response, 500, "stream failed\n") }
+  storage: [128]u8
+  hello := http.sse_event(storage[..], "hello", "", "connected")
+  _ = evented.send(app.workers, opened.value, hello.value, false)
+  return http.Result{}
+}
+
+fn chat(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  upgraded := evented.upgrade(response, request, ChatTopic)
+  if io.failed(upgraded.failure) { return text(response, 400, "not a websocket upgrade\n") }
+  return http.Result{}
+}
+
+// POST body goes to every SSE stream as an event and every socket as text.
+fn broadcast(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  storage: [1024]u8
+  event := http.sse_event(storage[..], "message", "7", request.body)
+  if io.failed(evented.publish(app.workers, EventsTopic, event.value, false)) ||
+    io.failed(evented.publish(app.workers, ChatTopic, request.body, false)) {
+    return text(response, 503, "inbox full\n")
+  }
+  return text(response, 200, "sent\n")
+}
+
+fn asset(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  found := http.find_asset(&app.assets, http.param(request, "name").value)
+  if found == nil { return text(response, 404, "no asset\n") }
+  return http.serve_asset(response, request, found, "public, max-age=60")
+}
+
+fn client(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  storage: [64]u8
+  return text(response, 200, net.ip_text(storage[..], evented.client_ip(response)))
+}
+
+// Upload: answers the body's length and byte sum.
+fn upload(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  sum: u64 = 0
+  for byte in request.body {
+    sum += byte
+  }
+  storage: [64]u8
+  out := fmt.buffer(storage[..])
+  fmt.write_u64(&out, #len(request.body))
+  fmt.write_byte(&out, ' ')
+  fmt.write_u64(&out, sum)
+  return text(response, 200, fmt.bytes(&out))
+}
+
+fn quit(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  sync.store_u32(&app.quit, 1)
+  return text(response, 200, "bye\n")
+}
+
+// Echo each message to its sender, with a prefix; "all:" messages go to every
+// socket.
+
+fn on_message(message: *const evented.Message) {
+  app := #cast(*App, message.context)
+  if message.kind == evented.MessageKind.Closed { return }
+  if bytes.starts_with(message.payload, "all:") {
+    _ = evented.publish(app.workers, ChatTopic, message.payload[4..], false)
+    return
+  }
+  if bytes.equal(message.payload, "bye") {
+    _ = evented.close_peer(app.workers, message.peer)
+    return
+  }
+  storage: [8 * 1024]u8
+  out := fmt.buffer(storage[..])
+  fmt.write(&out, "echo:")
+  fmt.write(&out, message.payload)
+  _ = evented.send(app.workers, message.peer, fmt.bytes(&out), message.kind == evented.MessageKind.Binary)
+}
+
+// Bodies larger than any upload block, read as they arrive: POST /large
+// answers with the byte count and sum, ?limit=N stops after N bytes, and
+// anything else is refused from the head alone.
+struct Upload { app: *App, count: usize, sum: u64, limit: usize }
+
+fn large_chunk(job: *Upload, piece: []const u8) bool {
+  for byte in piece {
+    job.sum += #cast(u64, byte)
+  }
+  job.count += #len(piece)
+  return job.limit == 0 || job.count <= job.limit
+}
+
+fn large_finish(response: *http.Response, request: *const http.Request, job: *Upload, end: evented.BodyEnd) http.Result {
+  storage: [64]u8
+  line := fmt.buffer(storage[..])
+  case end {
+    evented.BodyEnd.Complete => {
+      fmt.print(&line, "{} {}", job.count, job.sum)
+      return text(response, 200, fmt.bytes(&line))
+    }
+    evented.BodyEnd.Stopped => {
+      fmt.print(&line, "stopped after {}", job.count)
+      return text(response, http.StatusPayloadTooLarge, fmt.bytes(&line))
+    }
+    evented.BodyEnd.Invalid => { return text(response, http.StatusBadRequest, "bad chunks\n") }
+    evented.BodyEnd.Closed => {
+      _ = sync.fetch_add_u32(&job.app.abandoned, 1)
+      return http.Result{}
+    }
+  }
+}
+
+fn large_body(response: *http.Response, request: *const http.Request) http.Result {
+  typed := #cast(*http.Typed(App), request.context)
+  if !bytes.equal(request.path, "/large") {
+    return text(response, http.StatusPayloadTooLarge, "too large\n")
+  }
+  job := evented.job(Upload, response)
+  if job == nil { return text(response, http.StatusServiceUnavailable, "busy\n") }
+  job.app = typed.state
+  storage: [16]u8
+  limit := http.query_value(request, "limit", storage[..])
+  if limit.found {
+    parsed := parse.u64_decimal(limit.value)
+    job.limit = #cast(usize, parsed.value)
+  }
+  if io.failed(evented.receive_body(response, job, large_chunk, large_finish)) {
+    return text(response, http.StatusInternalServerError, "cannot read\n")
+  }
+  return http.Result{}
+}
+
+fn abandoned(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  storage: [16]u8
+  line := fmt.buffer(storage[..])
+  fmt.print(&line, "{}", sync.load_u32(&app.abandoned))
+  return text(response, 200, fmt.bytes(&line))
+}
+
+fn handle(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  return http.serve_routes(&app.router, response, request)
+}
+
+fn main() {
+  arena := mem.arena_alloc(64 * mem.MiB)
+  defer mem.arena_release(arena)
+  spawner := posix.spawner()
+  started := pool.start_spawned(arena, 2, 64, 256 * mem.KiB, &spawner)
+  if io.failed(started.failure) { #panic("pool") }
+  jobs := started.value
+  workers: [WorkerCount]evented.Worker
+  app := App{ workers: workers[..] }
+  asset_storage: [2]http.Asset
+  style: [4096]u8
+  rule := "body { color: red; } "
+  for i in 0..#len(style) {
+    style[i] = rule[i % #len(rule)]
+  }
+  asset_storage[0] = http.make_asset(arena, "style.css", style[..])
+  asset_storage[0].modified = 784111777
+  asset_storage[1] = http.make_asset(arena, "logo.png", "\x89PNG not really")
+  app.assets = http.Assets{ items: asset_storage[..], count: 2 }
+  http.sort_assets(&app.assets)
+  for i in 0..#len(app.big) {
+    app.big[i] = #cast(u8, 'a' + i % 26)
+  }
+  app.router = http.typed_routes(app.route_storage[..], &app)
+  _ = http.add(&app.router, "GET", "/health", health)
+  _ = http.add(&app.router, "GET", "/report", report)
+  _ = http.add(&app.router, "GET", "/abandoned", abandoned)
+  _ = http.add(&app.router, "GET", "/big", big)
+  _ = http.add(&app.router, "GET", "/scratch", scratch)
+  _ = http.add(&app.router, "GET", "/later", deferred)
+  _ = http.add(&app.router, "POST", "/hash", hash)
+  _ = http.add(&app.router, "GET", "/events", events)
+  _ = http.add(&app.router, "GET", "/chat", chat)
+  _ = http.add(&app.router, "POST", "/broadcast", broadcast)
+  _ = http.add(&app.router, "POST", "/quit", quit)
+  _ = http.add(&app.router, "GET", "/static/:name", asset)
+  _ = http.add(&app.router, "GET", "/ip", client)
+  _ = http.add(&app.router, "POST", "/upload", upload)
+  typed := http.Typed(App){ state: &app, handler: handle }
+  binding := http.bind(&typed)
+  config := evented.default_config()
+  config.connections_per_worker = 8
+  config.receive_size = 4 * mem.KiB
+  config.send_size = 4 * mem.KiB
+  config.overflow_send_size = 64 * mem.KiB
+  config.overflow_send_count = 8
+  config.upload_size = mem.MiB
+  config.upload_count = 2
+  config.spawner = &spawner
+  config.pool = jobs
+  config.on_message = on_message
+  config.message_context = &app
+  config.idle_timeout_milliseconds = 60000
+  config.overflow = evented.Overflow.Reject
+  arguments := process.arguments(arena)
+  if #len(arguments.value) > 1 && bytes.equal(arguments.value[1], "wait") {
+    config.overflow = evented.Overflow.Wait
+  }
+  quic_stack := evented.Quic{}
+  if #len(arguments.value) == 4 && bytes.equal(arguments.value[1], "h3") {
+    // HTTP/3 over QUIC, which brings its own TLS; TCP stays cleartext.
+    quic_context := https.quic_context(arena, arguments.value[2], arguments.value[3])
+    if io.failed(quic_context.failure) {
+      #panic("cannot create the QUIC context")
+    }
+    quic_stack = https.quic(quic_context.value)
+    config.http3 = true
+    config.quic = &quic_stack
+  }
+  if #len(arguments.value) > 1 && (bytes.equal(arguments.value[1], "h2") || bytes.equal(arguments.value[1], "h3")) {
+    // HTTP/2 needs room for a whole 16 KiB frame.
+    config.http2 = true
+    config.receive_size = 32 * mem.KiB
+    config.http2_connections = 8
+    config.http2_slots = 16
+  }
+  config.evict_idle_milliseconds = 200
+  config.compress_level = 6
+  config.on_large_body = large_body
+  storage := mem.arena_sub(arena, evented.storage_size(config, WorkerCount) + mem.MiB)
+  address := net.ipv4(127, 0, 0, 1, 0)
+  listened := net.tcp_listen_ipv4(&address, 64)
+  if io.failed(listened.failure) { #panic("listen") }
+  listener := net.listener_take(&listened.value)
+  ran := evented.start(storage, workers[..], &listener, config, binding.handler, binding.context)
+  if io.failed(ran.failure) { #panic("start") }
+  io.println("port {}", evented.local_port(workers[..]))
+  for sync.load_u32(&app.quit) == 0 {
+    _ = time.sleep(20 * time.Millisecond)
+  }
+  evented.stop(workers[..])
+  joined := evented.join(workers[..])
+  if io.failed(joined.failure) { #panic("join") }
+  net.listener_close(&listener)
+  if io.failed(pool.stop(jobs).failure) { #panic("pool stop") }
+  evicted: u64 = 0
+  refused: u64 = 0
+  for *worker in workers {
+    evicted += worker.evicted
+    refused += worker.refused
+  }
+  io.println("evicted {} refused {}", evicted, refused)
+}

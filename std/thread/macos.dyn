@@ -80,9 +80,7 @@ fn spawn_with_size_untyped(arena: *mem.Arena, stack_size: usize, entry: fn(rawpt
 // Failure: retains the handle for retry; keep arena/thread/context alive until success.
 // Allocation: none. Thread safety: one caller controls this descriptor.
 pub fn join(thread: *Thread) Result {
-  if thread.handle == nil {
-    return Result{}
-  }
+  if thread.handle == nil { return Result{} }
   value: rawptr = nil
   error := wait(thread.handle, &value)
   if error != 0 {
@@ -113,8 +111,6 @@ pub fn cpu_count() usize {
   name := "hw.activecpu\x00"
   value: i32 = 0
   length: usize = #sizeof(i32)
-  if sysctl_by_name(&name[0], &value, &length, nil, 0) != 0 || value < 1 {
-    return 1
-  }
+  if sysctl_by_name(&name[0], &value, &length, nil, 0) != 0 || value < 1 { return 1 }
   return #cast(usize, value)
 }

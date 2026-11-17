@@ -212,9 +212,7 @@ pub fn push_state(arena: *mem.Arena, measure: fn(*$C, []const u8) f32, measure_d
 // while the key stays.
 pub fn display_text(label: []const u8) []const u8 {
   for i in 0..#len(label) {
-    if i + 1 < #len(label) && label[i] == '#' && label[i + 1] == '#' {
-      return label[..i]
-    }
+    if i + 1 < #len(label) && label[i] == '#' && label[i + 1] == '#' { return label[..i] }
   }
   return label
 }
@@ -235,9 +233,7 @@ pub fn key(seed: u64, label: []const u8) u64 {
 // Hashes an explicit identity without interpreting label suffixes.
 pub fn key_bytes(seed: u64, identity: []const u8) u64 {
   value := hash.wyhash(identity, seed)
-  if value == 0 {
-    return 1
-  }
+  if value == 0 { return 1 }
   return value
 }
 
@@ -256,26 +252,20 @@ pub fn key_number(seed: u64, number: u64) u64 {
 // which that key disappears, because expired storage may serve another key.
 pub fn find(state: *const State, value: u64) *Box {
   found := lookup(state, value)
-  if found != nil && found.touched == state.frame_index {
-    return found
-  }
+  if found != nil && found.touched == state.frame_index { return found }
   return nil
 }
 
 fn derived(value: u64) u64 {
   next := hash.wyhash("derived", value)
-  if next == 0 {
-    return 1
-  }
+  if next == 0 { return 1 }
   return next
 }
 
 fn lookup(state: *const State, value: u64) *Box {
   at := state.buckets[#cast(usize, value % bucket_count)]
   for at != nil {
-    if at.key == value {
-      return at
-    }
+    if at.key == value { return at }
     at = at.hash_next
   }
   return nil
@@ -397,9 +387,7 @@ pub fn build(state: *State, flags: u32, label: []const u8) *Box {
 struct FocusOrder { first: u64, last: u64, before: u64, after: u64, seen: bool }
 
 fn focus_order(box: *const Box, focused: u64, order: *FocusOrder) {
-  if box == nil {
-    return
-  }
+  if box == nil { return }
   if (box.flags & Focusable) != 0 {
     if order.first == 0 {
       order.first = box.key
@@ -524,23 +512,17 @@ pub fn signal(state: *State, box: *Box) Signal {
 }
 
 fn size_of(box: *const Box, axis: usize) Size {
-  if axis == 0 {
-    return box.width
-  }
+  if axis == 0 { return box.width }
   return box.height
 }
 
 fn floating(box: *const Box, axis: usize) bool {
-  if axis == 0 {
-    return (box.flags & (FloatingX | AbsoluteX)) != 0
-  }
+  if axis == 0 { return (box.flags & (FloatingX | AbsoluteX)) != 0 }
   return (box.flags & (FloatingY | AbsoluteY)) != 0
 }
 
 fn scrolls(box: *const Box, axis: usize) bool {
-  if axis == 0 {
-    return (box.flags & ScrollX) != 0
-  }
+  if axis == 0 { return (box.flags & ScrollX) != 0 }
   return (box.flags & ScrollY) != 0
 }
 
@@ -783,20 +765,14 @@ pub fn animating(state: *const State) bool {
 }
 
 fn animating_box(box: *const Box) bool {
-  if box == nil {
-    return false
-  }
-  if box.view[0] != box.view_target[0] || box.view[1] != box.view_target[1] {
-    return true
-  }
+  if box == nil { return false }
+  if box.view[0] != box.view_target[0] || box.view[1] != box.view_target[1] { return true }
   if box.hot_t > 0.002 && box.hot_t < 0.998 || box.active_t > 0.002 && box.active_t < 0.998 {
     return true
   }
   child := box.first
   for child != nil {
-    if animating_box(child) {
-      return true
-    }
+    if animating_box(child) { return true }
     child = child.next
   }
   return false
@@ -812,12 +788,8 @@ fn mix(a, b: ui.Color, t: f32) ui.Color {
 }
 
 fn whole(value: f32) i32 {
-  if value < -1000000000.0 {
-    return -1000000000
-  }
-  if value > 1000000000.0 {
-    return 1000000000
-  }
+  if value < -1000000000.0 { return -1000000000 }
+  if value > 1000000000.0 { return 1000000000 }
   return #cast(i32, math.floor(value + 0.5))
 }
 
@@ -932,12 +904,8 @@ pub fn hit(state: *const State, x, y: f32) u64 {
 }
 
 fn hit_box(box: *const Box, x, y: f32) u64 {
-  if box == nil {
-    return 0
-  }
-  if (box.flags & Clip) != 0 && !inside(box.visible, x, y) {
-    return 0
-  }
+  if box == nil { return 0 }
+  if (box.flags & Clip) != 0 && !inside(box.visible, x, y) { return 0 }
   found: u64 = 0
   if (box.flags & Clickable) != 0 && inside(box.visible, x, y) {
     found = box.key
@@ -958,23 +926,15 @@ fn hit_box(box: *const Box, x, y: f32) u64 {
 // held, so moving the mouse within a box costs no frame. Combine it with
 // animating to decide when to draw.
 pub fn needs_frame(state: *const State, input: Input) bool {
-  if input.correction != nil {
-    return true
-  }
-  if #len(input.composition) != state.composition_length {
-    return true
-  }
+  if input.correction != nil { return true }
+  if #len(input.composition) != state.composition_length { return true }
   if #len(input.composition) != 0 && input.composition_cursor != state.composition_cursor {
     return true
   }
   // Larger custom snapshots conservatively redraw; window snapshots fit256.
-  if #len(input.composition) > #len(state.composition_text) {
-    return true
-  }
+  if #len(input.composition) > #len(state.composition_text) { return true }
   for i in 0..#len(input.composition) {
-    if input.composition[i] != state.composition_text[i] {
-      return true
-    }
+    if input.composition[i] != state.composition_text[i] { return true }
   }
   if input.down != state.previous_down || input.down || input.scroll_x != 0.0 || input.scroll_y != 0.0 || #len(input.text) != 0 {
     return true

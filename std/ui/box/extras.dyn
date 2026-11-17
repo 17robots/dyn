@@ -37,9 +37,7 @@ pub fn menu_begin(state: *State, label: []const u8, menu: *Menu) bool {
   if state.input.escape {
     menu.open = false
   }
-  if !menu.open {
-    return false
-  }
+  if !menu.open { return false }
   push_parent(state, state.root)
   panel := build(state, DrawBackground | DrawBorder | FloatingX | FloatingY | Clip, label)
   panel.axis = 1

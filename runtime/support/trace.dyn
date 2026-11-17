@@ -33,36 +33,26 @@ fn trace_u32(at: usize) u32 {
 }
 // The table, or 0 before dyn_trace_start or in release builds.
 fn trace_table() usize {
-  if trace_header == 0 {
-    return 0
-  }
+  if trace_header == 0 { return 0 }
   table := trace_word(trace_header + #sizeof(usize))
-  if table == 0 || trace_u32(table) != 0x544e5944 || trace_u32(table + 4) != 1 {
-    return 0
-  }
+  if table == 0 || trace_u32(table) != 0x544e5944 || trace_u32(table + 4) != 1 { return 0 }
   return table
 }
 // A code address without the Thumb bit.
 fn trace_code(table: usize, address: usize) usize {
-  if (trace_u32(table + 8) & 1) != 0 {
-    return address & ~#cast(usize, 1)
-  }
+  if (trace_u32(table + 8) & 1) != 0 { return address & ~#cast(usize, 1) }
   return address
 }
 fn trace_offset(table: usize, address: usize) usize {
   text := trace_code(table, trace_word(trace_header)) - trace_u32(table + 20)
   code := trace_code(table, address)
-  if code < text {
-    return #max(usize)
-  }
+  if code < text { return #max(usize) }
   return code - text
 }
 // The function record holding address, or 0.
 fn trace_function(table: usize, address: usize) usize {
   offset := trace_offset(table, address)
-  if offset >= trace_u32(table + 24) {
-    return 0
-  }
+  if offset >= trace_u32(table + 24) { return 0 }
   low: usize = 0
   high := #cast(usize, trace_u32(table + 28))
   for low < high {
@@ -85,9 +75,7 @@ fn trace_line(table: usize, record: usize, address: usize) u32 {
   line: u32 = 0
   for i in 0..#cast(usize, trace_u32(record + 12)) {
     row := rows + 8 * (first + i)
-    if trace_u32(row) > offset {
-      break
-    }
+    if trace_u32(row) > offset { break }
     line = trace_u32(row + 4)
   }
   return line
@@ -99,9 +87,7 @@ fn trace_line(table: usize, record: usize, address: usize) u32 {
 // traced ones, such as the start routine, ends the walk.
 fn trace_walk(pc: usize, fp: usize, exact: bool, frames: []usize) u64 {
   table := trace_table()
-  if table == 0 {
-    return 0
-  }
+  if table == 0 { return 0 }
   previous_offset := #cast(usize, trace_u32(table + 12))
   return_offset := #cast(usize, trace_u32(table + 16))
   total: u64 = 0
@@ -124,15 +110,11 @@ fn trace_walk(pc: usize, fp: usize, exact: bool, frames: []usize) u64 {
     } else {
       skipped += 1
     }
-    if frame == 0 || frame % #sizeof(usize) != 0 {
-      return total
-    }
+    if frame == 0 || frame % #sizeof(usize) != 0 { return total }
     // Callers' frames sit at higher addresses.
     previous := trace_word(frame + previous_offset)
     address = trace_code(table, trace_word(frame + return_offset)) - 1
-    if previous <= frame {
-      return total
-    }
+    if previous <= frame { return total }
     frame = previous
   }
   return total
@@ -143,9 +125,7 @@ fn write_string(text: []const u8) {
 // "  at function (path:line)".
 fn trace_frame(table: usize, address: usize) {
   record := trace_function(table, address)
-  if record == 0 {
-    return
-  }
+  if record == 0 { return }
   names := table + 40 + 24 * #cast(usize, trace_u32(table + 28)) + 8 * #cast(usize, trace_u32(table + 32))
   write_string("  at ")
   trace_write(#cast(*const u8, names + trace_u32(record + 16)), trace_u32(record + 20))
@@ -156,18 +136,14 @@ fn trace_frame(table: usize, address: usize) {
     at -= 1
     digits[at] = #cast(u8, value % 10) + '0'
     value /= 10
-    if value == 0 {
-      break
-    }
+    if value == 0 { break }
   }
   trace_write(&digits[at], 10 - at)
   write_string(")\n")
 }
 fn trace_print(frames: []usize, total: u64) {
   table := trace_table()
-  if table == 0 || total == 0 {
-    return
-  }
+  if table == 0 || total == 0 { return }
   write_string("stack trace:\n")
   inner := #cast(usize, total)
   if inner > trace_inner {
@@ -176,9 +152,7 @@ fn trace_print(frames: []usize, total: u64) {
   for i in 0..inner {
     trace_frame(table, frames[i])
   }
-  if total <= trace_inner {
-    return
-  }
+  if total <= trace_inner { return }
   ring := trace_frames - trace_inner
   rest := #cast(usize, total) - trace_inner
   start: usize = 0
@@ -192,9 +166,7 @@ fn trace_print(frames: []usize, total: u64) {
       at -= 1
       digits[at] = #cast(u8, value % 10) + '0'
       value /= 10
-      if value == 0 {
-        break
-      }
+      if value == 0 { break }
     }
     trace_write(&digits[at], 20 - at)
     write_string(" more frames\n")
@@ -207,19 +179,13 @@ fn trace_print(frames: []usize, total: u64) {
 // with and fp the caller's frame pointer. A panic raised again at the end of
 // unwinding keeps the trace of the first.
 pub fn dyn_trace_capture(pc: usize, fp: usize) {
-  if trace_table() == 0 {
-    return
-  }
+  if trace_table() == 0 { return }
   slot := unwind_slot(true)
-  if slot == nil || slot.unwinding != 0 {
-    return
-  }
+  if slot == nil || slot.unwinding != 0 { return }
   slot.trace_total = trace_walk(pc, fp, false, slot.trace[..])
 }
 pub fn dyn_trace_dump() {
-  if trace_table() == 0 {
-    return
-  }
+  if trace_table() == 0 { return }
   slot := unwind_slot(false)
   if slot != nil {
     trace_print(slot.trace[..], slot.trace_total)

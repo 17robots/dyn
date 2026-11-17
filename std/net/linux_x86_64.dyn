@@ -4,8 +4,6 @@ use "std/os/linux/sys"
 pub struct Event { bytes: [12]u8 }
 const EventDataOffset: usize = 4
 fn poll_native(descriptors: []PollDescriptor, timeout_milliseconds: i32) isize {
-  if #len(descriptors) == 0 {
-    return #syscall(sys.Poll, 0, 0, timeout_milliseconds)
-  }
+  if #len(descriptors) == 0 { return #syscall(sys.Poll, 0, 0, timeout_milliseconds) }
   return #syscall(sys.Poll, &descriptors[0], #len(descriptors), timeout_milliseconds)
 }

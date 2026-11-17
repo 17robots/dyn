@@ -48,12 +48,8 @@ fn apply(operator: Operation, left: f64, right: f64) Value {
     '*' => { return Value{ number: left * right } }
     '^' => { return Value{ number: math.pow(left, right) } }
     '/', '%' => {
-      if right == 0.0 {
-        return failure(Problem.DivideByZero, operator.offset)
-      }
-      if operator.operator == '/' {
-        return Value{ number: left / right }
-      }
+      if right == 0.0 { return failure(Problem.DivideByZero, operator.offset) }
+      if operator.operator == '/' { return Value{ number: left / right } }
       return Value{ number: left % right }
     }
     _ => {
@@ -74,9 +70,7 @@ fn evaluate(e: *const Expr, names: *const map.Map([]const u8, f64)) Value {
     }
     Expr.Variable v => {
       found := map.get(names, v.name)     // nil when absent
-      if found == nil {
-        return failure(Problem.UnknownName, v.offset)
-      }
+      if found == nil { return failure(Problem.UnknownName, v.offset) }
       return Value{ number: found.* }
     }
     Expr.Negate inner => {
@@ -86,20 +80,14 @@ fn evaluate(e: *const Expr, names: *const map.Map([]const u8, f64)) Value {
     }
     Expr.Binary b => {
       left := evaluate(b.left, names)
-      if left.problem != Problem.None {
-        return left
-      }
+      if left.problem != Problem.None { return left }
       right := evaluate(b.right, names)
-      if right.problem != Problem.None {
-        return right
-      }
+      if right.problem != Problem.None { return right }
       return apply(b, left.number, right.number)
     }
     Expr.Call c => {
       argument := evaluate(c.argument, names)
-      if argument.problem != Problem.None {
-        return argument
-      }
+      if argument.problem != Problem.None { return argument }
       return call(c, argument.number)
     }
   }

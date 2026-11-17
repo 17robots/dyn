@@ -11,9 +11,7 @@ pub type EncodeResult = parse.Bytes
 // Inputs must not borrow unused backing of the output arena.
 // Invalid/unsupported input restores the arena mark. Allocation exhaustion panics.
 pub fn decode(arena: *mem.Arena, source: []const u8) Result {
-  if #len(source) < 18 {
-    return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
-  }
+  if #len(source) < 18 { return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
   kind := source[2]
   if source[1] != 0 || (kind != 2 && kind != 3 && kind != 10 && kind != 11) || (source[17] & 192) != 0 {
     return Result{ failure: parse.Failure{ kind: parse.Kind.Unsupported } }
@@ -117,9 +115,7 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channel
     return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   count := #cast(u64, width) * #cast(u64, height)
-  if count > 16777216 {
-    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
-  }
+  if count > 16777216 { return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Capacity } } }
   size := #cast(usize, count) * #cast(usize, channels)
   if #len(pixels) != size {
     return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }

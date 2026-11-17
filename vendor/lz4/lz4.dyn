@@ -5,9 +5,7 @@ use "std/io"
 pub struct Result { written: usize, code: i32, failure: io.Failure }
 pub const MaxInput: usize = 2113929216
 pub fn compress_bound(size: usize) usize {
-  if size > MaxInput {
-    return 0
-  }
+  if size > MaxInput { return 0 }
   return #cast(usize, native_bound(#cast(i32, size)))
 }
 pub fn compress(destination: []u8, source: []const u8) Result {
@@ -20,9 +18,7 @@ pub fn compress(destination: []u8, source: []const u8) Result {
     input = &source[0]
   }
   code := native_compress(input, &destination[0], #cast(i32, #len(source)), #cast(i32, #len(destination)))
-  if code <= 0 {
-    return Result{ code: code, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if code <= 0 { return Result{ code: code, failure: io.Failure{ kind: io.Kind.System } } }
   return Result{ written: #cast(usize, code), code: code }
 }
 pub fn decompress(destination: []u8, source: []const u8) Result {
@@ -35,9 +31,7 @@ pub fn decompress(destination: []u8, source: []const u8) Result {
     output = &destination[0]
   }
   code := native_decompress(&source[0], output, #cast(i32, #len(source)), #cast(i32, #len(destination)))
-  if code < 0 {
-    return Result{ code: code, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if code < 0 { return Result{ code: code, failure: io.Failure{ kind: io.Kind.System } } }
   return Result{ written: #cast(usize, code), code: code }
 }
 extern fn native_bound "LZ4_compressBound"(size: i32) i32

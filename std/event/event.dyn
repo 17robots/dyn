@@ -67,21 +67,15 @@ fn find_slot(queue: *const Queue, descriptor: isize) usize {
   at := slot_start(queue, descriptor)
   for _ in 0..#len(queue.table) {
     value := queue.table[at]
-    if value == SlotEmpty {
-      return #len(queue.table)
-    }
-    if value != SlotRemoved && queue.entries[value - 1].descriptor == descriptor {
-      return at
-    }
+    if value == SlotEmpty { return #len(queue.table) }
+    if value != SlotRemoved && queue.entries[value - 1].descriptor == descriptor { return at }
     at = (at + 1) & mask
   }
   return #len(queue.table)
 }
 fn find(queue: *Queue, descriptor: isize) usize {
   slot := find_slot(queue, descriptor)
-  if slot == #len(queue.table) {
-    return #len(queue.entries)
-  }
+  if slot == #len(queue.table) { return #len(queue.entries) }
   return queue.table[slot] - 1
 }
 fn table_place(queue: *Queue, descriptor: isize, index: usize) {
@@ -109,12 +103,8 @@ fn table_rebuild(queue: *Queue) {
   }
 }
 fn state(queue: *Queue) Result {
-  if !queue.active {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } }
-  }
-  if queue.failed {
-    return Result{ failure: io.Failure{ kind: queue.kind, native: queue.error } }
-  }
+  if !queue.active { return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
+  if queue.failed { return Result{ failure: io.Failure{ kind: queue.kind, native: queue.error } } }
   return Result{}
 }
 fn control(queue: *Queue, index: usize, entry: Entry) Result {
@@ -130,23 +120,17 @@ fn control(queue: *Queue, index: usize, entry: Entry) Result {
 }
 pub fn add(queue: *Queue, descriptor: isize, events: u32, token: u64) Result {
   ready := state(queue)
-  if io.failed(ready.failure) {
-    return ready
-  }
+  if io.failed(ready.failure) { return ready }
   if descriptor < 0 || #cast(net.Descriptor, descriptor) != descriptor || events == 0 || (events & ~#cast(u32, 5)) != 0 {
     return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   if find(queue, descriptor) != #len(queue.entries) {
     return Result{ failure: io.Failure{ kind: io.Kind.AlreadyExists } }
   }
-  if queue.free_count == 0 {
-    return Result{ failure: io.Failure{ kind: io.Kind.Capacity } }
-  }
+  if queue.free_count == 0 { return Result{ failure: io.Failure{ kind: io.Kind.Capacity } } }
   index := #cast(usize, queue.free[queue.free_count - 1])
   added := control(queue, index, Entry{ descriptor: descriptor, token: token, events: events, active: true })
-  if io.failed(added.failure) {
-    return added
-  }
+  if io.failed(added.failure) { return added }
   queue.free_count -= 1
   if 4 * (queue.used_slots + 1) > 3 * #len(queue.table) {
     table_rebuild(queue)
@@ -156,32 +140,22 @@ pub fn add(queue: *Queue, descriptor: isize, events: u32, token: u64) Result {
 }
 pub fn modify(queue: *Queue, descriptor: isize, events: u32, token: u64) Result {
   ready := state(queue)
-  if io.failed(ready.failure) {
-    return ready
-  }
+  if io.failed(ready.failure) { return ready }
   if events == 0 || (events & ~#cast(u32, 5)) != 0 {
     return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   index := find(queue, descriptor)
-  if index == #len(queue.entries) {
-    return Result{ failure: io.Failure{ kind: io.Kind.NotFound } }
-  }
+  if index == #len(queue.entries) { return Result{ failure: io.Failure{ kind: io.Kind.NotFound } } }
   return control(queue, index, Entry{ descriptor: descriptor, token: token, events: events, active: true })
 }
 pub fn remove(queue: *Queue, descriptor: isize) Result {
   ready := state(queue)
-  if io.failed(ready.failure) {
-    return ready
-  }
+  if io.failed(ready.failure) { return ready }
   slot := find_slot(queue, descriptor)
-  if slot == #len(queue.table) {
-    return Result{ failure: io.Failure{ kind: io.Kind.NotFound } }
-  }
+  if slot == #len(queue.table) { return Result{ failure: io.Failure{ kind: io.Kind.NotFound } } }
   index := #cast(usize, queue.table[slot] - 1)
   removed := control(queue, index, Entry{})
-  if io.failed(removed.failure) {
-    return removed
-  }
+  if io.failed(removed.failure) { return removed }
   queue.table[slot] = SlotRemoved
   queue.free[queue.free_count] = #cast(u32, index)
   queue.free_count += 1
@@ -207,9 +181,7 @@ pub fn wait(arena: *mem.Arena, queue: *Queue, timeout_milliseconds: i32) WaitRes
   mark := mem.arena_mark(arena)
   for true {
     outcome := native_wait(arena, queue, remaining)
-    if !io.failed(outcome.failure) || outcome.failure.kind != io.Kind.Interrupted {
-      return outcome
-    }
+    if !io.failed(outcome.failure) || outcome.failure.kind != io.Kind.Interrupted { return outcome }
     mem.arena_rewind(arena, mark)
     if timeout_milliseconds > 0 {
       now := clock.monotonic_now()
@@ -221,18 +193,74 @@ pub fn wait(arena: *mem.Arena, queue: *Queue, timeout_milliseconds: i32) WaitRes
         return WaitResult{ failure: io.Failure{ kind: elapsed.failure.kind, native: elapsed.failure.native } }
       }
       duration := timeout_milliseconds * clock.Millisecond
-      if elapsed.value >= duration {
-        return WaitResult{}
-      }
+      if elapsed.value >= duration { return WaitResult{} }
       remaining = #cast(i32, ((duration - elapsed.value + clock.Millisecond - 1) / clock.Millisecond))
     }
   }
   return WaitResult{ failure: io.Failure{ kind: io.Kind.System } }
 }
 pub fn close(queue: *Queue) {
-  if !queue.active {
-    return
-  }
+  if !queue.active { return }
   outcome := native_close(queue.handle)
   queue.* = Queue{}
+}
+
+// Wakes a queue's owner from another thread. The waker is a loopback datagram
+// socket connected to itself, so it works with every queue backend. The owner
+// adds descriptor to its queue for Readable and calls waker_drain when it
+// fires; any thread may call wake. One wake may cover several posts: drain,
+// then look at everything posted.
+pub struct Waker { descriptor: isize, active: bool }
+pub type WakerResult = io.Result(Waker)
+
+pub fn waker_open() WakerResult {
+  opened := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
+  if io.failed(opened.failure) { return WakerResult{ failure: opened.failure } }
+  descriptor := opened.value
+  local := net.ipv4(127, 0, 0, 1, 0)
+  bound := net.bind_ipv4(descriptor, &local)
+  if io.failed(bound.failure) {
+    net.close(descriptor)
+    return WakerResult{ failure: bound.failure }
+  }
+  address := net.Address{}
+  named := net.local_address(descriptor, &address)
+  if io.failed(named.failure) {
+    net.close(descriptor)
+    return WakerResult{ failure: named.failure }
+  }
+  connected := net.connect(descriptor, address.bytes[..address.length])
+  if io.failed(connected.failure) {
+    net.close(descriptor)
+    return WakerResult{ failure: connected.failure }
+  }
+  blocking := net.nonblocking(descriptor, true)
+  if io.failed(blocking.failure) {
+    net.close(descriptor)
+    return WakerResult{ failure: blocking.failure }
+  }
+  return WakerResult{ value: Waker{ descriptor: descriptor, active: true } }
+}
+
+// Never blocks. A full socket buffer means wakes are already pending.
+pub fn wake(waker: *const Waker) {
+  if !waker.active { return }
+  signal: [1]u8 = [1]
+  _ = net.send(waker.descriptor, signal[..], 0)
+}
+
+// Discards pending wakes. Call on the owner's thread before reading posts.
+pub fn waker_drain(waker: *const Waker) {
+  if !waker.active { return }
+  storage: [64]u8
+  for i in 0..1024 {
+    received := net.receive(waker.descriptor, storage[..], 0)
+    if io.failed(received.failure) || received.value <= 0 { return }
+  }
+}
+
+pub fn waker_close(waker: *Waker) {
+  if !waker.active { return }
+  net.close(waker.descriptor)
+  waker.* = Waker{}
 }

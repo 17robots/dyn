@@ -16,27 +16,19 @@ pub fn io_value(result: *const IoResult) isize {
   return result.value
 }
 fn io_result(value: isize) IoResult {
-  if value < 0 {
-    return IoResult{ value: value, failure: io.darwin_failure(value) }
-  }
+  if value < 0 { return IoResult{ value: value, failure: io.darwin_failure(value) } }
   return IoResult{ value: value }
 }
 fn terminated(path: []const u8, storage: []u8) *const u8 {
-  if #len(path) == 0 {
-    return nil
-  }
+  if #len(path) == 0 { return nil }
   result := cstrings.string_into(storage, path)
-  if parse.failed(result.failure) {
-    return nil
-  }
+  if parse.failed(result.failure) { return nil }
   return result.value
 }
 pub fn file_open(path: []const u8, write_access: bool, create: bool) IoResult {
   storage: [4096 + mem.ArenaBufferOverhead]u8
   name := terminated(path, storage[..])
-  if name == nil {
-    return IoResult{ value: -1, failure: io.darwin_failure(-63) }
-  }
+  if name == nil { return IoResult{ value: -1, failure: io.darwin_failure(-63) } }
   flags: usize = 0
   if write_access {
     flags = 2
@@ -59,14 +51,10 @@ pub fn socket_close(socket: usize) bool {
   return #syscall(sys.Close, socket) == 0
 }
 pub fn socket_connect(socket: usize, address: []const u8) bool {
-  if #len(address) == 0 {
-    return false
-  }
+  if #len(address) == 0 { return false }
   return #syscall(sys.Connect, socket, &address[0], #len(address)) == 0
 }
 pub fn event_poll(items: []PollDescriptor, milliseconds: i32) isize {
-  if #len(items) == 0 {
-    return 0
-  }
+  if #len(items) == 0 { return 0 }
   return #syscall(sys.Poll, &items[0], #len(items), milliseconds)
 }

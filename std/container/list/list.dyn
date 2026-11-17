@@ -19,9 +19,7 @@ pub fn sll_stack_push(first: **$T, node: *$T) {
 // Pops the top node, or returns nil_node when the stack is empty.
 pub fn sll_stack_pop(first: **$T, nil_node: *const $T) *T {
   node := first.*
-  if node == nil {
-    return #cast(*T, nil_node)
-  }
+  if node == nil { return #cast(*T, nil_node) }
   first.* = node.next
   node.next = nil
   return node
@@ -45,9 +43,7 @@ pub fn sll_queue_push_front(first, last: **$T, node: *$T) {
 // Pops the front node, or returns nil_node when the queue is empty.
 pub fn sll_queue_pop(first, last: **$T, nil_node: *const $T) *T {
   node := first.*
-  if node == nil {
-    return #cast(*T, nil_node)
-  }
+  if node == nil { return #cast(*T, nil_node) }
   first.* = node.next
   if first.* == nil {
     last.* = nil
@@ -117,9 +113,7 @@ pub fn free_push(first_free: **$T, node: *$T) {
 // The node keeps its old contents; clear it (mem.clear or slot_map.reset).
 pub fn free_pop(first_free: **$T, nil_node: *const $T) *T {
   node := first_free.*
-  if node == nil {
-    return #cast(*T, nil_node)
-  }
+  if node == nil { return #cast(*T, nil_node) }
   first_free.* = node.free_next
   node.free_next = nil
   return node

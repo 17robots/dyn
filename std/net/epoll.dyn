@@ -81,9 +81,7 @@ pub fn event_remove(queue: isize, descriptor: isize) Result {
 }
 
 pub fn event_wait(queue: isize, events: []Event, timeout_milliseconds: i32) Result {
-  if #len(events) == 0 {
-    return Result{ value: -1, failure: io.Failure{ native: -22 } }
-  }
+  if #len(events) == 0 { return Result{ value: -1, failure: io.Failure{ native: -22 } } }
   start := clock.ClockResult{}
   if timeout_milliseconds > 0 {
     start = clock.monotonic_now()
@@ -96,9 +94,7 @@ pub fn event_wait(queue: isize, events: []Event, timeout_milliseconds: i32) Resu
   for value == -4 {
     if timeout_milliseconds > 0 {
       retry := interrupted_timeout(start.value, timeout_milliseconds)
-      if io.failed(retry.failure) || retry.value == 0 {
-        return retry
-      }
+      if io.failed(retry.failure) || retry.value == 0 { return retry }
       remaining = #cast(i32, retry.value)
     }
     value = #syscall(sys.EpollWait, queue, &events[0], #len(events), remaining)

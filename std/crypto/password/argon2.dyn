@@ -1,0 +1,797 @@
+// Argon2id (RFC 9106), the memory-hard password hash RFC 9106 and OWASP
+// recommend. Lanes are computed one after another on the calling thread, which
+// gives the same result as parallel lanes. The memory is the caller's: a
+// workspace of argon2id_workspace_words(parameters) u64 words.
+use "std/crypto/blake2b" blake2b
+use "std/encoding/binary" binary
+
+pub struct Argon2Parameters {
+  // Memory in KiB blocks, at least 8 per lane.
+  memory: u32,
+  iterations: u32,
+  parallelism: u32,
+}
+
+// OWASP's first Argon2id configuration: 19 MiB, two passes, one lane.
+pub const Argon2Recommended: Argon2Parameters = Argon2Parameters{ memory: 19456, iterations: 2, parallelism: 1 }
+
+const BlockWords: usize = 128
+const SyncPoints: usize = 4
+const Version: u32 = 0x13
+const TypeId: u32 = 2
+
+fn lane_blocks(parameters: Argon2Parameters) usize {
+  lanes := #cast(usize, parameters.parallelism)
+  total := #cast(usize, parameters.memory)
+  if total < 8 * lanes {
+    total = 8 * lanes
+  }
+  // A multiple of 4 * lanes, as RFC 9106 3.2 requires.
+  return total / (SyncPoints * lanes) * SyncPoints
+}
+
+fn parameters_valid(parameters: Argon2Parameters) bool {
+  return parameters.iterations >= 1 && parameters.parallelism >= 1 && parameters.parallelism <= 0xffffff &&
+    parameters.memory >= 8 * parameters.parallelism
+}
+
+// u64 words of workspace argon2id needs for parameters.
+pub fn argon2id_workspace_words(parameters: Argon2Parameters) usize {
+  if !parameters_valid(parameters) { return 0 }
+  // The memory, then two blocks of scratch for fill_block.
+  return lane_blocks(parameters) * parameters.parallelism * BlockWords + 2 * BlockWords
+}
+
+fn put32(state: *blake2b.State, value: u32) {
+  encoded: [4]u8
+  binary.store_u32_le(encoded[..], value)
+  blake2b.update(state, encoded[..])
+}
+
+// H' (RFC 9106 3.3): a digest of any length from BLAKE2b. input is the
+// concatenation of first and second.
+fn long_hash(destination: []u8, first: []const u8, second: []const u8) {
+  length := #len(destination)
+  if length <= 64 {
+    state := blake2b.init(length, "")
+    put32(&state, #cast(u32, length))
+    blake2b.update(&state, first)
+    blake2b.update(&state, second)
+    _ = blake2b.finish(&state, destination)
+    return
+  }
+  previous: [64]u8
+  state := blake2b.init(64, "")
+  put32(&state, #cast(u32, length))
+  blake2b.update(&state, first)
+  blake2b.update(&state, second)
+  _ = blake2b.finish(&state, previous[..])
+  at: usize = 0
+  for length - at > 64 {
+    for i in 0..32 {
+      destination[at + i] = previous[i]
+    }
+    at += 32
+    if length - at <= 64 { break }
+    next: [64]u8
+    _ = blake2b.sum(next[..], previous[..])
+    previous = next
+  }
+  _ = blake2b.sum(destination[at..], previous[..])
+}
+
+// The permutation P (RFC 9106 3.6): eight steps of G, the BLAKE2b mix with
+// the BlaMka multiply, on 16 words of a block. Each step is written out with
+// its four words in locals: one function per step would cost calls, and a
+// table of positions loads and stores the words again. The BlaMka
+// multiply-add and the rotations are spelled out too (a + b + 2 * lo(a) *
+// lo(b), and x >> n | x << (64 - n), which compiles to one rotate), so the
+// steps do not depend on how much the compiler inlines into a large
+// function. The words are those of a row (16 in a row) or a column (8 pairs,
+// 16 words apart).
+fn permute_row(r: []u64, base: usize) {
+  v := r[base..base + 16]
+  {
+    x := v[0]
+    y := v[4]
+    z := v[8]
+    w := v[12]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[0] = x
+    v[4] = y
+    v[8] = z
+    v[12] = w
+  }
+  {
+    x := v[1]
+    y := v[5]
+    z := v[9]
+    w := v[13]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[1] = x
+    v[5] = y
+    v[9] = z
+    v[13] = w
+  }
+  {
+    x := v[2]
+    y := v[6]
+    z := v[10]
+    w := v[14]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[2] = x
+    v[6] = y
+    v[10] = z
+    v[14] = w
+  }
+  {
+    x := v[3]
+    y := v[7]
+    z := v[11]
+    w := v[15]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[3] = x
+    v[7] = y
+    v[11] = z
+    v[15] = w
+  }
+  {
+    x := v[0]
+    y := v[5]
+    z := v[10]
+    w := v[15]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[0] = x
+    v[5] = y
+    v[10] = z
+    v[15] = w
+  }
+  {
+    x := v[1]
+    y := v[6]
+    z := v[11]
+    w := v[12]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[1] = x
+    v[6] = y
+    v[11] = z
+    v[12] = w
+  }
+  {
+    x := v[2]
+    y := v[7]
+    z := v[8]
+    w := v[13]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[2] = x
+    v[7] = y
+    v[8] = z
+    v[13] = w
+  }
+  {
+    x := v[3]
+    y := v[4]
+    z := v[9]
+    w := v[14]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[3] = x
+    v[4] = y
+    v[9] = z
+    v[14] = w
+  }
+}
+
+fn permute_column(r: []u64, base: usize) {
+  v := r[base..base + 114]
+  {
+    x := v[0]
+    y := v[32]
+    z := v[64]
+    w := v[96]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[0] = x
+    v[32] = y
+    v[64] = z
+    v[96] = w
+  }
+  {
+    x := v[1]
+    y := v[33]
+    z := v[65]
+    w := v[97]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[1] = x
+    v[33] = y
+    v[65] = z
+    v[97] = w
+  }
+  {
+    x := v[16]
+    y := v[48]
+    z := v[80]
+    w := v[112]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[16] = x
+    v[48] = y
+    v[80] = z
+    v[112] = w
+  }
+  {
+    x := v[17]
+    y := v[49]
+    z := v[81]
+    w := v[113]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[17] = x
+    v[49] = y
+    v[81] = z
+    v[113] = w
+  }
+  {
+    x := v[0]
+    y := v[33]
+    z := v[80]
+    w := v[113]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[0] = x
+    v[33] = y
+    v[80] = z
+    v[113] = w
+  }
+  {
+    x := v[1]
+    y := v[48]
+    z := v[81]
+    w := v[96]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[1] = x
+    v[48] = y
+    v[81] = z
+    v[96] = w
+  }
+  {
+    x := v[16]
+    y := v[49]
+    z := v[64]
+    w := v[97]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[16] = x
+    v[49] = y
+    v[64] = z
+    v[97] = w
+  }
+  {
+    x := v[17]
+    y := v[32]
+    z := v[65]
+    w := v[112]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    v[17] = x
+    v[32] = y
+    v[65] = z
+    v[112] = w
+  }
+}
+
+// next = G(previous, reference), xor-ed into next when accumulate. scratch
+// holds two blocks of working space.
+fn fill_block(previous: []const u64, reference: []const u64, next: []u64, accumulate: bool, scratch: []u64) {
+  r := scratch[..BlockWords]
+  saved := scratch[BlockWords..2 * BlockWords]
+  for i in 0..BlockWords {
+    r[i] = previous[i] ^ reference[i]
+    saved[i] = r[i]
+    if accumulate {
+      saved[i] ^= next[i]
+    }
+  }
+  for row in 0..8 {
+    permute_row(r, 16 * row)
+  }
+  for column in 0..8 {
+    permute_column(r, 2 * column)
+  }
+  for i in 0..BlockWords {
+    next[i] = saved[i] ^ r[i]
+  }
+}
+
+struct Addresses { input: [BlockWords]u64, block: [BlockWords]u64, zero: [BlockWords]u64 }
+
+fn next_addresses(addresses: *Addresses, scratch: []u64) {
+  addresses.input[6] += 1
+  fill_block(addresses.zero[..], addresses.input[..], addresses.block[..], false, scratch)
+  fill_block(addresses.zero[..], addresses.block[..], addresses.block[..], false, scratch)
+}
+
+// Argon2id of password with salt (at least 8 bytes), and optional secret
+// and associated data, into all of destination (4 bytes or more). False
+// when parameters, salt, destination or workspace are invalid or too small.
+pub fn argon2id_keyed(destination: []u8, password: []const u8, salt: []const u8, secret: []const u8, associated: []const u8,
+  parameters: Argon2Parameters, workspace: []u64) bool {
+  if !parameters_valid(parameters) || #len(salt) < 8 || #len(destination) < 4 ||
+    #len(workspace) < argon2id_workspace_words(parameters) {
+    return false
+  }
+  lanes := #cast(usize, parameters.parallelism)
+  lane_length := lane_blocks(parameters)
+  segment_length := lane_length / SyncPoints
+  total := lane_length * lanes
+  memory := workspace[..total * BlockWords]
+  scratch := workspace[total * BlockWords..total * BlockWords + 2 * BlockWords]
+  initial := blake2b.init(64, "")
+  put32(&initial, parameters.parallelism)
+  put32(&initial, #cast(u32, #len(destination)))
+  put32(&initial, parameters.memory)
+  put32(&initial, parameters.iterations)
+  put32(&initial, Version)
+  put32(&initial, TypeId)
+  put32(&initial, #cast(u32, #len(password)))
+  blake2b.update(&initial, password)
+  put32(&initial, #cast(u32, #len(salt)))
+  blake2b.update(&initial, salt)
+  put32(&initial, #cast(u32, #len(secret)))
+  blake2b.update(&initial, secret)
+  put32(&initial, #cast(u32, #len(associated)))
+  blake2b.update(&initial, associated)
+  seed: [72]u8
+  _ = blake2b.finish(&initial, seed[..64])
+  block_bytes: [1024]u8
+  for lane in 0..lanes {
+    for column in 0..2 {
+      binary.store_u32_le(seed[64..68], #cast(u32, column))
+      binary.store_u32_le(seed[68..72], #cast(u32, lane))
+      long_hash(block_bytes[..], seed[..], "")
+      at := (lane * lane_length + column) * BlockWords
+      for w in 0..BlockWords {
+        memory[at + w] = binary.load_u64_le(block_bytes[w * 8..w * 8 + 8])
+      }
+    }
+  }
+  addresses := Addresses{}
+  for pass in 0..#cast(usize, parameters.iterations) {
+    for slice in 0..SyncPoints {
+      for lane in 0..lanes {
+        independent := pass == 0 && slice < SyncPoints / 2
+        start: usize = 0
+        if pass == 0 && slice == 0 {
+          start = 2
+        }
+        if independent {
+          for w in 0..BlockWords {
+            addresses.input[w] = 0
+          }
+          addresses.input[0] = pass
+          addresses.input[1] = lane
+          addresses.input[2] = slice
+          addresses.input[3] = total
+          addresses.input[4] = parameters.iterations
+          addresses.input[5] = TypeId
+          if start == 2 {
+            next_addresses(&addresses, scratch)
+          }
+        }
+        for index in start..segment_length {
+          current := lane * lane_length + slice * segment_length + index
+          previous := current - 1
+          if current % lane_length == 0 {
+            previous = current + lane_length - 1
+          }
+          random: u64 = 0
+          if independent {
+            if index % BlockWords == 0 {
+              next_addresses(&addresses, scratch)
+            }
+            random = addresses.block[index % BlockWords]
+          } else {
+            random = memory[previous * BlockWords]
+          }
+          reference_lane := #cast(usize, (random >> 32) % lanes)
+          if pass == 0 && slice == 0 {
+            reference_lane = lane
+          }
+          same := reference_lane == lane
+          area: usize = 0
+          if pass == 0 {
+            if slice == 0 || same {
+              area = slice * segment_length + index - 1
+            } else {
+              area = slice * segment_length
+              if index == 0 {
+                area -= 1
+              }
+            }
+          } else {
+            area = lane_length - segment_length
+            if same {
+              area += index - 1
+            } else if index == 0 {
+              area -= 1
+            }
+          }
+          low := random & 0xffffffff
+          x := (low * low) >> 32
+          relative := #cast(u64, area) - 1 - ((area * x) >> 32)
+          first: usize = 0
+          if pass != 0 && slice != SyncPoints - 1 {
+            first = (slice + 1) * segment_length
+          }
+          reference := reference_lane * lane_length + (first + #cast(usize, relative)) % lane_length
+          fill_block(memory[previous * BlockWords..(previous + 1) * BlockWords],
+            memory[reference * BlockWords..(reference + 1) * BlockWords],
+            memory[current * BlockWords..(current + 1) * BlockWords], pass != 0, scratch)
+        }
+      }
+    }
+  }
+  final: [BlockWords]u64
+  for lane in 0..lanes {
+    last := (lane * lane_length + lane_length - 1) * BlockWords
+    for w in 0..BlockWords {
+      final[w] ^= memory[last + w]
+    }
+  }
+  for w in 0..BlockWords {
+    binary.store_u64_le(block_bytes[w * 8..w * 8 + 8], final[w])
+  }
+  long_hash(destination, block_bytes[..], "")
+  return true
+}
+
+pub fn argon2id(destination: []u8, password: []const u8, salt: []const u8, parameters: Argon2Parameters, workspace: []u64) bool {
+  return argon2id_keyed(destination, password, salt, "", "", parameters, workspace)
+}
+
+const Base64Alphabet: []const u8 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+fn put_text(destination: []u8, at: usize, piece: []const u8) usize {
+  if at > #len(destination) || #len(piece) > #len(destination) - at { return #len(destination) + 1 }
+  for i in 0..#len(piece) {
+    destination[at + i] = piece[i]
+  }
+  return at + #len(piece)
+}
+
+fn put_number(destination: []u8, at: usize, value: u32) usize {
+  digits: [10]u8
+  count: usize = 0
+  rest := value
+  for true {
+    digits[count] = #cast(u8, '0' + rest % 10)
+    count += 1
+    rest /= 10
+    if rest == 0 { break }
+  }
+  reversed: [10]u8
+  for i in 0..count {
+    reversed[i] = digits[count - 1 - i]
+  }
+  return put_text(destination, at, reversed[..count])
+}
+
+// Standard base64 without padding, as PHC strings use.
+fn put_base64(destination: []u8, at: usize, source: []const u8) usize {
+  position := at
+  i: usize = 0
+  for i < #len(source) {
+    chunk: u32 = #cast(u32, source[i]) << 16
+    count: usize = 2
+    if i + 1 < #len(source) {
+      chunk |= #cast(u32, source[i + 1]) << 8
+      count = 3
+    }
+    if i + 2 < #len(source) {
+      chunk |= (source[i + 2])
+      count = 4
+    }
+    for k in 0..count {
+      symbol: [1]u8 = [Base64Alphabet[((chunk >> #cast(u32, 18 - 6 * k)) & 63)]]
+      position = put_text(destination, position, symbol[..])
+    }
+    i += 3
+  }
+  return position
+}
+
+fn base64_value(byte: u8) i32 {
+  if byte >= 'A' && byte <= 'Z' { return (byte - 'A') }
+  if byte >= 'a' && byte <= 'z' { return #cast(i32, byte - 'a') + 26 }
+  if byte >= '0' && byte <= '9' { return #cast(i32, byte - '0') + 52 }
+  if byte == '+' { return 62 }
+  if byte == '/' { return 63 }
+  return -1
+}
+
+// Decodes unpadded base64 into destination; empty on bad input or capacity.
+fn read_base64(destination: []u8, source: []const u8) []u8 {
+  if #len(source) % 4 == 1 { return destination[..0] }
+  at: usize = 0
+  accumulator: u32 = 0
+  bits: u32 = 0
+  for byte in source {
+    value := base64_value(byte)
+    if value < 0 { return destination[..0] }
+    accumulator = (accumulator << 6) | #cast(u32, value)
+    bits += 6
+    if bits >= 8 {
+      bits -= 8
+      if at == #len(destination) { return destination[..0] }
+      destination[at] = #cast(u8, accumulator >> bits)
+      at += 1
+    }
+  }
+  return destination[..at]
+}
+
+// The PHC string for a hash: "$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>",
+// salt and hash in unpadded base64. Empty when destination is too small.
+pub fn argon2id_encode(destination: []u8, parameters: Argon2Parameters, salt: []const u8, hash: []const u8) []u8 {
+  at := put_text(destination, 0, "$argon2id$v=19$m=")
+  at = put_number(destination, at, parameters.memory)
+  at = put_text(destination, at, ",t=")
+  at = put_number(destination, at, parameters.iterations)
+  at = put_text(destination, at, ",p=")
+  at = put_number(destination, at, parameters.parallelism)
+  at = put_text(destination, at, "$")
+  at = put_base64(destination, at, salt)
+  at = put_text(destination, at, "$")
+  at = put_base64(destination, at, hash)
+  if at > #len(destination) { return destination[..0] }
+  return destination[..at]
+}
+
+pub struct Argon2Hash { parameters: Argon2Parameters, salt: []u8, hash: []u8, valid: bool }
+
+fn read_number(text: []const u8, prefix: []const u8) u32 {
+  if #len(text) <= #len(prefix) || #len(text) > #len(prefix) + 10 { return 0 }
+  for i in 0..#len(prefix) {
+    if text[i] != prefix[i] { return 0 }
+  }
+  value: u64 = 0
+  for byte in text[#len(prefix)..] {
+    if byte < '0' || byte > '9' { return 0 }
+    value = value * 10 + (byte - '0')
+  }
+  if value > 0xffffffff { return 0 }
+  return #cast(u32, value)
+}
+
+fn field(text: []const u8, start: usize) usize {
+  at := start
+  for at < #len(text) && text[at] != '$' && text[at] != ',' {
+    at += 1
+  }
+  return at
+}
+
+// Parses a PHC string from argon2id_encode; salt and hash land in storage
+// (128 bytes is plenty). valid is false for any other form.
+pub fn argon2id_decode(encoded: []const u8, storage: []u8) Argon2Hash {
+  prefix := "$argon2id$v=19$"
+  if #len(encoded) < #len(prefix) { return Argon2Hash{} }
+  for i in 0..#len(prefix) {
+    if encoded[i] != prefix[i] { return Argon2Hash{} }
+  }
+  at := #len(prefix)
+  end := field(encoded, at)
+  memory := read_number(encoded[at..end], "m=")
+  if end >= #len(encoded) || encoded[end] != ',' { return Argon2Hash{} }
+  at = end + 1
+  end = field(encoded, at)
+  iterations := read_number(encoded[at..end], "t=")
+  if end >= #len(encoded) || encoded[end] != ',' { return Argon2Hash{} }
+  at = end + 1
+  end = field(encoded, at)
+  lanes := read_number(encoded[at..end], "p=")
+  if end >= #len(encoded) || encoded[end] != '$' { return Argon2Hash{} }
+  at = end + 1
+  end = field(encoded, at)
+  if end >= #len(encoded) || encoded[end] != '$' { return Argon2Hash{} }
+  half := #len(storage) / 2
+  salt := read_base64(storage[..half], encoded[at..end])
+  hash := read_base64(storage[half..], encoded[end + 1..])
+  parameters := Argon2Parameters{ memory: memory, iterations: iterations, parallelism: lanes }
+  if !parameters_valid(parameters) || #len(salt) < 8 || #len(hash) < 4 { return Argon2Hash{} }
+  return Argon2Hash{ parameters: parameters, salt: salt, hash: hash, valid: true }
+}
+
+// u64 words verify needs for encoded, or 0 when encoded is not valid.
+pub fn argon2id_verify_words(encoded: []const u8) usize {
+  storage: [256]u8
+  decoded := argon2id_decode(encoded, storage[..])
+  if !decoded.valid { return 0 }
+  return argon2id_workspace_words(decoded.parameters)
+}
+
+// Whether password matches encoded, comparing in constant time. False also
+// when encoded is invalid or workspace is shorter than argon2id_verify_words.
+pub fn argon2id_verify(encoded: []const u8, password: []const u8, workspace: []u64) bool {
+  storage: [256]u8
+  decoded := argon2id_decode(encoded, storage[..])
+  if !decoded.valid || #len(decoded.hash) > 128 { return false }
+  computed: [128]u8
+  if !argon2id(computed[..#len(decoded.hash)], password, decoded.salt, decoded.parameters, workspace) {
+    return false
+  }
+  difference: u8 = 0
+  for i in 0..#len(decoded.hash) {
+    difference |= computed[i] ^ decoded.hash[i]
+  }
+  return difference == 0
+}

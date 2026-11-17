@@ -9,9 +9,7 @@ pub fn basename(path: []const u8) []const u8 {
   for end > 1 && path[end - 1] == '/' {
     end -= 1
   }
-  if end == 1 && path[0] == '/' {
-    return path[..1]
-  }
+  if end == 1 && path[0] == '/' { return path[..1] }
   start := end
   for start > 0 && path[start - 1] != '/' {
     start -= 1
@@ -29,9 +27,7 @@ pub fn dirname(path: []const u8) []const u8 {
   for end > 1 && path[end - 1] == '/' {
     end -= 1
   }
-  if end == 0 {
-    return "."
-  }
+  if end == 0 { return "." }
   return path[..end]
 }
 pub fn extension(path: []const u8) []const u8 {
@@ -40,9 +36,7 @@ pub fn extension(path: []const u8) []const u8 {
   for i > 0 {
     i -= 1
     if name[i] == '.' {
-      if i == 0 {
-        return ""
-      }
+      if i == 0 { return "" }
       return name[i..]
     }
   }
@@ -55,19 +49,13 @@ pub fn is_absolute(path: []const u8) bool {
 fn join_into(destination: []u8, left: []const u8, right: []const u8) Result {
   separator := #len(left) > 0 && left[#len(left) - 1] != '/' && #len(right) > 0 && right[0] != '/'
   maximum := #max(usize)
-  if #len(left) > maximum - #len(right) {
-    return Result{ value: destination[..0], valid: false }
-  }
+  if #len(left) > maximum - #len(right) { return Result{ value: destination[..0], valid: false } }
   needed := #len(left) + #len(right)
   if separator {
-    if needed == maximum {
-      return Result{ value: destination[..0], valid: false }
-    }
+    if needed == maximum { return Result{ value: destination[..0], valid: false } }
     needed += 1
   }
-  if needed > #len(destination) {
-    return Result{ value: destination[..0], valid: false }
-  }
+  if needed > #len(destination) { return Result{ value: destination[..0], valid: false } }
   at: usize = 0
   for left_byte in left {
     destination[at] = left_byte
@@ -85,9 +73,7 @@ fn join_into(destination: []u8, left: []const u8, right: []const u8) Result {
 }
 
 fn clean_into(destination: []u8, path: []const u8) Result {
-  if #len(destination) == 0 {
-    return Result{ value: destination[..0], valid: false }
-  }
+  if #len(destination) == 0 { return Result{ value: destination[..0], valid: false } }
   absolute := is_absolute(path)
   at: usize = 0
   if absolute {
@@ -121,30 +107,22 @@ fn clean_into(destination: []u8, path: []const u8) Result {
         }
       } else if !absolute {
         if at > 0 {
-          if at == #len(destination) {
-            return Result{ value: destination[..0], valid: false }
-          }
+          if at == #len(destination) { return Result{ value: destination[..0], valid: false } }
           destination[at] = '/'
           at += 1
         }
-        if at + 2 > #len(destination) {
-          return Result{ value: destination[..0], valid: false }
-        }
+        if at + 2 > #len(destination) { return Result{ value: destination[..0], valid: false } }
         destination[at] = '.'
         destination[at + 1] = '.'
         at += 2
       }
     } else {
       if at > 0 && destination[at - 1] != '/' {
-        if at == #len(destination) {
-          return Result{ value: destination[..0], valid: false }
-        }
+        if at == #len(destination) { return Result{ value: destination[..0], valid: false } }
         destination[at] = '/'
         at += 1
       }
-      if length > #len(destination) - at {
-        return Result{ value: destination[..0], valid: false }
-      }
+      if length > #len(destination) - at { return Result{ value: destination[..0], valid: false } }
       for j in 0..length {
         destination[at] = path[start + j]
         at += 1
@@ -159,15 +137,11 @@ fn clean_into(destination: []u8, path: []const u8) Result {
 }
 
 fn safe_join_into(destination: []u8, root: []const u8, child: []const u8) Result {
-  if is_absolute(child) {
-    return Result{ value: destination[..0], valid: false }
-  }
+  if is_absolute(child) { return Result{ value: destination[..0], valid: false } }
   temporary: [4096]u8
   root_storage: [4096]u8
   combined := join_into(temporary[..], root, child)
-  if !combined.valid {
-    return Result{ value: destination[..0], valid: false }
-  }
+  if !combined.valid { return Result{ value: destination[..0], valid: false } }
   normalized := clean_into(destination, combined.value)
   normalized_root := clean_into(root_storage[..], root)
   if !normalized.valid || !normalized_root.valid || #len(normalized.value) < #len(normalized_root.value) {
@@ -260,9 +234,7 @@ fn relative_into(destination: []u8, base: []const u8, target: []const u8) Result
   if needed == 0 {
     needed = 1
   }
-  if needed > #len(destination) {
-    return Result{ value: destination[..0] }
-  }
+  if needed > #len(destination) { return Result{ value: destination[..0] } }
   at: usize = 0
   for i in 0..parents {
     destination[at] = '.'

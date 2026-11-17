@@ -18,16 +18,12 @@ pub fn next(state: *Cursor) Result {
     return Result{ offset: state.error_offset, failure: parse.Failure{ kind: state.kind, offset: state.error_offset } }
   }
   start := state.offset
-  if start == #len(state.source) {
-    return Result{ offset: start }
-  }
+  if start == #len(state.source) { return Result{ offset: start } }
   if start > #len(state.source) || #len(state.source) - start < 2 {
     return fail(state, parse.Kind.Syntax, start)
   }
   tag := state.source[start]
-  if (tag & 31) == 31 {
-    return fail(state, parse.Kind.Syntax, start)
-  }
+  if (tag & 31) == 31 { return fail(state, parse.Kind.Syntax, start) }
   at := start + 1
   first_length := state.source[at]
   at += 1
@@ -39,26 +35,18 @@ pub fn next(state: *Cursor) Result {
     if count == 0 || count > #len(state.source) - at {
       return fail(state, parse.Kind.Syntax, at - 1)
     }
-    if count > #sizeof(usize) {
-      return fail(state, parse.Kind.Overflow, at - 1)
-    }
-    if state.source[at] == 0 {
-      return fail(state, parse.Kind.Syntax, at)
-    }
+    if count > #sizeof(usize) { return fail(state, parse.Kind.Overflow, at - 1) }
+    if state.source[at] == 0 { return fail(state, parse.Kind.Syntax, at) }
     for i in 0..count {
       if length > (#max(usize) - #cast(usize, state.source[at + i])) / 256 {
         return fail(state, parse.Kind.Overflow, at + i)
       }
       length = length * 256 + state.source[at + i]
     }
-    if length < 128 {
-      return fail(state, parse.Kind.Syntax, at)
-    }
+    if length < 128 { return fail(state, parse.Kind.Syntax, at) }
     at += count
   }
-  if length > #len(state.source) - at {
-    return fail(state, parse.Kind.Syntax, at)
-  }
+  if length > #len(state.source) - at { return fail(state, parse.Kind.Syntax, at) }
   finish := at + length
   state.offset = finish
   return Result{ value: Element{ tag: tag, content: state.source[at..finish], encoded: state.source[start..finish], constructed: (tag & 32) != 0 }, found: true }

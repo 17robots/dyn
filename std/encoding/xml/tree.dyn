@@ -20,37 +20,27 @@ pub fn is_nil(node: *const Node) bool {
   return node == nil || node.kind == NodeKind.Missing
 }
 pub fn next_sibling(node: *const Node) *const Node {
-  if is_nil(node) || node.next == nil {
-    return &nil_node
-  }
+  if is_nil(node) || node.next == nil { return &nil_node }
   return node.next
 }
 pub fn child(node: *const Node, name: []const u8) *const Node {
-  if is_nil(node) {
-    return &nil_node
-  }
+  if is_nil(node) { return &nil_node }
   item: *const Node = node.first
   for !is_nil(item) {
-    if item.kind == NodeKind.Element && bytes.equal(item.name, name) {
-      return item
-    }
+    if item.kind == NodeKind.Element && bytes.equal(item.name, name) { return item }
     item = next_sibling(item)
   }
   return &nil_node
 }
 pub fn at(node: *const Node, index: usize) *const Node {
-  if is_nil(node) {
-    return &nil_node
-  }
+  if is_nil(node) { return &nil_node }
   item: *const Node = node.first
   i: usize = 0
   for !is_nil(item) && i < index {
     item = next_sibling(item)
     i += 1
   }
-  if is_nil(item) {
-    return &nil_node
-  }
+  if is_nil(item) { return &nil_node }
   return item
 }
 fn tree_failure(arena: *tree_memory.Arena, mark: usize, offset: usize, message: []const u8) ParseResult {
@@ -92,12 +82,8 @@ pub fn parse(arena: *tree_memory.Arena, source: []const u8) ParseResult {
       if scan.failure.kind != parse.StreamKind.Ok {
         return tree_failure(arena, mark, scan.failure.parse.offset, scan.failure.parse.message)
       }
-      if parent != document {
-        return tree_failure(arena, mark, #len(source), "mismatched tag")
-      }
-      if roots != 1 {
-        return tree_failure(arena, mark, #len(source), "")
-      }
+      if parent != document { return tree_failure(arena, mark, #len(source), "mismatched tag") }
+      if roots != 1 { return tree_failure(arena, mark, #len(source), "") }
       return ParseResult{ root: document, offset: #len(source) }
     }
     event := result.value
@@ -107,13 +93,9 @@ pub fn parse(arena: *tree_memory.Arena, source: []const u8) ParseResult {
       }
       parent = parent.parent
     } else if event.kind == Kind.Start {
-      if !valid_attributes(event) {
-        return tree_failure(arena, mark, start, "")
-      }
+      if !valid_attributes(event) { return tree_failure(arena, mark, start, "") }
       if parent == document {
-        if roots != 0 {
-          return tree_failure(arena, mark, start, "")
-        }
+        if roots != 0 { return tree_failure(arena, mark, start, "") }
         roots += 1
       }
       node := tree_append(arena, parent, NodeKind.Element, event)
@@ -123,14 +105,10 @@ pub fn parse(arena: *tree_memory.Arena, source: []const u8) ParseResult {
     } else {
       kind := NodeKind.Missing
       if event.kind == Kind.Text {
-        if !valid_text(event.text, false) {
-          return tree_failure(arena, mark, start, "")
-        }
+        if !valid_text(event.text, false) { return tree_failure(arena, mark, start, "") }
         if parent == document {
           for byte in event.text {
-            if !whitespace(byte) {
-              return tree_failure(arena, mark, start, "")
-            }
+            if !whitespace(byte) { return tree_failure(arena, mark, start, "") }
           }
         }
         kind = NodeKind.Text
@@ -142,9 +120,7 @@ pub fn parse(arena: *tree_memory.Arena, source: []const u8) ParseResult {
         }
         kind = NodeKind.Comment
       } else if event.kind == Kind.Cdata {
-        if parent == document {
-          return tree_failure(arena, mark, start, "")
-        }
+        if parent == document { return tree_failure(arena, mark, start, "") }
         kind = NodeKind.Cdata
       } else if event.kind == Kind.Processing {
         kind = NodeKind.Processing

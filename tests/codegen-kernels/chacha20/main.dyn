@@ -1,0 +1,17 @@
+// ChaCha20 over 128 MiB in 64 KiB pieces.
+use "std/crypto/chacha20"
+use "std/io"
+
+fn main() {
+  data: [65536]u8
+  out: [65536]u8
+  key: [32]u8
+  nonce: [12]u8
+  check: u64 = 0
+  for i in 0..2048 {
+    nonce[0] = #cast(u8, i)
+    _ = chacha20.xor(out[..], data[..], key[..], nonce[..], 1)
+    check += #cast(u64, out[i % 65536])
+  }
+  io.println("{}", check)
+}

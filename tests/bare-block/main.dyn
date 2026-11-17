@@ -1,0 +1,64 @@
+// A bare block scopes its locals and runs its defers at its closing brace.
+use "std/io"
+use "std/sync"
+
+struct Store {
+  lock: sync.Mutex,
+  count: i64,
+}
+
+fn read_count(store: *Store) i64 {
+  sync.lock(&store.lock)
+  defer sync.unlock(&store.lock)
+  return store.count
+}
+
+// The lock is released at the brace, so read_count can take it again.
+fn bump(store: *Store) i64 {
+  before: i64 = 0
+  {
+    sync.lock(&store.lock)
+    defer sync.unlock(&store.lock)
+    before = store.count
+    store.count += 1
+  }
+  return read_count(store) - before
+}
+
+fn ends_in_block(x: i64) i64 {
+  {
+    return x + 1
+  }
+}
+
+fn main() {
+  io.println("start")
+  {
+    defer io.println("block cleanup")
+    io.println("inside")
+  }
+  io.println("after block")
+  store := Store{ count: 41 }
+  io.println("{}", bump(&store))
+  {
+    x := 1
+    {
+      defer io.println("inner")
+      y := 2
+      io.println("{}", x + y)
+    }
+    y := 3
+    io.println("{}", y)
+  }
+  for i in 0..5 {
+    {
+      defer io.println("loop {}", i)
+      if i == 1 { break }
+    }
+  }
+  {}
+  defer {
+    io.println("deferred block")
+  }
+  io.println("{}", ends_in_block(9))
+}

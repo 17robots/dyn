@@ -79,12 +79,8 @@ pub fn contains(bounds: Rect, x, y: i32) bool {
     #cast(i64, y) < #cast(i64, bounds.y) + #cast(i64, bounds.height)
 }
 fn coordinate(value: i64) i32 {
-  if value < -2147483648 {
-    return -2147483648
-  }
-  if value > 2147483647 {
-    return 2147483647
-  }
+  if value < -2147483648 { return -2147483648 }
+  if value > 2147483647 { return 2147483647 }
   return #cast(i32, value)
 }
 pub fn inset(bounds: Rect, padding: i32) Rect {
@@ -93,9 +89,7 @@ pub fn inset(bounds: Rect, padding: i32) Rect {
   }
   width := #cast(i64, bounds.width) - 2 * #cast(i64, padding)
   height := #cast(i64, bounds.height) - 2 * #cast(i64, padding)
-  if width <= 0 || height <= 0 {
-    return Rect{}
-  }
+  if width <= 0 || height <= 0 { return Rect{} }
   return Rect{ x: coordinate(#cast(i64, bounds.x) + #cast(i64, padding)), y: coordinate(#cast(i64, bounds.y) + #cast(i64, padding)), width: #cast(i32, width), height: #cast(i32, height) }
 }
 // begin invalidates the old command list. Reset its arena only after rendering.
@@ -157,15 +151,11 @@ pub fn first(context: *const Context) *const Command {
   if context.building {
     #panic("UI frame not ended")
   }
-  if context.first == nil {
-    return &nil_command
-  }
+  if context.first == nil { return &nil_command }
   return context.first
 }
 pub fn next(command: *const Command) *const Command {
-  if command.next == nil {
-    return &nil_command
-  }
+  if command.next == nil { return &nil_command }
   return command.next
 }
 pub fn push_clip(context: *Context, bounds: Rect) Rect {
@@ -284,21 +274,13 @@ fn interact(context: *Context, id: u64, bounds: Rect, enabled: bool) Response {
   return Response{ hovered: hovered, held: captured && context.input.down, focused: context.focused == id, activated: activated, captured: captured }
 }
 fn background(context: *Context, response: Response, enabled: bool) Color {
-  if !enabled {
-    return context.style.disabled
-  }
-  if response.held {
-    return context.style.held
-  }
-  if response.hovered {
-    return context.style.hover
-  }
+  if !enabled { return context.style.disabled }
+  if response.held { return context.style.held }
+  if response.hovered { return context.style.hover }
   return context.style.background
 }
 fn outline(context: *Context, bounds: Rect, tint: Color) {
-  if bounds.width <= 0 || bounds.height <= 0 {
-    return
-  }
+  if bounds.width <= 0 || bounds.height <= 0 { return }
   rectangle(context, Rect{ x: bounds.x, y: bounds.y, width: bounds.width, height: 1 }, tint)
   rectangle(context, Rect{ x: bounds.x, y: coordinate(#cast(i64, bounds.y) + #cast(i64, bounds.height) - 1), width: bounds.width, height: 1 }, tint)
   rectangle(context, Rect{ x: bounds.x, y: bounds.y, width: 1, height: bounds.height }, tint)

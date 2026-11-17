@@ -1,0 +1,26 @@
+// A pure-looking leaf that reads through a pointer must not run before a
+// sibling argument's call that writes the same memory.
+use "std/io"
+
+struct Status { code: i32 }
+
+fn fail(status: *Status) bool {
+  status.code = 19
+  return false
+}
+
+fn code_of(status: *const Status) i32 {
+  return status.code
+}
+
+fn twice(status: *const Status) i32 {
+  return status.code * 2
+}
+
+fn main() {
+  status := Status{}
+  pointer := &status
+  io.println("{} {}", fail(pointer), code_of(pointer))
+  pointer.code = 1
+  io.println("{} {}", fail(pointer), twice(pointer) + code_of(pointer))
+}

@@ -14,9 +14,7 @@ pub fn cleanup() {
   native_cleanup()
 }
 fn receive(data: *const u8, size: usize, count: usize, context: rawptr) usize {
-  if context == nil {
-    return 0
-  }
+  if context == nil { return 0 }
   sink := #cast(*Sink, context)
   if size != 0 && count > (#cast(usize, -1)) / size {
     sink.full = true
@@ -28,9 +26,7 @@ fn receive(data: *const u8, size: usize, count: usize, context: rawptr) usize {
     return 0
   }
   if length > 0 {
-    if data == nil {
-      return 0
-    }
+    if data == nil { return 0 }
     _ = mem.copy(sink.destination[sink.used..], #slice(data, length))
     sink.used += length
   }
@@ -41,17 +37,13 @@ fn receive(data: *const u8, size: usize, count: usize, context: rawptr) usize {
 // HTTP error responses still have ok=true if transport succeeds; inspect status.
 // On failure written bytes are partial, not a complete response. No borrows escape.
 pub fn get_into(url: []const u8, url_buffer: []u8, destination: []u8, timeout_ms: i32) Result {
-  if timeout_ms <= 0 {
-    return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if timeout_ms <= 0 { return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } } }
   encoded := c.string_into(url_buffer, url)
   if parse.failed(encoded.failure) {
     return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
   }
   easy := native_easy_init()
-  if easy == nil {
-    return Result{ code: -2, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if easy == nil { return Result{ code: -2, failure: io.Failure{ kind: io.Kind.System } } }
   defer native_easy_cleanup(easy)
   sink := Sink{ destination: destination }
   protocols: [11]u8 = ['h', 't', 't', 'p', ',', 'h', 't', 't', 'p', 's', 0]

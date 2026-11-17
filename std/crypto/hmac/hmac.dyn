@@ -3,3 +3,18 @@ use "std/crypto/core" crypto_core
 pub fn sha256(destination: []u8, key: []const u8, message: []const u8) []u8 {
   return crypto_core.hmac_sha256(destination, key, message)
 }
+
+// A key prepared once for many HMAC-SHA256 computations. Each sha256_with call
+// costs two SHA-256 compressions fewer than sha256. A key too long to hash
+// makes every sha256_with return an empty slice.
+pub type Sha256Key = crypto_core.HmacSha256
+
+pub fn sha256_key(key: []const u8) Sha256Key {
+  state := Sha256Key{}
+  _ = crypto_core.hmac_sha256_init(&state, key)
+  return state
+}
+
+pub fn sha256_with(destination: []u8, key: *const Sha256Key, message: []const u8) []u8 {
+  return crypto_core.hmac_sha256_sum(key, destination, message)
+}

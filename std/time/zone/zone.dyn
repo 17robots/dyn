@@ -54,9 +54,7 @@ fn rule_day(rule: Rule, year: i32) i64 {
     }
     return first + day
   }
-  if rule.kind == 1 {
-    return first + rule.day
-  }
+  if rule.kind == 1 { return first + rule.day }
   month_start := time.days_from_civil(year, rule.month, 1)
   first_day := time.DateTime{ year: year, month: rule.month, day: 1 }
   start_weekday := #cast(i64, #cast(u8, time.weekday(&first_day)))
@@ -78,22 +76,16 @@ fn rule_instant(rule: Rule, year: i32, offset: i32) i64 {
 }
 
 fn rule_type(zone: *const Zone, seconds: i64) Type {
-  if !zone.has_daylight {
-    return zone.standard
-  }
+  if !zone.has_daylight { return zone.standard }
   year := time.date_time(time.Instant{ seconds: seconds }, zone.standard.offset).year
   start := rule_instant(zone.start, year, zone.standard.offset)
   end := rule_instant(zone.end, year, zone.daylight.offset)
   if start < end {
-    if seconds >= start && seconds < end {
-      return zone.daylight
-    }
+    if seconds >= start && seconds < end { return zone.daylight }
     return zone.standard
   }
   // Southern hemisphere: daylight time spans the new year.
-  if seconds >= end && seconds < start {
-    return zone.standard
-  }
+  if seconds >= end && seconds < start { return zone.standard }
   return zone.daylight
 }
 
@@ -101,22 +93,16 @@ fn rule_type(zone: *const Zone, seconds: i64) Type {
 pub fn type_at(zone: *const Zone, seconds: i64) Type {
   count := #len(zone.transitions)
   if count == 0 || seconds >= zone.transitions[count - 1] && zone.has_rule {
-    if zone.has_rule {
-      return rule_type(zone, seconds)
-    }
+    if zone.has_rule { return rule_type(zone, seconds) }
   }
   if count == 0 {
-    if #len(zone.types) != 0 {
-      return zone.types[0]
-    }
+    if #len(zone.types) != 0 { return zone.types[0] }
     return zone.standard
   }
   if seconds < zone.transitions[0] {
     // Before the first transition: the first standard-time type.
     for candidate in zone.types {
-      if !candidate.dst {
-        return candidate
-      }
+      if !candidate.dst { return candidate }
     }
     return zone.types[0]
   }
@@ -145,9 +131,7 @@ pub fn instant_of_local(zone: *const Zone, value: *const time.DateTime) time.Ins
   second := type_at(zone, candidate.seconds)
   if second.offset != first.offset {
     retried := time.instant_of(value, second.offset)
-    if type_at(zone, retried.seconds).offset == second.offset {
-      return retried
-    }
+    if type_at(zone, retried.seconds).offset == second.offset { return retried }
   }
   return candidate
 }
@@ -169,9 +153,7 @@ fn invalid() ZoneResult {
 // Parses a TZif file (RFC 8536, versions 1 through 4) into arena storage. The
 // result borrows nothing from data. name is copied into the zone.
 pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneResult {
-  if #len(data) < 44 || !bytes.starts_with(data, "TZif") {
-    return invalid()
-  }
+  if #len(data) < 44 || !bytes.starts_with(data, "TZif") { return invalid() }
   mark := mem.arena_mark(arena)
   version := data[4]
   at: usize = 0
@@ -187,9 +169,7 @@ pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneRes
     character_count := #cast(usize, read_u32(counts, 20))
     at = 44 + transition_count * 5 + type_count * 6 + character_count + leap_count * 8 + standard_count + utc_count
     time_size = 8
-    if at + 44 > #len(data) || !bytes.starts_with(data[at..], "TZif") {
-      return invalid()
-    }
+    if at + 44 > #len(data) || !bytes.starts_with(data[at..], "TZif") { return invalid() }
   }
   counts := data[at + 20..at + 44]
   utc_count := #cast(usize, read_u32(counts, 0))
@@ -200,9 +180,7 @@ pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneRes
   character_count := #cast(usize, read_u32(counts, 20))
   body := at + 44
   size := transition_count * time_size + transition_count + type_count * 6 + character_count + leap_count * (time_size + 4) + standard_count + utc_count
-  if type_count == 0 || type_count > 256 || body + size > #len(data) {
-    return invalid()
-  }
+  if type_count == 0 || type_count > 256 || body + size > #len(data) { return invalid() }
   zone := Zone{ name: strings.clone(arena, name) }
   zone.transitions = mem.push_array(i64, arena, transition_count)
   zone.transition_types = mem.push_array(u8, arena, transition_count)
@@ -267,9 +245,7 @@ pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneRes
 struct Cursor { text: []const u8, at: usize, ok: bool }
 
 fn peek(cursor: *Cursor) u8 {
-  if cursor.at >= #len(cursor.text) {
-    return 0
-  }
+  if cursor.at >= #len(cursor.text) { return 0 }
   return cursor.text[cursor.at]
 }
 
@@ -336,9 +312,7 @@ fn clock(cursor: *Cursor, maximum_hours: i64) i64 {
       value += number(cursor, 59)
     }
   }
-  if negative {
-    return -value
-  }
+  if negative { return -value }
   return value
 }
 
@@ -419,9 +393,7 @@ pub fn parse_posix(arena: *mem.Arena, text: []const u8) ZoneResult {
 // The zone named by an IANA name such as "Europe/Berlin", read from the
 // system zoneinfo database. Windows has no database and reports Unsupported.
 pub fn load(arena: *mem.Arena, name: []const u8) ZoneResult {
-  if #len(name) == 0 || name[0] == '/' || bytes.find(name, "..") != #len(name) {
-    return invalid()
-  }
+  if #len(name) == 0 || name[0] == '/' || bytes.find(name, "..") != #len(name) { return invalid() }
   return platform_load(arena, name)
 }
 
@@ -436,9 +408,7 @@ const weekday_names: [7][]const u8 = ["Sunday", "Monday", "Tuesday", "Wednesday"
 const month_names: [12][]const u8 = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 
 fn put(output: []u8, used: *usize, text: []const u8) bool {
-  if used.* + #len(text) > #len(output) {
-    return false
-  }
+  if used.* + #len(text) > #len(output) { return false }
   for i in 0..#len(text) {
     output[used.* + i] = text[i]
   }
@@ -459,9 +429,7 @@ fn put_number(output: []u8, used: *usize, value: i64, width: usize) bool {
     rest /= 10
     count += 1
   }
-  if negative && !put(output, used, "-") {
-    return false
-  }
+  if negative && !put(output, used, "-") { return false }
   return put(output, used, digits[24 - count..])
 }
 

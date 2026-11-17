@@ -1,0 +1,176 @@
+use "std/mem"
+
+// Shorter forms for the usual statement life: run a write, read a first row,
+// walk rows. Failure stays on the statement (state Failed, code), the way
+// step leaves it, so a caller checks once where it matters.
+
+// Binds values to parameters 1, 2, ... (see bind_values), steps to the end
+// and gives the statement back. True when it ran to Done. On failure the
+// statement's code stays readable (see constraint) until its next use.
+pub fn run(statement: *Statement, values: ...any) bool {
+  done(statement)
+  if io.failed(bind_list(statement, values)) { return false }
+  for {
+    stepped := step(statement)
+    if stepped.state == State.Done {
+      _ = reset(statement)
+      _ = clear_bindings(statement)
+      return true
+    }
+    if stepped.state != State.Row {
+      code := statement.code
+      _ = reset(statement)
+      _ = clear_bindings(statement)
+      statement.code = code
+      return false
+    }
+  }
+  return false
+}
+
+// Binds values and steps to the first row: true when a row is ready for the
+// column readers below. Read it, then done(statement), or defer that.
+pub fn first(statement: *Statement, values: ...any) bool {
+  done(statement)
+  if io.failed(bind_list(statement, values)) { return false }
+  return step(statement).state == State.Row
+}
+
+// Binds values for a query walked with next: for sqlite.next(statement) { ... }.
+// Call done(statement) after the walk, or defer it.
+pub fn query(statement: *Statement, values: ...any) bool {
+  done(statement)
+  return !io.failed(bind_list(statement, values))
+}
+
+// Steps to the next row; false at the end or on failure.
+pub fn next(statement: *Statement) bool {
+  return step(statement).state == State.Row
+}
+
+// Column index of the current row as an integer, converted the way SQLite
+// converts (NULL is 0, text is parsed, a real is truncated); 0 off a row.
+pub fn integer(statement: *const Statement, index: i32) i64 {
+  if !readable(statement, index) { return 0 }
+  return sqlite_column_integer(statement.handle, index)
+}
+// Column index of the current row as bytes, borrowed until the next step:
+// text and blobs as stored, NULL empty, numbers as SQLite writes them.
+pub fn bytes(statement: *const Statement, index: i32) []const u8 {
+  if !readable(statement, index) { return "" }
+  // Text and blobs come back as stored; column_bytes must follow column_blob.
+  pointer := sqlite_column_blob(statement.handle, index)
+  length := sqlite_column_bytes(statement.handle, index)
+  if pointer == nil || length <= 0 { return "" }
+  return #slice(pointer, length)
+}
+pub fn text(arena: *mem.Arena, statement: *const Statement, index: i32) []const u8 {
+  value := bytes(statement, index)
+  copy := mem.push_bytes_uninit(arena, #len(value))
+  _ = mem.copy(copy, value)
+  return copy
+}
+
+// Whether the statement's last step failed on a constraint (SQLITE_CONSTRAINT),
+// such as a UNIQUE column.
+pub fn constraint(statement: *const Statement) bool {
+  return (statement.code & 255) == 19
+}
+
+// Prepared statements of one connection, keyed by their SQL: each is
+// prepared on first use and kept. sql must outlive the cache (a string
+// literal does).
+pub const CacheSize: usize = 64
+
+struct CacheEntry { sql: []const u8, statement: Statement }
+
+pub struct Cache {
+  database: Database,
+  entries: [CacheSize]CacheEntry,
+  count: usize,
+  // A prepare failed or the cache was full; the code is SQLite's.
+  failed: bool,
+  code: i32,
+}
+
+pub fn cache(database: Database) Cache {
+  return Cache{ database: database }
+}
+
+// The statement for sql, prepared on first use. nil when it does not
+// prepare (cache.failed, cache.code tell why) or the cache is full.
+pub fn cached(statements: *Cache, sql: []const u8) *Statement {
+  for i in 0..statements.count {
+    entry := &statements.entries[i]
+    if #len(entry.sql) == #len(sql) && (#len(sql) == 0 || &entry.sql[0] == &sql[0] || equal(entry.sql, sql)) {
+      return &entry.statement
+    }
+  }
+  if statements.count == CacheSize {
+    statements.failed = true
+    return nil
+  }
+  prepared := prepare(statements.database, sql)
+  if io.failed(prepared.failure) || prepared.empty {
+    statements.failed = true
+    statements.code = prepared.code
+    return nil
+  }
+  entry := &statements.entries[statements.count]
+  entry.* = CacheEntry{ sql: sql, statement: prepared.statement }
+  statements.count += 1
+  return &entry.statement
+}
+
+fn readable(statement: *const Statement, index: i32) bool {
+  return statement.handle != nil && statement.state == State.Row && index >= 0 && index < statement.columns
+}
+
+// Finalizes every cached statement. Call before closing the database.
+pub fn cache_close(statements: *Cache) {
+  for i in 0..statements.count {
+    _ = finalize(&statements.entries[i].statement)
+  }
+  statements.count = 0
+}
+
+fn equal(left: []const u8, right: []const u8) bool {
+  for i in 0..#len(left) {
+    if left[i] != right[i] { return false }
+  }
+  return true
+}
+
+// A connection for one thread, ready to use: no SQLite mutex (only its
+// thread may use it), a 5 second busy timeout, and each schema statement run
+// (CREATE TABLE IF NOT EXISTS ..., PRAGMA ...). On failure the connection is
+// closed and the result carries the code.
+pub fn open_schema(path: []const u8, schema: []const []const u8) OpenResult {
+  scratch: [1024]u8
+  opened := open_with_options(path, scratch[..], OpenOptions{ caller_serialized: true })
+  if io.failed(opened.failure) { return opened }
+  for sql in schema {
+    failure := execute(opened.database, sql, scratch[..])
+    if io.failed(failure) {
+      _ = close(opened.database)
+      return OpenResult{ failure: failure }
+    }
+  }
+  _ = busy_timeout(opened.database, 5000)
+  return opened
+}
+
+// Calls write for each of rows inside one IMMEDIATE transaction and commits.
+// False, with the transaction rolled back, when it cannot begin or commit;
+// write records each row's own outcome.
+pub fn transaction(database: Database, rows: []$R, write: fn(*$R)) bool {
+  if io.failed(begin(database, TransactionMode.Immediate)) { return false }
+  for i in 0..#len(rows) {
+    write(&rows[i])
+  }
+  if io.failed(commit(database)) {
+    _ = rollback(database)
+    return false
+  }
+  return true
+}

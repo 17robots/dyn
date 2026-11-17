@@ -83,7 +83,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 
 | Package | Purpose |
 | --- | --- |
-| `std/encoding/json` | Validation, arena-backed mutable DOM parsing, queries and writing |
+| `std/encoding/json` | Validation, arena-backed mutable DOM parsing, queries and writing; a Writer into caller storage |
 | `std/encoding/json/read` | [Experimental compact read-only DOM](json-read.md), with arena-owned values and text |
 | `std/encoding/csv` | RFC 4180 field scanner, stream scanner and writer |
 | `std/encoding/ini` | INI scanner and one-pass `parse` into an arena table |
@@ -93,7 +93,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/encoding/hex`, `base32`, `base64` | Codecs into caller buffers that validate before writing |
 | `std/encoding/binary` | Fixed-width endian and unsigned LEB128 encoding |
 | `std/semver` | Semantic Versioning 2.0 values |
-| `std/compress/deflate`, `gzip`, `zstd` | DEFLATE encode and decode, gzip members, zstd compress and decompress |
+| `std/compress/deflate`, `gzip`, `zstd` | DEFLATE encode (zlib-level sizes) and decode, gzip members, zstd compress and decompress |
 | `std/archive/tar`, `zip` | TAR (ustar, PAX, GNU) and ZIP reading |
 | `std/image/png`, `qoi`, `color` | PNG and QOI encode and decode, with caller RGBA storage |
 | `std/image/bmp`, `tga`, `gif`, `jpeg` | BMP/TGA read-write, first-frame GIF and baseline JPEG decode |
@@ -137,11 +137,11 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/event` | Portable level-triggered readiness queues: epoll, kqueue and WSAPoll |
 | `std/net` | IPv4, IPv6 and Unix streams, IPv4 UDP multicast, polling and event queues |
 | `std/net/dns` | DNS queries into caller storage |
-| `std/net/http`, `http/concurrent`, `http/evented` | HTTP/1 client, server and router; a thread-per-connection worker pool; and an event-loop server (epoll/kqueue) for many keep-alive connections |
+| `std/net/http`, `http/concurrent`, `http/evented`, `http/session` | HTTP/1 client, server and router, cookies, static assets, pages, multipart, SSE and rate limits; a thread-per-connection worker pool; an event-loop server (epoll/kqueue) with thread-pool jobs, streams, WebSockets, HTTP/2 and HTTP/3; and cookie sessions with a per-worker cache. See [web apps](web-apps.md) |
 | `std/net/websocket` | RFC 6455 handshake and frame codec |
 | `std/net/url` | URL parsing and component encoding |
 | `std/net/tls` | Verified TLS client and server through OpenSSL; link it explicitly |
-| `std/crypto/sha2`, `sha512`, `hmac`, `kdf`, `password` | SHA-256/SHA-512, HMAC-SHA-256, HKDF and PBKDF2 |
+| `std/crypto/sha2`, `sha512`, `blake2b`, `hmac`, `kdf`, `password` | SHA-256/SHA-512, BLAKE2b, HMAC-SHA-256 with prepared keys, HKDF, PBKDF2 and Argon2id |
 | `std/crypto/aes`, `chacha20`, `aead` | Native AES-256-GCM and ChaCha20-Poly1305 |
 | `std/crypto/aesgcm`, `chacha20poly1305`, `poly1305` | Native caller-storage AEAD and one-time authentication |
 | `std/crypto/exchange`, `signature`, `x25519`, `ed25519`, `p256` | Native X25519, Ed25519 and deterministic ECDSA P-256 |

@@ -19,25 +19,19 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
   }
   name_length := #cast(usize, u16le(source, at + 28))
   tail := name_length + u16le(source, at + 30) + u16le(source, at + 32)
-  if tail > limit - at - 46 {
-    return Central{ error: parse.Kind.Syntax }
-  }
+  if tail > limit - at - 46 { return Central{ error: parse.Kind.Syntax } }
   name := source[at + 46..at + 46 + name_length]
   if local > data_limit || data_limit - local < 30 || u32le(source, local) != 67324752 {
     return Central{ error: parse.Kind.Syntax }
   }
   local_name := #cast(usize, u16le(source, local + 26))
   extra := #cast(usize, u16le(source, local + 28))
-  if local_name + extra > data_limit - local - 30 {
-    return Central{ error: parse.Kind.Syntax }
-  }
+  if local_name + extra > data_limit - local - 30 { return Central{ error: parse.Kind.Syntax } }
   if flags != u16le(source, local + 6) || method != u16le(source, local + 8) || !bytes.equal(name, source[local + 30..local + 30 + local_name]) {
     return Central{ error: parse.Kind.Syntax }
   }
   payload := local + 30 + local_name + extra
-  if compressed > data_limit - payload {
-    return Central{ error: parse.Kind.Syntax }
-  }
+  if compressed > data_limit - payload { return Central{ error: parse.Kind.Syntax } }
   checksum := u32le(source, at + 16)
   if (flags & 8) == 0 {
     if checksum != u32le(source, local + 14) || compressed != u32le(source, local + 18) || size != u32le(source, local + 22) {
@@ -45,9 +39,7 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
     }
   } else {
     descriptor := payload + compressed
-    if data_limit - descriptor < 12 {
-      return Central{ error: parse.Kind.Syntax }
-    }
+    if data_limit - descriptor < 12 { return Central{ error: parse.Kind.Syntax } }
     // A CRC may itself equal the optional signature: try the unsigned form first.
     unsigned := u32le(source, descriptor) == checksum && u32le(source, descriptor + 4) == compressed && u32le(source, descriptor + 8) == size
     if !unsigned {
@@ -67,9 +59,7 @@ pub fn open_checked(source: []const u8) OpenResult {
   if #len(source) > (#max(usize) >> 1) {
     return OpenResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
-  if #len(source) < 22 {
-    return OpenResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
-  }
+  if #len(source) < 22 { return OpenResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
   end := #len(source) - 22
   floor: usize = 0
   if end > 65535 {
@@ -81,9 +71,7 @@ pub fn open_checked(source: []const u8) OpenResult {
       found = true
       break
     }
-    if end == floor {
-      break
-    }
+    if end == floor { break }
     end -= 1
   }
   if !found {
@@ -117,16 +105,10 @@ pub fn open_checked(source: []const u8) OpenResult {
     directory_start: start, directory_end: end, remaining: count }, offset: start }
 }
 fn next_indexed(state: *ArchiveReader) EntryResult {
-  if state.failed {
-    return archive_failure(state, state.failure.parse.kind)
-  }
-  if state.remaining == 0 {
-    return EntryResult{ offset: state.offset }
-  }
+  if state.failed { return archive_failure(state, state.failure.parse.kind) }
+  if state.remaining == 0 { return EntryResult{ offset: state.offset } }
   item := central_entry(state.source, state.offset, state.directory_end, state.directory_start)
-  if !item.ok {
-    return archive_failure(state, item.error)
-  }
+  if !item.ok { return archive_failure(state, item.error) }
   state.offset = item.next
   state.remaining -= 1
   return EntryResult{ value: item.entry, offset: state.offset, found: true }

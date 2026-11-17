@@ -48,6 +48,7 @@ fn mapping_allocate(size: usize) Mapping {
 fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {
  return !mock_commit_fail
 }
+fn mapping_sparse(bytes: []u8) { _ = bytes }
 fn mapping_release(bytes: []u8) isize { mock_releases += 1
  return 0 }
 '''

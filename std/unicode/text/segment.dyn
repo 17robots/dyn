@@ -107,9 +107,7 @@ fn first_invalid(text: []const u8) usize {
   offset: usize = 0
   for offset < #len(text) {
     decoded := utf8.decode(text, offset)
-    if !decoded.valid {
-      return offset
-    }
+    if !decoded.valid { return offset }
     offset += decoded.width
   }
   return offset
@@ -160,9 +158,7 @@ pub fn word_breaks(arena: *mem.Arena, text: []const u8) Breaks {
     return Breaks{ offset: first_invalid(text), failure: parse.Failure{ kind: parse.Kind.Syntax, offset: first_invalid(text) } }
   }
   n := count.value
-  if n == 0 {
-    return Breaks{}
-  }
+  if n == 0 { return Breaks{} }
   result := mem.push_array(usize, arena, n)
   mark := mem.arena_mark(arena)
   values := mem.push_array(u32, arena, n)
@@ -278,12 +274,8 @@ fn hard(class: u8) bool {
 fn before_spaces(units: []Unit, index: usize) usize {
   at := index
   for true {
-    if units[at].class != LSP {
-      return at
-    }
-    if at == 0 {
-      return #len(units)
-    }
+    if units[at].class != LSP { return at }
+    if at == 0 { return #len(units) }
     at -= 1
   }
   return #len(units)
@@ -294,12 +286,8 @@ fn numeric_run(units: []Unit, index: usize) bool {
   at := index
   for true {
     class := units[at].class
-    if class == LNU {
-      return true
-    }
-    if class != LSY && class != LIS || at == 0 {
-      return false
-    }
+    if class == LNU { return true }
+    if class != LSY && class != LIS || at == 0 { return false }
     at -= 1
   }
   return false
@@ -313,47 +301,23 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
   right := &units[u]
   a := left.class
   b := right.class
-  if a == LBK {
-    return 2
-  }
-  if a == LCR && b == LLF {
-    return 0
-  }
-  if a == LCR || a == LLF || a == LNL {
-    return 2
-  }
-  if hard(b) || b == LSP || b == LZW {
-    return 0
-  }
+  if a == LBK { return 2 }
+  if a == LCR && b == LLF { return 0 }
+  if a == LCR || a == LLF || a == LNL { return 2 }
+  if hard(b) || b == LSP || b == LZW { return 0 }
   zero_width := before_spaces(units, u - 1)
-  if zero_width < n && units[zero_width].class == LZW {
-    return 1
-  }
-  if line_class(values[left.last]) == LZWJ {
-    return 0
-  }
-  if a == LWJ || b == LWJ {
-    return 0
-  }
-  if a == LGL {
-    return 0
-  }
-  if b == LGL && a != LSP && a != LBA && a != LHY && a != LHH {
-    return 0
-  }
-  if b == LEX || b == LCL || b == LCP || b == LSY {
-    return 0
-  }
+  if zero_width < n && units[zero_width].class == LZW { return 1 }
+  if line_class(values[left.last]) == LZWJ { return 0 }
+  if a == LWJ || b == LWJ { return 0 }
+  if a == LGL { return 0 }
+  if b == LGL && a != LSP && a != LBA && a != LHY && a != LHH { return 0 }
+  if b == LEX || b == LCL || b == LCP || b == LSY { return 0 }
   opening := before_spaces(units, u - 1)
-  if opening < n && units[opening].class == LOP {
-    return 0
-  }
+  if opening < n && units[opening].class == LOP { return 0 }
   // LB15a: an initial quote after a break context, then spaces.
   quote := before_spaces(units, u - 1)
   if quote < n && units[quote].class == LQU && (units[quote].flags & FlagInitial) != 0 {
-    if quote == 0 {
-      return 0
-    }
+    if quote == 0 { return 0 }
     previous := units[quote - 1].class
     if hard(previous) || previous == LOP || previous == LQU || previous == LGL || previous == LSP || previous == LZW {
       return 0
@@ -361,135 +325,65 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
   }
   // LB15b: a final quote before a closing context or the end.
   if b == LQU && (right.flags & FlagFinal) != 0 {
-    if u + 1 == n {
-      return 0
-    }
+    if u + 1 == n { return 0 }
     next := units[u + 1].class
     if next == LSP || next == LGL || next == LWJ || next == LCL || next == LQU || next == LCP || next == LEX || next == LIS || next == LSY || hard(next) || next == LZW {
       return 0
     }
   }
-  if a == LSP && b == LIS && u + 1 < n && units[u + 1].class == LNU {
-    return 1
-  }
-  if b == LIS {
-    return 0
-  }
+  if a == LSP && b == LIS && u + 1 < n && units[u + 1].class == LNU { return 1 }
+  if b == LIS { return 0 }
   closing := before_spaces(units, u - 1)
   if b == LNS && closing < n && (units[closing].class == LCL || units[closing].class == LCP) {
     return 0
   }
-  if b == LB2 && closing < n && units[closing].class == LB2 {
-    return 0
-  }
-  if a == LSP {
-    return 1
-  }
-  if b == LQU && (right.flags & FlagInitial) == 0 {
-    return 0
-  }
-  if a == LQU && (left.flags & FlagFinal) == 0 {
-    return 0
-  }
-  if b == LQU && (left.flags & FlagEastAsian) == 0 {
-    return 0
-  }
-  if b == LQU && (u + 1 == n || (units[u + 1].flags & FlagEastAsian) == 0) {
-    return 0
-  }
-  if a == LQU && (right.flags & FlagEastAsian) == 0 {
-    return 0
-  }
-  if a == LQU && (u == 1 || (units[u - 2].flags & FlagEastAsian) == 0) {
-    return 0
-  }
-  if b == LCB || a == LCB {
-    return 1
-  }
+  if b == LB2 && closing < n && units[closing].class == LB2 { return 0 }
+  if a == LSP { return 1 }
+  if b == LQU && (right.flags & FlagInitial) == 0 { return 0 }
+  if a == LQU && (left.flags & FlagFinal) == 0 { return 0 }
+  if b == LQU && (left.flags & FlagEastAsian) == 0 { return 0 }
+  if b == LQU && (u + 1 == n || (units[u + 1].flags & FlagEastAsian) == 0) { return 0 }
+  if a == LQU && (right.flags & FlagEastAsian) == 0 { return 0 }
+  if a == LQU && (u == 1 || (units[u - 2].flags & FlagEastAsian) == 0) { return 0 }
+  if b == LCB || a == LCB { return 1 }
   if (a == LHY || a == LHH) && alphabetic(b) {
-    if u == 1 {
-      return 0
-    }
+    if u == 1 { return 0 }
     previous := units[u - 2].class
     if hard(previous) || previous == LSP || previous == LZW || previous == LCB || previous == LGL {
       return 0
     }
   }
-  if b == LBA || b == LHH || b == LHY || b == LNS || a == LBB {
-    return 0
-  }
-  if (a == LHY || a == LHH) && b != LHL && u >= 2 && units[u - 2].class == LHL {
-    return 0
-  }
-  if a == LSY && b == LHL {
-    return 0
-  }
-  if b == LIN {
-    return 0
-  }
-  if alphabetic(a) && b == LNU || a == LNU && alphabetic(b) {
-    return 0
-  }
-  if a == LPR && ideographic(b) || ideographic(a) && b == LPO {
-    return 0
-  }
-  if (a == LPR || a == LPO) && alphabetic(b) || alphabetic(a) && (b == LPR || b == LPO) {
-    return 0
-  }
+  if b == LBA || b == LHH || b == LHY || b == LNS || a == LBB { return 0 }
+  if (a == LHY || a == LHH) && b != LHL && u >= 2 && units[u - 2].class == LHL { return 0 }
+  if a == LSY && b == LHL { return 0 }
+  if b == LIN { return 0 }
+  if alphabetic(a) && b == LNU || a == LNU && alphabetic(b) { return 0 }
+  if a == LPR && ideographic(b) || ideographic(a) && b == LPO { return 0 }
+  if (a == LPR || a == LPO) && alphabetic(b) || alphabetic(a) && (b == LPR || b == LPO) { return 0 }
   if (b == LPO || b == LPR) && (a == LCL || a == LCP) && u >= 2 && numeric_run(units, u - 2) {
     return 0
   }
-  if (b == LPO || b == LPR) && numeric_run(units, u - 1) {
-    return 0
-  }
+  if (b == LPO || b == LPR) && numeric_run(units, u - 1) { return 0 }
   if (a == LPO || a == LPR) && b == LOP && u + 1 < n {
     next := units[u + 1].class
-    if next == LNU || next == LIS && u + 2 < n && units[u + 2].class == LNU {
-      return 0
-    }
+    if next == LNU || next == LIS && u + 2 < n && units[u + 2].class == LNU { return 0 }
   }
-  if (a == LPO || a == LPR || a == LHY || a == LIS) && b == LNU {
-    return 0
-  }
-  if b == LNU && numeric_run(units, u - 1) {
-    return 0
-  }
-  if a == LJL && (b == LJL || b == LJV || b == LH2 || b == LH3) {
-    return 0
-  }
-  if (a == LJV || a == LH2) && (b == LJV || b == LJT) {
-    return 0
-  }
-  if (a == LJT || a == LH3) && b == LJT {
-    return 0
-  }
-  if korean(a) && b == LPO || a == LPR && korean(b) {
-    return 0
-  }
-  if alphabetic(a) && alphabetic(b) {
-    return 0
-  }
-  if a == LAP && aksara(right) {
-    return 0
-  }
-  if aksara(left) && (b == LVF || b == LVI) {
-    return 0
-  }
+  if (a == LPO || a == LPR || a == LHY || a == LIS) && b == LNU { return 0 }
+  if b == LNU && numeric_run(units, u - 1) { return 0 }
+  if a == LJL && (b == LJL || b == LJV || b == LH2 || b == LH3) { return 0 }
+  if (a == LJV || a == LH2) && (b == LJV || b == LJT) { return 0 }
+  if (a == LJT || a == LH3) && b == LJT { return 0 }
+  if korean(a) && b == LPO || a == LPR && korean(b) { return 0 }
+  if alphabetic(a) && alphabetic(b) { return 0 }
+  if a == LAP && aksara(right) { return 0 }
+  if aksara(left) && (b == LVF || b == LVI) { return 0 }
   if a == LVI && u >= 2 && aksara(&units[u - 2]) && (b == LAK || (right.flags & FlagDottedCircle) != 0) {
     return 0
   }
-  if aksara(left) && aksara(right) && u + 1 < n && units[u + 1].class == LVF {
-    return 0
-  }
-  if a == LIS && alphabetic(b) {
-    return 0
-  }
-  if (alphabetic(a) || a == LNU) && b == LOP && (right.flags & FlagEastAsian) == 0 {
-    return 0
-  }
-  if a == LCP && (left.flags & FlagEastAsian) == 0 && (alphabetic(b) || b == LNU) {
-    return 0
-  }
+  if aksara(left) && aksara(right) && u + 1 < n && units[u + 1].class == LVF { return 0 }
+  if a == LIS && alphabetic(b) { return 0 }
+  if (alphabetic(a) || a == LNU) && b == LOP && (right.flags & FlagEastAsian) == 0 { return 0 }
+  if a == LCP && (left.flags & FlagEastAsian) == 0 && (alphabetic(b) || b == LNU) { return 0 }
   if a == LRI && b == LRI {
     count_back: usize = 0
     back := u
@@ -497,9 +391,7 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
       count_back += 1
       back -= 1
     }
-    if count_back % 2 == 1 {
-      return 0
-    }
+    if count_back % 2 == 1 { return 0 }
     return 1
   }
   if b == LEM && (a == LEB || (left.flags & FlagPictographic) != 0 && (left.flags & FlagUnassigned) != 0) {
@@ -517,9 +409,7 @@ pub fn line_breaks(arena: *mem.Arena, text: []const u8) LineBreaks {
     return LineBreaks{ offset: first_invalid(text), failure: parse.Failure{ kind: parse.Kind.Syntax, offset: first_invalid(text) } }
   }
   n := count.value
-  if n == 0 {
-    return LineBreaks{}
-  }
+  if n == 0 { return LineBreaks{} }
   result := mem.push_array(LineBreak, arena, n)
   mark := mem.arena_mark(arena)
   values := mem.push_array(u32, arena, n)

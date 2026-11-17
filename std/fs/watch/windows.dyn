@@ -47,17 +47,13 @@ fn error() isize {
   return 0 - #cast(isize, native_error())
 }
 fn arm(slot: *Slot) Result {
-  if reset_event(slot.event) == 0 {
-    return failure(error())
-  }
+  if reset_event(slot.event) == 0 { return failure(error()) }
   slot.overlap = Overlapped{ event: slot.event }
   slot.used = 0
   slot.offset = 0
   if read_changes(slot.handle, &slot.buffer[0], 4096, 0, 31, nil, &slot.overlap, nil) == 0 {
     code := native_error()
-    if code != 997 {
-      return failure(0 - #cast(isize, code))
-    }
+    if code != 997 { return failure(0 - #cast(isize, code)) }
   }
   slot.pending = true
   return Result{}
@@ -75,31 +71,23 @@ fn retire(slot: *Slot) isize {
   if slot.pending {
     if cancel(slot.handle, &slot.overlap) == 0 {
       code := native_error()
-      if code != 1168 {
-        return 0 - #cast(isize, code)
-      }
+      if code != 1168 { return 0 - #cast(isize, code) }
     }
     transferred: u32 = 0
     if completion(slot.handle, &slot.overlap, &transferred, 1) == 0 {
       code := native_error()
-      if code != 995 && code != 1022 {
-        return 0 - #cast(isize, code)
-      }
+      if code != 995 && code != 1022 { return 0 - #cast(isize, code) }
       // Aborted or overflowed completion no longer borrows the slot. Unknown
       // errors retain it conservatively, so close never frees an active request.
     }
     slot.pending = false
   }
   if slot.handle != nil {
-    if native_close(slot.handle) == 0 {
-      return error()
-    }
+    if native_close(slot.handle) == 0 { return error() }
     slot.handle = nil
   }
   if slot.event != nil {
-    if native_close(slot.event) == 0 {
-      return error()
-    }
+    if native_close(slot.event) == 0 { return error() }
     slot.event = nil
   }
   slot.id = 0
@@ -108,12 +96,8 @@ fn retire(slot: *Slot) isize {
   return 0
 }
 pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
-  if state.native == nil || #len(path) == 0 {
-    return validation_failure(-22)
-  }
-  if (mask & SupportedEvents) == 0 {
-    return validation_failure(-95)
-  }
+  if state.native == nil || #len(path) == 0 { return validation_failure(-22) }
+  if (mask & SupportedEvents) == 0 { return validation_failure(-95) }
   index: usize = 16
   for i in 0..16 {
     if state.native.slots[i].handle == nil && state.native.slots[i].event == nil {
@@ -121,21 +105,15 @@ pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
       break
     }
   }
-  if index == 16 || state.native.next_id == 2147483647 {
-    return validation_failure(-28)
-  }
+  if index == 16 || state.native.next_id == 2147483647 { return validation_failure(-28) }
   wide: [4096]u16
   at: usize = 0
   used: usize = 0
   for at < #len(path) {
     decoded := utf8.decode(path, at)
-    if !decoded.valid || decoded.codepoint == 0 {
-      return validation_failure(-22)
-    }
+    if !decoded.valid || decoded.codepoint == 0 { return validation_failure(-22) }
     width := utf16.encode(wide[used..4095], decoded.codepoint)
-    if width == 0 {
-      return validation_failure(-36)
-    }
+    if width == 0 { return validation_failure(-36) }
     used += width
     at += decoded.width
   }
@@ -162,9 +140,7 @@ pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
   return Result{ value: slot.id }
 }
 pub fn remove(state: *Watcher, watch: i32) Result {
-  if state.native == nil || watch <= 0 {
-    return validation_failure(-22)
-  }
+  if state.native == nil || watch <= 0 { return validation_failure(-22) }
   for i in 0..16 {
     if state.native.slots[i].id == watch {
       code := retire(&state.native.slots[i])
@@ -174,14 +150,10 @@ pub fn remove(state: *Watcher, watch: i32) Result {
   return validation_failure(-22)
 }
 pub fn close(state: *Watcher) {
-  if state.native == nil {
-    return
-  }
+  if state.native == nil { return }
   for i in 0..16 {
     code := retire(&state.native.slots[i])
-    if code != 0 {
-      return
-    }
+    if code != 0 { return }
   }
   mem.arena_release(state.owner)
   state.native = nil
@@ -204,19 +176,13 @@ fn event_failure(state: *Watcher, code: isize, kind: io.Kind) EventResult {
   return EventResult{ failure: io.Failure{ kind: state.kind, native: state.error } }
 }
 pub fn next(state: *Watcher) EventResult {
-  if state.failed {
-    return event_failure(state, state.error, state.kind)
-  }
-  if state.native == nil {
-    return event_failure(state, -9, io.Kind.InvalidState)
-  }
+  if state.failed { return event_failure(state, state.error, state.kind) }
+  if state.native == nil { return event_failure(state, -9, io.Kind.InvalidState) }
   for checked in 0..16 {
     index := state.native.cursor
     state.native.cursor = (index + 1) % 16
     slot := &state.native.slots[index]
-    if slot.id == 0 {
-      continue
-    }
+    if slot.id == 0 { continue }
     if !slot.pending && slot.offset == slot.used {
       armed := arm(slot)
       if io.failed(armed.failure) {
@@ -227,9 +193,7 @@ pub fn next(state: *Watcher) EventResult {
       transferred: u32 = 0
       if completion(slot.handle, &slot.overlap, &transferred, 0) == 0 {
         code := native_error()
-        if code == 996 {
-          continue
-        }
+        if code == 996 { continue }
         if code == 1022 {
           slot.pending = false
           return rescan(state, slot.id)
@@ -276,22 +240,16 @@ pub fn next(state: *Watcher) EventResult {
         return rescan(state, slot.id)
       }
       mask = mask & slot.mask
-      if mask == 0 {
-        continue
-      }
+      if mask == 0 { continue }
       bytes := #slice(#cast(*u8, &slot.buffer[0]), 4096)
       names := #slice(#cast(*u16, &bytes[at + 12]), length / 2)
       position: usize = 0
       used: usize = 0
       for position < #len(names) {
         decoded := utf16.decode(names, position)
-        if !decoded.valid {
-          return rescan(state, slot.id)
-        }
+        if !decoded.valid { return rescan(state, slot.id) }
         width := utf8.encode(state.storage[used..], decoded.codepoint)
-        if width == 0 {
-          return rescan(state, slot.id)
-        }
+        if width == 0 { return rescan(state, slot.id) }
         used += width
         position += decoded.width
       }
@@ -312,9 +270,7 @@ fn failure(code: isize) Result {
   return Result{ failure: io.Failure{ kind: kind, native: code } }
 }
 fn status(code: isize) Result {
-  if code == 0 {
-    return Result{}
-  }
+  if code == 0 { return Result{} }
   return failure(code)
 }
 // Validation codes retain their errno-style namespace separately from Win32.

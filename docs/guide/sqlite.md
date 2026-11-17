@@ -42,6 +42,29 @@ Provider contracts: [prepare](https://www.sqlite.org/c3ref/prepare.html),
 [columns](https://www.sqlite.org/c3ref/column_blob.html),
 [finalization](https://www.sqlite.org/c3ref/finalize.html).
 
+## Helpers
+
+The usual statement life in one call each. Failure stays on the statement:
+`code` holds SQLite's code until its next use.
+
+| Call | Does |
+|---|---|
+| `run(statement, values...)` | binds, steps to Done, resets and clears bindings; false on failure |
+| `first(statement, values...)` | binds and steps once; true at a row, read it, then `done` |
+| `query(statement, values...)`, `next(statement)` | bind, then step row by row |
+| `integer`, `bytes`, `text(arena, ...)` | read a column; `bytes` borrows until the next step, `text` copies |
+| `constraint(statement)` | the last failure was a constraint (duplicate key, foreign key) |
+| `cache(database)`, `cached(&cache, sql)`, `cache_close(&cache)` | prepare each SQL text once per connection, up to `CacheSize` (64) |
+
+`open_schema(path, schema)` opens a connection for one thread (no SQLite
+mutex, 5 second busy timeout) and runs each schema statement.
+`transaction(database, rows, write)` calls `write` for each row inside one
+IMMEDIATE transaction and commits, or rolls back and returns false.
+
+`cached` returns nil when preparing fails (`cache.failed`, `cache.code`) or
+the cache is full. Its SQL must outlive the cache, as a string literal does.
+`cache_close` finalizes every statement; close the database after it.
+
 `busy_timeout(database, milliseconds)` rejects negative timeouts. `changes` and
 `last_insert_rowid` return checked 64-bit results. `begin(database, mode)`, `commit`,
 and `rollback` preserve native status codes. A failed commit may leave a transaction

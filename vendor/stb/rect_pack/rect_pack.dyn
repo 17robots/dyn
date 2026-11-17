@@ -7,19 +7,13 @@ pub struct Rectangle { width: i32, height: i32, x: i32, y: i32, was_packed: i32 
 // code=-1 invalid input/storage, 0 partial fit, 1 all fit. count is the successes.
 pub struct Result { count: usize, code: i32, failure: io.Failure }
 pub fn pack(scratch: *mem.Arena, width: i32, height: i32, rectangles: []Rectangle) Result {
-  if scratch == nil {
-    return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if scratch == nil { return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } } }
   size := native_size(width, #len(rectangles))
-  if size == 0 {
-    return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if size == 0 { return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } } }
   mark := mem.arena_mark(scratch)
   defer mem.arena_rewind(scratch, mark)
   work := mem.arena_try_push(scratch, size, 64)
-  if !work.ok {
-    return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if !work.ok { return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } } }
   data: *Rectangle = nil
   if #len(rectangles) != 0 {
     data = &rectangles[0]

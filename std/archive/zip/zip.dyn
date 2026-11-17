@@ -82,9 +82,7 @@ fn stream_discard(state: *StreamReader, amount: usize) bool {
     if take > #len(state.header_storage) {
       take = #len(state.header_storage)
     }
-    if take == 0 || !stream_exact(state, state.header_storage[..take]) {
-      return false
-    }
+    if take == 0 || !stream_exact(state, state.header_storage[..take]) { return false }
     left -= take
   }
   return true
@@ -92,15 +90,9 @@ fn stream_discard(state: *StreamReader, amount: usize) bool {
 
 // Reads one local-file entry from a stream. Name and payload borrow caller storage.
 pub fn next_stream(state: *StreamReader) EntryResult {
-  if state.failed {
-    return stream_failure(state, state.failure.parse.kind)
-  }
-  if state.ended {
-    return EntryResult{ offset: state.offset }
-  }
-  if #len(state.header_storage) < 30 {
-    return stream_failure(state, parse.Kind.Capacity)
-  }
+  if state.failed { return stream_failure(state, state.failure.parse.kind) }
+  if state.ended { return EntryResult{ offset: state.offset } }
+  if #len(state.header_storage) < 30 { return stream_failure(state, parse.Kind.Capacity) }
   first := stream_read(state, state.header_storage[..4])
   if first.status == stream.Status.End && first.transferred == 0 {
     state.ended = true
@@ -119,9 +111,7 @@ pub fn next_stream(state: *StreamReader) EntryResult {
       return stream_failure(state, state.failure.parse.kind)
     }
     error := end_record(state.header_storage[..22])
-    if error != parse.Kind.Ok {
-      return stream_failure(state, error)
-    }
+    if error != parse.Kind.Ok { return stream_failure(state, error) }
     if !stream_discard(state, u16le(state.header_storage, 20)) {
       return stream_failure(state, state.failure.parse.kind)
     }
@@ -135,9 +125,7 @@ pub fn next_stream(state: *StreamReader) EntryResult {
   flags := u16le(header, 6)
   method := u16le(header, 8)
   checksum := u32le(header, 14)
-  if (flags & 1) != 0 || (flags & 8) != 0 {
-    return stream_failure(state, parse.Kind.Unsupported)
-  }
+  if (flags & 1) != 0 || (flags & 8) != 0 { return stream_failure(state, parse.Kind.Unsupported) }
   compressed_size := #cast(usize, u32le(header, 18))
   uncompressed_size := #cast(usize, u32le(header, 22))
   name_length := #cast(usize, u16le(header, 26))
@@ -163,9 +151,7 @@ fn u32le(source: []const u8, at: usize) u32 {
     (#cast(u32, source[at + 2]) << 16) | (#cast(u32, source[at + 3]) << 24)
 }
 fn end_record(source: []const u8) parse.Kind {
-  if #len(source) < 22 {
-    return parse.Kind.Syntax
-  }
+  if #len(source) < 22 { return parse.Kind.Syntax }
   if u16le(source, 4) != 0 || u16le(source, 6) != 0 || u16le(source, 8) != u16le(source, 10) || u16le(source, 10) == 65535 {
     return parse.Kind.Unsupported
   }
@@ -176,18 +162,10 @@ pub fn open(source: []const u8) ArchiveReader {
 }
 
 pub fn next(state: *ArchiveReader) EntryResult {
-  if state.failed {
-    return archive_failure(state, state.failure.parse.kind)
-  }
-  if #len(state.source) > (#max(usize) >> 1) {
-    return archive_failure(state, parse.Kind.Overflow)
-  }
-  if state.indexed {
-    return next_indexed(state)
-  }
-  if state.offset == #len(state.source) {
-    return EntryResult{ offset: state.offset }
-  }
+  if state.failed { return archive_failure(state, state.failure.parse.kind) }
+  if #len(state.source) > (#max(usize) >> 1) { return archive_failure(state, parse.Kind.Overflow) }
+  if state.indexed { return next_indexed(state) }
+  if state.offset == #len(state.source) { return EntryResult{ offset: state.offset } }
   if state.offset <= #len(state.source) && #len(state.source) - state.offset >= 4 && u32le(state.source, state.offset) == 33639248 {
     return EntryResult{ offset: state.offset }
   }
@@ -195,9 +173,7 @@ pub fn next(state: *ArchiveReader) EntryResult {
   if start <= #len(state.source) && #len(state.source) - start >= 4 && u32le(state.source, start) == 101010256 {
     remaining := state.source[start..]
     error := end_record(remaining)
-    if error != parse.Kind.Ok {
-      return archive_failure(state, error)
-    }
+    if error != parse.Kind.Ok { return archive_failure(state, error) }
     if #cast(usize, u16le(remaining, 20)) > #len(remaining) - 22 {
       return archive_failure(state, parse.Kind.Syntax)
     }
@@ -209,9 +185,7 @@ pub fn next(state: *ArchiveReader) EntryResult {
   }
   flags := u16le(state.source, start + 6)
   method := u16le(state.source, start + 8)
-  if (flags & 1) != 0 || (flags & 8) != 0 {
-    return archive_failure(state, parse.Kind.Unsupported)
-  }
+  if (flags & 1) != 0 || (flags & 8) != 0 { return archive_failure(state, parse.Kind.Unsupported) }
   compressed_size := #cast(usize, u32le(state.source, start + 18))
   uncompressed_size := #cast(usize, u32le(state.source, start + 22))
   name_length := #cast(usize, u16le(state.source, start + 26))

@@ -19,9 +19,7 @@ fn thread_id() u64 {
   return get_tid()
 }
 fn trace_write(data: *const u8, size: u64) {
-  if size == 0 {
-    return
-  }
+  if size == 0 { return }
   handle := get_handle(4294967284)
   bytes := #slice(data, #cast(usize, size))
   offset: usize = 0

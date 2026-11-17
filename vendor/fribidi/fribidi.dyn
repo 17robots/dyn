@@ -73,9 +73,7 @@ pub fn resolve(arena: *mem.Arena, api: *const Api, text: []const u8, base: u32) 
     count += 1
     offset += decoded.width
   }
-  if count == 0 {
-    return Result{ value:Paragraph{base:base} }
-  }
+  if count == 0 { return Result{ value:Paragraph{base:base} } }
   if api.log2vis == nil || api.get_bidi_types == nil {
     return Result{ kind:io.Kind.InvalidState, failure: io.Failure{ kind: io.Kind.System } }
   }
@@ -129,9 +127,7 @@ pub fn reorder(arena: *mem.Arena, api: *const Api, paragraph: *const Paragraph, 
   if start > end || end > count || count > 2147483647 || #len(paragraph.levels) != count || #len(paragraph.types) != count || !direction(paragraph.base) {
     return LineResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
-  if start == end {
-    return LineResult{}
-  }
+  if start == end { return LineResult{} }
   if api.reorder_line == nil {
     return LineResult{ kind:io.Kind.InvalidState, failure: io.Failure{ kind: io.Kind.System } }
   }

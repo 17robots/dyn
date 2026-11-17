@@ -1,0 +1,103 @@
+// Cookie sessions for the evented server: tokens, CSRF secrets, the sid
+// cookie, and a per-worker cache in front of the app's own store. The app
+// keeps sessions where it likes (a SQLite table, say): start makes a new
+// one to store, cached answers from memory, remember adds what the store
+// returned, and forget invalidates every worker's cache after a logout.
+use "std/bytes" bytes
+use "std/crypto/core" crypto
+use "std/crypto/random" random
+use "std/encoding/hex" hex
+use "std/mem" mem
+use "std/net/http" http
+use "std/sync" sync
+
+// The cookie's name, and the lengths of a token and a CSRF secret (hex).
+pub const CookieName: []const u8 = "sid"
+pub const TokenLength: usize = 64
+pub const CsrfLength: usize = 32
+pub const Slots: usize = 256
+pub const DataSize: usize = 64
+
+// A session as handlers see it. csrf and data point into the cache, valid
+// until the worker's next request.
+pub struct Session { found: bool, user: i64, csrf: []const u8, data: []const u8 }
+
+struct Slot { token: [64]u8, user: i64, csrf: [32]u8, data: [64]u8, data_length: usize, expires: i64 }
+
+// One per worker; only that worker touches it.
+pub struct Cache { slots: [Slots]Slot, version: u64 }
+
+// Shared by the workers: forget bumps it, and each cache empties itself
+// when it sees a new value.
+pub struct Shared { version: sync.AtomicU64 }
+
+// A new session to store: token, csrf, and the Set-Cookie value.
+pub struct New { token: []const u8, csrf: []const u8, cookie: []const u8, ok: bool }
+
+// The request's session token, or empty when it has none of the right form.
+pub fn token(request: *const http.Request) []const u8 {
+  value := http.cookie(request, CookieName).value
+  if #len(value) != TokenLength { return "" }
+  return value
+}
+
+// The session for token from the cache, if a store answer for it is cached,
+// unexpired at now and not forgotten since.
+pub fn cached(cache: *Cache, shared: *Shared, token: []const u8, now: i64) Session {
+  version := sync.load_u64(&shared.version)
+  if cache.version != version {
+    for i in 0..Slots {
+      cache.slots[i].expires = 0
+    }
+    cache.version = version
+  }
+  if #len(token) != TokenLength { return Session{} }
+  slot := slot_of(cache, token)
+  if slot.expires <= now || !bytes.equal(slot.token[..], token) { return Session{} }
+  return Session{ found: true, user: slot.user, csrf: slot.csrf[..], data: slot.data[..slot.data_length] }
+}
+
+// Caches what the store returned for token and returns it as a Session.
+// Not found when csrf or data have the wrong length.
+pub fn remember(cache: *Cache, token: []const u8, user: i64, csrf: []const u8, data: []const u8, expires: i64) Session {
+  if #len(token) != TokenLength || #len(csrf) != CsrfLength || #len(data) > DataSize { return Session{} }
+  slot := slot_of(cache, token)
+  slot.* = Slot{ user: user, data_length: #len(data), expires: expires }
+  _ = mem.copy(slot.token[..], token)
+  _ = mem.copy(slot.csrf[..], csrf)
+  _ = mem.copy(slot.data[..], data)
+  return Session{ found: true, user: user, csrf: slot.csrf[..], data: slot.data[..slot.data_length] }
+}
+
+// A fresh token and CSRF secret in arena, and a Set-Cookie value for a
+// session of seconds (HttpOnly, SameSite=Lax, Path=/). ok is false when the
+// system had no randomness.
+pub fn start(arena: *mem.Arena, seconds: i64) New {
+  raw: [32]u8
+  if !random.fill(raw[..]) { return New{} }
+  token := hex.encode(arena, raw[..], false)
+  if !random.fill(raw[..16]) { return New{} }
+  csrf := hex.encode(arena, raw[..16], false)
+  storage := mem.push_bytes_uninit(arena, 160)
+  cookie := http.set_cookie(storage, http.Cookie{ name: CookieName, value: token, path: "/", max_age: seconds, http_only: true,
+    same_site: http.SameSite.Lax })
+  return New{ token: token, csrf: csrf, cookie: cookie.value, ok: #len(cookie.value) > 0 }
+}
+
+// After the app deleted a session from its store: every worker's cache
+// forgets what it holds. Returns the Set-Cookie value that clears the cookie.
+pub fn forget(shared: *Shared) []const u8 {
+  _ = sync.fetch_add_u64(&shared.version, 1)
+  return "sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+}
+
+// Whether presented (a form field or header) is the session's CSRF secret,
+// compared in constant time.
+pub fn csrf_ok(session: *const Session, presented: []const u8) bool {
+  return session.found && crypto.equal_constant_time(presented, session.csrf)
+}
+
+// The token's last bytes are random hex: they pick its slot.
+fn slot_of(cache: *Cache, token: []const u8) *Slot {
+  return &cache.slots[(#cast(usize, token[TokenLength - 2]) * 16 + #cast(usize, token[TokenLength - 1])) % Slots]
+}

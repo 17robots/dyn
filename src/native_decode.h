@@ -420,7 +420,7 @@ static size_t nd_x64(const unsigned char *p, size_t n, char *out, size_t cap) {
     imm = op == 0x80 || op == 0x83 ? 1 : bits == 16 ? 2 : 4;
   }
   if (!two && (op == 0xc1 || op == 0xd3)) {
-    name = group == 4 ? "shl" : group == 5 ? "shr" : group == 7 ? "sar" : NULL;
+    name = group == 0 ? "rol" : group == 1 ? "ror" : group == 4 ? "shl" : group == 5 ? "shr" : group == 7 ? "sar" : NULL;
     if (!name)
       return 0;
     if (op == 0xc1)

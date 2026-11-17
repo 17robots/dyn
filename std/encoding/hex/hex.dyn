@@ -12,9 +12,7 @@ const Upper: []const u8 = "0123456789ABCDEF"
 
 fn encoded_size(source_size: usize) usize {
   maximum := #max(usize)
-  if source_size > maximum / 2 {
-    return 0
-  }
+  if source_size > maximum / 2 { return 0 }
   return source_size * 2
 }
 
@@ -41,15 +39,9 @@ fn encode_into(destination: []u8, source: []const u8, uppercase: bool) Result {
 }
 
 fn digit_value(byte: u8) isize {
-  if byte >= '0' && byte <= '9' {
-    return (byte - '0')
-  }
-  if byte >= 'a' && byte <= 'f' {
-    return #cast(isize, (byte - 'a')) + 10
-  }
-  if byte >= 'A' && byte <= 'F' {
-    return #cast(isize, (byte - 'A')) + 10
-  }
+  if byte >= '0' && byte <= '9' { return (byte - '0') }
+  if byte >= 'a' && byte <= 'f' { return #cast(isize, (byte - 'a')) + 10 }
+  if byte >= 'A' && byte <= 'F' { return #cast(isize, (byte - 'A')) + 10 }
   return -1
 }
 
@@ -81,9 +73,7 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usiz
 fn decode_into(destination: []u8, source: []const u8) Result {
   offset: usize = 0
   measured := decode_pass(destination[..0], source, false, &offset)
-  if parse.failed(measured.failure) {
-    return measured
-  }
+  if parse.failed(measured.failure) { return measured }
   if measured.required > #len(destination) {
     return Result{ failure: parse.Failure{ kind: parse.Kind.Capacity }, required: measured.required }
   }

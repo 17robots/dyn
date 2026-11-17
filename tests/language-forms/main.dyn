@@ -163,12 +163,8 @@ fn main() {
 fn classify(T: type) usize {
   if #typeof(T).kind == TypeKind.Slice {
     return 100
-  } else if #typeof(T).kind == TypeKind.Enum {
-    return 200
-  }
-  if #sizeof(T) == 8 {
-    return 8
-  }
+  } else if #typeof(T).kind == TypeKind.Enum { return 200 }
+  if #sizeof(T) == 8 { return 8 }
   return #sizeof(T)
 }
 

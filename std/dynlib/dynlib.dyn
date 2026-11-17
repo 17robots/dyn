@@ -34,9 +34,7 @@ pub fn open(path: []const u8, flags: i32) OpenResult {
 }
 
 pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
-  if handle == nil {
-    return SymbolResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
-  }
+  if handle == nil { return SymbolResult{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
   storage: [4096 + mem.ArenaBufferOverhead]u8
   if #len(name) >= #len(storage) {
     return SymbolResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
@@ -50,13 +48,9 @@ pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
 
 // Clears the owned handle only after a successful close. Failure retains ownership.
 pub fn close(handle: *Handle) Result {
-  if handle == nil {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
+  if handle == nil { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
   value := handle.*
-  if value == nil {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } }
-  }
+  if value == nil { return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
   closed := platform_close(value)
   if !io.failed(closed.failure) {
     handle.* = nil

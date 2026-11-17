@@ -12,6 +12,182 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
+
+- Shorter web apps, with no language change:
+  - `json.object_of`/`json.array_of` write structs as JSON objects, by
+    field name. `#typeof` field descriptors now carry each field's byte
+    offset in `TypeMember.value`.
+  - `html.print` fills `{}` with escaped text, numbers, or `Trusted` markup.
+    `http.page_writer` and `http.page` send a page from the send buffer,
+    with CSP and nosniff.
+  - `std/net/http/session` gives tokens, CSRF secrets, the `sid` cookie and
+    a per-worker cache in front of the app's own store.
+  - `Config.access_log` logs each request. `log.write` writes a line in one
+    write.
+  - `sqlite.open_schema`, `sqlite.transaction`, `http.assets_of` and
+    `process.environment_or` cover the rest. `http.Response.status` records
+    the status sent.
+  - Chirp went from 538 to 416 lines, as fast as before.
+- `evented.later` finishes a request after the worker's current pass over
+  ready connections, so handlers can group work, such as one transaction for
+  many inserts. Chirp's post creation went from 85k to 198k per second.
+- The evented server scans only the connection slots it has used, not all
+  `connections_per_worker`: a published message used to walk every slot on
+  every worker. HTTP header parsing finds line ends with `bytes.find_byte`
+  and checks token bytes against two bit masks. Static responses are about
+  10% faster, and a post with a live feed 22% faster in Chirp.
+- The SSA backend combines byte loads and stores on x86-64 and AArch64:
+  `x[0] | x[1] << 8 | ...` from consecutive addresses is one load, and
+  storing a value's successive bytes (or constant bytes) one store.
+  `binary.load_u64_le` and `store_u64_le` compile to one instruction each;
+  BLAKE2b is 7% faster.
+- `html.text`, JSON string writing and `utf8.valid` look at eight bytes at
+  a time while nothing needs escaping or decoding: text without specials
+  escapes twice as fast. Text with an entity every few bytes runs as before.
+- `vendor/sqlite`: statements keep their column count, and `integer`,
+  `bytes` and `text` read a column with one or two SQLite calls instead of
+  four. `integer` converts the way SQLite does (text is parsed), and `bytes`
+  returns a number's text.
+- SHA-256 uses the CPU's SHA instructions on x86-64 when CPUID reports
+  them (the runtime checks once and falls back to the Dyn code otherwise):
+  about 7 times faster. HMAC-SHA256 hashes a message of up to 55 bytes in
+  one block per pad. PBKDF2-SHA256 with 20,000 iterations takes 1.8 ms,
+  against 7 ms before and OpenSSL's 2.2 ms on the same machine. The
+  language is unchanged: the instructions live in the runtime assembly
+  (`runtime/native_sha256_x86_64.S`), as `memcpy` does.
+- Shorter servers. `vendor/sqlite` gains a per-connection statement cache
+  (`cache`, `cached`, `cache_close`) and one-call forms: `run`, `first`,
+  `query`/`next`, `integer`, `bytes`, `text` and `constraint`. `std/net/http`
+  gains `http.text`, `http.json` and `http.redirect`; `std/encoding/json`
+  gains `json.field`. The evented server gives each worker a request arena
+  (`evented.arena`, `Config.request_arena_size`) and names the worker
+  (`evented.worker_index`), so each worker can own a database connection
+  without a lock, and `evented.serve` serves until SIGINT or SIGTERM. Chirp
+  went from 750 to 422 lines (Go 435, Rust 393), with the same throughput
+  on reads and 13% more on writes.
+- Threads from `std/thread` and `std/thread/posix` start with SIGINT, SIGTERM
+  and SIGHUP blocked. A pool started before `signal.watch` used to take the
+  signal and end the process instead of letting it shut down.
+- `dyn fmt` puts a guard on one line when it fits in 100 columns:
+  `if done { return value }` for an `if` with no else whose block is one
+  return, break or continue. `dyn fmt --check` reports code with these
+  guards spread over three lines. std, runtime and vendor are reformatted,
+  about 5,800 lines shorter.
+- Fixed a release miscompile: the O2 inliner treated a leaf that reads a
+  field through a pointer as pure, and could run it before an earlier
+  argument's call. `f(run(p), code_of(p))` read `p.code` from before
+  `run`. Debug builds and O1 were right.
+- SSA folds: `(b + c) - b` is `c`, so `xs[b..b + 4]` has a constant length
+  and its constant indexes need no checks; `(p << k) * q` becomes
+  `(p * q) << k`, and on x86-64 `t + (p << k)` becomes one LEA, so
+  `a + b + 2 * x * y` costs one multiply. Constants move to the right of
+  commutative operations. Argon2id takes 11.4 ms (it took 13.4 ms; Go
+  takes 11.1 and the reference C 10). Functions with loops start on 64-byte
+  boundaries, so an unrelated edit no longer moves a hot loop's speed by
+  a third. `tools/codegen-bench.py` measures kernel time, spills and stack
+  traffic against a saved baseline.
+- HTTP/2 in `std/net/http/evented` with `Config.http2`: TLS clients through
+  ALPN (`https.offer_http2`) and prior-knowledge cleartext clients, on the
+  same port as HTTP/1.1. Streams run the ordinary handler; run, open_stream
+  and receive_body work per stream. Flow control both ways, fixed memory
+  (`http2_connections`, `http2_slots`). `std/net/http/hpack` implements
+  HPACK; `tls.server_alpn` selects ALPN on servers.
+- The evented server's memory no longer swells under transparent huge
+  pages: each worker's storage is one block marked with the new
+  `mem.advise_sparse`, so a few busy connections touch 4 KiB pages, not
+  2 MiB ones. Chirp went from 13 to 8 MiB idle and 22 to 11 MiB under load,
+  level with Rust and C.
+- x86-64 and AArch64 emit one rotate for 64-bit `x >> c | x << (64 - c)`,
+  and x86-64 a 32-bit move for `x & 0xffffffff`. Argon2id is 2.4 times
+  faster (32 to 13 ms for OWASP's 19 MiB setting; the SIMD reference C
+  takes 10): its permutation keeps G's words in locals, uses fixed offsets
+  and reuses two blocks of workspace (`argon2id_workspace_words` grew by
+  two blocks).
+- HTTP/3 in `std/net/http/evented` with `Config.http3` and a QUIC stack in
+  `Config.quic` (`https.quic` over OpenSSL's QUIC server): UDP on the TCP
+  port, Alt-Svc on TCP responses, and streams on the HTTP/2 machinery, so
+  run, open_stream and receive_body work per stream. `std/net/http/qpack`
+  implements QPACK without a dynamic table.
+- WebSockets over HTTP/2 (RFC 8441): `evented.upgrade` on an extended
+  CONNECT stream answers 200 and carries frames in DATA; send, publish,
+  close_peer and on_message work as on HTTP/1.1.
+- Request bodies of any size: `Config.on_large_body` gets requests whose
+  body fits no buffer, and `evented.receive_body` hands it over piece by
+  piece, chunked framing removed (`http.ChunkReader`), then calls finish
+  with how it ended. Without it they still get 413.
+- `evented.respond_compressed` gzips dynamic responses with a per-worker
+  encoder (`Config.compress_level`) when the client accepts gzip, the type
+  compresses and the body is at least 1 KiB; `http.respond_compressed`
+  takes the encoder itself.
+- A bare block, `{ ... }` as a statement, opens a scope: its locals end and
+  its defers run at the closing brace. Hold a lock for part of a function
+  without a helper function or `if true`.
+- SHA-256 is about 15 times faster (25 to 380 MiB/s on x86-64), and PBKDF2
+  about 26 times (20,000 iterations: 185 to 7 ms). `std/crypto/core` built
+  32-bit arithmetic from 64-bit remainders and multiply loops; ChaCha20 and
+  the WebSocket SHA-1 did too. `hmac.sha256_key` and `hmac.sha256_with`
+  hash an HMAC key once for many messages.
+- x86-64 and AArch64 release builds emit 32-bit operations for `u32`
+  arithmetic whose result is truncated anyway, and a rotate for
+  `x >> c | x << (32 - c)`, also on `u32` loop variables.
+- The inliner expands every call to a small pure function in a statement,
+  not only the first: `rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)` becomes
+  straight-line code. A user-written SHA-256 runs 2.4 times faster.
+- Assembly listings name `rol` and `ror`.
+- Literal arithmetic such as `1 << 15` or `3 * 4` adapts to a generic call's
+  parameter type like a plain literal, instead of defaulting to `i32`.
+- `std/crypto/blake2b`, and Argon2id in `std/crypto/password`
+  (`argon2id`, `argon2id_encode`, `argon2id_verify`), checked against
+  RFC 9106 and the reference implementation.
+- `std/compress/deflate` gains a real encoder (`deflate`): hash chains, lazy
+  matching, zlib's level parameters and dynamic Huffman blocks, with output
+  within 0.1% of zlib. `gzip.compress` and `gzip.write` use it.
+- `json.writer` writes JSON into caller storage with automatic separators.
+- `std/net/http`:
+  - Breaking: 413 is reported as "Content Too Large" (RFC 9110); the
+    constant keeps its name `StatusPayloadTooLarge`.
+  - Breaking: every response carries `Date` unless
+    `ResponseOptions.omit_date` is set.
+  - Breaking: 1xx, 204 and 304 heads carry no `Content-Type` or
+    `Content-Length`, and `respond` rejects a body for them. An empty
+    response without a content type no longer sends one.
+  - `GET` routes answer `HEAD`.
+  - `status_reason` covers every registered code; more `Status*` constants.
+  - New helpers: `cookie`, `cookie_in`, `set_cookie` (`Cookie`, `SameSite`),
+    `format_date`, `parse_date`, `sse_event`.
+  - Static assets: `make_asset`, `load_directory`, `find_asset`,
+    `serve_asset` (with single byte ranges, 206 and 416), `byte_range`,
+    `content_type`, `accepts_encoding`, `etag_matches`.
+  - `multipart` and `next_part` for `multipart/form-data`.
+  - `Limiter`, `allow` and `ip_key` for rate limits.
+  - A small chunk of a streamed body is now sent as one write.
+- `std/net/http/evented`:
+  - `run` hands a request to a thread pool and answers it from a finish
+    function; `job` gives per-connection job storage.
+  - `open_stream` (Server-Sent Events, long polling) and `upgrade`
+    (WebSocket) return a `Peer`; `send`, `publish` (topics) and `close_peer`
+    reach peers from any thread; `Config.on_message` receives WebSocket
+    messages.
+  - When every slot is busy, an idle keep-alive connection is evicted, then
+    `Config.overflow` decides: `Wait` (default) holds the client in a
+    reserve slot, `Reject` answers 503. Before, new clients waited in the
+    kernel backlog behind idle connections until those timed out.
+  - `client_ip` gives the client's address.
+  - Request bodies larger than `receive_size` borrow a block from an
+    upload pool (`Config.upload_size`, `upload_count`); `Expect:
+    100-continue` is answered.
+  - Chunked request bodies are accepted and decoded in place, by both
+    servers (`http.frame_request_decoding`); before, they got 400.
+  - Breaking: `storage_size` grows for reserve slots, job storage and the
+    inbox.
+- `std/event` gains `Waker` for waking a queue from another thread.
+- `std/thread/pool` gains `start_spawned` for pools on a custom spawner.
+- `std/net` gains `address_ip` and `ip_text`.
+- `vendor/sqlite` gains `bind_values` and `done`.
+
 ## 0.1.0-preview.39
 
 Breaking: see [docs/migrations/0.1.0-preview.39.md](docs/migrations/0.1.0-preview.39.md).

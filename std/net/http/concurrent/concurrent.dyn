@@ -25,12 +25,8 @@ fn worker_main(worker: *Worker) isize {
   for sync.load_u32(&worker.stopping) == 0 {
     accepted := http.accept(worker.listener)
     if io.failed(accepted.failure) {
-      if sync.load_u32(&worker.stopping) != 0 {
-        return 0
-      }
-      if accepted.failure.kind == io.Kind.Interrupted {
-        continue
-      }
+      if sync.load_u32(&worker.stopping) != 0 { return 0 }
+      if accepted.failure.kind == io.Kind.Interrupted { continue }
       worker.error = Result{ failure: io.Failure{ kind: accepted.failure.kind, native: accepted.failure.native } }
       if !io.failed(worker.error.failure) {
         worker.error.failure.kind = io.Kind.System
@@ -96,9 +92,7 @@ pub fn start_context(arena: *mem.Arena, workers: []Worker, listener: *http.Liste
     return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   for *worker in workers {
-    if worker.thread != nil {
-      return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } }
-    }
+    if worker.thread != nil { return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
   }
   i: usize = 0
   for i < #len(workers) {

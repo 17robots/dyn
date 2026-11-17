@@ -27,9 +27,7 @@ fn slot_of(slots: []*$T, hash: u64) usize {
 pub fn find(slots: []*$T, hash: u64, key: []const u8, nil_node: *const $T) *T {
   node := slots[slot_of(slots, hash)]
   for node != nil {
-    if node.hash == hash && bytes_equal(node.key, key) {
-      return node
-    }
+    if node.hash == hash && bytes_equal(node.key, key) { return node }
     node = node.hash_next
   }
   return #cast(*T, nil_node)
@@ -58,13 +56,9 @@ pub fn remove(slots: []*$T, node: *$T) bool {
 }
 
 fn bytes_equal(left: []const u8, right: []const u8) bool {
-  if #len(left) != #len(right) {
-    return false
-  }
+  if #len(left) != #len(right) { return false }
   for i in 0..#len(left) {
-    if left[i] != right[i] {
-      return false
-    }
+    if left[i] != right[i] { return false }
   }
   return true
 }

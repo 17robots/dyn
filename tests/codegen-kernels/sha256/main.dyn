@@ -1,0 +1,15 @@
+// SHA-256 over 128 MiB in 64 KiB pieces.
+use "std/crypto/sha2"
+use "std/io"
+
+fn main() {
+  data: [65536]u8
+  digest: [32]u8
+  check: u64 = 0
+  for i in 0..2048 {
+    data[i % 65536] = #cast(u8, i)
+    _ = sha2.sum256(digest[..], data[..])
+    check += #cast(u64, digest[0])
+  }
+  io.println("{}", check)
+}

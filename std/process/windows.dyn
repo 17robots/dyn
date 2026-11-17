@@ -41,32 +41,22 @@ fn encode_wide(destination: []u16, source: []const u8) usize {
   at: usize = 0
   for at < #len(source) {
     decoded := utf8.decode(source, at)
-    if !decoded.valid {
-      return 0
-    }
+    if !decoded.valid { return 0 }
     width := utf16.encode(destination[used..], decoded.codepoint)
-    if width == 0 {
-      return 0
-    }
+    if width == 0 { return 0 }
     used += width
     at += decoded.width
   }
-  if used == #len(destination) {
-    return 0
-  }
+  if used == #len(destination) { return 0 }
   destination[used] = 0
   return used + 1
 }
 fn wide(arena: *mem.Arena, source: []const u8) Wide {
-  if #len(source) > 32766 {
-    return Wide{}
-  }
+  if #len(source) > 32766 { return Wide{} }
   allocation := mem.arena_push_uninit(arena, (#len(source)+1)*2, 2)
   destination := #slice(#cast(*u16, allocation), #len(source)+1)
   length := encode_wide(destination, source)
-  if length == 0 {
-    return Wide{}
-  }
+  if length == 0 { return Wide{} }
   return Wide{ data: destination[..length], ok: true }
 }
 fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) SpawnResult {
@@ -245,9 +235,7 @@ fn wait_native(child: *Child, nonblocking: bool) ExitResult {
     timeout = 0
   }
   value := win_wait(handle(child.handle), timeout)
-  if value == 258 {
-    return ExitResult{}
-  }
+  if value == 258 { return ExitResult{} }
   if value != 0 {
     wait_error := win_failure()
     return ExitResult{ failure: io.windows_failure(wait_error) }
@@ -288,14 +276,10 @@ fn read_native(value: isize, destination: []u8) ReadResult {
   available: u32 = 0
   if win_peek(handle(value), nil, 0, nil, &available, nil) == 0 {
     error := win_error()
-    if error == 109 {
-      return ReadResult{ ended: true, ok: true }
-    }
+    if error == 109 { return ReadResult{ ended: true, ok: true } }
     return ReadResult{ error: 0 - #cast(isize, error), kind: io.windows(0 - #cast(isize, error)) }
   }
-  if available == 0 {
-    return ReadResult{ ok: true }
-  }
+  if available == 0 { return ReadResult{ ok: true } }
   amount := #cast(usize, available)
   if amount > #len(destination) {
     amount = #len(destination)
@@ -323,9 +307,7 @@ fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
   length := win_environment(&key[0], &value[0], 32768)
   if length == 0 {
     error := win_error()
-    if error == 203 {
-      return EnvironmentResult{ value: destination[..0] }
-    }
+    if error == 203 { return EnvironmentResult{ value: destination[..0] } }
     if error != 0 {
       return EnvironmentResult{ failure: io.windows_failure(0 - #cast(isize, error)) }
     }

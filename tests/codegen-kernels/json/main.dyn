@@ -1,0 +1,32 @@
+// JSON: build a 1 MiB document, then parse it 60 times.
+use "std/encoding/json"
+use "std/fmt"
+use "std/io"
+use "std/mem"
+
+fn main() {
+  arena := mem.arena_alloc(512 * mem.MiB)
+  defer mem.arena_release(arena)
+  storage := mem.push_bytes_uninit(arena, 2 * mem.MiB)
+  out := fmt.buffer(storage)
+  fmt.write(&out, "[")
+  for i in 0..12000 {
+    if i > 0 {
+      fmt.write(&out, ",")
+    }
+    fmt.print(&out, "{{\"id\":{},\"name\":\"user {}\",\"score\":{}.5,\"tags\":[\"a\",\"b\\u00e9\"],\"ok\":true}}", i, i, i * 3)
+  }
+  fmt.write(&out, "]")
+  document := fmt.bytes(&out)
+  check: usize = 0
+  for round in 0..60 {
+    mark := mem.arena_mark(arena)
+    parsed := json.parse(arena, document)
+    if json.is_array(parsed.root) {
+      check += 1
+    }
+    mem.arena_rewind(arena, mark)
+    _ = round
+  }
+  io.println("{} {}", check, #len(document))
+}

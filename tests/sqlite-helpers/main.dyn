@@ -1,0 +1,79 @@
+// vendor/sqlite helpers: the statement cache, run, first, query/next, the
+// column readers, constraint, open_schema and transaction.
+use "std/io"
+use "std/mem"
+use "std/process"
+use "vendor/sqlite"
+
+const Schema: [2][]const u8 = ["PRAGMA journal_mode=WAL", "CREATE TABLE IF NOT EXISTS item(id INTEGER PRIMARY KEY, name TEXT UNIQUE)"]
+
+struct Row { statement: *sqlite.Statement, name: []const u8, stored: bool }
+
+fn store(row: *Row) {
+  row.stored = sqlite.run(row.statement, row.name)
+}
+
+fn main() {
+  arena := mem.arena_alloc(mem.MiB)
+  defer mem.arena_release(arena)
+  buffer: [256]u8
+  opened := sqlite.open(":memory:", buffer[..])
+  if io.failed(opened.failure) {
+    #panic("open")
+  }
+  database := opened.database
+  defer {
+    _ = sqlite.close(database)
+  }
+  _ = sqlite.execute(database, "CREATE TABLE user(id INTEGER PRIMARY KEY, name TEXT UNIQUE, score INTEGER)", buffer[..])
+  statements := sqlite.cache(database)
+  defer sqlite.cache_close(&statements)
+  insert := "INSERT INTO user(name, score) VALUES(?1, ?2)"
+  for i in 0..5 {
+    names: [5][]const u8 = ["ada", "bob", "cy", "di", "ed"]
+    if !sqlite.run(sqlite.cached(&statements, insert), names[i], i * 10) {
+      #panic("insert")
+    }
+  }
+  again := sqlite.cached(&statements, insert)
+  io.println("cached once {}", again == sqlite.cached(&statements, "INSERT INTO user(name, score) VALUES(?1, ?2)"))
+  io.println("duplicate {} constraint {}", sqlite.run(again, "bob", 1), sqlite.constraint(again))
+  lookup := sqlite.cached(&statements, "SELECT id, name, score FROM user WHERE name = ?1")
+  if sqlite.first(lookup, "cy") {
+    id := sqlite.integer(lookup, 0)
+    // Copied text outlives the row.
+    name := sqlite.text(arena, lookup, 1)
+    sqlite.done(lookup)
+    io.println("first {} {} {}", id, name, #len(name))
+  }
+  io.println("missing {}", sqlite.first(lookup, "zed"))
+  sqlite.done(lookup)
+  list := sqlite.cached(&statements, "SELECT name, score FROM user WHERE score >= ?1 ORDER BY score")
+  total: i64 = 0
+  if sqlite.query(list, 20) {
+    for sqlite.next(list) {
+      io.println("row {} {}", sqlite.bytes(list, 0), sqlite.integer(list, 1))
+      total += sqlite.integer(list, 1)
+    }
+  }
+  sqlite.done(list)
+  io.println("total {} bad sql {}", total, sqlite.cached(&statements, "SELEKT 1") == nil)
+  // open_schema: a ready connection; transaction: rows in one commit.
+  path := process.environment_or(arena, "SQLITE_HELPERS_DB", "")
+  ready := sqlite.open_schema(path, Schema[..])
+  if io.failed(ready.failure) {
+    #panic("open_schema")
+  }
+  items := sqlite.cache(ready.database)
+  add := sqlite.cached(&items, "INSERT INTO item(name) VALUES(?1)")
+  rows: [3]Row = [Row{ statement: add, name: "a" }, Row{ statement: add, name: "b" }, Row{ statement: add, name: "a" }]
+  committed := sqlite.transaction(ready.database, rows[..], store)
+  count := sqlite.cached(&items, "SELECT count(*) FROM item")
+  _ = sqlite.first(count)
+  io.println("transaction {} stored {} {} {} rows {}", committed, rows[0].stored, rows[1].stored, rows[2].stored, sqlite.integer(count, 0))
+  sqlite.done(count)
+  sqlite.cache_close(&items)
+  _ = sqlite.close(ready.database)
+  broken: [1][]const u8 = ["CREATE TABL item(id)"]
+  io.println("bad schema {}", io.failed(sqlite.open_schema(path, broken[..]).failure))
+}

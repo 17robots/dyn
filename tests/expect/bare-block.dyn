@@ -1,0 +1,13 @@
+// A bare block's locals end at its closing brace.
+fn main() {
+  {
+    x := 1
+    _ = x
+  }
+  _ = x // error: unknown name 'x'
+  y := 2
+  {
+    y := 3 // error: locals never shadow
+    _ = y
+  }
+}

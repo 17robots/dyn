@@ -133,8 +133,8 @@ fn header_injection(context: rawptr, input: []const u8) bool {
       return false
     }
   }
-  // Status, Content-Type, Content-Length, the header, Connection, blank.
-  return lines == 6
+  // Status, Content-Type, Content-Length, Date, the header, Connection, blank.
+  return lines == 7
 }
 
 // Escaped output holds no markup characters, and every input byte is

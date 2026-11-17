@@ -76,15 +76,9 @@ fn unreserved(byte: u8) bool {
     (byte >= '0' && byte <= '9') || byte == '-' || byte == '.' || byte == '_' || byte == '~'
 }
 fn hex_value(byte: u8) isize {
-  if byte >= '0' && byte <= '9' {
-    return (byte - '0')
-  }
-  if byte >= 'a' && byte <= 'f' {
-    return #cast(isize, (byte - 'a')) + 10
-  }
-  if byte >= 'A' && byte <= 'F' {
-    return #cast(isize, (byte - 'A')) + 10
-  }
+  if byte >= '0' && byte <= '9' { return (byte - '0') }
+  if byte >= 'a' && byte <= 'f' { return #cast(isize, (byte - 'a')) + 10 }
+  if byte >= 'A' && byte <= 'F' { return #cast(isize, (byte - 'A')) + 10 }
   return -1
 }
 // Encode one component, including slashes. Source and destination must not overlap.

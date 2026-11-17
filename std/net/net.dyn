@@ -74,9 +74,7 @@ pub fn shutdown(descriptor: isize, how: usize) Result {
 }
 
 pub fn ipv4_address(destination: []u8, a: u8, b: u8, c: u8, d: u8, port: u16) []u8 {
-  if #len(destination) < 16 {
-    return destination[..0]
-  }
+  if #len(destination) < 16 { return destination[..0] }
   for i in 0..16 {
     destination[i] = 0
   }
@@ -114,13 +112,9 @@ pub fn ipv6(bytes: [16]u8, port: u16, scope: u32) Ipv6Address {
 // Native sockaddr_un. Empty result means an empty/oversized path.
 pub fn unix(path: []const u8) UnixAddress {
   value: UnixAddress = UnixAddress{}
-  if #len(path) == 0 || #len(path) > UnixPathLimit {
-    return value
-  }
+  if #len(path) == 0 || #len(path) > UnixPathLimit { return value }
   for i in 0..#len(path) {
-    if path[i] == 0 {
-      return value
-    }
+    if path[i] == 0 { return value }
   }
   address_family(value.bytes[..], 3 + #len(path), 1)
   for i in 0..#len(path) {
@@ -316,9 +310,7 @@ pub fn connection_take(connection: *Connection) Connection {
 }
 
 pub fn listener_close(listener: *Listener) {
-  if !listener.active {
-    return
-  }
+  if !listener.active { return }
   descriptor := listener.descriptor
   // Never retry close: after a failure the descriptor may already be reused.
   listener.* = Listener{}
@@ -326,9 +318,7 @@ pub fn listener_close(listener: *Listener) {
 }
 
 pub fn connection_close(connection: *Connection) {
-  if !connection.active {
-    return
-  }
+  if !connection.active { return }
   descriptor := connection.descriptor
   // Never retry close: after a failure the descriptor may already be reused.
   connection.* = Connection{}
@@ -420,9 +410,7 @@ pub fn peer_address(descriptor: isize, address: *Address) Result {
 }
 
 pub fn send(descriptor: isize, bytes: []const u8, flags: usize) Result {
-  if #len(bytes) == 0 {
-    return Result{ value: 0 }
-  }
+  if #len(bytes) == 0 { return Result{ value: 0 } }
   // MSG_NOSIGNAL keeps a disconnected peer in the Result error channel.
   flags = flags | NoSignalFlag
   value := native_send(descriptor, &bytes[0], #len(bytes), flags, nil, 0)
@@ -433,9 +421,7 @@ pub fn send(descriptor: isize, bytes: []const u8, flags: usize) Result {
 }
 
 pub fn receive(descriptor: isize, bytes: []u8, flags: usize) Result {
-  if #len(bytes) == 0 {
-    return Result{ value: 0 }
-  }
+  if #len(bytes) == 0 { return Result{ value: 0 } }
   value := native_receive(descriptor, &bytes[0], #len(bytes), flags, nil, nil)
   for native_interrupted(value) {
     value = native_receive(descriptor, &bytes[0], #len(bytes), flags, nil, nil)
@@ -462,9 +448,7 @@ pub fn send_to(descriptor: isize, bytes: []const u8, flags: usize, address: []co
 }
 
 pub fn receive_from(descriptor: isize, bytes: []u8, flags: usize, address: []u8, address_length: *u32) Result {
-  if #len(bytes) == 0 {
-    return Result{ value: 0 }
-  }
+  if #len(bytes) == 0 { return Result{ value: 0 } }
   address_raw: *u8 = nil
   if #len(address) > 0 {
     address_raw = &address[0]
@@ -513,12 +497,8 @@ pub fn socket_error(descriptor: isize) Result {
   error: i32 = 0
   length: u32 = #cast(u32, #sizeof(i32))
   queried := native_get_option(descriptor, SocketLevel, ErrorOption, &error, &length)
-  if queried < 0 {
-    return result(queried)
-  }
-  if error != 0 {
-    return result(0 - #cast(isize, error))
-  }
+  if queried < 0 { return result(queried) }
+  if error != 0 { return result(0 - #cast(isize, error)) }
   return result(0)
 }
 
@@ -545,13 +525,9 @@ fn interrupted_timeout(start: clock.Instant, milliseconds: i32) Result {
     return Result{ value: now.failure.native, failure: io.Failure{ kind: now.failure.kind, native: now.failure.native } }
   }
   elapsed := clock.elapsed(start, now.value)
-  if io.failed(elapsed.failure) || elapsed.value < 0 {
-    return result(-75)
-  }
+  if io.failed(elapsed.failure) || elapsed.value < 0 { return result(-75) }
   duration := milliseconds * clock.Millisecond
-  if elapsed.value >= duration {
-    return result(0)
-  }
+  if elapsed.value >= duration { return result(0) }
   return result(#cast(isize, ((duration - elapsed.value + clock.Millisecond - 1) / clock.Millisecond)))
 }
 
@@ -568,9 +544,7 @@ pub fn poll(descriptors: []PollDescriptor, timeout_milliseconds: i32) Result {
   for native_interrupted(value) {
     if timeout_milliseconds > 0 {
       retry := interrupted_timeout(start.value, timeout_milliseconds)
-      if io.failed(retry.failure) {
-        return retry
-      }
+      if io.failed(retry.failure) { return retry }
       if retry.value == 0 {
         for i in 0..#len(descriptors) {
           descriptors[i].returned = 0
@@ -587,9 +561,7 @@ pub fn poll(descriptors: []PollDescriptor, timeout_milliseconds: i32) Result {
 pub fn wait(descriptor: isize, events: i16, timeout_milliseconds: i32) Result {
   item := PollDescriptor{ descriptor: #cast(Descriptor, descriptor), events: events, returned: 0 }
   outcome := poll(#slice(&item, 1), timeout_milliseconds)
-  if io.failed(outcome.failure) || outcome.value == 0 {
-    return outcome
-  }
+  if io.failed(outcome.failure) || outcome.value == 0 { return outcome }
   return Result{ value: item.returned }
 }
 
@@ -598,3 +570,112 @@ pub fn poll_has(item: *const PollDescriptor, events: i16) bool {
 }
 
 
+
+// The IP of an IPv4 or IPv6 socket address: 4 or 16 bytes in network order,
+// and the port. Empty bytes for other families.
+pub struct Ip { bytes: [16]u8, length: usize, port: u16 }
+
+pub fn address_ip(address: *const Address) Ip {
+  result := Ip{}
+  if address.length < 8 { return result }
+  family := read_family(address.bytes[..])
+  result.port = #cast(u16, address.bytes[2]) << 8 | #cast(u16, address.bytes[3])
+  if family == AddressFamilyIpv4 {
+    for i in 0..4 {
+      result.bytes[i] = address.bytes[4 + i]
+    }
+    result.length = 4
+  } else if family == AddressFamilyIpv6 && address.length >= 24 {
+    for i in 0..16 {
+      result.bytes[i] = address.bytes[8 + i]
+    }
+    result.length = 16
+  }
+  return result
+}
+
+fn put_decimal(destination: []u8, at: usize, value: u32) usize {
+  digits: [10]u8
+  count: usize = 0
+  rest := value
+  for true {
+    digits[count] = #cast(u8, '0' + rest % 10)
+    count += 1
+    rest /= 10
+    if rest == 0 { break }
+  }
+  position := at
+  for i in 0..count {
+    if position < #len(destination) {
+      destination[position] = digits[count - 1 - i]
+    }
+    position += 1
+  }
+  return position
+}
+
+// The IP as text: dotted IPv4, or IPv6 in RFC 5952 form (lowercase, the
+// longest run of zero groups as ::). Empty when destination is shorter than
+// 46 bytes or ip is empty.
+pub fn ip_text(destination: []u8, ip: Ip) []u8 {
+  if #len(destination) < 46 || (ip.length != 4 && ip.length != 16) { return destination[..0] }
+  at: usize = 0
+  if ip.length == 4 {
+    for i in 0..4 {
+      if i > 0 {
+        destination[at] = '.'
+        at += 1
+      }
+      at = put_decimal(destination, at, #cast(u32, ip.bytes[i]))
+    }
+    return destination[..at]
+  }
+  groups: [8]u32
+  for i in 0..8 {
+    groups[i] = #cast(u32, ip.bytes[2 * i]) << 8 | #cast(u32, ip.bytes[2 * i + 1])
+  }
+  best_start: usize = 8
+  best_length: usize = 0
+  i: usize = 0
+  for i < 8 {
+    if groups[i] != 0 {
+      i += 1
+      continue
+    }
+    start := i
+    for i < 8 && groups[i] == 0 {
+      i += 1
+    }
+    if i - start > best_length && i - start >= 2 {
+      best_start = start
+      best_length = i - start
+    }
+  }
+  digits := "0123456789abcdef"
+  g: usize = 0
+  for g < 8 {
+    if g == best_start {
+      destination[at] = ':'
+      destination[at + 1] = ':'
+      at += 2
+      g += best_length
+      continue
+    }
+    if g > 0 && g != best_start + best_length {
+      destination[at] = ':'
+      at += 1
+    }
+    value := groups[g]
+    started := false
+    for shift in 0..4 {
+      nibble := (value >> #cast(u32, 12 - 4 * shift)) & 15
+      if nibble != 0 || started || shift == 3 {
+        destination[at] = digits[nibble]
+        at += 1
+        started = true
+      }
+    }
+    g += 1
+  }
+  return destination[..at]
+}

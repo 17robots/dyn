@@ -1,0 +1,6 @@
+#target(arch: thumbv7em)
+
+// No SHA instructions are used on thumbv7em; core.dyn computes every block.
+fn hardware_blocks(state: *[8]u32, data: []const u8) bool {
+  return false
+}

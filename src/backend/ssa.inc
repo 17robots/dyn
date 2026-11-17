@@ -85,10 +85,23 @@ enum { SYM_GLOBAL, SYM_FUNCTION, SYM_LOCAL };
 #define SSA_PENDING_LITERAL UINT32_MAX
 /* Memory types: bits | signed << 8 | float << 9. */
 #define SSA_MEM(bits, sign, fl) ((bits) | (sign) << 8 | (fl) << 9)
+/* x86-64: functions with loops start on SSA_LOOP_ENTRY_ALIGN bytes, loop
+   headers on SSA_LOOP_HEADER_ALIGN from there (see ssa_aligned_entry). */
+#ifndef SSA_LOOP_ENTRY_ALIGN
+#define SSA_LOOP_ENTRY_ALIGN 64
+#endif
+#ifndef SSA_LOOP_HEADER_ALIGN
+#define SSA_LOOP_HEADER_ALIGN 16
+#endif
 
 typedef struct {
   uint8_t op, cls, cond, scale;
   bool effect, dead, fused, retain_constant;
+  /* x86-64 and AArch64, set by ssa_narrow32 just before allocation: w32
+     emits the operation on 32-bit registers, so its result is zero-extended
+     from 32 bits; rotate (op SO_SHR) emits ROR by the constant b, on 32 bits
+     with w32 and on 64 bits without (ssa_rotate64). */
+  bool w32, rotate;
   int32_t a, b, c;
   int64_t aux, aux2;
   uint32_t block, list, count, uses, check_origin;
@@ -4227,6 +4240,9 @@ static bool ssa_condition_holds(Cond cond, uint64_t a, uint64_t b) {
   }
 }
 /* Replaces values computable now. Returns whether anything changed. */
+static bool x86_lea_target(const Ssa *s) {
+  return !s->ctx->a64 && !s->ctx->rv64 && !s->ctx->rv32 && !s->ctx->t32;
+}
 static bool ssa_fold(Ssa *s, const uint32_t *order, uint32_t n) {
   bool changed = false;
   for (uint32_t i = 0; i < n; ++i) {
@@ -4234,14 +4250,61 @@ static bool ssa_fold(Ssa *s, const uint32_t *order, uint32_t n) {
     for (uint32_t k = 0; k < block->values.count; ++k) {
       uint32_t id = block->values.items[k];
       SsaValue *v = &s->values[id];
-      uint64_t x, y, r;
+      uint64_t x = 0, y = 0, r = 0;
       bool ca = ssa_is_const(s, v->a, &x), cb = ssa_is_const(s, v->b, &y);
+      /* Commutative operations keep a constant on the right, where the rules
+         below and instruction selection look for it. */
+      if (ca && !cb && v->a >= 0 && v->b >= 0 && v->cls == SC_INT &&
+          (v->op == SO_ADD || v->op == SO_MUL || v->op == SO_AND || v->op == SO_OR || v->op == SO_XOR)) {
+        int32_t t = v->a; v->a = v->b; v->b = t;
+        uint64_t u = x; x = y; y = u;
+        ca = false; cb = true;
+        changed = true;
+      }
       int32_t replacement = -1;
       bool constant = false;
       switch (v->op) {
-      case SO_ADD: if (ca && cb) { r = x + y; constant = true; } else if (cb && !y) replacement = v->a; else if (ca && !x) replacement = v->b; break;
-      case SO_SUB: if (ca && cb) { r = x - y; constant = true; } else if (cb && !y) replacement = v->a; break;
+      case SO_ADD: {
+        if (ca && cb) { r = x + y; constant = true; break; }
+        if (cb && !y) { replacement = v->a; break; }
+        if (ca && !x) { replacement = v->b; break; }
+        break;
+      }
+      case SO_SUB: {
+        if (ca && cb) { r = x - y; constant = true; break; }
+        if (cb && !y) { replacement = v->a; break; }
+        /* (b + c) - b is c: the length of xs[b..b + c]. */
+        SsaValue *sum = v->a >= 0 ? &s->values[v->a] : NULL;
+        uint64_t c;
+        if (sum && sum->op == SO_ADD && sum->cls == SC_INT && v->b >= 0 && sum->a == v->b && ssa_is_const(s, sum->b, &c)) {
+          r = c; constant = true;
+        } else if (sum && sum->op == SO_ADD && sum->cls == SC_INT && v->b >= 0 && sum->b == v->b && ssa_is_const(s, sum->a, &c)) {
+          r = c; constant = true;
+        }
+        break;
+      }
       case SO_MUL:
+        if (!ca && !cb && v->cls == SC_INT && v->a >= 0 && v->b >= 0) {
+          /* (p << k) * q is (p * q) << k: the shift leaves the multiply's
+             dependency chain, and can fold into a following add. */
+          for (unsigned side = 0; side < 2; ++side) {
+            int32_t shifted = side ? v->b : v->a, other = side ? v->a : v->b;
+            SsaValue *sh = &s->values[shifted];
+            uint64_t bits;
+            if (sh->op != SO_SHL || sh->cls != SC_INT || sh->a < 0 || !ssa_is_const(s, sh->b, &bits) || bits >= 64) continue;
+            int32_t amount = sh->b, base = sh->a;
+            int32_t product = ssa_value(s, order[i], SO_MUL, SC_INT, base, other, -1, 0, 0);
+            if (s->failed) return false;
+            v = &s->values[id];
+            v->op = SO_SHL; v->a = product; v->b = amount;
+            ssa_push(s, &block->values, 0);
+            memmove(block->values.items + k + 1, block->values.items + k, (block->values.count - k - 1) * sizeof(uint32_t));
+            block->values.items[k] = (uint32_t)product; ++k;
+            changed = true;
+            break;
+          }
+          break;
+        }
         if (ca && cb) { r = x * y; constant = true; }
         else if (cb && y == 1) replacement = v->a;
         else if (cb && y && !(y & (y - 1))) {
@@ -5244,6 +5307,7 @@ static void ssa_range(Ssa *s, int32_t id, uint32_t block, uint64_t *lo, uint64_t
 static void ssa_range_compute(Ssa *s, int32_t id, uint32_t block, uint64_t *lo, uint64_t *hi, unsigned depth) {
   SsaValue *v = &s->values[id];
   uint64_t alo, ahi, blo, bhi, c;
+  if (v->w32) { *hi = UINT32_MAX; return; }
   switch (v->op) {
   case SO_CONST: if (v->cls == SC_INT) *lo = *hi = (uint64_t)v->aux; return;
   case SO_EXT:
@@ -8943,22 +9007,23 @@ static Cond ssa_compare_values(SsaEmit *e, int32_t a, int32_t b, Cond cond) {
 static void ssa_alu(SsaEmit *e, SsaValue *v, unsigned extension, unsigned char opcode, bool commutative) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
   int32_t a = v->a, b = v->b, imm;
+  bool wide = !v->w32;
   unsigned d = ssa_target(e, v);
   if (commutative && ssa_imm32(s, a, &imm) && !ssa_imm32(s, b, &imm)) { int32_t t = a; a = b; b = t; }
   if (ssa_imm32(s, b, &imm)) {
     x86_mov(ctx, d, ssa_get(e, a, d));
-    if (imm >= -128 && imm <= 127) { x86_reg_op(ctx, -1, true, OP1(0x83), extension, d, false); byte(ctx, (uint8_t)imm); }
-    else { x86_reg_op(ctx, -1, true, OP1(0x81), extension, d, false); word(ctx, (uint32_t)imm); }
+    if (imm >= -128 && imm <= 127) { x86_reg_op(ctx, -1, wide, OP1(0x83), extension, d, false); byte(ctx, (uint8_t)imm); }
+    else { x86_reg_op(ctx, -1, wide, OP1(0x81), extension, d, false); word(ctx, (uint32_t)imm); }
     return;
   }
   SsaValue *vb = &s->values[b];
   if (vb->reg >= 0 && (unsigned)vb->reg == d && a != b) {
     if (commutative) { int32_t t = a; a = b; b = t; vb = &s->values[b]; }
-    else { x86_mov(ctx, X_R10, d); x86_mov(ctx, d, ssa_get(e, a, d)); x86_reg_op(ctx, -1, true, OP1(opcode), d, X_R10, false); return; }
+    else { x86_mov(ctx, X_R10, d); x86_mov(ctx, d, ssa_get(e, a, d)); x86_reg_op(ctx, -1, wide, OP1(opcode), d, X_R10, false); return; }
   }
   x86_mov(ctx, d, ssa_get(e, a, d));
-  if (vb->op != SO_CONST && vb->op != SO_FRAME && vb->reg < 0) x86_mem_op(ctx, -1, true, OP1(opcode), d, ssa_slot_memory(e, vb), false);
-  else x86_reg_op(ctx, -1, true, OP1(opcode), d, ssa_get(e, b, X_R10), false);
+  if (vb->op != SO_CONST && vb->op != SO_FRAME && vb->reg < 0) x86_mem_op(ctx, -1, wide, OP1(opcode), d, ssa_slot_memory(e, vb), false);
+  else x86_reg_op(ctx, -1, wide, OP1(opcode), d, ssa_get(e, b, X_R10), false);
 }
 static void ssa_float_op(SsaEmit *e, SsaValue *v, unsigned char opcode, bool commutative) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
@@ -10038,13 +10103,25 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     if (x->reg >= 0 && (unsigned)x->reg != d && (imm || (y->reg >= 0 && (unsigned)y->reg != d))) {
       SsaMemory m = imm ? (SsaMemory){x->reg, -1, 1, imm32_scratch} : (SsaMemory){x->reg, y->reg, 1, 0};
       if (m.index == X_RSP) { m.index = m.base; m.base = X_RSP; }
-      x86_mem_op(ctx, -1, true, OP1(0x8d), d, m, false);
+      x86_mem_op(ctx, -1, !v->w32, OP1(0x8d), d, m, false);
     } else ssa_alu(e, v, 0, 0x03, true);
     ssa_put(e, v, d);
     return;
   }
   case SO_SUB: ssa_alu(e, v, 5, 0x2b, false); ssa_put(e, v, ssa_target(e, v)); return;
-  case SO_AND: ssa_alu(e, v, 4, 0x23, true); ssa_put(e, v, ssa_target(e, v)); return;
+  case SO_AND: {
+    uint64_t mask;
+    if (!v->w32 && ssa_is_const(s, v->b, &mask) && mask == UINT32_MAX && v->a >= 0) {
+      /* x & 0xffffffff: a 32-bit move zero-extends. */
+      d = ssa_target(e, v);
+      x86_reg_op(ctx, -1, false, OP1(0x8b), d, ssa_get(e, v->a, d), false);
+      ssa_put(e, v, d);
+      return;
+    }
+    ssa_alu(e, v, 4, 0x23, true);
+    ssa_put(e, v, ssa_target(e, v));
+    return;
+  }
   case SO_OR: ssa_alu(e, v, 1, 0x0b, true); ssa_put(e, v, ssa_target(e, v)); return;
   case SO_XOR: ssa_alu(e, v, 6, 0x33, true); ssa_put(e, v, ssa_target(e, v)); return;
   case SO_ADDO: case SO_SUBO:
@@ -10068,25 +10145,25 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     if (ssa_imm32(s, a, &imm) && !ssa_imm32(s, b, &imm)) { int32_t t = a; a = b; b = t; }
     if (ssa_imm32(s, b, &imm)) {
       unsigned ra = ssa_get(e, a, d);
-      x86_reg_op(ctx, -1, true, OP1(0x69), d, ra, false); word(ctx, (uint32_t)imm);
+      x86_reg_op(ctx, -1, !v->w32, OP1(0x69), d, ra, false); word(ctx, (uint32_t)imm);
     } else {
       SsaValue *vb = &s->values[b];
       if (vb->reg >= 0 && (unsigned)vb->reg == d && a != b) { int32_t t = a; a = b; b = t; vb = &s->values[b]; }
       x86_mov(ctx, d, ssa_get(e, a, d));
-      if (vb->op != SO_CONST && vb->reg < 0) x86_mem_op(ctx, -1, true, OP2(0x0f, 0xaf), d, ssa_slot_memory(e, vb), false);
-      else x86_reg_op(ctx, -1, true, OP2(0x0f, 0xaf), d, ssa_get(e, b, X_R10), false);
+      if (vb->op != SO_CONST && vb->reg < 0) x86_mem_op(ctx, -1, !v->w32, OP2(0x0f, 0xaf), d, ssa_slot_memory(e, vb), false);
+      else x86_reg_op(ctx, -1, !v->w32, OP2(0x0f, 0xaf), d, ssa_get(e, b, X_R10), false);
     }
     if (v->op == SO_MULO) ssa_fail_raw(e, JCC_O, GUARD_OVERFLOW);
     ssa_put(e, v, d);
     return;
   }
   case SO_SHL: case SO_SHR: case SO_SAR: {
-    unsigned extension = v->op == SO_SHL ? 4 : v->op == SO_SHR ? 5 : 7;
+    unsigned extension = v->rotate ? 1 : v->op == SO_SHL ? 4 : v->op == SO_SHR ? 5 : 7;
     d = ssa_target(e, v);
     uint64_t c;
     if (ssa_is_const(s, v->b, &c)) {
       x86_mov(ctx, d, ssa_get(e, v->a, d));
-      x86_reg_op(ctx, -1, true, OP1(0xc1), extension, d, false); byte(ctx, (uint8_t)(c & 63));
+      x86_reg_op(ctx, -1, !v->w32, OP1(0xc1), extension, d, false); byte(ctx, (uint8_t)(c & (v->w32 ? 31 : 63)));
     } else if (ctx->bmi2) {
       unsigned ra = ssa_get(e, v->a, X_R11), rc = ssa_get(e, v->b, X_R10);
       byte(ctx, 0xc4);
@@ -10185,7 +10262,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_NEG: case SO_NOT:
     d = ssa_target(e, v);
     x86_mov(ctx, d, ssa_get(e, v->a, d));
-    x86_reg_op(ctx, -1, true, OP1(0xf7), v->op == SO_NEG ? 3 : 2, d, false);
+    x86_reg_op(ctx, -1, !v->w32, OP1(0xf7), v->op == SO_NEG ? 3 : 2, d, false);
     ssa_put(e, v, d);
     return;
   case SO_EXT:
@@ -10507,6 +10584,417 @@ static int ssa_float_branch(SsaEmit *e, const SsaValue *c) {
   x86_reg_op(ctx, f32 ? -1 : 0x66, false, OP2(0x0f, 0x2e), ra - X_XMM0, rb - X_XMM0, false);
   return c->aux == 2 || c->aux == 4 ? CC_A : CC_AE;
 }
+/* x86-64 and AArch64: a 32-bit zero-extension whose operand is an integer operation
+   used nowhere else becomes that operation on 32-bit registers, which
+   zero-extends its result for free. Then x >> c | x << (32 - c), with x
+   known to fit in 32 bits, becomes ROR. Runs after dce, which counts uses. */
+/* Which values are below 2^32, as a fixpoint: phis start optimistic (a u32
+   loop variable carried around a loop), and anything an operand disproves
+   drops out until nothing changes. */
+static bool ssa_fits32_value(Ssa *s, const bool *fits, uint32_t id) {
+  SsaValue *v = &s->values[id];
+  uint64_t c;
+  if (v->cls != SC_INT) return false;
+  if (v->w32) return true;
+  switch (v->op) {
+  case SO_CONST: return (uint64_t)v->aux <= UINT32_MAX;
+  case SO_EXT: return !v->aux2 && v->aux <= 32;
+  case SO_LOAD: return !(v->aux2 >> 9 & 1) && !(v->aux2 >> 8 & 1) && (v->aux2 & 0xff) <= 32;
+  case SO_CMP: case SO_FCMP: return true;
+  case SO_AND: return (v->a >= 0 && fits[v->a]) || (v->b >= 0 && fits[v->b]);
+  case SO_OR: case SO_XOR: return v->a >= 0 && v->b >= 0 && fits[v->a] && fits[v->b];
+  case SO_SHR: return v->a >= 0 && fits[v->a];
+  case SO_COPY: return v->a >= 0 && fits[v->a];
+  case SO_REM: return !v->aux2 && ssa_is_const(s, v->b, &c) && c && c - 1 <= UINT32_MAX;
+  case SO_PHI:
+    for (uint32_t k = 0; k < v->count; ++k) {
+      int32_t operand = (int32_t)s->lists[v->list + k];
+      if (operand < 0 || !fits[operand]) return false;
+    }
+    return true;
+  default: return false;
+  }
+}
+static bool *ssa_fits32_all(Ssa *s, const uint32_t *order, uint32_t n) {
+  bool *fits = ssa_temp(s, (s->value_count + 1) * sizeof(bool));
+  if (!fits) return NULL;
+  for (uint32_t i = 0; i < s->value_count; ++i) fits[i] = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k)
+      fits[block->values.items[k]] = s->values[block->values.items[k]].cls == SC_INT;
+  }
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (uint32_t i = 0; i < n; ++i) {
+      SsaBlock *block = &s->blocks[order[i]];
+      for (uint32_t k = 0; k < block->values.count; ++k) {
+        uint32_t id = block->values.items[k];
+        if (fits[id] && !ssa_fits32_value(s, fits, id)) { fits[id] = false; changed = true; }
+      }
+    }
+  }
+  return fits;
+}
+static void ssa_narrow32(Ssa *s, const uint32_t *order, uint32_t n) {
+  bool changed = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      uint32_t id = block->values.items[k];
+      SsaValue *v = &s->values[id];
+      if (v->dead || v->op != SO_EXT || v->aux != 32 || v->aux2 || v->a < 0) continue;
+      SsaValue *x = &s->values[v->a];
+      if (x->dead || x->cls != SC_INT || x->uses != 1 || x->w32) continue;
+      uint64_t c;
+      bool narrow = false;
+      switch (x->op) {
+      case SO_ADD: case SO_SUB: case SO_MUL: case SO_AND: case SO_OR: case SO_XOR: case SO_NEG: case SO_NOT:
+        narrow = true;
+        break;
+      case SO_SHL:
+        narrow = ssa_is_const(s, x->b, &c) && c < 32;
+        break;
+      default:
+        break;
+      }
+      if (!narrow) continue;
+      x->w32 = true;
+      ssa_replace(s, id, v->a);
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  ssa_resolve_all(s);
+  ssa_dce(s, order, n);
+  ++s->range_stamp;
+  bool *fits = ssa_fits32_all(s, order, n);
+  if (!fits) return;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      SsaValue *v = &s->values[block->values.items[k]];
+      if (v->dead || v->op != SO_OR || v->cls != SC_INT || v->a < 0 || v->b < 0) continue;
+      int32_t right = v->a, left = v->b;
+      if (s->values[right].op != SO_SHR) { int32_t t = right; right = left; left = t; }
+      SsaValue *r = &s->values[right], *l = &s->values[left];
+      uint64_t rc, lc;
+      if (r->op != SO_SHR || r->rotate || l->op != SO_SHL || !l->w32 || r->a != l->a || r->a < 0 ||
+          !ssa_is_const(s, r->b, &rc) || !ssa_is_const(s, l->b, &lc) || rc == 0 || rc >= 32 || lc != 32 - rc ||
+          !fits[r->a])
+        continue;
+      v->op = SO_SHR;
+      v->a = r->a;
+      v->b = r->b;
+      v->w32 = v->rotate = true;
+    }
+  }
+  ssa_dce(s, order, n);
+}
+/* x86-64 and AArch64: x >> c | x << (64 - c) on 64-bit values becomes one
+   ROR, as BLAKE2b, SHA-512 and Argon2 write their rotations. */
+static void ssa_rotate64(Ssa *s, const uint32_t *order, uint32_t n) {
+  bool changed = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      SsaValue *v = &s->values[block->values.items[k]];
+      if (v->dead || v->op != SO_OR || v->cls != SC_INT || v->w32 || v->a < 0 || v->b < 0) continue;
+      int32_t right = v->a, left = v->b;
+      if (s->values[right].op != SO_SHR) { int32_t t = right; right = left; left = t; }
+      SsaValue *r = &s->values[right], *l = &s->values[left];
+      uint64_t rc, lc;
+      if (r->op != SO_SHR || r->rotate || r->w32 || l->op != SO_SHL || l->w32 || r->a != l->a || r->a < 0 ||
+          r->cls != SC_INT || !ssa_is_const(s, r->b, &rc) || !ssa_is_const(s, l->b, &lc) || rc == 0 || rc >= 64 ||
+          lc != 64 - rc)
+        continue;
+      v->op = SO_SHR;
+      v->a = r->a;
+      v->b = r->b;
+      v->rotate = true;
+      changed = true;
+    }
+  }
+  if (changed) ssa_dce(s, order, n);
+}
+/* x86-64, after the loop passes, which look for adds and shifts, and after
+   ssa_narrow32: t + (p << k)
+   with k in 1..3 is one LEA [t + p*2^k], as in a + b + 2 * x * y. */
+/* Load combining: an OR of unsigned integer loads from one base and index,
+   each shifted left by eight times its distance from the lowest offset, and
+   together covering 16, 32 or 64 contiguous bits, is one load of that width
+   on little-endian targets that allow unaligned access (x86-64, AArch64).
+   `x[0] | x[1] << 8 | ...` written byte by byte becomes one MOV. The same
+   bytes are read, so no new fault is possible; the combined load sits at the
+   OR, so only loads in its block with nothing that writes memory between
+   them and the OR take part. */
+typedef struct { int32_t load; unsigned shift; } SsaLoadPiece;
+static bool ssa_load_pieces(Ssa *s, int32_t id, unsigned shift, SsaLoadPiece *pieces, unsigned *count, unsigned depth) {
+  if (id < 0 || depth > 16 || shift >= 64) return false;
+  SsaValue *v = &s->values[id];
+  uint64_t c;
+  if (v->cls != SC_INT || v->w32) return false;
+  switch (v->op) {
+  case SO_OR:
+    return ssa_load_pieces(s, v->a, shift, pieces, count, depth + 1) &&
+           ssa_load_pieces(s, v->b, shift, pieces, count, depth + 1);
+  case SO_SHL:
+    return ssa_is_const(s, v->b, &c) && c % 8 == 0 && c < 64 &&
+           ssa_load_pieces(s, v->a, shift + (unsigned)c, pieces, count, depth + 1);
+  case SO_EXT: {
+    /* A zero extension changes nothing when every piece under it fits. */
+    if (v->aux2 || v->a < 0) return false;
+    unsigned before = *count;
+    if (!ssa_load_pieces(s, v->a, shift, pieces, count, depth + 1)) return false;
+    for (unsigned q = before; q < *count; ++q)
+      if (pieces[q].shift + (unsigned)(s->values[pieces[q].load].aux2 & 0xff) > shift + (uint64_t)v->aux) return false;
+    return true;
+  }
+  case SO_LOAD: {
+    unsigned bits = (unsigned)(v->aux2 & 0xff);
+    if (v->aux2 != SSA_MEM(bits, 0, 0) || (bits != 8 && bits != 16 && bits != 32) || *count >= 8) return false;
+    pieces[(*count)++] = (SsaLoadPiece){id, shift};
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+/* A value as a root plus a constant: x + 1 and x + 2 share the root x. */
+static int32_t ssa_constant_offset(Ssa *s, int32_t id, int64_t *offset) {
+  uint64_t c;
+  for (unsigned depth = 0; id >= 0 && depth < 8; ++depth) {
+    const SsaValue *v = &s->values[id];
+    if (v->op == SO_COPY && v->a >= 0) id = v->a;
+    else if (v->op == SO_ADD && v->cls == SC_INT && !v->w32 && v->b >= 0 && ssa_is_const(s, v->b, &c)) {
+      *offset += (int64_t)c;
+      id = v->a;
+    } else if (v->op == SO_ADD && v->cls == SC_INT && !v->w32 && v->a >= 0 && ssa_is_const(s, v->a, &c)) {
+      *offset += (int64_t)c;
+      id = v->b;
+    } else break;
+  }
+  return id;
+}
+/* A load's address [base + index * scale + offset], with constants moved
+   out of base and index into offset. */
+typedef struct { int32_t base, index; int64_t offset; } SsaAddress;
+static SsaAddress ssa_load_address(Ssa *s, const SsaValue *load) {
+  SsaAddress address = {-1, -1, load->aux};
+  address.base = ssa_constant_offset(s, load->a, &address.offset);
+  uint64_t c;
+  if (load->b >= 0 && ssa_is_const(s, load->b, &c)) {
+    address.offset += (int64_t)c * (int64_t)load->scale;
+  } else if (load->b >= 0) {
+    int64_t steps = 0;
+    address.index = ssa_constant_offset(s, load->b, &steps);
+    address.offset += steps * (int64_t)load->scale;
+  }
+  return address;
+}
+/* The values a byte store's value passes through, each with the bit position
+   of the stored byte in it: x >> 8 stores bit 8 of x and bit 0 of x >> 8.
+   Zero extensions that keep the byte pass through. Returns how many. */
+typedef struct { int32_t value; unsigned shift; } SsaByteSource;
+static unsigned ssa_byte_sources(Ssa *s, int32_t id, SsaByteSource *chain) {
+  uint64_t c;
+  unsigned shift = 0, count = 0;
+  for (unsigned depth = 0; id >= 0 && depth < 8; ++depth) {
+    const SsaValue *v = &s->values[id];
+    if (v->cls != SC_INT) break;
+    chain[count++] = (SsaByteSource){id, shift};
+    if (v->w32) break;
+    if (v->op == SO_SHR && v->b >= 0 && ssa_is_const(s, v->b, &c) && c % 8 == 0 && shift + c < 64) {
+      shift += (unsigned)c;
+      id = v->a;
+    } else if (v->op == SO_EXT && !v->aux2 && v->a >= 0 && (uint64_t)v->aux >= 8 && shift + 8 <= (uint64_t)v->aux) {
+      id = v->a;
+    } else if (v->op == SO_COPY && v->a >= 0) {
+      id = v->a;
+    } else {
+      break;
+    }
+  }
+  return count;
+}
+static bool ssa_byte_source_at(const SsaByteSource *chain, unsigned count, int32_t value, unsigned shift) {
+  for (unsigned q = 0; q < count; ++q)
+    if (chain[q].value == value && chain[q].shift == shift) return true;
+  return false;
+}
+/* Store combining: byte stores of the successive bytes of one value to
+   consecutive addresses, with nothing between them that reads or writes
+   memory, are one 16-, 32- or 64-bit store on x86-64 and AArch64. The same
+   bytes are written; the store happens at the last of them. */
+static void ssa_combine_stores(Ssa *s, const uint32_t *order, uint32_t n) {
+  if (s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32) return;
+  bool changed = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      const SsaValue *head = &s->values[block->values.items[k]];
+      if (head->dead || head->op != SO_STORE || head->aux2 != SSA_MEM(8, 0, 0) || head->c < 0) continue;
+      /* Up to eight byte stores, only pure values between them. */
+      uint32_t at[8];
+      unsigned count = 0;
+      for (uint32_t q = k; q < block->values.count && count < 8; ++q) {
+        const SsaValue *v = &s->values[block->values.items[q]];
+        if (v->dead) continue;
+        if (v->op == SO_STORE && v->aux2 == SSA_MEM(8, 0, 0) && v->c >= 0) { at[count++] = q; continue; }
+        if (v->effect) break;
+      }
+      unsigned sizes[3] = {8, 4, 2};
+      for (unsigned z = 0; z < 3; ++z) {
+        unsigned m = sizes[z];
+        if (m > count) continue;
+        const SsaValue *first = &s->values[block->values.items[at[0]]];
+        SsaAddress address = ssa_load_address(s, first);
+        if (address.base < 0) continue;
+        SsaByteSource chain[8];
+        unsigned length = ssa_byte_sources(s, first->c, chain);
+        /* The deepest value that holds the first byte at bit 0 and every
+           later byte q at bit 8q. */
+        int32_t root = -1;
+        for (unsigned d = length; d-- > 0 && root < 0;) {
+          if (chain[d].shift != 0) continue;
+          bool match = true;
+          for (unsigned q = 1; q < m && match; ++q) {
+            const SsaValue *v = &s->values[block->values.items[at[q]]];
+            SsaAddress here = ssa_load_address(s, v);
+            SsaByteSource other[8];
+            unsigned others = ssa_byte_sources(s, v->c, other);
+            match = ssa_byte_source_at(other, others, chain[d].value, 8 * q) && here.base == address.base &&
+                    here.index == address.index && (v->b < 0 || v->scale == first->scale) &&
+                    here.offset == address.offset + (int64_t)q;
+          }
+          if (match) root = chain[d].value;
+        }
+        /* Constant bytes, such as a literal stored byte by byte, become
+           one constant word. */
+        uint64_t word = 0, byte;
+        bool constant = true;
+        for (unsigned q = 0; q < m && constant; ++q) {
+          const SsaValue *v = &s->values[block->values.items[at[q]]];
+          SsaAddress here = ssa_load_address(s, v);
+          constant = ssa_is_const(s, v->c, &byte) && here.base == address.base && here.index == address.index &&
+                     (v->b < 0 || v->scale == first->scale) && here.offset == address.offset + (int64_t)q;
+          word |= (byte & 0xff) << (8 * q);
+        }
+        if (root < 0 && constant) {
+          root = ssa_value(s, order[i], SO_CONST, SC_INT, -1, -1, -1, (int64_t)word, 0);
+          if (s->failed) return;
+          uint32_t place = at[m - 1];
+          ssa_push(s, &block->values, 0);
+          memmove(block->values.items + place + 1, block->values.items + place,
+                  (block->values.count - place - 1) * sizeof(uint32_t));
+          block->values.items[place] = (uint32_t)root;
+          ++at[m - 1];
+        }
+        bool match = root >= 0;
+        if (!match) continue;
+        /* ssa_value may have moved the values: read through indexes. */
+        uint8_t scale = s->values[block->values.items[at[0]]].scale;
+        SsaValue *last = &s->values[block->values.items[at[m - 1]]];
+        last->a = address.base; last->b = address.index; last->c = root;
+        last->scale = address.index >= 0 ? scale : 1;
+        last->aux = address.offset; last->aux2 = SSA_MEM(8 * m, 0, 0);
+        for (unsigned q = 0; q + 1 < m; ++q) s->values[block->values.items[at[q]]].dead = true;
+        changed = true;
+        break;
+      }
+    }
+    if (changed) {
+      uint32_t kept = 0;
+      for (uint32_t k = 0; k < block->values.count; ++k) {
+        uint32_t id = block->values.items[k];
+        if (!(s->values[id].dead && s->values[id].op == SO_STORE)) block->values.items[kept++] = id;
+      }
+      block->values.count = kept;
+    }
+  }
+  if (changed) ssa_dce(s, order, n);
+}
+static void ssa_combine_loads(Ssa *s, const uint32_t *order, uint32_t n) {
+  if (s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32) return;
+  bool changed = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      int32_t root = (int32_t)block->values.items[k];
+      SsaValue *v = &s->values[root];
+      if (v->dead || v->op != SO_OR || v->cls != SC_INT || v->w32) continue;
+      SsaLoadPiece pieces[8];
+      unsigned count = 0;
+      if (!ssa_load_pieces(s, root, 0, pieces, &count, 0) || count < 2) continue;
+      const SsaValue *first = &s->values[pieces[0].load];
+      SsaAddress address = ssa_load_address(s, first);
+      int64_t offsets[8];
+      int64_t lowest = address.offset;
+      unsigned total = 0;
+      bool same = address.base >= 0;
+      for (unsigned q = 0; q < count && same; ++q) {
+        const SsaValue *load = &s->values[pieces[q].load];
+        SsaAddress at = ssa_load_address(s, load);
+        offsets[q] = at.offset;
+        same = at.base == address.base && at.index == address.index && (load->b < 0 || load->scale == first->scale) &&
+               load->block == order[i];
+        if (offsets[q] < lowest) lowest = offsets[q];
+        total += (unsigned)(load->aux2 & 0xff);
+      }
+      if (!same || (total != 16 && total != 32 && total != 64)) continue;
+      /* Each piece sits at its byte distance, and the pieces do not overlap. */
+      uint64_t covered = 0;
+      bool placed = true;
+      for (unsigned q = 0; q < count && placed; ++q) {
+        const SsaValue *load = &s->values[pieces[q].load];
+        unsigned bits = (unsigned)(load->aux2 & 0xff);
+        int64_t distance = offsets[q] - lowest;
+        uint64_t mask = (bits == 64 ? ~0ull : (1ull << bits) - 1) << pieces[q].shift;
+        placed = distance >= 0 && (uint64_t)distance * 8 == pieces[q].shift && pieces[q].shift + bits <= total &&
+                 !(covered & mask);
+        covered |= mask;
+      }
+      if (!placed || covered != (total == 64 ? ~0ull : (1ull << total) - 1)) continue;
+      /* Nothing between the earliest piece and the OR writes memory. */
+      uint32_t start = k;
+      for (uint32_t q = 0; q < k; ++q)
+        for (unsigned r = 0; r < count; ++r)
+          if (block->values.items[q] == (uint32_t)pieces[r].load && q < start) start = q;
+      bool quiet = start < k;
+      for (uint32_t q = start; q < k && quiet; ++q) quiet = !ssa_value_writes(&s->values[block->values.items[q]]);
+      if (!quiet) continue;
+      /* The index keeps its scale; the constants it carried are in lowest. */
+      uint8_t scale = first->scale;
+      v->op = SO_LOAD; v->a = address.base; v->b = address.index; v->c = -1; v->scale = address.index >= 0 ? scale : 1;
+      v->aux = lowest; v->aux2 = SSA_MEM(total, 0, 0); v->effect = first->effect;
+      changed = true;
+    }
+  }
+  if (changed) ssa_dce(s, order, n);
+}
+static void ssa_late_lea(Ssa *s, const uint32_t *order, uint32_t n) {
+  if (!x86_lea_target(s)) return;
+  bool changed = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      SsaValue *v = &s->values[block->values.items[k]];
+      /* A 32-bit add (ssa_narrow32) stays one: LEA here is 64-bit. */
+      if (v->dead || v->op != SO_ADD || v->cls != SC_INT || v->w32 || v->a < 0 || v->b < 0) continue;
+      for (unsigned side = 0; side < 2; ++side) {
+        int32_t shifted = side ? v->a : v->b, other = side ? v->b : v->a;
+        SsaValue *sh = &s->values[shifted];
+        uint64_t bits;
+        if (sh->op != SO_SHL || sh->w32 || sh->cls != SC_INT || sh->a < 0 || !ssa_is_const(s, sh->b, &bits) || bits < 1 || bits > 3)
+          continue;
+        v->op = SO_LEA; v->a = other; v->b = sh->a; v->scale = (uint8_t)(1u << bits); v->aux = 0;
+        changed = true;
+        break;
+      }
+    }
+  }
+  if (changed) ssa_dce(s, order, n);
+}
 static void ssa_fuse(Ssa *s, const uint32_t *order, uint32_t n) {
   /* A comparison used only by a select in its block sits right before it
      and is emitted by it: CMP then CMOVcc, or CSEL with its condition. */
@@ -10687,7 +11175,8 @@ static bool ssa_early_value(SsaEarly *w, int32_t id, SsaSymbol *out) {
   if (w->sym[id].kind == 3) return false;
   if (w->sym[id].kind) { *out = w->sym[id]; return true; }
   SsaValue *v = &s->values[id];
-  if (v->cls != SC_INT || !w->visited[v->block]) return false;
+  /* 32-bit forms (ssa_narrow32) take the regular path. */
+  if (v->cls != SC_INT || !w->visited[v->block] || v->w32) return false;
   SsaSymbol x = {0, 0, 0}, y = {0, 0, 0}, r = {0, 0, 0};
   switch (v->op) {
   case SO_CONST: r = (SsaSymbol){1, 0, v->aux}; break;
@@ -11030,7 +11519,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
         w->slot = place == 1 ? a->caches[c].evicted_slot : -1;
       }
     }
-    /* Loop headers start on a 16-byte boundary, so short loops do not
+    /* Loop headers start on a SSA_LOOP_HEADER_ALIGN boundary, so short loops do not
        straddle fetch lines; the padding is one multi-byte NOP run. */
     if (!ctx->a64 && !ctx->rv64) {
       bool header = false;
@@ -11039,7 +11528,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
         static const unsigned char nops[][9] = {{0x90}, {0x66, 0x90}, {0x0f, 0x1f, 0x00}, {0x0f, 0x1f, 0x40, 0x00},
           {0x0f, 0x1f, 0x44, 0x00, 0x00}, {0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00}, {0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00},
           {0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00}, {0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00}};
-        unsigned pad = (unsigned)(-ctx->text.n & 15);
+        unsigned pad = (unsigned)(-ctx->text.n & (SSA_LOOP_HEADER_ALIGN - 1));
         while (pad) { unsigned n = pad > 9 ? 9 : pad; code(ctx, nops[n - 1], n); pad -= n; }
       }
     }
@@ -11561,6 +12050,13 @@ allocate:
     if (ssa_reuse_loads(s, order, n)) ssa_resolve_all(s);
     ssa_dce(s, order, n);
   }
+  ssa_combine_loads(s, order, n);
+  ssa_combine_stores(s, order, n);
+  if (!ctx->rv64 && !ctx->rv32 && !ctx->t32) {
+    ssa_narrow32(s, order, n);
+    ssa_rotate64(s, order, n);
+    ssa_late_lea(s, order, n);
+  }
   ssa_fuse(s, order, n);
   ssa_loop_depths(s, order, n);
   ssa_mark_cold(s, order, n);
@@ -11613,7 +12109,11 @@ static bool ssa_finish_literals(Ssa *s) {
   }
   return true;
 }
-/* x86-64 release builds start a function with a loop on a 16-byte boundary.
+/* x86-64 release builds start a function with a loop on a 64-byte boundary,
+   a whole fetch line, so its loops sit at the same place in their lines
+   whatever the linker put before it: with 16, one 16-byte shift of earlier
+   code moved matmul's inner loop across a line and cost it 35%. */
+/* x86-64 release builds start a function with a loop on a 64-byte boundary.
    Its loop headers pad to 16 bytes from where the function starts, so they
    align the same in a shard as in the object, and emission is identical
    whether a worker or the driver does it. The predicate is the one the
@@ -11664,7 +12164,7 @@ static int ssa_emit_prepared(BackendContext *ctx, const DynSource *source, const
   order = layout;
   if (ssa_aligned_entry(ctx, s, order, n)) {
     if (ctx->shard) ctx->shard->aligned_entry = true;
-    while (ctx->text.n & 15) { byte(ctx, 0xcc); ++ctx->ssa_entry_pad; }
+    while (ctx->text.n & (SSA_LOOP_ENTRY_ALIGN - 1)) { byte(ctx, 0xcc); ++ctx->ssa_entry_pad; }
   }
   /* Measure, then emit again with short branches. */
   emit.start = ctx->text.n;
@@ -11860,7 +12360,7 @@ static int ssa_shard_merge(BackendContext *ctx, const SsaEmitted *m) {
   ctx->ssa_allocate_ms += m->allocate_ms; ctx->ssa_emit_ms += m->emit_ms;
   if (m->result != SSA_EMITTED) return m->result;
   if (m->aligned_entry)
-    while (ctx->text.n & 15) { byte(ctx, 0xcc); ++ctx->ssa_entry_pad; }
+    while (ctx->text.n & (SSA_LOOP_ENTRY_ALIGN - 1)) { byte(ctx, 0xcc); ++ctx->ssa_entry_pad; }
   size_t base = ctx->text.n;
   if (!reserve(&ctx->text, base + m->text_length)) return SSA_FAILED;
   if (m->text_length) memcpy(ctx->text.data + base, m->text, m->text_length);

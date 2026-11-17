@@ -15,21 +15,15 @@ pub fn is_open(file: *const File) bool {
 }
 // Adopt transfers responsibility for a native handle to the returned owner.
 pub fn adopt_handle(handle: isize) File {
-  if !native_valid(handle) {
-    return File{}
-  }
+  if !native_valid(handle) { return File{} }
   return owned_file(handle)
 }
 pub fn borrow_handle(handle: isize) File {
-  if !native_valid(handle) {
-    return File{}
-  }
+  if !native_valid(handle) { return File{} }
   return File{ descriptor: handle, active: true }
 }
 pub fn borrow(file: *const File) File {
-  if !is_open(file) {
-    return File{}
-  }
+  if !is_open(file) { return File{} }
   return borrow_handle(file.descriptor)
 }
 pub fn take(file: *File) File {
@@ -54,9 +48,7 @@ fn failure(code: isize) Result {
   return Result{ failure: io.Failure{ kind: native_kind(code), native: code } }
 }
 pub fn close(file: *File) {
-  if !is_open(file) || !file.owned {
-    return
-  }
+  if !is_open(file) || !file.owned { return }
   handle := file.descriptor
   // Never retry close on a possibly reused native handle, including after EINTR.
   file.* = File{}
@@ -64,31 +56,21 @@ pub fn close(file: *File) {
 }
 // Destination borrows caller storage. Zero bytes on a successful nonempty read means EOF.
 pub fn read(file: *File, destination: []u8) Result {
-  if !is_open(file) {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } }
-  }
-  if #len(destination) == 0 {
-    return Result{}
-  }
+  if !is_open(file) { return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
+  if #len(destination) == 0 { return Result{} }
   value := native_read(file.descriptor, destination)
   for native_interrupted(value) {
     value = native_read(file.descriptor, destination)
   }
-  if value < 0 {
-    return failure(value)
-  }
+  if value < 0 { return failure(value) }
   return Result{ transferred: #cast(usize, value) }
 }
 pub fn write(file: *File, source: []const u8) Result {
-  if !is_open(file) {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } }
-  }
+  if !is_open(file) { return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
   written: usize = 0
   for written < #len(source) {
     value := native_write(file.descriptor, source[written..])
-    if native_interrupted(value) {
-      continue
-    }
+    if native_interrupted(value) { continue }
     if value < 0 {
       return Result{ transferred: written, failure: io.Failure{ kind: native_kind(value), native: value } }
     }
@@ -126,12 +108,8 @@ pub fn writer(file: *File) io.Writer {
 }
 // origin: 0 start, 1 current, 2 end.
 pub fn seek(file: *File, offset: isize, origin: usize) OffsetResult {
-  if !is_open(file) {
-    return OffsetResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
-  }
-  if origin > 2 {
-    return OffsetResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
+  if !is_open(file) { return OffsetResult{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
+  if origin > 2 { return OffsetResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
   value := native_seek(file.descriptor, offset, origin)
   if value < 0 {
     return OffsetResult{ failure: io.Failure{ kind: native_kind(value), native: value } }
@@ -139,13 +117,9 @@ pub fn seek(file: *File, offset: isize, origin: usize) OffsetResult {
   return OffsetResult{ value: #cast(usize, value) }
 }
 pub fn sync(file: *File) Result {
-  if !is_open(file) {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } }
-  }
+  if !is_open(file) { return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
   value := native_sync(file.descriptor)
-  if value < 0 {
-    return failure(value)
-  }
+  if value < 0 { return failure(value) }
   return Result{}
 }
 
@@ -158,25 +132,19 @@ pub type Mapping = io.Result([]const u8)
 // Maps the whole file. The file position is unchanged, and the file may be
 // closed while the mapping stays valid.
 pub fn map(file: *const File) Mapping {
-  if !is_open(file) {
-    return Mapping{ failure: io.Failure{ kind: io.Kind.InvalidState } }
-  }
+  if !is_open(file) { return Mapping{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
   current := native_seek(file.descriptor, 0, 1)
   if current < 0 {
     return Mapping{ failure: io.Failure{ kind: native_kind(current), native: current } }
   }
   end := native_seek(file.descriptor, 0, 2)
   restored := native_seek(file.descriptor, current, 0)
-  if end < 0 {
-    return Mapping{ failure: io.Failure{ kind: native_kind(end), native: end } }
-  }
+  if end < 0 { return Mapping{ failure: io.Failure{ kind: native_kind(end), native: end } } }
   if restored < 0 {
     return Mapping{ failure: io.Failure{ kind: native_kind(restored), native: restored } }
   }
   size := #cast(usize, end)
-  if size == 0 {
-    return Mapping{}
-  }
+  if size == 0 { return Mapping{} }
   address := native_map(file.descriptor, size)
   if address < 0 {
     return Mapping{ failure: io.Failure{ kind: native_kind(address), native: address } }
@@ -187,14 +155,10 @@ pub fn map(file: *const File) Mapping {
 
 // Releases a mapping and clears it. Unmapping a zero Mapping succeeds.
 pub fn unmap(mapping: *Mapping) Result {
-  if mapping == nil {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
+  if mapping == nil { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
   if #len(mapping.value) != 0 {
     value := native_unmap(#cast(usize, &mapping.value[0]), #len(mapping.value))
-    if value < 0 {
-      return failure(value)
-    }
+    if value < 0 { return failure(value) }
   }
   mapping.* = Mapping{}
   return Result{}
@@ -237,9 +201,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
         kind = extra.failure.kind
         break
       }
-      if extra.transferred == 0 {
-        break
-      }
+      if extra.transferred == 0 { break }
       if total == maximum {
         kind = io.Kind.Overflow
         break
@@ -325,9 +287,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
       kind = part.failure.kind
       break
     }
-    if part.transferred == 0 {
-      break
-    }
+    if part.transferred == 0 { break }
   }
   close(&opened.value)
   if kind != io.Kind.Ok {

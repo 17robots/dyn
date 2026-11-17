@@ -5,9 +5,7 @@ struct Kevent { ident: u64, filter: i16, flags: u16, filter_flags: u32, data: i6
 struct Timeout { seconds: i64, nanoseconds: i64 }
 fn native_open() net.Result {
   value := #syscall(sys.Kqueue)
-  if value < 0 {
-    return net.Result{ failure: io.darwin_failure(value) }
-  }
+  if value < 0 { return net.Result{ failure: io.darwin_failure(value) } }
   return net.Result{ value: value }
 }
 fn native_close(handle: isize) Result {
@@ -39,9 +37,7 @@ fn native_control(queue: *Queue, index: usize, entry: Entry) Result {
     }
   }
   code := #syscall(sys.Kevent, queue.handle, &changes[0], count, 0, 0, 0)
-  if code < 0 {
-    return Result{ failure: io.darwin_failure(code) }
-  }
+  if code < 0 { return Result{ failure: io.darwin_failure(code) } }
   return Result{}
 }
 fn native_wait(arena: *mem.Arena, queue: *Queue, milliseconds: i32) WaitResult {
@@ -54,9 +50,7 @@ fn native_wait(arena: *mem.Arena, queue: *Queue, milliseconds: i32) WaitResult {
     pointer = &timeout
   }
   code := #syscall(sys.Kevent, queue.handle, 0, 0, &native[0], #len(native), pointer)
-  if code < 0 {
-    return WaitResult{ failure: io.darwin_failure(code) }
-  }
+  if code < 0 { return WaitResult{ failure: io.darwin_failure(code) } }
   events := mem.push_array(Event, arena, #cast(usize, code))
   for i in 0..#len(events) {
     entry := queue.entries[#cast(usize, native[i].user)]

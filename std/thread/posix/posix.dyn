@@ -8,6 +8,7 @@
 
 use "std/io" io
 use "std/mem" mem
+use "std/os/linux/sys"
 use "std/thread" threading
 
 // Large enough for pthread_attr_t on every supported glibc and musl target.
@@ -17,6 +18,21 @@ extern fn attr_stack_size "pthread_attr_setstacksize"(attributes: *Attributes, s
 extern fn attr_destroy "pthread_attr_destroy"(attributes: *Attributes) i32
 extern fn create "pthread_create"(thread: *usize, attributes: *const Attributes, entry: fn(rawptr) rawptr, context: rawptr) i32
 extern fn wait "pthread_join"(thread: usize, value: *rawptr) i32
+
+// New threads start with SIGHUP, SIGINT and SIGTERM blocked (the mask is
+// inherited), so those process signals reach the thread that unblocks or
+// watches them (std/process/signal), never a worker started earlier.
+fn block_quit_signals() u64 {
+  mask: u64 = 0x4003
+  previous: u64 = 0
+  _ = #syscall(sys.RtSigprocmask, 0, &mask, &previous, 8)
+  return previous
+}
+
+fn restore_signals(previous: u64) {
+  saved := previous
+  _ = #syscall(sys.RtSigprocmask, 2, &saved, 0, 8)
+}
 
 pub struct Thread { handle: usize, entry: fn(rawptr) isize, context: rawptr, joined: bool }
 pub type SpawnResult = io.Result(*Thread)
@@ -40,21 +56,19 @@ fn spawn_untyped(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, 
   }
   attributes := Attributes{}
   error := attr_init(&attributes)
-  if error != 0 {
-    return SpawnResult{ failure: io.linux_failure(0 - #cast(isize, error)) }
-  }
+  if error != 0 { return SpawnResult{ failure: io.linux_failure(0 - #cast(isize, error)) } }
   defer {
     _ = attr_destroy(&attributes)
   }
   error = attr_stack_size(&attributes, (stack_size + 4095) & ~#cast(usize, 4095))
-  if error != 0 {
-    return SpawnResult{ failure: io.linux_failure(0 - #cast(isize, error)) }
-  }
+  if error != 0 { return SpawnResult{ failure: io.linux_failure(0 - #cast(isize, error)) } }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
   thread.entry = entry
   thread.context = context
+  signals := block_quit_signals()
   error = create(&thread.handle, &attributes, trampoline, thread)
+  restore_signals(signals)
   if error != 0 {
     mem.arena_rewind(arena, mark)
     return SpawnResult{ failure: io.linux_failure(0 - #cast(isize, error)) }
@@ -64,23 +78,17 @@ fn spawn_untyped(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, 
 
 // Waits for the thread. A joined Thread joins again as a no-op.
 pub fn join(thread: *Thread) io.Failure {
-  if thread.joined {
-    return io.Failure{}
-  }
+  if thread.joined { return io.Failure{} }
   value: rawptr = nil
   error := wait(thread.handle, &value)
-  if error != 0 {
-    return io.linux_failure(0 - #cast(isize, error))
-  }
+  if error != 0 { return io.linux_failure(0 - #cast(isize, error)) }
   thread.joined = true
   return io.Failure{}
 }
 
 fn spawner_spawn(data: rawptr, arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) rawptr {
   spawned := spawn_untyped(arena, stack_size, entry, context)
-  if io.failed(spawned.failure) {
-    return nil
-  }
+  if io.failed(spawned.failure) { return nil }
   return spawned.value
 }
 

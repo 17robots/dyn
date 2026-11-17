@@ -324,7 +324,7 @@ typedef struct SsaShard {
   struct SsaShardPiece { size_t at, length; uint32_t align; bool raw; } *pieces;
   uint32_t piece_count, piece_capacity;
   char *bytes; size_t byte_count, byte_capacity;
-  bool aligned_entry; /* the function starts on a 16-byte boundary (ssa_aligned_entry) */
+  bool aligned_entry; /* the function starts on a SSA_LOOP_ENTRY_ALIGN boundary (ssa_aligned_entry) */
 } SsaShard;
 /* The rodata addend that names the start of piece. */
 static int64_t shard_tag(uint32_t piece) { return SHARD_TAG + ((int64_t)piece << 32); }

@@ -38,13 +38,9 @@ fn native_wait_timeout(address: *AtomicU32, expected: u32, duration: i64) isize 
     milliseconds = 4294967294
   }
   compared := expected
-  if wait_address(&address.value, &compared, 4, #cast(u32, milliseconds)) != 0 {
-    return 0
-  }
+  if wait_address(&address.value, &compared, 4, #cast(u32, milliseconds)) != 0 { return 0 }
   code := wait_error()
-  if code == 1460 {
-    return 1
-  }
+  if code == 1460 { return 1 }
   return 0 - #cast(isize, code)
 }
 fn native_sync_error(code: isize) io.Kind {

@@ -33,60 +33,43 @@ fn native_would_block(code: isize) bool {
 fn address_family(bytes: []u8, _length: usize, family: usize) {
   bytes[0] = #cast(u8, family)
 }
+fn read_family(bytes: []const u8) usize {
+  return #cast(usize, bytes[0])
+}
 fn native_status(value: i32) isize {
-  if value == -1 {
-    return win.socket_error()
-  }
+  if value == -1 { return win.socket_error() }
   return value
 }
 fn native_socket(family: usize, kind: usize, protocol: usize) isize {
-  if family > 2147483647 || kind > 2147483647 || protocol > 2147483647 {
-    return -22
-  }
+  if family > 2147483647 || kind > 2147483647 || protocol > 2147483647 { return -22 }
   opened := win.socket_open(#cast(i32, family), #cast(i32, kind), #cast(i32, protocol))
-  if io.failed(opened.failure) {
-    return 0 - opened.failure.native
-  }
+  if io.failed(opened.failure) { return 0 - opened.failure.native }
   return opened.value
 }
 fn native_close(descriptor: isize) isize {
-  if win.socket_close(#cast(usize, descriptor)) {
-    return 0
-  }
+  if win.socket_close(#cast(usize, descriptor)) { return 0 }
   return win.socket_error()
 }
 fn native_listen(descriptor: isize, backlog: usize) isize {
-  if backlog > 2147483647 {
-    return -22
-  }
+  if backlog > 2147483647 { return -22 }
   return native_status(raw_listen(#cast(usize, descriptor), #cast(i32, backlog)))
 }
 fn native_shutdown(descriptor: isize, how: usize) isize {
-  if how > 2 {
-    return -22
-  }
+  if how > 2 { return -22 }
   return native_status(raw_shutdown(#cast(usize, descriptor), #cast(i32, how)))
 }
 fn native_connect(descriptor: isize, address: *const u8, length: usize) isize {
-  if length > 2147483647 {
-    return -22
-  }
-  if win.socket_connect(#cast(usize, descriptor), #slice(address, length)) {
-    return 0
-  }
+  if length > 2147483647 { return -22 }
+  if win.socket_connect(#cast(usize, descriptor), #slice(address, length)) { return 0 }
   return win.socket_error()
 }
 fn native_bind(descriptor: isize, address: *const u8, length: usize) isize {
-  if length > 2147483647 {
-    return -22
-  }
+  if length > 2147483647 { return -22 }
   return native_status(raw_bind(#cast(usize, descriptor), address, #cast(i32, length)))
 }
 fn native_accept(descriptor: isize, address: *u8, length: *u32) isize {
   value := raw_accept(#cast(usize, descriptor), address, length)
-  if value == #max(usize) {
-    return win.socket_error()
-  }
+  if value == #max(usize) { return win.socket_error() }
   return #cast(isize, value)
 }
 fn native_local(descriptor: isize, address: *u8, length: *u32) isize {
@@ -96,21 +79,15 @@ fn native_peer(descriptor: isize, address: *u8, length: *u32) isize {
   return native_status(raw_peer(#cast(usize, descriptor), address, length))
 }
 fn native_send(descriptor: isize, data: *const u8, length: usize, flags: usize, address: *const u8, address_length: usize) isize {
-  if length > 2147483647 || flags > 2147483647 || address_length > 2147483647 {
-    return -22
-  }
+  if length > 2147483647 || flags > 2147483647 || address_length > 2147483647 { return -22 }
   return native_status(raw_send(#cast(usize, descriptor), data, #cast(i32, length), #cast(i32, flags), address, #cast(i32, address_length)))
 }
 fn native_receive(descriptor: isize, data: *u8, length: usize, flags: usize, address: *u8, address_length: *u32) isize {
-  if length > 2147483647 || flags > 2147483647 {
-    return -22
-  }
+  if length > 2147483647 || flags > 2147483647 { return -22 }
   return native_status(raw_receive(#cast(usize, descriptor), data, #cast(i32, length), #cast(i32, flags), address, address_length))
 }
 fn native_set_option(descriptor: isize, level: usize, option: usize, data: rawptr, length: usize) isize {
-  if length > 2147483647 {
-    return -22
-  }
+  if length > 2147483647 { return -22 }
   return native_status(raw_set_option(#cast(usize, descriptor), #cast(i32, level), #cast(i32, option), data, #cast(i32, length)))
 }
 fn native_get_option(descriptor: isize, level: usize, option: usize, data: rawptr, length: *u32) isize {
@@ -124,9 +101,7 @@ fn native_nonblocking(descriptor: isize, enabled: bool) isize {
   return native_status(raw_ioctl(#cast(usize, descriptor), -2147195266, &value))
 }
 fn native_timeout(descriptor: isize, milliseconds: usize, sending: bool) isize {
-  if milliseconds > 4294967295 {
-    return -22
-  }
+  if milliseconds > 4294967295 { return -22 }
   value := #cast(u32, milliseconds)
   option: usize = 4102
   if sending {
@@ -143,13 +118,9 @@ fn poll_native(items: []PollDescriptor, milliseconds: i32) isize {
     raw_idle(duration)
     return 0
   }
-  if #len(items) > 4294967295 {
-    return -22
-  }
+  if #len(items) > 4294967295 { return -22 }
   for i in 0..#len(items) {
-    if (items[i].events & ~#cast(i16, 29)) != 0 {
-      return -22
-    }
+    if (items[i].events & ~#cast(i16, 29)) != 0 { return -22 }
   }
   for i in 0..#len(items) {
     requested: i16 = 0
@@ -200,9 +171,7 @@ pub fn receive_packet(descriptor: isize, bytes: []u8) Result {
   for native_interrupted(value) {
     value = native_receive(descriptor, data, #len(bytes), 0, nil, nil)
   }
-  if value == -10040 {
-    return result(#cast(isize, #len(bytes)) + 1)
-  }
+  if value == -10040 { return result(#cast(isize, #len(bytes)) + 1) }
   return result(value)
 }
 
@@ -212,9 +181,7 @@ fn native_kind(code: isize) io.Kind {
   if value < 0 {
     value = 0 - value
   }
-  if value < 10000 {
-    return io.linux(code)
-  }
+  if value < 10000 { return io.linux(code) }
   case value {
     10004 => {
       return io.Kind.Interrupted

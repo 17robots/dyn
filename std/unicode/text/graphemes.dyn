@@ -16,9 +16,7 @@ pub fn next_grapheme(state: *Graphemes) GraphemeResult {
   if state.error != parse.Kind.Ok {
     return GraphemeResult{ offset: state.error_offset, failure: parse.Failure{ kind: state.error, offset: state.error_offset } }
   }
-  if state.offset == #len(state.source) {
-    return GraphemeResult{}
-  }
+  if state.offset == #len(state.source) { return GraphemeResult{} }
   start := state.offset
   first := utf8.decode(state.source, start)
   if !first.valid {
@@ -69,9 +67,7 @@ pub fn next_grapheme(state: *Graphemes) GraphemeResult {
     } else if previous == 6 && current == 6 && regional % 2 == 1 {
       join = true
     }
-    if !join {
-      break
-    }
+    if !join { break }
     if current == 5 {
       zwj_pictograph = pictograph
     }

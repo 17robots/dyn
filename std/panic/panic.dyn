@@ -10,9 +10,7 @@ handler: fn([]const u8)
 
 fn run(message: *const u8, length: u64) {
   callback := handler
-  if callback == nil {
-    return
-  }
+  if callback == nil { return }
   if message == nil {
     callback("")
     return

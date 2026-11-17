@@ -84,9 +84,7 @@ fn mutate(generator: *Random, sample: []u8, length: usize, corpus: []const []con
     // Splice: keep a prefix, append a suffix of another corpus entry.
     other := corpus[random_below(generator, #len(corpus))]
     keep := random_below(generator, length + 1)
-    if #len(other) == 0 {
-      return keep
-    }
+    if #len(other) == 0 { return keep }
     from := random_below(generator, #len(other))
     return keep + copy_into(sample[keep..], other[from..])
   }
@@ -154,9 +152,7 @@ pub fn remaining(state: *const Source) usize {
 }
 
 pub fn take_u8(state: *Source) u8 {
-  if state.at == #len(state.data) {
-    return 0
-  }
+  if state.at == #len(state.data) { return 0 }
   value := state.data[state.at]
   state.at += 1
   return value
@@ -185,9 +181,7 @@ pub fn take_u64(state: *Source) u64 {
 
 // A value in 0..bound; zero when bound is zero.
 pub fn take_below(state: *Source, bound: u64) u64 {
-  if bound == 0 {
-    return 0
-  }
+  if bound == 0 { return 0 }
   return take_u64(state) % bound
 }
 

@@ -34,7 +34,6 @@ pub struct Result { offset: usize, failure: io.Failure }
 
 pub struct WebSocketResult { event: WebSocketEvent, offset: usize, failure: io.Failure }
 
-const WsMod32: u64 = 4294967296
 const WsU8Zero: u8 = 0
 const WsU8Three: u8 = 3
 const WsU8Seven: u8 = 7
@@ -65,21 +64,12 @@ const WsU32High: u32 = 16777216
 const WsU64Byte: u64 = 256
 const WsU64Word: u64 = 65536
 const WsU64High: u64 = 16777216
+// Std code wraps on overflow in every build mode, so + and << are mod 2^32.
 fn ws_add32(left: u32, right: u32) u32 {
-  wide_left: u64 = left
-  wide_right: u64 = right
-  return #cast(u32, ((wide_left + wide_right) % WsMod32))
+  return left + right
 }
-fn ws_shl(value: u32, count: usize) u32 {
-  factor: u64 = 1
-  for i in 0..count {
-    factor *= 2
-  }
-  wide_value: u64 = value
-  return #cast(u32, ((wide_value * factor) % WsMod32))
-}
-fn ws_rol(value: u32, count: usize) u32 {
-  return ws_shl(value, count) | (value >> (32 - count))
+fn ws_rol(value: u32, count: u32) u32 {
+  return (value << count) | (value >> (32 - count))
 }
 fn ws_sha1_block(state: []u32, block: []const u8) {
   words: [80]u32
@@ -135,20 +125,14 @@ fn ws_sha1_block(state: []u32, block: []const u8) {
 }
 
 fn ws_equal(left: []const u8, right: []const u8) bool {
-  if #len(left) != #len(right) {
-    return false
-  }
+  if #len(left) != #len(right) { return false }
   for i in 0..#len(left) {
-    if left[i] != right[i] {
-      return false
-    }
+    if left[i] != right[i] { return false }
   }
   return true
 }
 fn ws_equal_case(left: []const u8, right: []const u8) bool {
-  if #len(left) != #len(right) {
-    return false
-  }
+  if #len(left) != #len(right) { return false }
   for i in 0..#len(left) {
     a := left[i]
     b := right[i]
@@ -158,9 +142,7 @@ fn ws_equal_case(left: []const u8, right: []const u8) bool {
     if b >= 'A' && b <= 'Z' {
       b += 32
     }
-    if a != b {
-      return false
-    }
+    if a != b { return false }
   }
   return true
 }
@@ -244,23 +226,17 @@ fn websocket_validate_upgrade_request(request: []const u8) WebSocketUpgrade {
 fn websocket_write_upgrade_response(destination: []u8, key: []const u8) []u8 {
   accept_storage: [28]u8
   accept_value := websocket_accept(accept_storage[..], key)
-  if #len(accept_value) == 0 {
-    return destination[..0]
-  }
+  if #len(accept_value) == 0 { return destination[..0] }
   at := ws_append(destination, 0, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ")
   at = ws_append(destination, at, accept_value)
   at = ws_append(destination, at, "\r\n\r\n")
-  if at > #len(destination) {
-    return destination[..0]
-  }
+  if at > #len(destination) { return destination[..0] }
   return destination[..at]
 }
 
 fn websocket_validate_upgrade_response(response: []const u8, key: []const u8) bool {
   head := http.parse_response(response)
-  if parse.failed(head.failure) || head.code != 101 {
-    return false
-  }
+  if parse.failed(head.failure) || head.code != 101 { return false }
   upgrade := http.header(response, "Upgrade")
   connection_header := http.header(response, "Connection")
   accept_header := http.header(response, "Sec-WebSocket-Accept")
@@ -439,9 +415,7 @@ fn websocket_decode(destination: []u8, frame: WebSocketFrame) []u8 {
 }
 
 fn ws_decode_at(destination: []u8, at: usize, frame: WebSocketFrame) bool {
-  if at > #len(destination) || #len(frame.payload) > #len(destination) - at {
-    return false
-  }
+  if at > #len(destination) || #len(frame.payload) > #len(destination) - at { return false }
   keys: [4]u8 = [#cast(u8, (frame.mask >> 24)), #cast(u8, (frame.mask >> 16)), #cast(u8, (frame.mask >> 8)), #cast(u8, frame.mask)]
   i: usize = 0
   for i < #len(frame.payload) {
@@ -480,31 +454,21 @@ fn ws_utf8(bytes: []const u8) bool {
     } else {
       return false
     }
-    if need > #len(bytes) - i - 1 {
-      return false
-    }
+    if need > #len(bytes) - i - 1 { return false }
     for j in 0..need {
       next := bytes[i + j + 1]
-      if next < 128 || next > 191 {
-        return false
-      }
+      if next < 128 || next > 191 { return false }
       value = value * 64 + (next & 63)
     }
-    if value < minimum || value > 1114111 || (value >= 55296 && value <= 57343) {
-      return false
-    }
+    if value < minimum || value > 1114111 || (value >= 55296 && value <= 57343) { return false }
     i += need + 1
   }
   return true
 }
 
 fn ws_close_code(code: u16) bool {
-  if code < 1000 || code >= 5000 {
-    return false
-  }
-  if code == 1004 || code == 1005 || code == 1006 || code == 1015 {
-    return false
-  }
+  if code < 1000 || code >= 5000 { return false }
+  if code == 1004 || code == 1005 || code == 1006 || code == 1015 { return false }
   return code <= 1014 || code >= 3000
 }
 
@@ -674,15 +638,11 @@ pub fn connection_send(state: *WebSocketConnection, opcode: u8, payload: []const
   if state.failed {
     return Result{ offset: state.offset, failure: io.Failure{ kind: state.kind, native: state.error } }
   }
-  if !state.active {
-    return ws_connection_fail(state, io.Kind.InvalidState, 0)
-  }
+  if !state.active { return ws_connection_fail(state, io.Kind.InvalidState, 0) }
   if state.close_sent || (state.state.closed && opcode != WsU8Eight) {
     return Result{ failure: io.Failure{ kind: io.Kind.InvalidState, native: 0 } }
   }
-  if state.output.write == nil {
-    return ws_connection_fail(state, io.Kind.InvalidState, 0)
-  }
+  if state.output.write == nil { return ws_connection_fail(state, io.Kind.InvalidState, 0) }
   if state.frame_used > #len(state.frames) || state.frame_consumed > state.frame_used {
     return ws_connection_fail(state, io.Kind.InvalidState, 0)
   }
@@ -699,9 +659,7 @@ pub fn connection_send(state: *WebSocketConnection, opcode: u8, payload: []const
   if #len(frame) == 0 {
     frame = websocket_write(state.frames[state.frame_used..], opcode, payload, final, state.client, mask)
   }
-  if #len(frame) == 0 {
-    return ws_connection_fail(state, io.Kind.Capacity, 0)
-  }
+  if #len(frame) == 0 { return ws_connection_fail(state, io.Kind.Capacity, 0) }
   result := io.write_all(state.output, frame)
   if io.failed(result.failure) {
     return ws_connection_fail(state, result.failure.kind, result.failure.native)
@@ -724,9 +682,7 @@ pub fn connection_close(state: *WebSocketConnection, payload: []const u8, mask: 
   if state.failed {
     return Result{ offset: state.offset, failure: io.Failure{ kind: state.kind, native: state.error } }
   }
-  if !state.active || state.close_sent {
-    return Result{}
-  }
+  if !state.active || state.close_sent { return Result{} }
   return connection_send(state, 8, payload, true, mask)
 }
 

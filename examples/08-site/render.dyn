@@ -56,9 +56,7 @@ fn render_page(w: *html.Writer, text: []const u8) {
   block := Block.Nothing
   for {
     next := strings.scan_line(&scan)
-    if !next.found {
-      break
-    }
+    if !next.found { break }
     line := strings.trim(next.value)
     if #len(line) == 0 {
       close_block(w, block)

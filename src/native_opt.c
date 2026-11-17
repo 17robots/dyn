@@ -348,6 +348,9 @@ typedef struct {
   bool *active;
   /* Locals whose address is taken anywhere; a call may change them. */
   bool *addressed;
+  /* Original expression ID -> 1 + the rebuilt expression holding its value,
+     for pure leaf calls hoisted out of the statement being rebuilt. */
+  uint32_t *substitute;
   /* Original local ID -> 0 unknown, 1 varying/unsafe, or literal ID + 2.
      Facts only describe readonly scalar parameters of private direct callees. */
   uint32_t *param_literals;
@@ -613,6 +616,8 @@ static DynExprId inline_expr(Inline *b, const InlineScope *scope, DynExprId id,
     b->failed = true;
     return DYN_NO_EXPR;
   }
+  if (b->substitute && b->substitute[id])
+    return b->substitute[id] - 1;
   unsigned shared_budget = 1024;
   if (inline_shared_expr(b->in, id, 0, &shared_budget,
                          scope->check_origin != 0))
@@ -932,6 +937,10 @@ static bool inline_call_bound(Inline *b, const InlineScope *scope,
   uint32_t node = overridden ? b->override_node : 0;
   b->overridden = false;
   if (call->kind != DYN_EXPR_CALL || (uint64_t)call->item_start + call->item_count > b->in->item_count)
+    return false;
+  /* Already expanded by inline_hoist; its value is substituted. */
+  DynExprId original_site = inline_site(b, site);
+  if (!overridden && b->substitute && original_site != DYN_NO_EXPR && b->substitute[original_site])
     return false;
   if (!overridden && scope->expand) {
     node = inline_plan_node(b, scope, inline_site(b, site));
@@ -1445,6 +1454,131 @@ static void inline_plan(Inline *b, uint32_t caller) {
     inline_plan_walk(b, best, f->body_start, f->body_count, weight, true, 0, &visits);
   }
 }
+/* An expression that cannot trap or have effects: wrapping arithmetic, no
+   division, no memory access but by-value fields. */
+static bool inline_pure_expr(const DynIrProgram *ir, DynExprId id, unsigned *remaining) {
+  if (id == DYN_NO_EXPR)
+    return true;
+  if (id >= ir->expression_count || !*remaining)
+    return false;
+  --*remaining;
+  const DynIrExpr *e = &ir->expressions[id];
+  switch (e->kind) {
+  case DYN_EXPR_INT: case DYN_EXPR_FLOAT: case DYN_EXPR_BOOL:
+  case DYN_EXPR_CHAR: case DYN_EXPR_NIL: case DYN_EXPR_NAME:
+    return true;
+  case DYN_EXPR_UNARY:
+    if (e->op != DYN_OP_NOT && e->op != DYN_OP_BIT_NOT &&
+        !(e->op == DYN_OP_NEG && (e->wrap || e->type == DYN_TYPE_F32 || e->type == DYN_TYPE_F64)))
+      return false;
+    break;
+  case DYN_EXPR_BINARY:
+    if (e->op == DYN_OP_DIV || e->op == DYN_OP_REM)
+      return false;
+    if (dyn_op_wraps(e->op) && !e->wrap && e->type != DYN_TYPE_F32 && e->type != DYN_TYPE_F64)
+      return false;
+    break;
+  case DYN_EXPR_FIELD:
+    /* p.x through a pointer reads memory another call may write. */
+    if (e->left < ir->expression_count && dyn_type_is_pointer(ir->expressions[e->left].type))
+      return false;
+    break;
+  case DYN_EXPR_CONVERT: case DYN_EXPR_CAST: case DYN_EXPR_BITCAST:
+  case DYN_EXPR_STRUCT:
+    break;
+  default:
+    return false;
+  }
+  if (!inline_pure_expr(ir, e->left, remaining) || !inline_pure_expr(ir, e->right, remaining) ||
+      (uint64_t)e->item_start + e->item_count > ir->item_count)
+    return false;
+  for (uint32_t i = 0; i < e->item_count; ++i)
+    if (!inline_pure_expr(ir, ir->items[e->item_start + i].expression, remaining))
+      return false;
+  return true;
+}
+/* A single-return leaf whose result depends only on its arguments, without
+   traps: running it earlier or later than written changes nothing. */
+static bool inline_pure_leaf(const DynIrProgram *ir, uint64_t function) {
+  if (function >= ir->function_count) return false;
+  const DynIrFunction *f = &ir->functions[function];
+  if (f->foreign || f->generic || f->variadic || !inline_leaf(ir, f)) return false;
+  unsigned remaining = 24;
+  return inline_pure_expr(ir, ir->statements[ir->children[f->body_start]].expression, &remaining);
+}
+/* Whether evaluating id earlier than written gives the same value: pure
+   operations on literals, locals no pointer reaches, and pure leaf calls. */
+static bool inline_hoistable(const Inline *b, DynExprId id, unsigned depth) {
+  if (id == DYN_NO_EXPR) return true;
+  if (id >= b->in->expression_count || depth > 32) return false;
+  const DynIrExpr *e = &b->in->expressions[id];
+  if (inline_literal(e)) return true;
+  if (e->kind == DYN_EXPR_NAME)
+    return (uint64_t)e->integer < b->in->local_count && !b->addressed[e->integer];
+  if (e->kind == DYN_EXPR_CALL) {
+    if (!inline_pure_leaf(b->in, e->integer) || (uint64_t)e->item_start + e->item_count > b->in->item_count)
+      return false;
+    for (uint32_t i = 0; i < e->item_count; ++i)
+      if (!inline_hoistable(b, b->in->items[e->item_start + i].expression, depth + 1)) return false;
+    return true;
+  }
+  if (e->kind != DYN_EXPR_UNARY && e->kind != DYN_EXPR_BINARY && e->kind != DYN_EXPR_CONVERT &&
+      e->kind != DYN_EXPR_CAST && e->kind != DYN_EXPR_BITCAST)
+    return false;
+  /* The node itself must be pure; its operands are checked recursively. */
+  if (e->kind == DYN_EXPR_UNARY && e->op != DYN_OP_NOT && e->op != DYN_OP_BIT_NOT &&
+      !(e->op == DYN_OP_NEG && (e->wrap || e->type == DYN_TYPE_F32 || e->type == DYN_TYPE_F64)))
+    return false;
+  if (e->kind == DYN_EXPR_BINARY && (e->op == DYN_OP_DIV || e->op == DYN_OP_REM ||
+      (dyn_op_wraps(e->op) && !e->wrap && e->type != DYN_TYPE_F32 && e->type != DYN_TYPE_F64)))
+    return false;
+  return inline_hoistable(b, e->left, depth + 1) && inline_hoistable(b, e->right, depth + 1);
+}
+/* Pure leaf calls in id, innermost first in evaluation order, except under
+   the right operand of && and ||, which may not run. */
+static void inline_hoist_sites(const Inline *b, DynExprId id, DynExprId *sites, unsigned *count, unsigned depth) {
+  if (id == DYN_NO_EXPR || id >= b->in->expression_count || depth > 32 || *count >= 32) return;
+  const DynIrExpr *e = &b->in->expressions[id];
+  if (e->kind == DYN_EXPR_BINARY && (e->op == DYN_OP_LOGICAL_AND || e->op == DYN_OP_LOGICAL_OR)) {
+    inline_hoist_sites(b, e->left, sites, count, depth + 1);
+    return;
+  }
+  if (e->kind == DYN_EXPR_CALL) {
+    if ((uint64_t)e->item_start + e->item_count > b->in->item_count) return;
+    for (uint32_t i = 0; i < e->item_count; ++i)
+      inline_hoist_sites(b, b->in->items[e->item_start + i].expression, sites, count, depth + 1);
+    if (inline_hoistable(b, id, 0) && *count < 32) sites[(*count)++] = id;
+    return;
+  }
+  if (e->kind == DYN_EXPR_SLICE) inline_hoist_sites(b, (DynExprId)e->integer, sites, count, depth + 1);
+  inline_hoist_sites(b, e->left, sites, count, depth + 1);
+  inline_hoist_sites(b, e->right, sites, count, depth + 1);
+  if ((uint64_t)e->item_start + e->item_count > b->in->item_count) return;
+  for (uint32_t i = 0; i < e->item_count; ++i)
+    inline_hoist_sites(b, b->in->items[e->item_start + i].expression, sites, count, depth + 1);
+}
+/* The spine expands one call per statement. Pure leaf calls elsewhere in
+   the statement, such as each rotr in rotr(e, 6) ^ rotr(e, 11), expand
+   first into locals the rebuilt expression reads. Returns how many sites
+   were substituted; inline_hoist_clear undoes them after the statement. */
+static unsigned inline_hoist(Inline *b, const InlineScope *scope, DynExprId id, InlineList *list,
+                             unsigned depth, DynExprId *sites) {
+  unsigned count = 0;
+  if (!scope->expand || !b->substitute || b->leaf_only) return 0;
+  inline_hoist_sites(b, id, sites, &count, 0);
+  unsigned done = 0;
+  for (unsigned i = 0; i < count && !b->failed; ++i) {
+    DynExprId value = DYN_NO_EXPR;
+    if (!inline_call(b, scope, &b->in->expressions[sites[i]], list, &value, depth) || value == DYN_NO_EXPR)
+      continue;
+    b->substitute[sites[i]] = value + 1;
+    sites[done++] = sites[i];
+  }
+  return done;
+}
+static void inline_hoist_clear(Inline *b, const DynExprId *sites, unsigned count) {
+  for (unsigned i = 0; i < count; ++i) b->substitute[sites[i]] = 0;
+}
 static void inline_block(Inline *b, const InlineScope *scope, uint32_t start,
                          uint32_t count, InlineList *list, unsigned depth) {
   if (b->failed)
@@ -1471,6 +1605,9 @@ static void inline_block(Inline *b, const InlineScope *scope, uint32_t start,
          inline_simple_target(b->in, s.target)) ||
         (s.kind == DYN_STMT_ASSIGN && s.assignment_op != DYN_OP_NONE &&
          inline_stable_operand(b->in, b->addressed, s.target));
+    DynExprId hoisted[32];
+    unsigned hoisted_count = eligible && s.expression < b->in->expression_count
+                                 ? inline_hoist(b, scope, s.expression, list, depth, hoisted) : 0;
     InlineList expansion = {0};
     bool expanded = eligible && s.expression < b->in->expression_count &&
                     inline_cast_call(b, scope, s.expression, &expansion,
@@ -1487,9 +1624,12 @@ static void inline_block(Inline *b, const InlineScope *scope, uint32_t start,
     if (b->failed)
       return;
     /* An expanded call with no value has run; `_ = f()` of one is done too. */
-    if (expanded && (s.kind == DYN_STMT_EXPR || s.kind == DYN_STMT_ASSIGN) && value == DYN_NO_EXPR)
+    if (expanded && (s.kind == DYN_STMT_EXPR || s.kind == DYN_STMT_ASSIGN) && value == DYN_NO_EXPR) {
+      inline_hoist_clear(b, hoisted, hoisted_count);
       continue;
+    }
     s.expression = expanded ? value : inline_expr(b, scope, s.expression, 0);
+    inline_hoist_clear(b, hoisted, hoisted_count);
     if (!captured)
       s.target = inline_expr(b, scope, s.target, 0);
     if (s.kind == DYN_STMT_LOCAL || s.kind == DYN_STMT_ASSIGN ||
@@ -1697,6 +1837,8 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
     b.loop_span[i] = low == UINT32_MAX ? 0 : high - low + 1;
   }
   b.addressed = calloc(b.in->local_count ? b.in->local_count : 1, sizeof(bool));
+  b.substitute = calloc(b.in->expression_count ? b.in->expression_count : 1, sizeof(*b.substitute));
+  if (!b.substitute) b.failed = true;
   // Uniform-parameter qualification currently covers native x86-64 SSA only;
   // other backends retain their previous optimization and allocation paths.
   if (b.uniform_params) {
@@ -1815,6 +1957,7 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
   free(b.loop_low);
   free(b.loop_span);
   free(b.addressed);
+  free(b.substitute);
   free(b.param_literals);
   free(b.escaped);
   free(b.guess_types);

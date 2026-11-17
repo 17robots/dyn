@@ -10,9 +10,7 @@ fn load(source: []const u8, at: usize) u64 {
   return binary.load_u32_le(source[at..at+4])
 }
 pub fn init(key: []const u8) State {
-  if #len(key) != 32 {
-    return State{}
-  }
+  if #len(key) != 32 { return State{} }
   state := State{ valid: true }
   state.r[0] = load(key, 0) & 0x3ffffff
   state.r[1] = (load(key, 3) >> 2) & 0x3ffff03
@@ -52,9 +50,7 @@ fn block(state: *State, input: []const u8, high: u64) {
   state.h[0] &= Mask
 }
 pub fn update(state: *State, input: []const u8) bool {
-  if !state.valid {
-    return false
-  }
+  if !state.valid { return false }
   at: usize = 0
   if state.used != 0 {
     for at < #len(input) && state.used < 16 {
@@ -80,9 +76,7 @@ pub fn update(state: *State, input: []const u8) bool {
 }
 // finish consumes the state. A second finish or update is rejected.
 pub fn finish(state: *State) Tag {
-  if !state.valid {
-    return Tag{}
-  }
+  if !state.valid { return Tag{} }
   if state.used != 0 {
     state.buffer[state.used] = 1
     for i in state.used+1..16 {
@@ -124,16 +118,12 @@ pub fn finish(state: *State) Tag {
 }
 pub fn authenticate(message: []const u8, key: []const u8) Tag {
   state := init(key)
-  if !update(&state, message) {
-    return Tag{}
-  }
+  if !update(&state, message) { return Tag{} }
   return finish(&state)
 }
 // Fixed 16-byte comparison; length is public.
 pub fn equal(left: []const u8, right: []const u8) bool {
-  if #len(left) != 16 || #len(right) != 16 {
-    return false
-  }
+  if #len(left) != 16 || #len(right) != 16 { return false }
   difference: u32 = 0
   for i in 0..16 {
     difference |= left[i] ^ right[i]

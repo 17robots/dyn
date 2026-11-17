@@ -830,6 +830,22 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
         st.else_count = 1;
       }
     }
+  } else if (k == SRC_BLOCK) {
+    /* A bare block is `if true`: it scopes its locals and runs its defers at
+       the closing brace, and sema folds the constant condition away. */
+    st.kind = DYN_STMT_IF;
+    st.bare_block = true;
+    if (!reserve_expr(a)) {
+      compact_diagnostic(n, s, errors, "out of memory");
+      a->statements[id] = st;
+      return id;
+    }
+    DynSpan open = st.span;
+    open.end_byte = open.start_byte + 1;
+    a->expressions[a->expression_count] = (DynAstExpr){.kind = DYN_EXPR_BOOL, .type = DYN_TYPE_BOOL,
+      .boolean = true, .span = open, .left = DYN_NO_EXPR, .right = DYN_NO_EXPR};
+    st.expression = (DynExprId)a->expression_count++;
+    compact_block(n, s, a, errors, loop_depth, &st.body_start, &st.body_count);
   } else if (!(k != SRC_CASE)) {
     compact_case(n, s, a, errors, loop_depth, &st);
   } else if (!(k != SRC_FOR)) {

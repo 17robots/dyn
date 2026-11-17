@@ -20,13 +20,9 @@ fn native_sleep(duration: i64) SleepResult {
   request := Instant{ seconds: duration / Second, nanoseconds: duration % Second }
   remaining := Instant{}
   for {
-    if clock_sleep(&request, &remaining) == 0 {
-      return SleepResult{}
-    }
+    if clock_sleep(&request, &remaining) == 0 { return SleepResult{} }
     code: isize = 0 - #cast(isize, clock_error().*)
-    if code != -4 {
-      return SleepResult{ failure: io.darwin_failure(code) }
-    }
+    if code != -4 { return SleepResult{ failure: io.darwin_failure(code) } }
     request = remaining
   }
   return SleepResult{}

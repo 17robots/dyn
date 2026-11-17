@@ -6,9 +6,7 @@ pub fn reader(source: []const u8) ArchiveReader {
   return ArchiveReader{ source: source }
 }
 fn decimal(source: []const u8, output: *u64) bool {
-  if #len(source) == 0 {
-    return false
-  }
+  if #len(source) == 0 { return false }
   value: u64 = 0
   for byte in source {
     if byte < '0' || byte > '9' || value > (18446744073709551615 - #cast(u64, (byte - '0'))) / 10 {
@@ -26,30 +24,22 @@ fn pax(source: []const u8, values: *Overrides, global: bool) bool {
     for space < #len(source) && source[space] != ' ' {
       space += 1
     }
-    if space == #len(source) {
-      return false
-    }
+    if space == #len(source) { return false }
     length: u64 = 0
     if !decimal(source[at..space], &length) || length > (#len(source) - at) || length <= (space - at + 2) {
       return false
     }
     end := at + #cast(usize, length)
-    if source[end - 1] != '\n' {
-      return false
-    }
+    if source[end - 1] != '\n' { return false }
     equal := space + 1
     for equal < end - 1 && source[equal] != '=' {
       equal += 1
     }
-    if equal == end - 1 || equal == space + 1 {
-      return false
-    }
+    if equal == end - 1 || equal == space + 1 { return false }
     key := source[space + 1..equal]
     value := source[equal + 1..end - 1]
     for byte in value {
-      if byte == 0 {
-        return false
-      }
+      if byte == 0 { return false }
     }
     if bytes.equal(key, "path") {
       values.path = value
@@ -60,14 +50,10 @@ fn pax(source: []const u8, values: *Overrides, global: bool) bool {
     } else if bytes.equal(key, "size") {
       values.has_size = !global || #len(value) > 0
       values.delete_size = #len(value) == 0
-      if #len(value) > 0 && !decimal(value, &values.size) {
-        return false
-      }
+      if #len(value) > 0 && !decimal(value, &values.size) { return false }
     }
     // Sparse payloads need a different extraction model; never expose them as ordinary files.
-    else if #len(key) >= 10 && bytes.equal(key[..10], "GNU.sparse") {
-      return false
-    }
+    else if #len(key) >= 10 && bytes.equal(key[..10], "GNU.sparse") { return false }
     at = end
   }
   return true

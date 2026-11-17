@@ -40,14 +40,10 @@ fn read_name(packet: []const u8, start: usize, destination: []u8) Name {
       return Name{ end: end, length: used, ok: true }
     }
     if (length & 192) == 192 {
-      if cursor + 1 >= #len(packet) {
-        return Name{}
-      }
+      if cursor + 1 >= #len(packet) { return Name{} }
       target := #cast(usize, (length & 63)) * 256 + #cast(usize, packet[cursor + 1])
       // RFC compression points to a prior occurrence. This also excludes cycles.
-      if target < 12 || target >= cursor {
-        return Name{}
-      }
+      if target < 12 || target >= cursor { return Name{} }
       if end == 0 {
         end = cursor + 2
       }
@@ -55,17 +51,11 @@ fn read_name(packet: []const u8, start: usize, destination: []u8) Name {
       hops += 1
     } else {
       amount := #cast(usize, length)
-      if length > 63 || amount > #len(packet) - cursor - 1 {
-        return Name{}
-      }
-      if used == #len(destination) {
-        return Name{}
-      }
+      if length > 63 || amount > #len(packet) - cursor - 1 { return Name{} }
+      if used == #len(destination) { return Name{} }
       destination[used] = length
       used += 1
-      if amount > #len(destination) - used {
-        return Name{}
-      }
+      if amount > #len(destination) - used { return Name{} }
       for i in 0..amount {
         byte := packet[cursor + 1 + i]
         if byte >= 'A' && byte <= 'Z' {
@@ -83,9 +73,7 @@ fn read_name(packet: []const u8, start: usize, destination: []u8) Name {
 fn skip_name(packet: []const u8, start: usize) usize {
   storage: [254]u8
   parsed := read_name(packet, start, storage[..])
-  if !parsed.ok {
-    return 0
-  }
+  if !parsed.ok { return 0 }
   return parsed.end
 }
 fn question_matches(packet: []const u8, name: []const u8) bool {
@@ -94,9 +82,7 @@ fn question_matches(packet: []const u8, name: []const u8) bool {
   encoded: [512]u8
   canonical: [254]u8
   request := query(encoded[..], name, 0, 1)
-  if #len(request) == 0 {
-    return false
-  }
+  if #len(request) == 0 { return false }
   expected := read_name(request, 12, canonical[..])
   return parsed.ok && expected.ok && same_name(storage[..parsed.length], canonical[..expected.length])
 }
@@ -121,9 +107,7 @@ fn query_arena(arena: *mem.Arena, name: []const u8, identifier: u16, kind: u16) 
   return output
 }
 fn query(destination: []u8, name: []const u8, identifier: u16, kind: u16) []u8 {
-  if #len(destination) < 17 || #len(name) == 0 || #len(name) > 253 {
-    return destination[..0]
-  }
+  if #len(destination) < 17 || #len(name) == 0 || #len(name) > 253 { return destination[..0] }
   for i in 0..12 {
     destination[i] = 0
   }
@@ -199,13 +183,9 @@ pub fn parse_ipv6(arena: *mem.Arena, packet: []const u8, identifier: u16, name: 
   return Ipv6Result{ value: output }
 }
 fn same_name(left: []const u8, right: []const u8) bool {
-  if #len(left) != #len(right) {
-    return false
-  }
+  if #len(left) != #len(right) { return false }
   for i in 0..#len(left) {
-    if left[i] != right[i] {
-      return false
-    }
+    if left[i] != right[i] { return false }
   }
   return true
 }
@@ -213,9 +193,7 @@ fn same_name(left: []const u8, right: []const u8) bool {
 // bounded packet so records may arrive in any order without heap allocation.
 fn canonical_owner(packet: []const u8, start: usize, answers: usize, owner: []u8) Name {
   current := read_name(packet, 12, owner)
-  if !current.ok {
-    return Name{offset: 12}
-  }
+  if !current.ok { return Name{offset: 12} }
   hop: usize = 0
   for hop <= answers && hop < 128 {
     cursor := start
@@ -227,23 +205,17 @@ fn canonical_owner(packet: []const u8, start: usize, answers: usize, owner: []u8
       record_start := cursor
       record_name: [254]u8
       parsed := read_name(packet, cursor, record_name[..])
-      if !parsed.ok || parsed.end + 10 > #len(packet) {
-        return Name{offset: record_start}
-      }
+      if !parsed.ok || parsed.end + 10 > #len(packet) { return Name{offset: record_start} }
       cursor = parsed.end
       kind := load_u16(packet, cursor)
       class := load_u16(packet, cursor + 2)
       length := #cast(usize, load_u16(packet, cursor + 8))
       cursor += 10
-      if length > #len(packet) - cursor {
-        return Name{offset: record_start}
-      }
+      if length > #len(packet) - cursor { return Name{offset: record_start} }
       if kind == 5 && class == 1 && same_name(record_name[..parsed.length], owner[..current.length]) {
         candidate: [254]u8
         alias := read_name(packet, cursor, candidate[..])
-        if !alias.ok || alias.end != cursor + length {
-          return Name{offset: record_start}
-        }
+        if !alias.ok || alias.end != cursor + length { return Name{offset: record_start} }
         if found && !same_name(target[..target_length], candidate[..alias.length]) {
           return Name{offset: record_start}
         }
@@ -256,9 +228,7 @@ fn canonical_owner(packet: []const u8, start: usize, answers: usize, owner: []u8
       cursor += length
       index += 1
     }
-    if !found {
-      return current
-    }
+    if !found { return current }
     for k in 0..target_length {
       owner[k] = target[k]
     }
@@ -338,9 +308,7 @@ fn parse(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv
   for answer in 0..answers {
     record_owner: [254]u8
     parsed_owner := read_name(packet, cursor, record_owner[..])
-    if !parsed_owner.ok {
-      return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-    }
+    if !parsed_owner.ok { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
     matches := same_name(record_owner[..parsed_owner.length], owner[..canonical.length])
     cursor = parsed_owner.end
     if cursor == 0 || cursor + 10 > #len(packet) {
@@ -400,9 +368,7 @@ pub fn resolve_ipv6(arena: *mem.Arena, name: []const u8, server: *const network.
 }
 // NXDOMAIN (3) is a missing name; other response codes are server failures.
 fn rcode_kind(code: u16) io.Kind {
-  if code == 3 {
-    return io.Kind.NotFound
-  }
+  if code == 3 { return io.Kind.NotFound }
   return io.Kind.System
 }
 
@@ -420,9 +386,7 @@ fn ready(descriptor: isize, events: i16, deadline: *const time.Deadline, finite:
     timeout = #cast(i32, ((remaining.value + time.Millisecond - 1) / time.Millisecond))
   }
   result := network.wait(descriptor, events, timeout)
-  if io.failed(result.failure) {
-    return result
-  }
+  if io.failed(result.failure) { return result }
   if result.value == 0 {
     return network.Result{ failure: io.Failure{ kind: io.Kind.System, native: -110 } }
   }
@@ -436,9 +400,7 @@ fn transfer(descriptor: isize, buffer: []u8, sending: bool, deadline: *const tim
       events = network.PollWritable
     }
     error := ready(descriptor, events, deadline, finite)
-    if io.failed(error.failure) {
-      return error
-    }
+    if io.failed(error.failure) { return error }
     result := network.Result{}
     if sending {
       result = network.send(descriptor, buffer[at..], 0)
@@ -446,9 +408,7 @@ fn transfer(descriptor: isize, buffer: []u8, sending: bool, deadline: *const tim
       result = network.receive(descriptor, buffer[at..], 0)
     }
     if io.failed(result.failure) {
-      if result.failure.native == -4 || network.would_block(&result) {
-        continue
-      }
+      if result.failure.native == -4 || network.would_block(&result) { continue }
       return result
     }
     if result.value == 0 {
@@ -461,9 +421,7 @@ fn transfer(descriptor: isize, buffer: []u8, sending: bool, deadline: *const tim
 fn tcp(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
   identifier: u16, kind: u16, deadline: *const time.Deadline, finite: bool) Packet {
   request := query(packet, name, identifier, kind)
-  if #len(request) == 0 {
-    return Packet{ error: -22, kind: io.Kind.InvalidInput }
-  }
+  if #len(request) == 0 { return Packet{ error: -22, kind: io.Kind.InvalidInput } }
   opened := network.socket(network.AddressFamilyIpv4, network.SocketStream, 0)
   if io.failed(opened.failure) {
     return Packet{ error: opened.failure.native, kind: opened.failure.kind }
@@ -504,12 +462,8 @@ fn tcp(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
     return Packet{ error: received.failure.native, kind: received.failure.kind }
   }
   length := #cast(usize, load_u16(prefix[..], 0))
-  if length > #len(packet) {
-    return Packet{ error: -28, kind: io.Kind.Capacity }
-  }
-  if length < 12 {
-    return Packet{ error: -74, kind: io.Kind.InvalidInput }
-  }
+  if length > #len(packet) { return Packet{ error: -28, kind: io.Kind.Capacity } }
+  if length < 12 { return Packet{ error: -74, kind: io.Kind.InvalidInput } }
   received = transfer(descriptor, packet[..length], false, deadline, finite)
   if io.failed(received.failure) {
     return Packet{ error: received.failure.native, kind: received.failure.kind }
@@ -528,14 +482,10 @@ fn exchange(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
     deadline = created.value
   }
   entropy: [2]u8
-  if !random.fill(entropy[..]) {
-    return Packet{ error: -5, kind: io.Kind.System }
-  }
+  if !random.fill(entropy[..]) { return Packet{ error: -5, kind: io.Kind.System } }
   identifier := load_u16(entropy[..], 0)
   request := query(packet, name, identifier, kind)
-  if #len(request) == 0 {
-    return Packet{ error: -22, kind: io.Kind.InvalidInput }
-  }
+  if #len(request) == 0 { return Packet{ error: -22, kind: io.Kind.InvalidInput } }
   opened := network.socket(network.AddressFamilyIpv4, network.SocketDatagram, 0)
   if io.failed(opened.failure) {
     return Packet{ error: opened.failure.native, kind: opened.failure.kind }
@@ -556,9 +506,7 @@ fn exchange(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
   if io.failed(sent.failure) {
     return Packet{ error: sent.failure.native, kind: sent.failure.kind }
   }
-  if #cast(usize, sent.value) != #len(request) {
-    return Packet{ error: -5, kind: io.Kind.System }
-  }
+  if #cast(usize, sent.value) != #len(request) { return Packet{ error: -5, kind: io.Kind.System } }
   for {
     error := ready(descriptor, network.PollReadable, &deadline, finite)
     if io.failed(error.failure) {
@@ -566,9 +514,7 @@ fn exchange(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
     }
     received := network.receive_packet(descriptor, packet)
     if io.failed(received.failure) {
-      if received.failure.native == -4 || network.would_block(&received) {
-        continue
-      }
+      if received.failure.native == -4 || network.would_block(&received) { continue }
       return Packet{ error: received.failure.native, kind: received.failure.kind }
     }
     length := #cast(usize, received.value)

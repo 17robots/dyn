@@ -1,4 +1,6 @@
 // Strict UTF-8 over byte slices. Invalid decoding consumes one byte for recovery.
+use "std/encoding/binary"
+
 
 pub struct Decode {
   codepoint: u32,
@@ -7,13 +9,9 @@ pub struct Decode {
 }
 
 pub fn decode(text: []const u8, offset: usize) Decode {
-  if offset >= #len(text) {
-    return Decode{ codepoint: 0, width: 0, valid: false }
-  }
+  if offset >= #len(text) { return Decode{ codepoint: 0, width: 0, valid: false } }
   first := text[offset]
-  if first < 128 {
-    return Decode{ codepoint: first, width: 1, valid: true }
-  }
+  if first < 128 { return Decode{ codepoint: first, width: 1, valid: true } }
   width: usize = 0
   value: u32 = 0
   minimum: u32 = 0
@@ -32,14 +30,10 @@ pub fn decode(text: []const u8, offset: usize) Decode {
   } else {
     return Decode{ codepoint: 0, width: 1, valid: false }
   }
-  if width > #len(text) - offset {
-    return Decode{ codepoint: 0, width: 1, valid: false }
-  }
+  if width > #len(text) - offset { return Decode{ codepoint: 0, width: 1, valid: false } }
   for i in 1..width {
     byte := text[offset + i]
-    if byte < 128 || byte > 191 {
-      return Decode{ codepoint: 0, width: 1, valid: false }
-    }
+    if byte < 128 || byte > 191 { return Decode{ codepoint: 0, width: 1, valid: false } }
     value = (value << 6) | (byte & 63)
   }
   if value < minimum || value > 1114111 || (value >= 55296 && value <= 57343) {
@@ -51,15 +45,18 @@ pub fn decode(text: []const u8, offset: usize) Decode {
 pub fn valid(text: []const u8) bool {
   offset: usize = 0
   for offset < #len(text) {
+    // Eight ASCII bytes at a time: none has its high bit set.
+    if #len(text) - offset >= 8 && (binary.load_u64_le(text[offset..offset + 8]) & 0x8080808080808080) == 0 {
+      offset += 8
+      continue
+    }
     // ASCII bytes are complete code points; avoid constructing Decode for each.
     if text[offset] < 128 {
       offset += 1
       continue
     }
     decoded := decode(text, offset)
-    if !decoded.valid {
-      return false
-    }
+    if !decoded.valid { return false }
     offset += decoded.width
   }
   return true
@@ -73,9 +70,7 @@ pub fn codepoint_count(text: []const u8) Count {
   total: usize = 0
   for offset < #len(text) {
     decoded := decode(text, offset)
-    if !decoded.valid {
-      return Count{}
-    }
+    if !decoded.valid { return Count{} }
     offset += decoded.width
     total += 1
   }
@@ -83,29 +78,17 @@ pub fn codepoint_count(text: []const u8) Count {
 }
 
 pub fn encoded_width(codepoint: u32) usize {
-  if codepoint <= 127 {
-    return 1
-  }
-  if codepoint <= 2047 {
-    return 2
-  }
-  if codepoint >= 55296 && codepoint <= 57343 {
-    return 0
-  }
-  if codepoint <= 65535 {
-    return 3
-  }
-  if codepoint <= 1114111 {
-    return 4
-  }
+  if codepoint <= 127 { return 1 }
+  if codepoint <= 2047 { return 2 }
+  if codepoint >= 55296 && codepoint <= 57343 { return 0 }
+  if codepoint <= 65535 { return 3 }
+  if codepoint <= 1114111 { return 4 }
   return 0
 }
 
 pub fn encode(destination: []u8, codepoint: u32) usize {
   width := encoded_width(codepoint)
-  if width == 0 || #len(destination) < width {
-    return 0
-  }
+  if width == 0 || #len(destination) < width { return 0 }
   continuation: u32 = 128
   mask: u32 = 63
   lead2: u32 = 192
@@ -142,13 +125,9 @@ pub struct Next { value: u32, valid: bool }
 
 // The next code point. ok is false at the end or at invalid UTF-8.
 pub fn next(state: *Iterator) Next {
-  if state.offset >= #len(state.text) {
-    return Next{}
-  }
+  if state.offset >= #len(state.text) { return Next{} }
   decoded := decode(state.text, state.offset)
-  if !decoded.valid {
-    return Next{}
-  }
+  if !decoded.valid { return Next{} }
   state.offset += decoded.width
   return Next{ value: decoded.codepoint, valid: true }
 }

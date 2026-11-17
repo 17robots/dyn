@@ -12,9 +12,7 @@ pub fn length(state: *const Ring) usize {
 }
 
 pub fn push(state: *Ring, byte: u8) bool {
-  if state.length == #len(state.data) || #len(state.data) == 0 {
-    return false
-  }
+  if state.length == #len(state.data) || #len(state.data) == 0 { return false }
   state.data[(state.read + state.length) % #len(state.data)] = byte
   state.length += 1
   return true
@@ -24,9 +22,7 @@ pub struct Popped { value: u8, found: bool }
 
 // The oldest byte. ok is false when the ring is empty.
 pub fn pop(state: *Ring) Popped {
-  if state.length == 0 {
-    return Popped{}
-  }
+  if state.length == 0 { return Popped{} }
   value := state.data[state.read]
   state.read = (state.read + 1) % #len(state.data)
   state.length -= 1

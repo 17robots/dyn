@@ -7,9 +7,7 @@ pub fn secure_random(destination: []u8) bool {
     if count > 4294967295 {
       count = 4294967295
     }
-    if entropy(nil, &destination[at], #cast(u32, count), 2) < 0 {
-      return false
-    }
+    if entropy(nil, &destination[at], #cast(u32, count), 2) < 0 { return false }
     at += count
   }
   return true

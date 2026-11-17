@@ -1,6 +1,6 @@
 use "std/parse" parse
 use "std/mem" memory
-use "std/strings" text
+use "std/strings" strings
 use "std/io" stream
 use "std/unicode/utf8" utf8
 use "std/bytes"
@@ -119,15 +119,9 @@ fn hex(byte: u8) bool {
 }
 
 fn hex_value(byte: u8) usize {
-  if byte >= '0' && byte <= '9' {
-    return (byte - '0')
-  }
-  if byte >= 'a' && byte <= 'f' {
-    return #cast(usize, (byte - 'a')) + 10
-  }
-  if byte >= 'A' && byte <= 'F' {
-    return #cast(usize, (byte - 'A')) + 10
-  }
+  if byte >= '0' && byte <= '9' { return (byte - '0') }
+  if byte >= 'a' && byte <= 'f' { return #cast(usize, (byte - 'a')) + 10 }
+  if byte >= 'A' && byte <= 'F' { return #cast(usize, (byte - 'A')) + 10 }
   return 16
 }
 
@@ -141,59 +135,41 @@ fn skip(cursor: *Cursor) {
   at := cursor.at
   for at < #len(source) {
     byte := source[at]
-    if byte != ' ' && byte != '\n' && byte != '\r' && byte != '\t' {
-      break
-    }
+    if byte != ' ' && byte != '\n' && byte != '\r' && byte != '\t' { break }
     at += 1
   }
   cursor.at = at
 }
 
 fn literal(cursor: *Cursor, content: []const u8) bool {
-  if cursor.at + #len(content) > #len(cursor.source) {
-    return false
-  }
+  if cursor.at + #len(content) > #len(cursor.source) { return false }
   for i in 0..#len(content) {
-    if cursor.source[cursor.at + i] != content[i] {
-      return false
-    }
+    if cursor.source[cursor.at + i] != content[i] { return false }
   }
   cursor.at += #len(content)
   return true
 }
 
 fn string(cursor: *Cursor) bool {
-  if cursor.at >= #len(cursor.source) || cursor.source[cursor.at] != '"' {
-    return false
-  }
+  if cursor.at >= #len(cursor.source) || cursor.source[cursor.at] != '"' { return false }
   cursor.at += 1
   for cursor.at < #len(cursor.source) {
     byte := cursor.source[cursor.at]
     cursor.at += 1
-    if byte == '"' {
-      return true
-    }
-    if byte < 32 {
-      return false
-    }
+    if byte == '"' { return true }
+    if byte < 32 { return false }
     if byte >= 128 {
       decoded := utf8.decode(cursor.source, cursor.at - 1)
-      if !decoded.valid {
-        return false
-      }
+      if !decoded.valid { return false }
       cursor.at += decoded.width - 1
     }
     if byte == '\\' {
-      if cursor.at >= #len(cursor.source) {
-        return false
-      }
+      if cursor.at >= #len(cursor.source) { return false }
       escaped := cursor.source[cursor.at]
       cursor.at += 1
       if escaped == 'u' {
         for count in 0..4 {
-          if cursor.at >= #len(cursor.source) || !hex(cursor.source[cursor.at]) {
-            return false
-          }
+          if cursor.at >= #len(cursor.source) || !hex(cursor.source[cursor.at]) { return false }
           cursor.at += 1
         }
       } else if escaped != '"' && escaped != '\\' && escaped != '/' && escaped != 'b' && escaped != 'f' && escaped != 'n' && escaped != 'r' && escaped != 't' {
@@ -208,15 +184,11 @@ fn number(cursor: *Cursor) bool {
   if cursor.at < #len(cursor.source) && cursor.source[cursor.at] == '-' {
     cursor.at += 1
   }
-  if cursor.at >= #len(cursor.source) {
-    return false
-  }
+  if cursor.at >= #len(cursor.source) { return false }
   if cursor.source[cursor.at] == '0' {
     cursor.at += 1
   } else {
-    if cursor.source[cursor.at] < '1' || cursor.source[cursor.at] > '9' {
-      return false
-    }
+    if cursor.source[cursor.at] < '1' || cursor.source[cursor.at] > '9' { return false }
     for cursor.at < #len(cursor.source) && (cursor.source[cursor.at] >= '0' && cursor.source[cursor.at] <= '9') {
       cursor.at += 1
     }
@@ -227,9 +199,7 @@ fn number(cursor: *Cursor) bool {
     for cursor.at < #len(cursor.source) && (cursor.source[cursor.at] >= '0' && cursor.source[cursor.at] <= '9') {
       cursor.at += 1
     }
-    if cursor.at == exponent_start {
-      return false
-    }
+    if cursor.at == exponent_start { return false }
   }
   if cursor.at < #len(cursor.source) && (cursor.source[cursor.at] == 'e' || cursor.source[cursor.at] == 'E') {
     cursor.at += 1
@@ -240,9 +210,7 @@ fn number(cursor: *Cursor) bool {
     for cursor.at < #len(cursor.source) && (cursor.source[cursor.at] >= '0' && cursor.source[cursor.at] <= '9') {
       cursor.at += 1
     }
-    if cursor.at == start {
-      return false
-    }
+    if cursor.at == start { return false }
   }
   return true
 }
@@ -251,26 +219,14 @@ const MaximumDepth: usize = 256
 
 fn validate_value(cursor: *Cursor, depth: usize) bool {
   skip(cursor)
-  if cursor.at >= #len(cursor.source) {
-    return false
-  }
+  if cursor.at >= #len(cursor.source) { return false }
   byte := cursor.source[cursor.at]
-  if byte == '"' {
-    return string(cursor)
-  }
-  if byte == 'n' {
-    return literal(cursor, "null")
-  }
-  if byte == 't' {
-    return literal(cursor, "true")
-  }
-  if byte == 'f' {
-    return literal(cursor, "false")
-  }
+  if byte == '"' { return string(cursor) }
+  if byte == 'n' { return literal(cursor, "null") }
+  if byte == 't' { return literal(cursor, "true") }
+  if byte == 'f' { return literal(cursor, "false") }
   if byte == '[' {
-    if depth >= MaximumDepth {
-      return false
-    }
+    if depth >= MaximumDepth { return false }
     cursor.at += 1
     skip(cursor)
     if cursor.at < #len(cursor.source) && cursor.source[cursor.at] == ']' {
@@ -278,27 +234,19 @@ fn validate_value(cursor: *Cursor, depth: usize) bool {
       return true
     }
     for {
-      if !validate_value(cursor, depth + 1) {
-        return false
-      }
+      if !validate_value(cursor, depth + 1) { return false }
       skip(cursor)
-      if cursor.at >= #len(cursor.source) {
-        return false
-      }
+      if cursor.at >= #len(cursor.source) { return false }
       if cursor.source[cursor.at] == ']' {
         cursor.at += 1
         return true
       }
-      if cursor.source[cursor.at] != ',' {
-        return false
-      }
+      if cursor.source[cursor.at] != ',' { return false }
       cursor.at += 1
     }
   }
   if byte == '{' {
-    if depth >= MaximumDepth {
-      return false
-    }
+    if depth >= MaximumDepth { return false }
     cursor.at += 1
     skip(cursor)
     if cursor.at < #len(cursor.source) && cursor.source[cursor.at] == '}' {
@@ -307,28 +255,18 @@ fn validate_value(cursor: *Cursor, depth: usize) bool {
     }
     for {
       skip(cursor)
-      if !string(cursor) {
-        return false
-      }
+      if !string(cursor) { return false }
       skip(cursor)
-      if cursor.at >= #len(cursor.source) || cursor.source[cursor.at] != ':' {
-        return false
-      }
+      if cursor.at >= #len(cursor.source) || cursor.source[cursor.at] != ':' { return false }
       cursor.at += 1
-      if !validate_value(cursor, depth + 1) {
-        return false
-      }
+      if !validate_value(cursor, depth + 1) { return false }
       skip(cursor)
-      if cursor.at >= #len(cursor.source) {
-        return false
-      }
+      if cursor.at >= #len(cursor.source) { return false }
       if cursor.source[cursor.at] == '}' {
         cursor.at += 1
         return true
       }
-      if cursor.source[cursor.at] != ',' {
-        return false
-      }
+      if cursor.source[cursor.at] != ',' { return false }
       cursor.at += 1
     }
   }
@@ -337,17 +275,13 @@ fn validate_value(cursor: *Cursor, depth: usize) bool {
 
 pub fn valid(source: []const u8) bool {
   cursor := Cursor{ source: source, at: 0 }
-  if !validate_value(&cursor, 0) {
-    return false
-  }
+  if !validate_value(&cursor, 0) { return false }
   skip(&cursor)
   return cursor.at == #len(source)
 }
 
 fn write_string_into(destination: []u8, source: []const u8) []u8 {
-  if #len(destination) < 2 || !utf8.valid(source) {
-    return destination[..0]
-  }
+  if #len(destination) < 2 || !utf8.valid(source) { return destination[..0] }
   at: usize = 0
   destination[at] = '"'
   at += 1
@@ -369,17 +303,13 @@ fn write_string_into(destination: []u8, source: []const u8) []u8 {
       escaped = 'f'
     }
     if escaped != 0 {
-      if at + 2 >= #len(destination) {
-        return destination[..0]
-      }
+      if at + 2 >= #len(destination) { return destination[..0] }
       destination[at] = '\\'
       destination[at + 1] = escaped
       at += 2
     } else {
       if byte < 32 {
-        if #len(destination) - at <= 6 {
-          return destination[..0]
-        }
+        if #len(destination) - at <= 6 { return destination[..0] }
         digits := "0123456789abcdef"
         destination[at] = '\\'
         destination[at + 1] = 'u'
@@ -390,9 +320,7 @@ fn write_string_into(destination: []u8, source: []const u8) []u8 {
         at += 6
         continue
       }
-      if at + 1 >= #len(destination) {
-        return destination[..0]
-      }
+      if at + 1 >= #len(destination) { return destination[..0] }
       destination[at] = byte
       at += 1
     }
@@ -413,18 +341,14 @@ fn failed_string(cursor: *Cursor) []const u8 {
 fn ascii_string_prefix(source: []const u8) usize {
   for i in 0..#len(source) {
     byte := source[i]
-    if byte < 32 || byte >= 128 || byte == '"' || byte == '\\' {
-      return i
-    }
+    if byte < 32 || byte >= 128 || byte == '"' || byte == '\\' { return i }
   }
   return #len(source)
 }
 
 fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
   source := cursor.source
-  if cursor.at >= #len(source) || source[cursor.at] != '"' {
-    return failed_string(cursor)
-  }
+  if cursor.at >= #len(source) || source[cursor.at] != '"' { return failed_string(cursor) }
   cursor.at += 1
   start := cursor.at
   end := start
@@ -439,35 +363,25 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
   ascii: bool = true
   for end < #len(source) {
     byte := source[end]
-    if byte == '"' {
-      break
-    }
+    if byte == '"' { break }
     if byte >= 128 {
       ascii = false
     }
     if byte == '\\' {
       has_escape = true
       end += 1
-      if end >= #len(source) {
-        return failed_string(cursor)
-      }
+      if end >= #len(source) { return failed_string(cursor) }
       byte = source[end]
       if byte >= 128 {
         ascii = false
       }
     }
-    if byte < 32 {
-      return failed_string(cursor)
-    }
+    if byte < 32 { return failed_string(cursor) }
     end += 1
   }
 
-  if end >= #len(source) {
-    return failed_string(cursor)
-  }
-  if !ascii && !utf8.valid(source[start..end]) {
-    return failed_string(cursor)
-  }
+  if end >= #len(source) { return failed_string(cursor) }
+  if !ascii && !utf8.valid(source[start..end]) { return failed_string(cursor) }
   if end == start {
     cursor.at = end + 1
     return source[start..end]
@@ -486,9 +400,7 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
     byte := source[source_at]
     source_at += 1
     if byte == '\\' {
-      if source_at >= end {
-        return failed_string(cursor)
-      }
+      if source_at >= end { return failed_string(cursor) }
       escaped := source[source_at]
       source_at += 1
       if escaped == '"' || escaped == '\\' || escaped == '/' {
@@ -504,15 +416,11 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
       } else if escaped == 't' {
         byte = '\t'
       } else if escaped == 'u' {
-        if source_at + 4 > end {
-          return failed_string(cursor)
-        }
+        if source_at + 4 > end { return failed_string(cursor) }
         code: usize = 0
         for digits in 0..4 {
           part := hex_value(source[source_at])
-          if part == 16 {
-            return failed_string(cursor)
-          }
+          if part == 16 { return failed_string(cursor) }
           code = code * 16 + part
           source_at += 1
         }
@@ -524,19 +432,13 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
           low: usize = 0
           for low_digits in 0..4 {
             low_part := hex_value(source[source_at])
-            if low_part == 16 {
-              return failed_string(cursor)
-            }
+            if low_part == 16 { return failed_string(cursor) }
             low = low * 16 + low_part
             source_at += 1
           }
-          if low < 56320 || low > 57343 {
-            return failed_string(cursor)
-          }
+          if low < 56320 || low > 57343 { return failed_string(cursor) }
           code = 65536 + (code - 55296) * 1024 + low - 56320
-        } else if code >= 56320 && code <= 57343 {
-          return failed_string(cursor)
-        }
+        } else if code >= 56320 && code <= 57343 { return failed_string(cursor) }
         if code <= 127 {
           output[output_at] = #cast(u8, code)
           output_at += 1
@@ -571,26 +473,18 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
 
 fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
   skip(cursor)
-  if cursor.at >= #len(cursor.source) {
-    return nil
-  }
+  if cursor.at >= #len(cursor.source) { return nil }
   byte := cursor.source[cursor.at]
   if byte == 'n' {
-    if !literal(cursor, "null") {
-      return nil
-    }
+    if !literal(cursor, "null") { return nil }
     return node(arena, KindNull)
   }
   if byte == 't' || byte == 'f' {
     truth := byte == 't'
     if truth {
-      if !literal(cursor, "true") {
-        return nil
-      }
+      if !literal(cursor, "true") { return nil }
     } else {
-      if !literal(cursor, "false") {
-        return nil
-      }
+      if !literal(cursor, "false") { return nil }
     }
     bool_node := node(arena, KindBool)
     bool_node.boolean = truth
@@ -598,17 +492,13 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
   }
   if byte == '"' {
     content := decoded_string(arena, cursor)
-    if cursor.error != parse.Kind.Ok {
-      return nil
-    }
+    if cursor.error != parse.Kind.Ok { return nil }
     string_node := node(arena, KindString)
     string_node.text = content
     return string_node
   }
   if byte == '[' || byte == '{' {
-    if depth >= MaximumDepth {
-      return nil
-    }
+    if depth >= MaximumDepth { return nil }
     object := byte == '{'
     cursor.at += 1
     container := node(arena, KindArray)
@@ -628,40 +518,28 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
       key: []const u8 = cursor.source[..0]
       if object {
         key = decoded_string(arena, cursor)
-        if cursor.error != parse.Kind.Ok {
-          return nil
-        }
+        if cursor.error != parse.Kind.Ok { return nil }
         skip(cursor)
-        if cursor.at >= #len(cursor.source) || cursor.source[cursor.at] != ':' {
-          return nil
-        }
+        if cursor.at >= #len(cursor.source) || cursor.source[cursor.at] != ':' { return nil }
         cursor.at += 1
       }
       child := parse_node(arena, cursor, depth + 1)
-      if child == nil {
-        return nil
-      }
+      if child == nil { return nil }
       child.key = key
       append(container, child)
       skip(cursor)
-      if cursor.at >= #len(cursor.source) {
-        return nil
-      }
+      if cursor.at >= #len(cursor.source) { return nil }
       if cursor.source[cursor.at] == closing {
         cursor.at += 1
         return container
       }
-      if cursor.source[cursor.at] != ',' {
-        return nil
-      }
+      if cursor.source[cursor.at] != ',' { return nil }
       cursor.at += 1
       skip(cursor)
     }
   }
   start := cursor.at
-  if !number(cursor) {
-    return nil
-  }
+  if !number(cursor) { return nil }
   number_node := node(arena, KindNumber)
   number_node.text = cursor.source[start..cursor.at]
   return number_node
@@ -697,9 +575,7 @@ pub fn push_bool(arena: *memory.Arena, value: bool) *Value {
 // Retains text as a borrowed view; caller keeps it alive.
 pub fn push_number(arena: *memory.Arena, content: []const u8) *Value {
   cursor := Cursor{ source: content, at: 0 }
-  if !number(&cursor) || cursor.at != #len(content) {
-    return nil
-  }
+  if !number(&cursor) || cursor.at != #len(content) { return nil }
   result := node(arena, KindNumber)
   result.text = content
   return result
@@ -719,34 +595,24 @@ pub fn push_object(arena: *memory.Arena) *Value {
 // A node has one parent. Reject duplicate attachment, reparenting and cycles
 // before touching links or borrowed keys; no allocation or arena rewind occurs.
 fn can_append(parent: *Value, child: *Value) bool {
-  if parent == nil || child == nil || child.parent != nil || child.next != nil {
-    return false
-  }
-  if parent.kind != KindArray && parent.kind != KindObject {
-    return false
-  }
+  if parent == nil || child == nil || child.parent != nil || child.next != nil { return false }
+  if parent.kind != KindArray && parent.kind != KindObject { return false }
   ancestor := parent
   depth: usize = 0
   for ancestor != nil {
-    if ancestor == child || depth > MaximumDepth {
-      return false
-    }
+    if ancestor == child || depth > MaximumDepth { return false }
     ancestor = ancestor.parent
     depth += 1
   }
   return true
 }
 pub fn add(parent: *Value, child: *Value) bool {
-  if !can_append(parent, child) {
-    return false
-  }
+  if !can_append(parent, child) { return false }
   append(parent, child)
   return true
 }
 pub fn add_member(parent: *Value, key: []const u8, child: *Value) bool {
-  if !can_append(parent, child) || parent.kind != KindObject {
-    return false
-  }
+  if !can_append(parent, child) || parent.kind != KindObject { return false }
   child.key = key
   append(parent, child)
   return true
@@ -754,14 +620,10 @@ pub fn add_member(parent: *Value, key: []const u8, child: *Value) bool {
 
 // The member named key, or &nil_value.
 pub fn object_get(object: *const Value, key: []const u8) *const Value {
-  if object == nil || object.kind != KindObject {
-    return &nil_value
-  }
+  if object == nil || object.kind != KindObject { return &nil_value }
   child := object.first
   for child != nil {
-    if bytes.equal(child.key, key) {
-      return child
-    }
+    if bytes.equal(child.key, key) { return child }
     child = child.next
   }
   return &nil_value
@@ -799,62 +661,62 @@ fn read_into(value: *const Value, target: any) {
     }
     *f64 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(f64, value.text)
+        p.* = strings.parse(f64, value.text)
       }
     }
     *f32 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(f32, value.text)
+        p.* = strings.parse(f32, value.text)
       }
     }
     *i64 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(i64, value.text)
+        p.* = strings.parse(i64, value.text)
       }
     }
     *i32 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(i32, value.text)
+        p.* = strings.parse(i32, value.text)
       }
     }
     *i16 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(i16, value.text)
+        p.* = strings.parse(i16, value.text)
       }
     }
     *i8 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(i8, value.text)
+        p.* = strings.parse(i8, value.text)
       }
     }
     *isize p => {
       if value.kind == KindNumber {
-        p.* = text.parse(isize, value.text)
+        p.* = strings.parse(isize, value.text)
       }
     }
     *u64 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(u64, value.text)
+        p.* = strings.parse(u64, value.text)
       }
     }
     *u32 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(u32, value.text)
+        p.* = strings.parse(u32, value.text)
       }
     }
     *u16 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(u16, value.text)
+        p.* = strings.parse(u16, value.text)
       }
     }
     *u8 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(u8, value.text)
+        p.* = strings.parse(u8, value.text)
       }
     }
     *usize p => {
       if value.kind == KindNumber {
-        p.* = text.parse(usize, value.text)
+        p.* = strings.parse(usize, value.text)
       }
     }
     _ => {
@@ -864,9 +726,7 @@ fn read_into(value: *const Value, target: any) {
 }
 
 pub fn array_length(array: *const Value) usize {
-  if array == nil || array.kind != KindArray {
-    return 0
-  }
+  if array == nil || array.kind != KindArray { return 0 }
   count: usize = 0
   child := array.first
   for child != nil {
@@ -878,15 +738,11 @@ pub fn array_length(array: *const Value) usize {
 
 // Element number index, or &nil_value.
 pub fn array_get(array: *const Value, index: usize) *const Value {
-  if array == nil || array.kind != KindArray {
-    return &nil_value
-  }
+  if array == nil || array.kind != KindArray { return &nil_value }
   child := array.first
   at: usize = 0
   for child != nil {
-    if at == index {
-      return child
-    }
+    if at == index { return child }
     at += 1
     child = child.next
   }
@@ -916,9 +772,7 @@ pub fn is_object(value: *const Value) bool {
 }
 
 fn copy(destination: []u8, at: *usize, data: []const u8) bool {
-  if at.* > #len(destination) || #len(data) > #len(destination) - at.* {
-    return false
-  }
+  if at.* > #len(destination) || #len(data) > #len(destination) - at.* { return false }
   for byte in data {
     destination[at.*] = byte
     at.* += 1
@@ -927,26 +781,16 @@ fn copy(destination: []u8, at: *usize, data: []const u8) bool {
 }
 
 fn encode_value(destination: []u8, at: *usize, value: *const Value, depth: usize) bool {
-  if depth > MaximumDepth || value == nil {
-    return false
-  }
-  if value.kind == KindNull {
-    return copy(destination, at, "null")
-  }
+  if depth > MaximumDepth || value == nil { return false }
+  if value.kind == KindNull { return copy(destination, at, "null") }
   if value.kind == KindBool {
-    if value.boolean {
-      return copy(destination, at, "true")
-    }
+    if value.boolean { return copy(destination, at, "true") }
     return copy(destination, at, "false")
   }
-  if value.kind == KindNumber {
-    return copy(destination, at, value.text)
-  }
+  if value.kind == KindNumber { return copy(destination, at, value.text) }
   if value.kind == KindString {
     string_encoded := write_string_into(destination[at.*..], value.text)
-    if #len(string_encoded) == 0 {
-      return false
-    }
+    if #len(string_encoded) == 0 { return false }
     at.* += #len(string_encoded)
     return true
   }
@@ -956,38 +800,26 @@ fn encode_value(destination: []u8, at: *usize, value: *const Value, depth: usize
     opening = '{'
     closing = '}'
   }
-  if at.* >= #len(destination) {
-    return false
-  }
+  if at.* >= #len(destination) { return false }
   destination[at.*] = opening
   at.* += 1
   child := value.first
   first := true
   for child != nil {
     if !first {
-      if !copy(destination, at, ",") {
-        return false
-      }
+      if !copy(destination, at, ",") { return false }
     }
     if value.kind == KindObject {
       key_encoded := write_string_into(destination[at.*..], child.key)
-      if #len(key_encoded) == 0 {
-        return false
-      }
+      if #len(key_encoded) == 0 { return false }
       at.* += #len(key_encoded)
-      if !copy(destination, at, ":") {
-        return false
-      }
+      if !copy(destination, at, ":") { return false }
     }
-    if !encode_value(destination, at, child, depth + 1) {
-      return false
-    }
+    if !encode_value(destination, at, child, depth + 1) { return false }
     first = false
     child = child.next
   }
-  if at.* >= #len(destination) {
-    return false
-  }
+  if at.* >= #len(destination) { return false }
   destination[at.*] = closing
   at.* += 1
   return true
@@ -995,18 +827,14 @@ fn encode_value(destination: []u8, at: *usize, value: *const Value, depth: usize
 
 fn encode_into(destination: []u8, value: *const Value) []u8 {
   at: usize = 0
-  if !encode_value(destination, &at, value, 0) {
-    return destination[..0]
-  }
+  if !encode_value(destination, &at, value, 0) { return destination[..0] }
   return destination[..at]
 }
 
 fn pretty_indent(destination: []u8, at: *usize, depth: usize, width: usize) bool {
   count := depth * width
   for count > 0 {
-    if !copy(destination, at, " ") {
-      return false
-    }
+    if !copy(destination, at, " ") { return false }
     count -= 1
   }
   return true
@@ -1014,9 +842,7 @@ fn pretty_indent(destination: []u8, at: *usize, depth: usize, width: usize) bool
 
 fn encode_pretty_value(destination: []u8, at: *usize, value: *const Value,
   depth: usize, width: usize) bool {
-  if value == nil || depth > MaximumDepth {
-    return false
-  }
+  if value == nil || depth > MaximumDepth { return false }
   if value.kind != KindArray && value.kind != KindObject {
     return encode_value(destination, at, value, depth)
   }
@@ -1026,54 +852,32 @@ fn encode_pretty_value(destination: []u8, at: *usize, value: *const Value,
     opening = "{"
     closing = "}"
   }
-  if !copy(destination, at, opening) {
-    return false
-  }
+  if !copy(destination, at, opening) { return false }
   child := value.first
-  if child == nil {
-    return copy(destination, at, closing)
-  }
-  if !copy(destination, at, "\n") {
-    return false
-  }
+  if child == nil { return copy(destination, at, closing) }
+  if !copy(destination, at, "\n") { return false }
   first := true
   for child != nil {
-    if !first && !copy(destination, at, ",\n") {
-      return false
-    }
-    if !pretty_indent(destination, at, depth + 1, width) {
-      return false
-    }
+    if !first && !copy(destination, at, ",\n") { return false }
+    if !pretty_indent(destination, at, depth + 1, width) { return false }
     if value.kind == KindObject {
       encoded := write_string_into(destination[at.*..], child.key)
-      if #len(encoded) == 0 {
-        return false
-      }
+      if #len(encoded) == 0 { return false }
       at.* += #len(encoded)
-      if !copy(destination, at, ": ") {
-        return false
-      }
+      if !copy(destination, at, ": ") { return false }
     }
-    if !encode_pretty_value(destination, at, child, depth + 1, width) {
-      return false
-    }
+    if !encode_pretty_value(destination, at, child, depth + 1, width) { return false }
     first = false
     child = child.next
   }
-  if !copy(destination, at, "\n") || !pretty_indent(destination, at, depth, width) {
-    return false
-  }
+  if !copy(destination, at, "\n") || !pretty_indent(destination, at, depth, width) { return false }
   return copy(destination, at, closing)
 }
 
 fn encode_pretty_into(destination: []u8, value: *const Value, indent: usize) []u8 {
-  if indent == 0 {
-    return encode_into(destination, value)
-  }
+  if indent == 0 { return encode_into(destination, value) }
   at: usize = 0
-  if !encode_pretty_value(destination, &at, value, 0, indent) {
-    return destination[..0]
-  }
+  if !encode_pretty_value(destination, &at, value, 0, indent) { return destination[..0] }
   return destination[..at]
 }
 
@@ -1082,9 +886,7 @@ fn stream_bytes(destination: stream.Writer, source: []const u8) stream.Transfer 
 }
 
 fn hex_digit(value: u8) u8 {
-  if value < 10 {
-    return value + '0'
-  }
+  if value < 10 { return value + '0' }
   return value - 10 + 'a'
 }
 
@@ -1094,9 +896,7 @@ fn stream_string(destination: stream.Writer, source: []const u8) stream.Transfer
   }
   total: usize = 0
   opening := stream_bytes(destination, "\"")
-  if stream.failed(opening.failure) {
-    return opening
-  }
+  if stream.failed(opening.failure) { return opening }
   total += opening.transferred
   start: usize = 0
   for i in 0..#len(source) {
@@ -1163,21 +963,13 @@ fn stream_value(destination: stream.Writer, value: *const Value, depth: usize) s
   if value == nil || depth > MaximumDepth {
     return stream.Transfer{ failure: stream.Failure{ kind: stream.Kind.InvalidInput, native: -22 } }
   }
-  if value.kind == KindNull {
-    return stream_bytes(destination, "null")
-  }
+  if value.kind == KindNull { return stream_bytes(destination, "null") }
   if value.kind == KindBool {
-    if value.boolean {
-      return stream_bytes(destination, "true")
-    }
+    if value.boolean { return stream_bytes(destination, "true") }
     return stream_bytes(destination, "false")
   }
-  if value.kind == KindNumber {
-    return stream_bytes(destination, value.text)
-  }
-  if value.kind == KindString {
-    return stream_string(destination, value.text)
-  }
+  if value.kind == KindNumber { return stream_bytes(destination, value.text) }
+  if value.kind == KindString { return stream_string(destination, value.text) }
   opening: []const u8 = "["
   closing: []const u8 = "]"
   if value.kind == KindObject {
@@ -1187,9 +979,7 @@ fn stream_value(destination: stream.Writer, value: *const Value, depth: usize) s
   total: usize = 0
   open_result := stream_bytes(destination, opening)
   total += open_result.transferred
-  if stream.failed(open_result.failure) {
-    return open_result
-  }
+  if stream.failed(open_result.failure) { return open_result }
   child := value.first
   first := true
   for child != nil {
@@ -1238,9 +1028,7 @@ pub fn write(destination: stream.Writer, value: *const Value) stream.Transfer {
 // past MaximumDepth).
 fn encode_arena(arena: *memory.Arena, value: *const Value, indent: usize, string: []const u8, quote: bool) []u8 {
   empty: []u8
-  if (quote && !utf8.valid(string)) || (!quote && !encodable(value, 0)) {
-    return empty
-  }
+  if (quote && !utf8.valid(string)) || (!quote && !encodable(value, 0)) { return empty }
   capacity := memory.trial_size(arena, 256)
   for capacity > 0 {
     mark := memory.arena_mark(arena)
@@ -1272,9 +1060,7 @@ fn encodable(value: *const Value, depth: usize) bool {
   }
   child := value.first
   for child != nil {
-    if !encodable(child, depth + 1) {
-      return false
-    }
+    if !encodable(child, depth + 1) { return false }
     child = child.next
   }
   return true

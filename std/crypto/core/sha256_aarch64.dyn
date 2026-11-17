@@ -1,0 +1,6 @@
+#target(arch: aarch64)
+
+// No SHA instructions are used on aarch64; core.dyn computes every block.
+fn hardware_blocks(state: *[8]u32, data: []const u8) bool {
+  return false
+}

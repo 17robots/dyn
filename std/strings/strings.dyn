@@ -9,15 +9,11 @@ use "std/io" io
 // returns #len(text), always a safe slice bound.
 
 pub fn strip_prefix(text: []const u8, prefix: []const u8) []const u8 {
-  if byte_ops.starts_with(text, prefix) {
-    return text[#len(prefix)..]
-  }
+  if byte_ops.starts_with(text, prefix) { return text[#len(prefix)..] }
   return text
 }
 pub fn strip_suffix(text: []const u8, suffix: []const u8) []const u8 {
-  if byte_ops.ends_with(text, suffix) {
-    return text[..#len(text) - #len(suffix)]
-  }
+  if byte_ops.ends_with(text, suffix) { return text[..#len(text) - #len(suffix)] }
   return text
 }
 
@@ -31,15 +27,11 @@ pub fn ascii_is_whitespace(byte: u8) bool {
   return byte == ' ' || byte == 9 || byte == 10 || byte == 13
 }
 pub fn ascii_to_lower(byte: u8) u8 {
-  if byte >= 'A' && byte <= 'Z' {
-    return byte + ('a' - 'A')
-  }
+  if byte >= 'A' && byte <= 'Z' { return byte + ('a' - 'A') }
   return byte
 }
 pub fn ascii_to_upper(byte: u8) u8 {
-  if byte >= 'a' && byte <= 'z' {
-    return byte - ('a' - 'A')
-  }
+  if byte >= 'a' && byte <= 'z' { return byte - ('a' - 'A') }
   return byte
 }
 
@@ -57,22 +49,14 @@ pub fn trim(text: []const u8) []const u8 {
 }
 
 fn digit_value(byte: u8) u8 {
-  if byte >= '0' && byte <= '9' {
-    return byte - '0'
-  }
-  if byte >= 'a' && byte <= 'z' {
-    return byte - 'a' + 10
-  }
-  if byte >= 'A' && byte <= 'Z' {
-    return byte - 'A' + 10
-  }
+  if byte >= '0' && byte <= '9' { return byte - '0' }
+  if byte >= 'a' && byte <= 'z' { return byte - 'a' + 10 }
+  if byte >= 'A' && byte <= 'Z' { return byte - 'A' + 10 }
   return 255
 }
 
 fn parse_u64_into(text: []const u8, base: u8, output: *u64) bool {
-  if #len(text) == 0 || base < 2 || base > 36 {
-    return false
-  }
+  if #len(text) == 0 || base < 2 || base > 36 { return false }
   value: u64 = 0
   radix := #cast(u64, base)
   maximum: u64 = 18446744073709551615
@@ -80,13 +64,9 @@ fn parse_u64_into(text: []const u8, base: u8, output: *u64) bool {
   remainder := maximum % radix
   for byte in text {
     digit := digit_value(byte)
-    if digit >= base {
-      return false
-    }
+    if digit >= base { return false }
     wide := #cast(u64, digit)
-    if value > quotient || (value == quotient && wide > remainder) {
-      return false
-    }
+    if value > quotient || (value == quotient && wide > remainder) { return false }
     // The quotient/remainder test proves this product and sum fit.
     value = value * radix + wide
   }
@@ -95,34 +75,24 @@ fn parse_u64_into(text: []const u8, base: u8, output: *u64) bool {
 }
 
 fn parse_i64_into(text: []const u8, base: u8, output: *i64) bool {
-  if #len(text) == 0 {
-    return false
-  }
+  if #len(text) == 0 { return false }
   negative := text[0] == '-'
   start: usize = 0
   if negative || text[0] == '+' {
     start = 1
   }
-  if start == #len(text) {
-    return false
-  }
+  if start == #len(text) { return false }
   magnitude: u64 = 0
-  if !parse_u64_into(text[start..], base, &magnitude) {
-    return false
-  }
+  if !parse_u64_into(text[start..], base, &magnitude) { return false }
   if negative {
-    if magnitude > 9223372036854775808 {
-      return false
-    }
+    if magnitude > 9223372036854775808 { return false }
     if magnitude == 9223372036854775808 {
       output.* = -9223372036854775807 - 1
     } else {
       output.* = -#cast(i64, magnitude)
     }
   } else {
-    if magnitude > 9223372036854775807 {
-      return false
-    }
+    if magnitude > 9223372036854775807 { return false }
     output.* = #cast(i64, magnitude)
   }
   return true
@@ -141,9 +111,7 @@ pub struct Scanned { value: []const u8, found: bool }
 // The text up to the next delimiter, which is consumed, or the rest of the
 // text. ok is false once the text is used up.
 pub fn scan_until(state: *Scanner, delimiter: u8) Scanned {
-  if state.offset >= #len(state.text) {
-    return Scanned{}
-  }
+  if state.offset >= #len(state.text) { return Scanned{} }
   start := state.offset
   rest := state.text[start..]
   found := byte_ops.find_byte(rest, delimiter)
@@ -160,9 +128,7 @@ pub fn scan_field(state: *Scanner) Scanned {
   for state.offset < #len(state.text) && ascii_is_whitespace(state.text[state.offset]) {
     state.offset += 1
   }
-  if state.offset == #len(state.text) {
-    return Scanned{}
-  }
+  if state.offset == #len(state.text) { return Scanned{} }
   start := state.offset
   for state.offset < #len(state.text) && !ascii_is_whitespace(state.text[state.offset]) {
     state.offset += 1
@@ -192,9 +158,7 @@ fn decimal_multiply(value: *DecimalInteger, factor: u32, addition: u32) {
   }
 }
 fn decimal_shift(value: *DecimalInteger, bits: usize) {
-  if value.used == 0 {
-    return
-  }
+  if value.used == 0 { return }
   words := bits / 32
   index := value.used
   for index > 0 {
@@ -250,21 +214,13 @@ fn decimal_compare(numerator: *const DecimalInteger, denominator: *const Decimal
   } else {
     decimal_shift(&right, #cast(usize, exponent))
   }
-  if left.used < right.used {
-    return -1
-  }
-  if left.used > right.used {
-    return 1
-  }
+  if left.used < right.used { return -1 }
+  if left.used > right.used { return 1 }
   index := left.used
   for index > 0 {
     index -= 1
-    if left.limbs[index] < right.limbs[index] {
-      return -1
-    }
-    if left.limbs[index] > right.limbs[index] {
-      return 1
-    }
+    if left.limbs[index] < right.limbs[index] { return -1 }
+    if left.limbs[index] > right.limbs[index] { return 1 }
   }
   return 0
 }
@@ -289,17 +245,13 @@ fn decimal_compare_bits(numerator: *const DecimalInteger, denominator: *const De
 // syntax leaves output unchanged. No heap allocations or locale dependence.
 // Reached through parse(f64, text).
 fn parse_f64_into(text: []const u8, output: *f64) bool {
-  if #len(text) == 0 || #cast(u64, #len(text)) > 9223372036854765807 {
-    return false
-  }
+  if #len(text) == 0 || #cast(u64, #len(text)) > 9223372036854765807 { return false }
   at: usize = 0
   negative := text[0] == '-'
   if negative || text[0] == '+' {
     at += 1
   }
-  if at == #len(text) {
-    return false
-  }
+  if at == #len(text) { return false }
   numerator := DecimalInteger{}
   significant: usize = 0
   digits: usize = 0
@@ -332,9 +284,7 @@ fn parse_f64_into(text: []const u8, output: *f64) bool {
       break
     }
   }
-  if digits == 0 {
-    return false
-  }
+  if digits == 0 { return false }
   exponent: i64 = 0
   exponent_negative := false
   if at < #len(text) && (text[at] == 'e' || text[at] == 'E') {
@@ -350,13 +300,9 @@ fn parse_f64_into(text: []const u8, output: *f64) bool {
       if exponent <= (cap - digit) / 10 { exponent = exponent * 10 + digit } else { exponent = cap }
       at += 1
     }
-    if at == start {
-      return false
-    }
+    if at == start { return false }
   }
-  if at != #len(text) {
-    return false
-  }
+  if at != #len(text) { return false }
   bits: u64 = 0
   if numerator.used != 0 {
     if exponent_negative {
@@ -448,9 +394,7 @@ pub fn valid(T: type, text: []const u8) bool {
 
 fn signed_into(text: []const u8, base: u8, minimum: i64, maximum: i64, output: *i64) bool {
   value: i64
-  if !parse_i64_into(text, base, &value) || value < minimum || value > maximum {
-    return false
-  }
+  if !parse_i64_into(text, base, &value) || value < minimum || value > maximum { return false }
   output.* = value
   return true
 }
@@ -458,15 +402,9 @@ fn signed_into(text: []const u8, base: u8, minimum: i64, maximum: i64, output: *
 fn unsigned_into(text: []const u8, base: u8, maximum: u64, output: *u64) bool {
   value: u64
   if #len(text) > 0 && text[0] == '+' {
-    if !parse_u64_into(text[1..], base, &value) {
-      return false
-    }
-  } else if !parse_u64_into(text, base, &value) {
-    return false
-  }
-  if value > maximum {
-    return false
-  }
+    if !parse_u64_into(text[1..], base, &value) { return false }
+  } else if !parse_u64_into(text, base, &value) { return false }
+  if value > maximum { return false }
   output.* = value
   return true
 }
@@ -495,9 +433,7 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
     }
     *isize p => {
       ok := parse_i64_into(text, base, &wide)
-      if !ok || wide < #min(isize) || wide > #max(isize) {
-        return false
-      }
+      if !ok || wide < #min(isize) || wide > #max(isize) { return false }
       p.* = #cast(isize, wide)
       return true
     }
@@ -529,9 +465,7 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
     }
     *f32 p => {
       value: f64
-      if base != 10 || !parse_f64_into(text, &value) {
-        return false
-      }
+      if base != 10 || !parse_f64_into(text, &value) { return false }
       p.* = #cast(f32, value)
       return true
     }
@@ -597,9 +531,7 @@ pub fn split(arena: *memory.Arena, source: []const u8, separator: []const u8) []
   for {
     rest := source[at..]
     found := byte_ops.find(rest, separator)
-    if found == #len(rest) {
-      break
-    }
+    if found == #len(rest) { break }
     count += 1
     at += found + #len(separator)
   }
@@ -624,9 +556,7 @@ pub fn replace(arena: *memory.Arena, source: []const u8, needle: []const u8, rep
   for {
     rest := source[at..]
     found := byte_ops.find(rest, needle)
-    if found == #len(rest) {
-      break
-    }
+    if found == #len(rest) { break }
     total = checked_add(total - #len(needle), #len(replacement))
     at += found + #len(needle)
   }
@@ -636,9 +566,7 @@ pub fn replace(arena: *memory.Arena, source: []const u8, needle: []const u8, rep
   for {
     rest := source[at..]
     next := byte_ops.find(rest, needle)
-    if next == #len(rest) {
-      break
-    }
+    if next == #len(rest) { break }
     end := at + next
     written += memory.copy(output[written..], source[at..end])
     written += memory.copy(output[written..], replacement)

@@ -202,17 +202,11 @@ fn put_f64_shortest(state: *Buffer, value: f64) bool {
   exponent_bits := (bits >> 52) & 2047
   mantissa_bits := bits & 4503599627370495
   if exponent_bits == 2047 {
-    if mantissa_bits != 0 {
-      return put(state, "nan")
-    }
-    if negative {
-      return put(state, "-inf")
-    }
+    if mantissa_bits != 0 { return put(state, "nan") }
+    if negative { return put(state, "-inf") }
     return put(state, "inf")
   }
-  if negative && !put_byte(state, '-') {
-    return false
-  }
+  if negative && !put_byte(state, '-') { return false }
   if exponent_bits == 0 && mantissa_bits == 0 {
     if !put_byte(state, '0') {
       state.length = start

@@ -21,6 +21,9 @@ pub struct Pool {
   running: usize,
   stopping: bool,
   workers: []*thread.Thread,
+  // Handles from spawner instead of workers, when started by start_spawned.
+  natives: []rawptr,
+  spawner: *const thread.Spawner,
   started: usize,
 }
 
@@ -33,9 +36,7 @@ fn worker(pool: *Pool) isize {
     for pool.count == 0 && !pool.stopping {
       sync.condition_wait(&pool.ready, &pool.lock)
     }
-    if pool.count == 0 {
-      break
-    }
+    if pool.count == 0 { break }
     task := pool.tasks[pool.head]
     pool.head = (pool.head + 1) % #len(pool.tasks)
     pool.count -= 1
@@ -82,9 +83,7 @@ pub fn start(arena: *mem.Arena, workers: usize, capacity: usize, stack_size: usi
 // Queues task. Returns false, queuing nothing, when the queue is full or the
 // pool is stopping.
 pub fn submit(pool: *Pool, task: Task) bool {
-  if pool == nil || task.run == nil {
-    return false
-  }
+  if pool == nil || task.run == nil { return false }
   sync.lock(&pool.lock)
   if pool.stopping || pool.count == #len(pool.tasks) {
     sync.unlock(&pool.lock)
@@ -100,9 +99,7 @@ pub fn submit(pool: *Pool, task: Task) bool {
 // Blocks until every queued task has finished, including tasks submitted by
 // running tasks.
 pub fn wait(pool: *Pool) {
-  if pool == nil {
-    return
-  }
+  if pool == nil { return }
   sync.lock(&pool.lock)
   for pool.count != 0 || pool.running != 0 {
     sync.condition_wait(&pool.idle, &pool.lock)
@@ -110,17 +107,48 @@ pub fn wait(pool: *Pool) {
   sync.unlock(&pool.lock)
 }
 
+// Like start, with threads from spawner, such as std/thread/posix spawner()
+// for tasks that call C libraries. spawner must stay alive until stop.
+pub fn start_spawned(arena: *mem.Arena, workers: usize, capacity: usize, stack_size: usize, spawner: *const thread.Spawner) StartResult {
+  if workers == 0 || capacity == 0 || stack_size < 256 || spawner == nil {
+    return StartResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+  }
+  mark := mem.arena_mark(arena)
+  pool := mem.push(Pool, arena)
+  pool.lock = sync.mutex()
+  pool.ready = sync.condition()
+  pool.idle = sync.condition()
+  pool.tasks = mem.push_array(Task, arena, capacity)
+  pool.natives = mem.push_array(rawptr, arena, workers)
+  pool.spawner = spawner
+  for i in 0..workers {
+    native := spawner.spawn(spawner.data, arena, stack_size, #cast(fn(rawptr) isize, worker), pool)
+    if native == nil {
+      _ = stop(pool)
+      mem.arena_rewind(arena, mark)
+      return StartResult{ failure: io.Failure{ kind: io.Kind.System } }
+    }
+    pool.natives[i] = native
+    pool.started += 1
+  }
+  return StartResult{ value: pool }
+}
+
 // Finishes queued tasks, then joins every worker. The pool's arena storage
 // may be reclaimed after a successful stop.
 pub fn stop(pool: *Pool) Result {
-  if pool == nil {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
+  if pool == nil { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
   sync.lock(&pool.lock)
   pool.stopping = true
   sync.condition_broadcast(&pool.ready)
   sync.unlock(&pool.lock)
   for i in 0..pool.started {
+    if pool.spawner != nil {
+      if !pool.spawner.join(pool.spawner.data, pool.natives[i]) {
+        return Result{ failure: io.Failure{ kind: io.Kind.System } }
+      }
+      continue
+    }
     joined := thread.join(pool.workers[i])
     if io.failed(joined.failure) {
       return Result{ failure: io.Failure{ kind: joined.failure.kind, native: joined.failure.native } }
