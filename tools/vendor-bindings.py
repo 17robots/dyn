@@ -118,6 +118,8 @@ class Generator:
     self.record_ids[n['id']]=name
    if kind=='EnumDecl' and name:self.enums[name]=n
    if kind=='FunctionDecl' and (name.startswith('dyn_helper_') or (self.prefix.match(name) and (not self.owner or self.owner.search(n.get('_source_file',''))))):self.functions[name]=n
+  # A macro helper gives way when a provider version declares the real function.
+  for name in [name for name in self.functions if name.startswith('dyn_helper_') and name[len('dyn_helper_'):] in self.functions]:del self.functions[name]
   for n in ast.get('inner',[]):
    if n.get('kind')=='VarDecl' and self.prefix.match(n.get('name','')) and (not self.owner or self.owner.search(n.get('_source_file',''))):self.variables[n['name']]=n
   for name,n in self.typedefs.items():

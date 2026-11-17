@@ -328,6 +328,10 @@ Compiler speed of generated code:
 
 Tools:
 
+- `tools/bind-vendors.py` builds the raw OpenSSL binding against OpenSSL 4
+  as well as 3: removed ENGINE calls bind to OpenSSL's own stubs, and a
+  macro helper gives way when the header declares the real function
+  (`BIO_eof`).
 - Errors can carry a fix. Text output prints it under the snippet
   (`fix: replace 'push_bytes_uninit' with 'push_bytes'`), and
   `--diagnostics json` adds `"fix": {replacement, path, certain, offset,
