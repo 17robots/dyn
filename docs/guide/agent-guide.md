@@ -8,11 +8,18 @@ from C, Go, Rust or Zig.
 ## Look up, write, check, run
 
 ```sh
+dyn guide --brief
 dyn docs std/strings --json > build/strings-declarations.json
 dyn check app --diagnostics json
+dyn fix app
 dyn build app --output build/app
 ./build/app
 ```
+
+`dyn guide --brief` is one page of what to write and what not to bring from
+Go, Rust, Zig or C. In JSON diagnostics, a `fix` with `"certain": true` is
+safe to apply as given (`dyn fix` applies all of them); one with `false` is a
+suggestion to judge.
 
 `dyn docs` takes a module directory. `std/...` and `vendor/...` resolve inside
 the SDK, so the same command works from any directory. It needs no language
@@ -104,7 +111,7 @@ native resource first. An arena reset does not close files or join threads.
 | Slot-map handle lookup | Index and live generation in the supplied slot array | Backing identity, forgery resistance or validity of retained raw views |
 | Explicit value copy | Independent storage for copied scalar or fixed-array fields | Deep copying of pointer/slice fields |
 | Arena poison | Diagnostic overwrite on rewind/reset | Reliable stale-access trap |
-| Arena snapshot | Current counters and arena peaks/failures as pointer-free values | Synchronization or whole-program tracing |
+| `mem.arena_used` | Bytes pushed at the moment you ask | Peaks, synchronization or whole-program tracing |
 | `std/profile` | Bounded timing events and overflow count | Unlimited retention or owned event-name strings |
 
 Use handles when objects die independently. Keep generation backing alive, initialize
@@ -120,11 +127,13 @@ an abstraction merely to label a state; choose behavior callers can use consiste
 ## Validate behavior, not just compilation
 
 The tested programs in [memory patterns](memory-patterns.md) show lifetimes,
-scratch reuse, typed pushes and snapshots. For new application code, test the actual result, exhausted capacity, cleanup on
+scratch reuse and typed pushes. For new application code, test the actual result, exhausted capacity, cleanup on
 failure, and retained output after scratch reuse. Report separately what compiled,
 what ran, and what remains unverified. An AI success-rate claim needs an available
 task corpus, compiler version, and reproducible results; example compilation alone
-is not a general reliability score.
+is not a general reliability score. `tools/agent-eval` is that corpus: seven
+specified tools, graders, and a harness that counts first-try checks and
+repair rounds for any agent command.
 
 Semantic project queries, bounded events and sandbox execution are documented in
 [tools](tools.md). They complement declaration exports.

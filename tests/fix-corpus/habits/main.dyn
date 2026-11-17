@@ -1,0 +1,24 @@
+use "std/io"
+use "std/mem"
+use "std/strings"
+
+fn total(values: []const u32) u32 {
+  sum: u32 = 0
+  for value in values {
+    sum += value
+  }
+  return sum
+}
+
+fn main() {
+  arena := mem.arena_alloc(0)
+  defer mem.arena_release(arena)
+  let values: [3]u32 = [1, 2, 3]
+  var label = "sum"
+  let mut count = total(values)
+  io.println("{} {}", label, count)
+  greeting := strings.format(arena, "{}{}", label, "!")
+  _ = greeting
+  joined := label + "!"
+  _ = strings.clone("x")
+}

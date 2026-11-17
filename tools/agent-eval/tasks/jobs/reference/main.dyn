@@ -1,0 +1,102 @@
+use "std/bufio"
+use "std/bytes"
+use "std/fail"
+use "std/fs"
+use "std/io"
+use "std/strings"
+
+fn report(failure: fail.Failure) {
+  storage: [512]u8
+  io.eprintln("jobs: {}", fail.describe(storage[..], failure))
+}
+
+// Newline characters in path, read a buffer at a time.
+fn count(status: *fail.Status, path: []const u8) usize {
+  file := fs.open(status, path)
+  defer fs.close(&file)
+  buffer: [65536]u8
+  lines: usize = 0
+  for !status.failed {
+    got := fs.read(status, &file, buffer[..])
+    if got == 0 { break }
+    lines += bytes.count_occurrences(buffer[..got], "\n")
+  }
+  return lines
+}
+
+fn copy(status: *fail.Status, from: []const u8, to: []const u8) {
+  input := fs.open(status, from)
+  defer fs.close(&input)
+  output := fs.create(status, to)
+  defer fs.close(&output)
+  buffer: [65536]u8
+  for !status.failed {
+    got := fs.read(status, &input, buffer[..])
+    if got == 0 { break }
+    fs.write(status, &output, buffer[..got])
+  }
+}
+
+// Runs one command line. Returns false when it failed or was unknown.
+fn run(line: []const u8) bool {
+  command := line
+  rest: []const u8 = ""
+  space := bytes.find_byte(line, ' ')
+  if space < #len(line) {
+    command = line[..space]
+    rest = strings.trim(line[space + 1..])
+  }
+  status: fail.Status
+  case command {
+    "count" => {
+      lines := count(&status, rest)
+      if !status.failed { io.println("{} {}", rest, lines) }
+    }
+    "copy" => {
+      split := bytes.find_byte(rest, ' ')
+      if split == #len(rest) {
+        io.eprintln("jobs: copy needs FROM and TO: {}", line)
+        return false
+      }
+      from := rest[..split]
+      copy(&status, from, strings.trim(rest[split + 1..]))
+      if !status.failed { io.println("copied {}", from) }
+    }
+    "remove" => {
+      fs.remove(&status, rest)
+      if !status.failed { io.println("removed {}", rest) }
+    }
+    _ => {
+      io.eprintln("jobs: unknown command: {}", line)
+      return false
+    }
+  }
+  if status.failed {
+    report(status.failure)
+    return false
+  }
+  return true
+}
+
+fn main() i32 {
+  storage: [65536]u8
+  input := bufio.reader(io.stdin(), storage[..])
+  line: [4096]u8
+  reading: fail.Status
+  all_good := true
+  for {
+    read := bufio.read_line(&reading, &input, line[..])
+    if reading.failed {
+      report(reading.failure)
+      return 1
+    }
+    text := strings.trim(line[..read.transferred])
+    if bytes.equal(text, "quit") { break }
+    if #len(text) != 0 && !run(text) {
+      all_good = false
+    }
+    if read.status == bufio.ReadStatus.End { break }
+  }
+  if all_good { return 0 }
+  return 1
+}

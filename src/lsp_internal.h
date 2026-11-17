@@ -132,6 +132,12 @@ bool lsp_document_parse(LspDocument *document);
 /* Rebuilds line_starts for the current text. */
 void lsp_document_lines(LspDocument *document);
 bool lsp_publish_syntax(LspDocument *document);
+/* Keeps the fix reported just before a diagnostic for lsp_collect_diagnostic
+   to attach; dyn_lsp installs it as the fix sink. */
+void lsp_note_fix(const DynFixReport *fix, void *data);
+/* A published diagnostic's "data" member carrying fix, or nothing. */
+size_t lsp_fix_data(char *out, size_t capacity, bool has_fix, bool certain, unsigned line, unsigned column,
+                    unsigned end_line, unsigned end_column, const char *replacement);
 
 /* navigation */
 const char *lsp_builtin_hover(const char *text, size_t line, size_t character);

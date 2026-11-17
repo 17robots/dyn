@@ -1,0 +1,7 @@
+use "std/mem"
+
+fn main() {
+  arena := mem.arena_alloc(0)
+  _ = mem.push_aray(u8, arena, 2)
+  _ = mem.arena_push(arena, 4, 1)
+}

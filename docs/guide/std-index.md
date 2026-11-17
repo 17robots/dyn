@@ -67,7 +67,7 @@ module's full declarations and comments.
 - `struct Splitter { value: []const u8, separator: []const u8, offset: usize, done: bool, }`
 - `fn splitter(value: []const u8, separator: []const u8) Splitter`
 - `struct Piece { value: []const u8, found: bool }`
-- `fn split_next(state: *Splitter) Piece`: The next piece, or ok false after the last one.
+- `fn split_next(state: *Splitter) Piece`: The next piece, or found false after the last one.
 - `struct Cursor { data: []const u8, offset: usize, }`
 - `fn cursor(data: []const u8) Cursor`
 - `fn cursor_remaining(state: *const Cursor) usize`

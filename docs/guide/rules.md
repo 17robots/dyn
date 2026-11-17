@@ -51,7 +51,8 @@ behavior (std, vendor) is not language and is documented with each module.
 16. **`if` and `for` conditions are `bool`.** There is no truthiness.
 17. **`for` has four forms:** condition, infinite, range (`a..b`, `a..=b`, with `#reverse` and
     `#step`), and over an array or slice (`for value in values`, `for *value`, `for value, i`).
-18. **`break` and `continue` act on the innermost loop.** Loops have no labels.
+18. **`break` and `continue` act on the innermost loop.** Loops have no labels. A `for` with no
+    condition and no `break` leaves only by `return` or a panic, so no `return` needs to follow it.
 19. **`case` on an enum lists every variant or has `_`; `case` on an integer or text always has `_`.**
 20. **`defer` runs at block exit, last first,** on every exit: fall-through, `return`, `break`,
     `continue`.

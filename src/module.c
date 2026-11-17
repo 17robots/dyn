@@ -488,6 +488,38 @@ static const char *closest_member(Resolver *r, const char *directory, const char
   }
   return best;
 }
+/* Up to four public members that look related when none is a close
+   spelling: one name starts with the other (list for list_dir), or they
+   share a word of three letters or more (stdin for read_stdin). */
+static size_t related_members(Resolver *r, const char *directory, const char *member, const char **out) {
+  ModuleInterface *interface = find_interface(r, directory);
+  if (!interface) return 0;
+  size_t count = 0, wanted = strlen(member);
+  for (int pass = 0; pass < 2 && count < 4; ++pass)
+    for (size_t i = 0; i < interface->decl_count && count < 4; ++i) {
+      if (!interface->decls[i].is_public) continue;
+      const char *name = interface->decls[i].name;
+      size_t length = strlen(name);
+      bool related = false;
+      if (pass == 0) {
+        size_t shorter = length < wanted ? length : wanted;
+        related = shorter >= 3 && !strncmp(name, member, shorter);
+      } else {
+        for (const char *word = member; *word && !related;) {
+          const char *end = strchr(word, '_');
+          size_t size = end ? (size_t)(end - word) : strlen(word);
+          for (size_t at = 0; size >= 3 && at + size <= length && !related; ++at)
+            related = !strncmp(name + at, word, size) && (at == 0 || name[at - 1] == '_') &&
+                      (name[at + size] == 0 || name[at + size] == '_');
+          word = end ? end + 1 : word + size;
+        }
+      }
+      bool seen = false;
+      for (size_t k = 0; k < count; ++k) seen = seen || out[k] == name;
+      if (related && !seen) out[count++] = name;
+    }
+  return count;
+}
 static size_t alias_index(char **aliases, size_t count, const char *name) {
   for (size_t i = 0; i < count; ++i)
     if (!strcmp(aliases[i], name))
@@ -502,6 +534,32 @@ static bool imported_decl(Resolver *r, char **targets, size_t count,
       return true;
   }
   return false;
+}
+#include "removed_api.inc"
+/* The entry for member of the module in directory in table, or NULL. */
+static const RemovedApi *api_entry(const RemovedApi *table, size_t count, const char *directory, const char *member) {
+  size_t length = strlen(directory);
+  for (size_t i = 0; i < count; ++i) {
+    const RemovedApi *api = &table[i];
+    size_t module = strlen(api->module);
+    if (strcmp(api->member, member) || length < module || strcmp(directory + length - module, api->module)) continue;
+    if (length > module && directory[length - module - 1] != '/' && directory[length - module - 1] != '\\') continue;
+    return api;
+  }
+  return NULL;
+}
+/* Offers name in place of the member that ends the reference start..end. */
+static const RemovedApi *removed_member(const char *directory, const char *member) {
+  return api_entry(removed_apis, sizeof(removed_apis) / sizeof(removed_apis[0]), directory, member);
+}
+static const RemovedApi *foreign_member(const char *directory, const char *member) {
+  return api_entry(foreign_names, sizeof(foreign_names) / sizeof(foreign_names[0]), directory, member);
+}
+static void fix_member(const DynSource *s, uint32_t start, uint32_t end, const char *member, const char *name,
+                       bool certain) {
+  size_t length = strlen(member);
+  if (end - start < length || end > s->length || memcmp(s->text + end - length, member, length)) return;
+  dyn_diagnostic_fix(s, start, end - length, end, name, certain);
 }
 static int validate_member_at(Resolver *r, uint32_t start, uint32_t end, const DynSource *s,
                            char **aliases, char **targets, size_t count,
@@ -526,13 +584,28 @@ static int validate_member_at(Resolver *r, uint32_t start, uint32_t end, const D
     } else if (decl_named(r, targets[found], member, &pub))
       snprintf(message, sizeof(message), "'%s.%s' is not pub; only pub declarations can be used from another module",
                qualifier, member);
-    else {
+    else if (removed_member(targets[found], member)) {
+      const RemovedApi *api = removed_member(targets[found], member);
+      snprintf(message, sizeof(message), "'%s.%s' was removed: %s", qualifier, member, api->hint);
+      if (api->rename) fix_member(s, start, end, member, api->rename, true);
+    } else if (foreign_member(targets[found], member)) {
+      const RemovedApi *api = foreign_member(targets[found], member);
+      snprintf(message, sizeof(message), "'%s' has no pub member '%s': %s", qualifier, member, api->hint);
+      if (api->rename) fix_member(s, start, end, member, api->rename, false);
+    } else {
       const char *closest = closest_member(r, targets[found], member);
-      if (closest)
+      if (closest) {
         snprintf(message, sizeof(message), "'%s' has no pub member '%s'; did you mean '%s.%s'?", qualifier, member,
                  qualifier, closest);
-      else
-        snprintf(message, sizeof(message), "'%s' has no pub member '%s'", qualifier, member);
+        fix_member(s, start, end, member, closest, false);
+      } else {
+        const char *related[4];
+        size_t found_related = related_members(r, targets[found], member, related);
+        int used = snprintf(message, sizeof(message), "'%s' has no pub member '%s'", qualifier, member);
+        for (size_t k = 0; k < found_related && used > 0 && (size_t)used < sizeof(message); ++k)
+          used += snprintf(message + used, sizeof(message) - (size_t)used, "%s%s.%s", k ? ", " : "; related: ",
+                           qualifier, related[k]);
+      }
     }
     dyn_diagnostic_source("error", s, start, end, message);
     return 1;

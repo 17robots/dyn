@@ -15,6 +15,12 @@ CASES = (
     ('use "std/fmt"\n\nfn main() {\n  _ = fmt.f64_decimal_into\n}\n', "'fmt.f64_decimal_into' is not pub"),
     ('import io\n\nfn main() {\n}\n', 'Dyn imports a module with use, as in use "std/io"'),
     ('fn main() {\n  sizes := [3]usize{ 1, 2, 3 }\n  _ = sizes\n}\n', 'write an array literal as [a, b, c] and give the type to the name'),
+    ('use "std/fs"\nuse "std/mem"\nuse "std/fail"\n\nfn main() {\n  a := mem.arena_alloc(0)\n  status: fail.Status\n'
+     '  _ = fs.list_entries(a, &status, ".")\n}\n', "'fs' has no pub member 'list_entries'; related: fs.list"),
+    ('use "std/fs"\nuse "std/fail"\n\nfn main() {\n  status: fail.Status\n  fs.create_dir_all(&status, "x")\n}\n',
+     "'fs' has no pub member 'create_dir_all': Dyn calls it fs.make_directory(&status, path, 0o755)"),
+    ('use "std/strings"\n\nfn main() {\n  _ = strings.equal("a", "b")\n}\n',
+     "'strings.equal' was removed: use bytes.equal(a, b) from std/bytes"),
 )
 with tempfile.TemporaryDirectory(prefix='dyn-diagnostic-hints-') as temporary:
     for index, (source, message) in enumerate(CASES):
@@ -29,4 +35,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-diagnostic-hints-') as temporary:
     (project / 'main.dyn').write_text('import: i32 = 5\n\nfn main() {\n  _ = import\n}\n')
     checked = subprocess.run([DYN, 'check', str(project)], capture_output=True, text=True, timeout=60)
     assert checked.returncode == 0, checked.stderr
-print('PASS diagnostic hints: member suggestions, private members, use instead of import, array literals')
+print('PASS diagnostic hints: member suggestions, related members, moved functions, private members, use instead of import, array literals')

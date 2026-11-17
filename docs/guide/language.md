@@ -262,7 +262,8 @@ size and alignment, such as `[4]u32` for a 16-byte, 4-aligned union.
 
 Functions may accept and return primitive or struct values. Arguments evaluate left-to-right and
 must match declared parameter count/types, subject to normal lossless conversions. Non-void
-functions must return on every reachable exit. Calling a non-void function as a statement is an
+functions must return on every reachable exit. A `for` with no condition and no `break` is not
+an exit, so a function may end with one; code after it is allowed but never runs. Calling a non-void function as a statement is an
 error; use `_ = call()` to discard its result. Forward calls and direct recursion are supported.
 
 Enums are nominal. Tags default to `u32` or use an explicit integer backing type, as in

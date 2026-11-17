@@ -1,0 +1,10 @@
+use "std/mem"
+use "std/io"
+
+fn main() {
+  arena := mem.arena_alloc(0)
+  defer mem.arena_release(arena)
+  bytes := mem.push_bytes_uninit(arena, 4)
+  bytes[0] = 7
+  io.println("{} {}", bytes[0], mem.arena_remaining(arena) > 0)
+}

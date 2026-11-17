@@ -1,0 +1,46 @@
+use "std/encoding/json"
+use "std/fail"
+use "std/fs"
+use "std/io"
+use "std/mem"
+use "std/process"
+
+// One line on standard error. A parse failure carries no path, so name it.
+fn report(path: []const u8, failure: fail.Failure) {
+  storage: [512]u8
+  text := fail.describe(storage[..], failure)
+  if #len(fail.path_text(&failure)) == 0 {
+    io.eprintln("config: {}: {}", path, text)
+  } else {
+    io.eprintln("config: {}", text)
+  }
+}
+
+fn main() i32 {
+  program := process.start()
+  if #len(program.args) != 2 {
+    io.eprintln("config: usage: config PATH")
+    return 1
+  }
+  path := program.args[1]
+  arena := mem.arena_alloc(0)
+  defer mem.arena_release(arena)
+  status: fail.Status
+  text := fs.read_all(arena, &status, path, mem.MiB)
+  root := json.parse(arena, &status, text)
+  if !status.failed {
+    name := json.get(*const json.Value, root, "name")
+    port := json.get(*const json.Value, root, "port")
+    if !json.is_string(name) {
+      fail.invalid(&status, "read", path, "\"name\" is not a string")
+    } else if !json.is_number(port) {
+      fail.invalid(&status, "read", path, "\"port\" is not a number")
+    }
+  }
+  if status.failed {
+    report(path, status.failure)
+    return 1
+  }
+  io.println("name={} port={}", json.get([]const u8, root, "name"), json.get(i64, root, "port"))
+  return 0
+}

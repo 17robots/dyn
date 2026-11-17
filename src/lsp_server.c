@@ -195,6 +195,7 @@ char *json_escape(const char *text, size_t length) {
 
 int dyn_lsp(const DynTarget *target) {
   lsp_target = target;
+  dyn_diagnostic_fix_sink(lsp_note_fix, NULL);
   int status = 0;
   LspInput input = {0};
   LspWork work_state = {.input = &input};

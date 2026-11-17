@@ -303,6 +303,8 @@ typedef struct {
   bool bare_block;
   /* for i in #step(range, n): step holds n until sema rewrites the loop. */
   bool for_step;
+  /* A for loop that some break leaves; sema sets it. */
+  bool for_broken;
   DynExprId step;
   DynSpan index_name;
 } DynAstStmt;

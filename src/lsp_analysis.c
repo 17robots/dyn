@@ -41,11 +41,48 @@ static bool lsp_overlay_sources(DynSources *sources, LspDocument *documents,
                                 size_t count);
 static LspSemantic lsp_snapshot_view(DynAnalysisSnapshot *snapshot);
 
+/* The fix the core reported for the diagnostic that comes next. */
+static _Thread_local struct {
+  bool set, certain;
+  char path[256], replacement[96];
+  unsigned line, column, end_line, end_column;
+} lsp_pending_fix;
+void lsp_note_fix(const DynFixReport *fix, void *data) {
+  (void)data;
+  lsp_pending_fix.set = fix->path && strlen(fix->path) < sizeof(lsp_pending_fix.path) &&
+                        strlen(fix->replacement) < sizeof(lsp_pending_fix.replacement);
+  if (!lsp_pending_fix.set) return;
+  snprintf(lsp_pending_fix.path, sizeof(lsp_pending_fix.path), "%s", fix->path);
+  snprintf(lsp_pending_fix.replacement, sizeof(lsp_pending_fix.replacement), "%s", fix->replacement);
+  lsp_pending_fix.certain = fix->certain;
+  lsp_pending_fix.line = fix->line;
+  lsp_pending_fix.column = fix->column;
+  lsp_pending_fix.end_line = fix->end_line;
+  lsp_pending_fix.end_column = fix->end_column;
+}
+size_t lsp_fix_data(char *out, size_t capacity, bool has_fix, bool certain, unsigned line, unsigned column,
+                    unsigned end_line, unsigned end_column, const char *replacement) {
+  if (!capacity) return 0;
+  out[0] = 0;
+  if (!has_fix) return 0;
+  char *escaped = json_escape(replacement, strlen(replacement));
+  if (!escaped) return 0;
+  /* Byte columns, like every range here; lsp_send converts them. */
+  int written = lsp_bounded_printf(out, capacity,
+      ",\"data\":{\"fix\":{\"range\":{\"start\":{\"line\":%u,\"character\":%u},\"end\":{\"line\":%u,"
+      "\"character\":%u}},\"newText\":\"%s\",\"certain\":%s}}",
+      line ? line - 1 : 0, column ? column - 1 : 0, end_line ? end_line - 1 : 0, end_column ? end_column - 1 : 0,
+      escaped, certain ? "true" : "false");
+  free(escaped);
+  return written > 0 ? (size_t)written : 0;
+}
 static void lsp_collect_diagnostic(const char *severity, const char *path,
                                    unsigned line, unsigned column,
                                    unsigned end_line, unsigned end_column,
                                    const char *message, void *context) {
   LspDiagnostics *all = context;
+  bool fixed = lsp_pending_fix.set && path && !strcmp(path, lsp_pending_fix.path);
+  lsp_pending_fix.set = false;
   if (all->allocation_failed) return;
   if (all->count == all->capacity) {
     size_t capacity = all->capacity ? all->capacity * 2 : 64;
@@ -66,6 +103,13 @@ static void lsp_collect_diagnostic(const char *severity, const char *path,
   item->column = column;
   item->end_line = end_line;
   item->end_column = end_column;
+  item->has_fix = fixed;
+  item->fix_certain = fixed && lsp_pending_fix.certain;
+  item->fix_line = lsp_pending_fix.line;
+  item->fix_column = lsp_pending_fix.column;
+  item->fix_end_line = lsp_pending_fix.end_line;
+  item->fix_end_column = lsp_pending_fix.end_column;
+  snprintf(item->replacement, sizeof(item->replacement), "%s", fixed ? lsp_pending_fix.replacement : "");
 }
 
 static int lsp_identifier_compare(const void *left, const void *right) {
@@ -550,13 +594,16 @@ void lsp_publish_semantic(LspDocument *documents, size_t count) {
         unsigned end_line = item->end_line ? item->end_line - 1 : line,
                  end_column =
                      item->end_column ? item->end_column - 1 : column + 1;
+        char data[512];
+        lsp_fix_data(data, sizeof(data), item->has_fix, item->fix_certain, item->fix_line, item->fix_column,
+                     item->fix_end_line, item->fix_end_column, item->replacement);
         at += (size_t)lsp_bounded_printf(
             body + at, capacity - at,
             "%s{\"range\":{\"start\":{\"line\":%u,\"character\":%u},\"end\":{"
             "\"line\":%u,\"character\":%u}},\"severity\":%u,\"source\":\"dyn\","
-            "\"message\":\"%s\"}",
+            "\"message\":\"%s\"%s}",
             comma ? "," : "", line, column, end_line, end_column,
-            !strcmp(item->severity, "error") ? 1u : 2u, message);
+            !strcmp(item->severity, "error") ? 1u : 2u, message, data);
         comma = true;
         free(message);
       }

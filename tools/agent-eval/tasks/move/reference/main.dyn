@@ -1,0 +1,42 @@
+use "std/fail"
+use "std/fs"
+use "std/io"
+use "std/mem"
+use "std/process"
+use "std/strings"
+
+fn report(failure: fail.Failure) {
+  storage: [512]u8
+  io.eprintln("move: {}", fail.describe(storage[..], failure))
+}
+
+fn main() i32 {
+  program := process.start()
+  if #len(program.args) != 3 {
+    io.eprintln("move: usage: move FROM TO")
+    return 1
+  }
+  from := program.args[1]
+  to := program.args[2]
+  arena := mem.arena_alloc(0)
+  defer mem.arena_release(arena)
+  status: fail.Status
+  input := fs.open(&status, from)
+  defer fs.close(&input)
+  // TO appears only once it is complete: written beside it, then renamed.
+  output := fs.atomic_begin(&status, to, strings.format(arena, "{}.move-partial", to))
+  buffer: [65536]u8
+  for !status.failed {
+    count := fs.read(&status, &input, buffer[..])
+    if count == 0 { break }
+    fs.write(&status, &output.file, buffer[..count])
+  }
+  fs.atomic_commit(&status, &output)
+  fs.atomic_abort(&output)
+  fs.remove(&status, from)
+  if status.failed {
+    report(status.failure)
+    return 1
+  }
+  return 0
+}

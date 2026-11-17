@@ -11,6 +11,10 @@ typedef struct {
 typedef struct {
   char severity[8], path[256], message[256];
   unsigned line, column, end_line, end_column;
+  /* The diagnostic's fix, in its own file, when has_fix. */
+  bool has_fix, fix_certain;
+  unsigned fix_line, fix_column, fix_end_line, fix_end_column;
+  char replacement[96];
 } DynAnalysisDiagnostic;
 typedef struct {
   DynAnalysisDiagnostic *items;
