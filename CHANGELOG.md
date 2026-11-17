@@ -232,6 +232,10 @@ Standard library:
   - `vendor/openssl/tls` takes the status and returns a `Want` when the
     socket is not ready; its `ErrorKind` and result types are gone.
     `tls.server_alpn` and `evented/tls.offer_http2` take the status.
+    `quic_read` and `quic_write` take the status too and return a
+    `QuicAttempt` (`count`, `blocked`, `ended`); a stream the peer resets
+    fails with `Interrupted`. `QuicStatus` and `QuicIo` leave the vendor
+    module, and `evented.QuicStatus` loses `Reset`.
   - `observe.record` and `progress` `advance`/`end` return nothing (drops
     are counted). `bytes.Builder` is removed; use `std/bytes/builder`.
   - Fixed: cgltf reported a missing file as out of memory.

@@ -140,22 +140,20 @@ fn quic_accept_stream(connection: rawptr) evented.QuicStream {
   return evented.QuicStream{ handle: accepted.handle, id: accepted.id, unidirectional: accepted.unidirectional }
 }
 
-fn quic_status(status: openssl.QuicStatus) evented.QuicStatus {
-  case status {
-    openssl.QuicStatus.Ok => { return evented.QuicStatus.Ok }
-    openssl.QuicStatus.WouldBlock => { return evented.QuicStatus.WouldBlock }
-    openssl.QuicStatus.End => { return evented.QuicStatus.End }
-    openssl.QuicStatus.Reset => { return evented.QuicStatus.Reset }
-    openssl.QuicStatus.Failed => { return evented.QuicStatus.Failed }
-  }
+// A failure from the provider, including a peer reset, ends the stream.
+fn quic_io(status: *fail.Status, attempt: openssl.QuicAttempt) evented.QuicIo {
+  if status.failed { return evented.QuicIo{ count: attempt.count, status: evented.QuicStatus.Failed } }
+  if attempt.blocked { return evented.QuicIo{ count: attempt.count, status: evented.QuicStatus.WouldBlock } }
+  if attempt.ended { return evented.QuicIo{ status: evented.QuicStatus.End } }
+  return evented.QuicIo{ count: attempt.count }
 }
 
 fn quic_read(stream: rawptr, destination: []u8) evented.QuicIo {
-  read := openssl.quic_read(stream, destination)
-  return evented.QuicIo{ count: read.count, status: quic_status(read.status) }
+  status: fail.Status
+  return quic_io(&status, openssl.quic_read(&status, stream, destination))
 }
 
 fn quic_write(stream: rawptr, source: []const u8, conclude: bool) evented.QuicIo {
-  written := openssl.quic_write(stream, source, conclude)
-  return evented.QuicIo{ count: written.count, status: quic_status(written.status) }
+  status: fail.Status
+  return quic_io(&status, openssl.quic_write(&status, stream, source, conclude))
 }
