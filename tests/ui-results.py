@@ -12,6 +12,17 @@ SOURCE = r'''use "std/ui" ui
 use "std/ui/software" software
 use "std/mem" mem
 use "std/io" errors
+use "std/fail"
+fn software_render(p0: *software.Surface, p1: *const ui.Command, p2: software.Font) fail.Failure {
+  status: fail.Status
+  software.render(&status, p0, p1, p2)
+  return status.failure
+}
+
+fn failed(failure: fail.Failure) bool {
+  return failure.kind != fail.Kind.Ok
+}
+
 fn check(ok: bool) { if !ok { #panic("UI contract") } }
 fn pair(context: *ui.Context, arena: *mem.Arena, input: ui.Input) [2]ui.Response {
   mem.arena_rewind(arena, 0)
@@ -129,7 +140,7 @@ fn raster(arena: *mem.Arena) {
   ui.rectangle(&context, ui.Rect{ x: 1, width: 2, height: 2 }, ui.Color{ b: 200, a: 255 })
   ui.rectangle(&context, ui.Rect{ x: 1, width: 2, height: 2 }, ui.Color{ r: 200, a: 128 })
   ui.end(&context)
-  check(!errors.failed(software.render(&surface, ui.first(&context), font).failure))
+  check(!failed(software_render(&surface, ui.first(&context), font)))
   check(bytes[0] == 200 && bytes[3] == 128)
   check(bytes[4] == 100 && bytes[6] == 100 && bytes[7] == 255)
   for y in 0..4 { for x in 16..20 { check(bytes[y * 20 + x] == 109) } }
@@ -140,7 +151,7 @@ fn raster(arena: *mem.Arena) {
   mutable[0] = 66
   ui.end(&context)
   check(ui.first(&context).text[0] == 65)
-  check(!errors.failed(software.render(&surface, ui.first(&context), font).failure))
+  check(!failed(software_render(&surface, ui.first(&context), font)))
   check(bytes[1] == 240 && bytes[3] == 128 && bytes[7] == 64 && bytes[23] == 0 && bytes[27] == 128)
   check(bytes[61] == 240 && bytes[63] == 128 && trace.calls == 2)
   for i in 0..80 { bytes[i] = 0 }
@@ -148,34 +159,34 @@ fn raster(arena: *mem.Arena) {
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 4, height: 4 })
   ui.label(&context, ui.Rect{ x: 1, y: 1, width: 2, height: 2 }, "A", ui.Color{ a: 255 })
   ui.end(&context)
-  check(!errors.failed(software.render(&surface, ui.first(&context), font).failure))
+  check(!failed(software_render(&surface, ui.first(&context), font)))
   check(bytes[27] == 128 && bytes[47] == 255 && bytes[23] == 0)
   for i in 0..80 { bytes[i] = 0 }
   trace = Trace{ bearing: -1 }
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 4, height: 4 })
   ui.label(&context, ui.Rect{ width: 3, height: 3 }, "AA", ui.Color{ a: 255 })
   ui.end(&context)
-  check(!errors.failed(software.render(&surface, ui.first(&context), font).failure))
+  check(!failed(software_render(&surface, ui.first(&context), font)))
   check(bytes[11] == 255)
   for i in 0..80 { bytes[i] = 0 }
   trace = Trace{ vertical: -1 }
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 4, height: 4 })
   ui.label(&context, ui.Rect{ width: 2, height: 3 }, "A\nA", ui.Color{ a: 255 })
   ui.end(&context)
-  check(!errors.failed(software.render(&surface, ui.first(&context), font).failure))
+  check(!failed(software_render(&surface, ui.first(&context), font)))
   check(bytes[43] == 255)
   trace = Trace{}
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 4, height: 4 })
   ui.label(&context, ui.Rect{ width: 4, height: 4 }, "\xff\xc3\xa9", ui.Color{ a: 255 })
   ui.end(&context)
-  check(!errors.failed(software.render(&surface, ui.first(&context), font).failure))
+  check(!failed(software_render(&surface, ui.first(&context), font)))
   check(trace.calls == 2 && trace.first == 65533 && trace.last == 233)
   trace.invalid = true
-  check(software.render(&surface, ui.first(&context), font).failure.kind == errors.Kind.InvalidInput)
+  check(software_render(&surface, ui.first(&context), font).kind == fail.Kind.InvalidInput)
   surface.stride = 15
-  check(software.render(&surface, ui.first(&context), font).failure.kind == errors.Kind.InvalidInput)
+  check(software_render(&surface, ui.first(&context), font).kind == fail.Kind.InvalidInput)
   surface.stride = 20
-  check(software.render(&surface, ui.first(&context), software.Font{}).failure.kind == errors.Kind.InvalidInput)
+  check(software_render(&surface, ui.first(&context), software.Font{}).kind == fail.Kind.InvalidInput)
 }
 fn main() {
   arena := mem.arena_alloc(0)

@@ -1,81 +1,143 @@
-use "std/parse" parse
+use "std/fail"
 use "std/c"
 #link("sqlite3")
 
 pub type Database = rawptr
-pub struct OpenResult { database: Database, code: i32, failure: io.Failure }
 
+extern fn sqlite_error_text "sqlite3_errstr"(code: i32) c.string
 
-// Provider allocates database. Successful results require close; failures own nothing.
-pub fn open(name: []const u8, buffer: []u8) OpenResult {
-  encoded := c.string_into(buffer, name)
-  if parse.failed(encoded.failure) {
-    return OpenResult{ code: string_error(encoded.failure.kind), failure: io.Failure{ kind: io.Kind.System } }
+// The portable kind for a SQLite result code, or for one of the wrapper's
+// negative codes below.
+fn kind_of(code: i32) fail.Kind {
+  primary := code & 255
+  if code == InvalidArgument { return fail.Kind.InvalidInput }
+  if code == Capacity || primary == 7 || primary == 13 || primary == 18 { return fail.Kind.Capacity }
+  if code == Overflow { return fail.Kind.Overflow }
+  if primary == 3 || primary == 8 || primary == 23 { return fail.Kind.PermissionDenied }
+  if primary == 5 || primary == 6 { return fail.Kind.WouldBlock }
+  if primary == 14 { return fail.Kind.NotFound }
+  if primary == 19 || primary == 20 || primary == 25 { return fail.Kind.InvalidInput }
+  if primary == 21 { return fail.Kind.InvalidState }
+  return fail.Kind.System
+}
+
+// Records code as a failure of operation: SQLite's text for it, and native
+// keeps the code, so constraint and the like can still look at it.
+fn sqlite_failed(status: *fail.Status, operation: []const u8, code: i32) {
+  if status.failed { return }
+  message: []const u8 = "invalid argument"
+  if code == Capacity {
+    message = "the text does not fit the buffer"
+  } else if code == Overflow {
+    message = "too large for SQLite"
+  } else if code > 0 {
+    text: fail.Status
+    message = c.bytes_from_string(&text, sqlite_error_text(code), 160)
   }
+  failure := fail.make(kind_of(code), operation, "", message)
+  failure.native = code
+  fail.set(status, failure)
+}
+fn checked(status: *fail.Status, operation: []const u8, code: i32) {
+  if code != 0 {
+    sqlite_failed(status, operation, code)
+  }
+}
+
+// name as a C string in buffer, or nil after recording why it does not fit.
+fn encoded(status: *fail.Status, operation: []const u8, buffer: []u8, text: []const u8) c.string {
+  encoding: fail.Status
+  value := c.string_into(&encoding, buffer, text)
+  if encoding.failed {
+    code := InvalidArgument
+    if encoding.failure.kind == fail.Kind.Capacity {
+      code = Capacity
+    } else if encoding.failure.kind == fail.Kind.Overflow {
+      code = Overflow
+    }
+    sqlite_failed(status, operation, code)
+    return nil
+  }
+  return value
+}
+
+// Opens or creates the database at name; buffer holds name as a C string.
+// The connection must be closed; a failure leaves nothing to close.
+pub fn open(status: *fail.Status, name: []const u8, buffer: []u8) Database {
+  if status.failed { return nil }
+  path := encoded(status, "open database", buffer, name)
+  if status.failed { return nil }
   database: rawptr = nil
-  code := sqlite_open(encoded.value, &database)
+  code := sqlite_open(path, &database)
   if code != 0 {
     if database != nil {
       _ = sqlite_close(database)
     }
-    return OpenResult{ code: code, failure: io.Failure{ kind: io.Kind.System } }
+    sqlite_failed(status, "open database", code)
+    return nil
   }
-  return OpenResult{ database: database, code: code }
+  return database
 }
 // Opt in only when the caller serializes every connection/statement operation,
 // including borrowed views, from publication until all workers have stopped.
 // The provider's default mutex mode remains the default for all existing calls.
 pub struct OpenOptions { caller_serialized: bool }
 extern fn sqlite_open_flags "sqlite3_open_v2"(name: c.string, database: *rawptr, flags: i32, vfs: c.string) i32
-pub fn open_with_options(name: []const u8, buffer: []u8, options: OpenOptions) OpenResult {
-  if !options.caller_serialized { return open(name, buffer) }
-  encoded := c.string_into(buffer, name)
-  if parse.failed(encoded.failure) {
-    return OpenResult{ code: string_error(encoded.failure.kind), failure: io.Failure{ kind: io.Kind.System } }
-  }
+pub fn open_with_options(status: *fail.Status, name: []const u8, buffer: []u8, options: OpenOptions) Database {
+  if !options.caller_serialized { return open(status, name, buffer) }
+  if status.failed { return nil }
+  path := encoded(status, "open database", buffer, name)
+  if status.failed { return nil }
   database: rawptr = nil
   // READWRITE | CREATE | NOMUTEX: file locking/durability are unchanged.
-  code := sqlite_open_flags(encoded.value, &database, 0x8006, nil)
+  code := sqlite_open_flags(path, &database, 0x8006, nil)
   if code != 0 {
     if database != nil { _ = sqlite_close(database) }
-    return OpenResult{ code: code, failure: io.Failure{ kind: io.Kind.System } }
+    sqlite_failed(status, "open database", code)
+    return nil
   }
-  return OpenResult{ database: database, code: code }
+  return database
 }
-// A SQLite result code as a failure: SQLITE_OK (0) succeeds, and native keeps
-// any other code.
-fn code_failure(code: i32) io.Failure {
-  if code == 0 { return io.Failure{} }
-  return io.Failure{ kind: io.Kind.System, native: code }
-}
-pub fn close(database: Database) io.Failure {
-  if database == nil { return io.Failure{} }
-  return code_failure(sqlite_close(database))
+// Fails with WouldBlock while statements are still open.
+pub fn close(status: *fail.Status, database: Database) {
+  if status.failed || database == nil { return }
+  checked(status, "close database", sqlite_close(database))
 }
 
-// SQL is borrowed only for call. SQLite owns returned error; wrapper releases it.
-pub fn execute(database: Database, sql: []const u8, buffer: []u8) io.Failure {
-  if database == nil { return code_failure(-1) }
-  encoded := c.string_into(buffer, sql)
-  if parse.failed(encoded.failure) { return code_failure(string_error(encoded.failure.kind)) }
+// SQL is borrowed only for the call; buffer holds it as a C string. The
+// failure's message is SQLite's own description of what went wrong.
+pub fn execute(status: *fail.Status, database: Database, sql: []const u8, buffer: []u8) {
+  if status.failed { return }
+  if database == nil {
+    sqlite_failed(status, "execute", InvalidArgument)
+    return
+  }
+  text := encoded(status, "execute", buffer, sql)
+  if status.failed { return }
   error: rawptr = nil
-  code := sqlite_exec(database, encoded.value, nil, nil, &error)
+  code := sqlite_exec(database, text, nil, nil, &error)
+  if code != 0 {
+    message: []const u8 = ""
+    if error != nil {
+      reading: fail.Status
+      message = c.bytes_from_string(&reading, #cast(c.string, error), 160)
+    }
+    if #len(message) == 0 {
+      sqlite_failed(status, "execute", code)
+    } else {
+      failure := fail.make(kind_of(code), "execute", "", message)
+      failure.native = code
+      fail.set(status, failure)
+    }
+  }
   if error != nil {
     sqlite_free(error)
   }
-  return code_failure(code)
 }
 
 // Returned bytes borrow database and expire at next SQLite call or close.
 pub fn error_message(database: Database, maximum: usize) []const u8 {
   if database == nil { return "" }
-  value := c.bytes_from_string(sqlite_error_message(database), maximum)
-  if parse.failed(value.failure) { return "" }
-  return value.value
-}
-
-fn string_error(error: parse.Kind) i32 {
-  if error == parse.Kind.Capacity { return Capacity }
-  if error == parse.Kind.Overflow { return Overflow }
-  return InvalidArgument
+  reading: fail.Status
+  return c.bytes_from_string(&reading, sqlite_error_message(database), maximum)
 }

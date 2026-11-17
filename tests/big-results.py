@@ -53,7 +53,7 @@ for a, b in cases:
     exponent = abs(a) % 4096
     out += [pow(a, exponent, modulus) if modulus > 0 else 'none']
     expected.append(' '.join(str(x) for x in out))
-SOURCE = '''use "std/parse" parse
+SOURCE = '''use "std/fail"
 use "std/math/big" big
 use "std/io" io
 use "std/mem" mem
@@ -77,8 +77,9 @@ fn main() {
     at = end + 1
     space := bytes.find_byte(line, 32)
     mark := mem.arena_mark(arena)
-    a := big.parse(arena, line[..space], 10).value
-    b := big.parse(arena, line[space + 1..], 10).value
+    numbers := fail.Status{ on_failure: fail.panic_on_failure }
+    a := big.parse(arena, &numbers, line[..space], 10)
+    b := big.parse(arena, &numbers, line[space + 1..], 10)
     show(arena, big.add(arena, a, b))
     show(arena, big.subtract(arena, a, b))
     show(arena, big.multiply(arena, a, b))
@@ -108,12 +109,14 @@ fn main() {
     }
     mem.arena_rewind(arena, mark)
   }
-  bad := big.parse(arena, "12x4", 10)
-  if !parse.failed(bad.failure) || bad.offset != 2 {
+  bad: fail.Status
+  _ = big.parse(arena, &bad, "12x4", 10)
+  if !bad.failed || bad.failure.offset != 2 {
     #panic("parse failure")
   }
-  hex := big.parse(arena, "-FfeE", 16)
-  if parse.failed(hex.failure) || !mem.equal(big.format(arena, hex.value, 36), "-1ejy") {
+  parsing: fail.Status
+  hex := big.parse(arena, &parsing, "-FfeE", 16)
+  if parsing.failed || !mem.equal(big.format(arena, hex, 36), "-1ejy") {
     #panic("bases")
   }
 }

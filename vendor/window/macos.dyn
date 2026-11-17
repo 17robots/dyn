@@ -1,22 +1,26 @@
 #target(kernel: darwin)
 use "vendor/window/native" native
+use "std/fail"
 use "std/ui/box" box
 pub type Window = native.Window
-pub type Result = native.Result
-pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
-  return native.open(window, title, width, height)
+pub fn open(status: *fail.Status, window: *Window, title: []const u8, width, height: i32) {
+  if status.failed { return }
+  native.open(status, window, title, width, height)
 }
 pub fn close(window: *Window) {
   native.close(window)
 }
-pub fn poll(window: *Window) Result {
-  return native.poll(window)
+pub fn poll(status: *fail.Status, window: *Window) {
+  if status.failed { return }
+  native.poll(status, window)
 }
-pub fn make_current(window: *Window) Result {
-  return native.make_current(window)
+pub fn make_current(status: *fail.Status, window: *Window) {
+  if status.failed { return }
+  native.make_current(status, window)
 }
-pub fn swap(window: *Window) Result {
-  return native.swap(window)
+pub fn swap(status: *fail.Status, window: *Window) {
+  if status.failed { return }
+  native.swap(status, window)
 }
 pub fn gl_proc(name: *const u8) rawptr {
   return native.gl_proc(name)
@@ -48,8 +52,9 @@ pub fn next_event(window: *Window, output: *Event) bool {
   return native.next_event(window, output)
 }
 // The owner must outlive all worker wake calls; stop/join them before close.
-pub fn wake(window: *const Window) Result {
-  return native.wake(window)
+pub fn wake(status: *fail.Status, window: *const Window) {
+  if status.failed { return }
+  native.wake(status, window)
 }
 
 // Ordered listening is disabled initially. Enable before polling input;
@@ -69,21 +74,26 @@ pub fn clipboard(window: *const Window) []const u8 {
 }
 
 pub type Surrounding = native.Surrounding
-pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
-  return native.set_surrounding_text(window, context)
+pub fn set_surrounding_text(status: *fail.Status, window: *Window, context: Surrounding) {
+  if status.failed { return }
+  native.set_surrounding_text(status, window, context)
 }
 
-pub fn set_title(window: *Window, title: []const u8) Result {
-  return native.set_title(window, title)
+pub fn set_title(status: *fail.Status, window: *Window, title: []const u8) {
+  if status.failed { return }
+  native.set_title(status, window, title)
 }
-pub fn set_size(window: *Window, width, height: i32) Result {
-  return native.set_size(window, width, height)
+pub fn set_size(status: *fail.Status, window: *Window, width, height: i32) {
+  if status.failed { return }
+  native.set_size(status, window, width, height)
 }
-pub fn set_swap_interval(window: *Window, interval: i32) Result {
-  return native.set_swap_interval(window, interval)
+pub fn set_swap_interval(status: *fail.Status, window: *Window, interval: i32) {
+  if status.failed { return }
+  native.set_swap_interval(status, window, interval)
 }
-pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
-  return native.try_set_clipboard(window, text)
+pub fn try_set_clipboard(status: *fail.Status, window: *Window, text: []const u8) {
+  if status.failed { return }
+  native.try_set_clipboard(status, window, text)
 }
 pub fn request_paste_snapshot(window: *Window) {
   native.request_paste_snapshot(window)
@@ -91,6 +101,7 @@ pub fn request_paste_snapshot(window: *Window) {
 pub fn paste_pending(window: *const Window) bool {
   return native.paste_pending(window)
 }
-pub fn paste_status(window: *const Window) Result {
-  return native.paste_status(window)
+pub fn paste_status(status: *fail.Status, window: *const Window) {
+  if status.failed { return }
+  native.paste_status(status, window)
 }

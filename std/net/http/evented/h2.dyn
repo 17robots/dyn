@@ -29,7 +29,6 @@ use "std/net/http" http
 use "std/net/http/hpack" hpack
 use "std/net/http/qpack" qpack
 use "std/net/websocket" websocket
-use "std/parse" parse
 use "std/sync" sync
 use "std/thread/pool" tasks
 
@@ -783,9 +782,10 @@ fn decode_block(worker: *Worker, connection: *Connection, block: []const u8) usi
   at: usize = 0
   // No response is being written while a request is read.
   scratch := pool.head
+  decoding: fail.Status
   for at < #len(block) {
-    field := hpack.decode_field(&h2.decoder, block[at..], scratch)
-    if parse.failed(field.failure) { return 0xffffffffffffffff }
+    field := hpack.decode_field(&decoding, &h2.decoder, block[at..], scratch)
+    if decoding.failed { return 0xffffffffffffffff }
     at += field.consumed
     if field.update { continue }
     need := 4 + #len(field.name) + #len(field.value)

@@ -1,10 +1,13 @@
 use "std/time"
 pub enum TransactionMode { Deferred, Immediate, Exclusive }
-pub struct IntegerResult { value: i64, code: i32, failure: io.Failure }
 // Applies to subsequent busy waits on this connection. Zero disables waiting.
-pub fn busy_timeout(database: Database, milliseconds: i32) io.Failure {
-  if database == nil || milliseconds < 0 { return code_failure(InvalidArgument) }
-  return code_failure(sqlite_busy_timeout(database, milliseconds))
+pub fn busy_timeout(status: *fail.Status, database: Database, milliseconds: i32) {
+  if status.failed { return }
+  if database == nil || milliseconds < 0 {
+    sqlite_failed(status, "set busy timeout", InvalidArgument)
+    return
+  }
+  checked(status, "set busy timeout", sqlite_busy_timeout(database, milliseconds))
 }
 extern fn sqlite_busy_handler "sqlite3_busy_handler"(database: rawptr, handler: fn(rawptr, i32) i32, argument: rawptr) i32
 
@@ -12,54 +15,60 @@ extern fn sqlite_busy_handler "sqlite3_busy_handler"(database: rawptr, handler: 
 // doubling to 1 millisecond, for about five seconds in all. SQLite's
 // busy_timeout sleeps whole milliseconds from the first retry, so threads
 // writing to one database wait far longer than the writes take.
-pub fn busy_wait(database: Database) io.Failure {
-  if database == nil { return code_failure(InvalidArgument) }
-  return code_failure(sqlite_busy_handler(database, busy_step, nil))
+pub fn busy_wait(status: *fail.Status, database: Database) {
+  if status.failed { return }
+  if database == nil {
+    sqlite_failed(status, "set busy handler", InvalidArgument)
+    return
+  }
+  checked(status, "set busy handler", sqlite_busy_handler(database, busy_step, nil))
 }
 
 fn busy_step(_argument: rawptr, attempts: i32) i32 {
   if attempts >= 5000 { return 0 }
   step: i64 = 1000 * time.Microsecond
   if attempts < 6 { step = (20 * time.Microsecond) << #cast(u64, attempts) }
-  _ = time.sleep(step)
+  time.sleep(step)
   return 1
 }
 
-pub fn changes(database: Database) IntegerResult {
-  if database == nil {
-    return IntegerResult{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
-  }
-  return IntegerResult{ value: sqlite_changes(database) }
+// Rows changed by the last INSERT, UPDATE or DELETE; zero without a database.
+pub fn changes(database: Database) i64 {
+  if database == nil { return 0 }
+  return sqlite_changes(database)
 }
-pub fn last_insert_rowid(database: Database) IntegerResult {
-  if database == nil {
-    return IntegerResult{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
-  }
-  return IntegerResult{ value: sqlite_last_rowid(database) }
+// The rowid of the last INSERT; zero without a database or before any.
+pub fn last_insert_rowid(database: Database) i64 {
+  if database == nil { return 0 }
+  return sqlite_last_rowid(database)
 }
 // Transactions belong to the connection. A failed commit may leave one active;
 // query in_transaction, retry or roll back before reusing the connection.
 pub fn in_transaction(database: Database) bool {
   return database != nil && sqlite_autocommit(database) == 0
 }
-fn transaction_command(database: Database, command: *const u8) i32 {
-  if database == nil { return InvalidArgument }
-  return sqlite_exec(database, command, nil, nil, nil)
+fn transaction_command(status: *fail.Status, operation: []const u8, database: Database, command: *const u8) {
+  if status.failed { return }
+  if database == nil {
+    sqlite_failed(status, operation, InvalidArgument)
+    return
+  }
+  checked(status, operation, sqlite_exec(database, command, nil, nil, nil))
 }
-pub fn begin(database: Database, mode: TransactionMode) io.Failure {
+pub fn begin(status: *fail.Status, database: Database, mode: TransactionMode) {
   command := "BEGIN DEFERRED\0"
   if mode == TransactionMode.Immediate {
     command = "BEGIN IMMEDIATE\0"
   } else if mode == TransactionMode.Exclusive {
     command = "BEGIN EXCLUSIVE\0"
   }
-  return code_failure(transaction_command(database, &command[0]))
+  transaction_command(status, "begin", database, &command[0])
 }
-pub fn commit(database: Database) io.Failure {
+pub fn commit(status: *fail.Status, database: Database) {
   command := "COMMIT\0"
-  return code_failure(transaction_command(database, &command[0]))
+  transaction_command(status, "commit", database, &command[0])
 }
-pub fn rollback(database: Database) io.Failure {
+pub fn rollback(status: *fail.Status, database: Database) {
   command := "ROLLBACK\0"
-  return code_failure(transaction_command(database, &command[0]))
+  transaction_command(status, "roll back", database, &command[0])
 }

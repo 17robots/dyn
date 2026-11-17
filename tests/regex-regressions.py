@@ -9,19 +9,25 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
 SOURCE = r'''use "std/text/regex" regex
 use "std/io" io
-use "std/parse" parse
+use "std/fail"
 use "std/mem" memory
 fn require(ok:bool,message:[]const u8){ if !ok { #panic(message) } }
 fn compile(arena:*memory.Arena,pattern:[]const u8) regex.Program {
-  result:=regex.compile(arena,pattern)
-  require(!parse.failed(result.failure),pattern)
-  return result.value
+  status:fail.Status
+  program:=regex.compile(arena,&status,pattern)
+  require(!status.failed,pattern)
+  return program
+}
+fn compile_kind(arena:*memory.Arena,pattern:[]const u8) fail.Kind {
+  status:fail.Status
+  _=regex.compile(arena,&status,pattern)
+  return status.failure.kind
 }
 fn check(pattern:[]const u8,text:[]const u8,expected:usize,matched:bool){
   arena := memory.arena_alloc(0)
   program:=compile(arena,pattern)
   result:=regex.find(program,text)
-  require(!parse.failed(result.failure) && result.value.found==matched && (!matched || result.value.end==expected),pattern)
+  require(result.value.found==matched && (!matched || result.value.end==expected),pattern)
 }
 fn main(){
   check("^a{1,}$","aaaaaaaaaaaaaaaa",16,true)
@@ -38,15 +44,13 @@ fn main(){
   check("a*ab","aaaab",5,true)
   check("^a|b","xb",2,true)
   arena := memory.arena_alloc(0)
-  invalid:=regex.compile(arena,"a{18446744073709551616}")
-  require(invalid.failure.kind == parse.Kind.Syntax,"count overflow")
-  invalid=regex.compile(arena,"a{1,18446744073709551616}")
-  require(invalid.failure.kind == parse.Kind.Syntax,"maximum overflow")
+  require(compile_kind(arena,"a{18446744073709551616}") == fail.Kind.InvalidInput,"count overflow")
+  require(compile_kind(arena,"a{1,18446744073709551616}") == fail.Kind.InvalidInput,"maximum overflow")
   program:=compile(arena,"(a)*")
   input:=memory.push_array(u8,arena,100000)
   for i in 0..#len(input){input[i]='a'}
   result:=regex.find(program,input)
-  require(!parse.failed(result.failure) && result.value.found && result.value.end==100000,"long repetition")
+  require(result.value.found && result.value.end==100000,"long repetition")
   require(result.captures[0].found && result.captures[0].start==99999 && result.captures[0].end==100000,"last capture")
   program=compile(arena,"(a*)a")
   result=regex.find(program,"aaaa")
@@ -58,10 +62,10 @@ fn main(){
   long_input:[200]u8
   for i in 0..200 {long_input[i]='a'}
   result=regex.find(program,long_input[..])
-  require(!parse.failed(result.failure) && result.value.found && result.value.end==200 && result.captures[0].start==199,"arena workspace")
+  require(result.value.found && result.value.end==200 && result.captures[0].start==199,"arena workspace")
   program=compile(arena,"(a)*")
   result=regex.find(program,"aaa")
-  require(!parse.failed(result.failure) && result.value.end==3 && result.captures[0].start==2,"reused workspace")
+  require(result.value.end==3 && result.captures[0].start==2,"reused workspace")
   io.println("regex passed")
 }
 '''

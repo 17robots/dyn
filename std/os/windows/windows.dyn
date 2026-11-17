@@ -1,14 +1,14 @@
-use "std/parse" parse
 #target(kernel: windows)
 
 use "std/mem" mem
 use "std/c" cstrings
 use "std/sync" sync
 use "std/io"
+use "std/fail"
 
-pub struct IoResult { value: isize, failure: io.Failure }
-pub fn io_value(result: *const IoResult) isize {
-  return result.value
+fn windows_failed(status: *fail.Status, operation: []const u8, path: []const u8, code: isize) isize {
+  fail.set(status, io.from_windows(operation, path, code))
+  return -1
 }
 extern fn create_file_raw "dyn_win_create_file"(name: *const u8, access: u32, share: u32, security: rawptr, creation: u32, attributes: u32, template: rawptr) rawptr
 pub extern fn close_handle_raw "dyn_win_close_handle"(handle: rawptr) i32
@@ -52,16 +52,17 @@ pub const has_native_threads: bool = true
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
   if #len(path) == 0 { return nil }
-  result := cstrings.string_into(storage, path)
-  if parse.failed(result.failure) { return nil }
-  return result.value
+  status: fail.Status
+  return cstrings.string_into(&status, storage, path)
 }
-pub fn file_open(path: []const u8, write_access: bool, create: bool) IoResult {
+// A handle, or -1 after a failure.
+pub fn file_open(status: *fail.Status, path: []const u8, write_access: bool, create: bool) isize {
+  if status.failed { return -1 }
   // Keep this below MSVC's stack-probe threshold; this bootstrap runtime does
   // not depend on compiler-rt. Win32 legacy paths are bounded at 260 bytes.
   storage: [260 + mem.ArenaBufferOverhead]u8
   name := terminated(path, storage[..])
-  if name == nil { return IoResult{ value: -1, failure: io.windows_failure(206) } }
+  if name == nil { return windows_failed(status, "open", path, 206) }
   access: u32 = 2147483648
   creation: u32 = 3
   if write_access {
@@ -72,16 +73,14 @@ pub fn file_open(path: []const u8, write_access: bool, create: bool) IoResult {
   }
   handle := create_file_raw(name, access, 7, nil, creation, 128, nil)
   raw := #cast(usize, handle)
-  if raw == 18446744073709551615 {
-    return IoResult{ value: -1, failure: io.windows_failure(#cast(isize, last_error_raw())) }
-  }
-  return IoResult{ value: #cast(isize, raw) }
+  if raw == 18446744073709551615 { return windows_failed(status, "open", path, #cast(isize, last_error_raw())) }
+  return #cast(isize, raw)
 }
-pub fn file_close(handle: isize) IoResult {
+pub fn file_close(status: *fail.Status, handle: isize) {
+  if status.failed { return }
   if close_handle_raw(#cast(rawptr, #cast(usize, handle))) == 0 {
-    return IoResult{ value: -1, failure: io.windows_failure(#cast(isize, last_error_raw())) }
+    _ = windows_failed(status, "close", "", #cast(isize, last_error_raw()))
   }
-  return IoResult{ value: 0 }
 }
 pub fn thread_spawn(thread: *Thread, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) bool {
   if thread.handle != nil { return false }
@@ -105,14 +104,14 @@ pub fn thread_error() isize {
 pub fn thread_yield() {
   _ = yield_raw()
 }
-pub fn socket_open(family: i32, kind: i32, protocol: i32) IoResult {
+// A socket, or -1 after a failure.
+pub fn socket_open(status: *fail.Status, family: i32, kind: i32, protocol: i32) isize {
+  if status.failed { return -1 }
   startup := socket_initialize()
-  if startup != 0 { return IoResult{ value: -1, failure: io.windows_failure(startup) } }
+  if startup != 0 { return windows_failed(status, "socket", "", startup) }
   value := socket_raw(family, kind, protocol)
-  if value == 18446744073709551615 {
-    return IoResult{ value: -1, failure: io.windows_failure(socket_error_raw()) }
-  }
-  return IoResult{ value: #cast(isize, value) }
+  if value == 18446744073709551615 { return windows_failed(status, "socket", "", socket_error_raw()) }
+  return #cast(isize, value)
 }
 pub fn socket_error() isize {
   return 0 - #cast(isize, socket_error_raw())

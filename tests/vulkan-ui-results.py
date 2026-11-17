@@ -12,6 +12,32 @@ use "std/ui" ui
 use "std/ui/software" software
 use "std/mem" mem
 use "std/io" errors
+use "std/fail"
+struct gpu_open_Outcome { failure: fail.Failure, kind: fail.Kind }
+fn gpu_open(p0: *gpu.Renderer, p1: gpu.Limits) gpu_open_Outcome {
+  status: fail.Status
+  gpu.open(&status, p0, p1)
+  return gpu_open_Outcome{ failure: status.failure, kind: status.failure.kind }
+}
+
+struct gpu_render_Outcome { failure: fail.Failure, kind: fail.Kind }
+fn gpu_render(p0: *gpu.Renderer, p1: *mem.Arena, p2: *software.Surface, p3: *const ui.Command, p4: software.Font) gpu_render_Outcome {
+  status: fail.Status
+  gpu.render(&status, p0, p1, p2, p3, p4)
+  return gpu_render_Outcome{ failure: status.failure, kind: status.failure.kind }
+}
+
+struct software_render_Outcome { failure: fail.Failure, kind: fail.Kind }
+fn software_render(p0: *software.Surface, p1: *const ui.Command, p2: software.Font) software_render_Outcome {
+  status: fail.Status
+  software.render(&status, p0, p1, p2)
+  return software_render_Outcome{ failure: status.failure, kind: status.failure.kind }
+}
+
+fn failed(failure: fail.Failure) bool {
+  return failure.kind != fail.Kind.Ok
+}
+
 fn check(ok: bool) { if !ok { #panic("Vulkan UI contract") } }
 struct FontData { pixels: [8]u8 }
 fn bitmap(data: rawptr, codepoint: u32) software.Glyph {
@@ -24,9 +50,9 @@ fn main() {
  arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  renderer := gpu.Renderer{}
- check(!errors.failed(gpu.open(&renderer,gpu.Limits{}).failure))
+ check(!failed(gpu_open(&renderer,gpu.Limits{}).failure))
  defer { gpu.close(&renderer) }
- check(gpu.open(&renderer,gpu.Limits{}).kind == errors.Kind.InvalidState)
+ check(gpu_open(&renderer,gpu.Limits{}).kind == fail.Kind.InvalidState)
  commands: [5]ui.Command = [
  ui.Command{kind:ui.Kind.Rectangle,bounds:ui.Rect{x:2,y:3,width:12,height:9},clip:ui.Rect{x:5,y:4,width:6,height:5},color:ui.Color{r:230,g:60,b:90,a:128}},
  ui.Command{kind:ui.Kind.Rectangle,bounds:ui.Rect{x:4,y:4,width:12,height:9},clip:ui.Rect{width:32,height:32},color:ui.Color{r:80,g:220,b:30,a:70}},
@@ -42,32 +68,32 @@ fn main() {
  actual[i] = pixels[i] }
  surface := software.Surface{pixels:pixels[..],width:32,height:32,stride:132}
  target := software.Surface{pixels:actual[..],width:32,height:32,stride:132}
- check(!errors.failed(software.render(&surface,&commands[0],font).failure))
- check(!errors.failed(gpu.render(&renderer,arena,&target,&commands[0],font).failure))
+ check(!failed(software_render(&surface,&commands[0],font).failure))
+ check(!failed(gpu_render(&renderer,arena,&target,&commands[0],font).failure))
  for i in 0..#len(pixels) { check(pixels[i] == actual[i]) }
  // Reuse persistent GPU buffer on a smaller frame.
  surface.width = 7
  surface.height = 5
  target.width = 7
  target.height = 5
- check(!errors.failed(software.render(&surface,&commands[0],font).failure))
- check(!errors.failed(gpu.render(&renderer,arena,&target,&commands[0],font).failure))
+ check(!failed(software_render(&surface,&commands[0],font).failure))
+ check(!failed(gpu_render(&renderer,arena,&target,&commands[0],font).failure))
  for i in 0..#len(pixels) { check(pixels[i] == actual[i]) }
  renderer.limits.draws = 0
- check(gpu.render(&renderer,arena,&target,&commands[0],font).kind == errors.Kind.Capacity)
+ check(gpu_render(&renderer,arena,&target,&commands[0],font).kind == fail.Kind.Capacity)
  renderer.limits = gpu.Limits{coverage_bytes:0}
  target.width = 32
  target.height = 32
- check(gpu.render(&renderer,arena,&target,&commands[2],font).kind == errors.Kind.Capacity)
+ check(gpu_render(&renderer,arena,&target,&commands[2],font).kind == fail.Kind.Capacity)
  renderer.limits = gpu.Limits{}
  bad := commands[3]
  bad.codepoint = 0
- check(gpu.render(&renderer,arena,&target,&bad,font).kind == errors.Kind.InvalidInput)
+ check(gpu_render(&renderer,arena,&target,&bad,font).kind == fail.Kind.InvalidInput)
  target.stride = 0
- check(gpu.render(&renderer,arena,&target,&commands[0],font).kind == errors.Kind.InvalidInput)
+ check(gpu_render(&renderer,arena,&target,&commands[0],font).kind == fail.Kind.InvalidInput)
  gpu.close(&renderer)
  gpu.close(&renderer)
- check(gpu.render(&renderer,arena,&target,&commands[0],font).kind == errors.Kind.InvalidState)
+ check(gpu_render(&renderer,arena,&target,&commands[0],font).kind == fail.Kind.InvalidState)
 }
 '''
 if not shutil.which('glslangValidator'):

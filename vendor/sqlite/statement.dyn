@@ -5,10 +5,11 @@ use "std/unicode/utf8"
 pub enum State { Ready, Row, Done, Failed }
 // columns is the result column count, fixed when the statement is prepared.
 pub struct Statement { handle: rawptr, state: State, code: i32, columns: i32 }
-pub struct PrepareResult { statement: Statement, consumed: usize, empty: bool, code: i32, failure: io.Failure }
-pub struct StepResult { state: State, code: i32, failure: io.Failure }
+// A compiled statement, the SQL bytes it took, and empty when the SQL held
+// only whitespace or comments (then there is no statement to step).
+pub struct Prepared { statement: Statement, consumed: usize, empty: bool }
 pub enum ColumnKind { Null, Integer, Float, Text, Blob }
-pub struct Column { kind: ColumnKind, integer: i64, real: f64, bytes: []const u8, code: i32, failure: io.Failure }
+pub struct Column { kind: ColumnKind, integer: i64, real: f64, bytes: []const u8 }
 
 // Negative codes are wrapper failures; positive codes are unchanged SQLite codes.
 pub const InvalidArgument: i32 = -1
@@ -18,19 +19,23 @@ pub const Overflow: i32 = -3
 // Compiles the first statement, reporting bytes consumed. Call again with the
 // remaining SQL to process a script. Empty/comment-only input succeeds with empty=true.
 // SQL is borrowed only during this call and needs no terminating NUL or scratch.
-pub fn prepare(database: Database, sql: []const u8) PrepareResult {
+pub fn prepare(status: *fail.Status, database: Database, sql: []const u8) Prepared {
+  if status.failed { return Prepared{} }
   if database == nil {
-    return PrepareResult{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
+    sqlite_failed(status, "prepare", InvalidArgument)
+    return Prepared{}
   }
   if #len(sql) > 2147483647 {
-    return PrepareResult{ code: Overflow, failure: io.Failure{ kind: io.Kind.System } }
+    sqlite_failed(status, "prepare", Overflow)
+    return Prepared{}
   }
   for byte in sql {
     if byte == 0 {
-      return PrepareResult{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
+      sqlite_failed(status, "prepare", InvalidArgument)
+      return Prepared{}
     }
   }
-  if #len(sql) == 0 { return PrepareResult{ empty: true } }
+  if #len(sql) == 0 { return Prepared{ empty: true } }
   handle: rawptr = nil
   tail: c.string = nil
   code := sqlite_prepare(database, &sql[0], #cast(i32, #len(sql)), &handle, &tail)
@@ -38,74 +43,108 @@ pub fn prepare(database: Database, sql: []const u8) PrepareResult {
     if handle != nil {
       _ = sqlite_finalize(handle)
     }
-    return PrepareResult{ code: code, failure: io.Failure{ kind: io.Kind.System } }
+    failure_text: fail.Status
+    message := c.bytes_from_string(&failure_text, sqlite_error_message(database), 160)
+    failure := fail.make(kind_of(code), "prepare", "", message)
+    failure.native = code
+    fail.set(status, failure)
+    return Prepared{}
   }
   consumed := #cast(usize, tail) - #cast(usize, &sql[0])
   columns: i32 = 0
   if handle != nil {
     columns = sqlite_column_count(handle)
   }
-  return PrepareResult{ statement: Statement{ handle: handle, columns: columns }, consumed: consumed, empty: handle == nil }
+  return Prepared{ statement: Statement{ handle: handle, columns: columns }, consumed: consumed, empty: handle == nil }
 }
 
-// Row and Done are successful, distinct outcomes. Repeated calls after Done or
-// failure do not implicitly re-execute SQL. reset is required before reuse.
-pub fn step(statement: *Statement) StepResult {
+// Row and Done are successful, distinct outcomes. A failed step leaves the
+// statement Failed with its code; repeated calls after Done or a failure do
+// not re-execute SQL. reset is required before reuse.
+pub fn step(status: *fail.Status, statement: *Statement) State {
+  if status.failed { return State.Failed }
   if statement.handle == nil {
-    return StepResult{ state: State.Failed, code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
+    sqlite_failed(status, "step", InvalidArgument)
+    return State.Failed
   }
-  if statement.state == State.Done { return StepResult{ state: State.Done, code: statement.code } }
+  if statement.state == State.Done { return State.Done }
+  if statement.state != State.Failed {
+    statement.code = sqlite_step(statement.handle)
+    if statement.code == 100 {
+      statement.state = State.Row
+    } else if statement.code == 101 {
+      statement.state = State.Done
+    } else {
+      statement.state = State.Failed
+    }
+  }
   if statement.state == State.Failed {
-    return StepResult{ state: State.Failed, code: statement.code, failure: io.Failure{ kind: io.Kind.System } }
+    sqlite_failed(status, "step", statement.code)
   }
-  statement.code = sqlite_step(statement.handle)
-  if statement.code == 100 {
-    statement.state = State.Row
-  } else if statement.code == 101 {
-    statement.state = State.Done
-  } else {
-    statement.state = State.Failed
-  }
-  return StepResult{ state: statement.state, code: statement.code, failure: io.failure_if(statement.state == State.Failed) }
+  return statement.state
 }
 
 // Always resets execution state, even when reporting the preceding execution's
 // error. Parameter values survive reset; use clear_bindings to release them.
-pub fn reset(statement: *Statement) io.Failure {
-  if statement.handle == nil { return code_failure(InvalidArgument) }
+pub fn reset(status: *fail.Status, statement: *Statement) {
+  if status.failed { return }
+  if statement.handle == nil {
+    sqlite_failed(status, "reset", InvalidArgument)
+    return
+  }
   code := sqlite_reset(statement.handle)
   statement.state = State.Ready
   statement.code = 0
-  return code_failure(code)
+  checked(status, "reset", code)
 }
 
-// Releases ownership and zeros the caller's slot even if SQLite reports a prior
-// execution error. Finalizing the same slot again succeeds without provider access.
-pub fn finalize(statement: *Statement) io.Failure {
+// Releases ownership and zeros the caller's slot. Finalizing the same slot
+// again does nothing. Cleanup takes no status: an error here only repeats
+// the last step's.
+pub fn finalize(statement: *Statement) {
   handle := statement.handle
   statement.* = Statement{}
-  if handle == nil { return io.Failure{} }
-  return code_failure(sqlite_finalize(handle))
+  if handle != nil {
+    _ = sqlite_finalize(handle)
+  }
 }
 
 fn can_bind(statement: *const Statement) bool {
   return statement.handle != nil && statement.state == State.Ready
 }
-pub fn clear_bindings(statement: *Statement) io.Failure {
-  if !can_bind(statement) { return code_failure(InvalidArgument) }
-  return code_failure(sqlite_clear_bindings(statement.handle))
+// Binding needs a prepared statement that is Ready (fresh or reset);
+// otherwise it fails with InvalidInput.
+pub fn clear_bindings(status: *fail.Status, statement: *Statement) {
+  if status.failed { return }
+  if !can_bind(statement) {
+    sqlite_failed(status, "bind", InvalidArgument)
+    return
+  }
+  checked(status, "bind", sqlite_clear_bindings(statement.handle))
 }
-pub fn bind_null(statement: *Statement, index: i32) io.Failure {
-  if !can_bind(statement) { return code_failure(InvalidArgument) }
-  return code_failure(sqlite_bind_null(statement.handle, index))
+pub fn bind_null(status: *fail.Status, statement: *Statement, index: i32) {
+  if status.failed { return }
+  if !can_bind(statement) {
+    sqlite_failed(status, "bind", InvalidArgument)
+    return
+  }
+  checked(status, "bind", sqlite_bind_null(statement.handle, index))
 }
-pub fn bind_i64(statement: *Statement, index: i32, value: i64) io.Failure {
-  if !can_bind(statement) { return code_failure(InvalidArgument) }
-  return code_failure(sqlite_bind_integer(statement.handle, index, value))
+pub fn bind_i64(status: *fail.Status, statement: *Statement, index: i32, value: i64) {
+  if status.failed { return }
+  if !can_bind(statement) {
+    sqlite_failed(status, "bind", InvalidArgument)
+    return
+  }
+  checked(status, "bind", sqlite_bind_integer(statement.handle, index, value))
 }
-pub fn bind_f64(statement: *Statement, index: i32, value: f64) io.Failure {
-  if !can_bind(statement) { return code_failure(InvalidArgument) }
-  return code_failure(sqlite_bind_float(statement.handle, index, value))
+pub fn bind_f64(status: *fail.Status, statement: *Statement, index: i32, value: f64) {
+  if status.failed { return }
+  if !can_bind(statement) {
+    sqlite_failed(status, "bind", InvalidArgument)
+    return
+  }
+  checked(status, "bind", sqlite_bind_float(statement.handle, index, value))
 }
 fn bind_bytes(statement: *Statement, index: i32, value: []const u8, text: bool) i32 {
   if !can_bind(statement) { return InvalidArgument }
@@ -124,15 +163,23 @@ fn bind_bytes(statement: *Statement, index: i32, value: []const u8, text: bool) 
 }
 // SQLite copies bindings before return. Text must be valid UTF-8 without NUL;
 // use blobs for arbitrary bytes. Inputs may be changed immediately after binding.
-pub fn bind_text(statement: *Statement, index: i32, value: []const u8) io.Failure {
-  if !utf8.valid(value) { return code_failure(InvalidArgument) }
-  for byte in value {
-    if byte == 0 { return code_failure(InvalidArgument) }
+pub fn bind_text(status: *fail.Status, statement: *Statement, index: i32, value: []const u8) {
+  if status.failed { return }
+  if !utf8.valid(value) {
+    fail.invalid(status, "bind", "", "text is not valid UTF-8")
+    return
   }
-  return code_failure(bind_bytes(statement, index, value, true))
+  for byte in value {
+    if byte == 0 {
+      fail.invalid(status, "bind", "", "text holds a NUL byte")
+      return
+    }
+  }
+  checked(status, "bind", bind_bytes(statement, index, value, true))
 }
-pub fn bind_blob(statement: *Statement, index: i32, value: []const u8) io.Failure {
-  return code_failure(bind_bytes(statement, index, value, false))
+pub fn bind_blob(status: *fail.Status, statement: *Statement, index: i32, value: []const u8) {
+  if status.failed { return }
+  checked(status, "bind", bind_bytes(statement, index, value, false))
 }
 
 // Values for bind_values: Blob binds bytes as a blob, Null binds SQL NULL.
@@ -142,58 +189,68 @@ pub struct Null {}
 // Binds values to parameters 1, 2, ... in order. Each value is an integer
 // (bound as i64), f32 or f64, bool (0 or 1), []const u8 or []u8 (text),
 // Blob or Null. Stops at the first failure; an unsupported type fails with
-// InvalidInput.
-pub fn bind_values(statement: *Statement, values: ...any) io.Failure {
-  return bind_list(statement, values)
+// InvalidInput, an integer past i64 with Overflow.
+pub fn bind_values(status: *fail.Status, statement: *Statement, values: ...any) {
+  bind_list(status, statement, values)
 }
 
-fn bind_list(statement: *Statement, values: []const any) io.Failure {
+fn bind_list(status: *fail.Status, statement: *Statement, values: []const any) {
   for i in 0..#len(values) {
+    if status.failed { return }
     index := #cast(i32, i + 1)
-    bound := io.Failure{}
     case values[i] {
-      i64 value => { bound = bind_i64(statement, index, value) }
-      i32 value => { bound = bind_i64(statement, index, value) }
-      i16 value => { bound = bind_i64(statement, index, value) }
-      i8 value => { bound = bind_i64(statement, index, value) }
-      u32 value => { bound = bind_i64(statement, index, value) }
-      u16 value => { bound = bind_i64(statement, index, value) }
-      u8 value => { bound = bind_i64(statement, index, value) }
+      i64 value => { bind_i64(status, statement, index, value) }
+      i32 value => { bind_i64(status, statement, index, value) }
+      i16 value => { bind_i64(status, statement, index, value) }
+      i8 value => { bind_i64(status, statement, index, value) }
+      u32 value => { bind_i64(status, statement, index, value) }
+      u16 value => { bind_i64(status, statement, index, value) }
+      u8 value => { bind_i64(status, statement, index, value) }
       u64 value => {
-        if value > 9223372036854775807 { return io.Failure{ kind: io.Kind.Overflow } }
-        bound = bind_i64(statement, index, #cast(i64, value))
+        if value > 9223372036854775807 {
+          sqlite_failed(status, "bind", Overflow)
+          return
+        }
+        bind_i64(status, statement, index, #cast(i64, value))
       }
       usize value => {
-        if #cast(u64, value) > 9223372036854775807 { return io.Failure{ kind: io.Kind.Overflow } }
-        bound = bind_i64(statement, index, #cast(i64, value))
+        if #cast(u64, value) > 9223372036854775807 {
+          sqlite_failed(status, "bind", Overflow)
+          return
+        }
+        bind_i64(status, statement, index, #cast(i64, value))
       }
-      isize value => { bound = bind_i64(statement, index, value) }
-      f64 value => { bound = bind_f64(statement, index, value) }
-      f32 value => { bound = bind_f64(statement, index, value) }
+      isize value => { bind_i64(status, statement, index, value) }
+      f64 value => { bind_f64(status, statement, index, value) }
+      f32 value => { bind_f64(status, statement, index, value) }
       bool value => {
         flag: i64 = 0
         if value {
           flag = 1
         }
-        bound = bind_i64(statement, index, flag)
+        bind_i64(status, statement, index, flag)
       }
-      []const u8 value => { bound = bind_text(statement, index, value) }
-      []u8 value => { bound = bind_text(statement, index, value) }
-      Blob value => { bound = bind_blob(statement, index, value.bytes) }
-      Null value => { bound = bind_null(statement, index) }
-      _ => { return io.Failure{ kind: io.Kind.InvalidInput } }
+      []const u8 value => { bind_text(status, statement, index, value) }
+      []u8 value => { bind_text(status, statement, index, value) }
+      Blob value => { bind_blob(status, statement, index, value.bytes) }
+      Null value => { bind_null(status, statement, index) }
+      _ => {
+        fail.invalid(status, "bind", "", "unsupported value type")
+        return
+      }
     }
-    if io.failed(bound) { return bound }
   }
-  return io.Failure{}
 }
 
 // Returns statement to Ready and drops its bindings, ready for the next
 // use: defer sqlite.done(&statement) right after taking it. Errors are not
 // reported; step already reported them.
 pub fn done(statement: *Statement) {
-  _ = reset(statement)
-  _ = clear_bindings(statement)
+  if statement.handle == nil { return }
+  _ = sqlite_reset(statement.handle)
+  statement.state = State.Ready
+  statement.code = 0
+  _ = sqlite_clear_bindings(statement.handle)
 }
 
 pub fn column_count(statement: *const Statement) i32 {
@@ -203,9 +260,12 @@ pub fn column_count(statement: *const Statement) i32 {
 // Columns are zero-based and available only after Row. No implicit conversions:
 // kind distinguishes NULL, empty text, empty blob and numeric zero. Returned bytes
 // borrow SQLite storage until step/reset/finalize; clone them into an arena to retain.
-pub fn column(statement: *const Statement, index: i32) Column {
+// Off a row or out of range fails with InvalidInput.
+pub fn column(status: *fail.Status, statement: *const Statement, index: i32) Column {
+  if status.failed { return Column{} }
   if statement.handle == nil || statement.state != State.Row || index < 0 || index >= statement.columns {
-    return Column{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
+    sqlite_failed(status, "read column", InvalidArgument)
+    return Column{}
   }
   kind := sqlite_column_type(statement.handle, index)
   if kind == 5 { return Column{ kind: ColumnKind.Null } }
@@ -223,11 +283,13 @@ pub fn column(statement: *const Statement, index: i32) Column {
     pointer = sqlite_column_blob(statement.handle, index)
     result_kind = ColumnKind.Blob
   } else {
-    return Column{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
+    sqlite_failed(status, "read column", InvalidArgument)
+    return Column{}
   }
   length := sqlite_column_bytes(statement.handle, index)
   if pointer == nil && (length != 0 || kind == 3) {
-    return Column{ code: 7, failure: io.Failure{ kind: io.Kind.System } }
+    sqlite_failed(status, "read column", 7)
+    return Column{}
   }
   if length == 0 { return Column{ kind: result_kind, bytes: "" } }
   return Column{ kind: result_kind, bytes: #slice(pointer, length) }

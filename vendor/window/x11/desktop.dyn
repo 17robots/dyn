@@ -28,7 +28,7 @@ pub struct Desktop {
   owned: []u8, owned_arena: *mem.Arena, owned_length: usize, owns: bool,
   // The most recent clipboard text received from another client.
   received: []u8, received_arena: *mem.Arena, received_length: usize, paste_pending: bool,
-  incoming_arena: *mem.Arena, incoming: bool, incoming_failed: bool, paste_result: Result, paste_owner: usize, paste_ordered: bool,
+  incoming_arena: *mem.Arena, incoming: bool, incoming_failed: bool, paste_kind: fail.Kind, paste_owner: usize, paste_ordered: bool,
   // Received text waiting for the next poll to report it as a paste.
   paste_ready: bool,
   cursors: [5]usize, cursor: Cursor,
@@ -462,9 +462,9 @@ fn desktop_close(window: *Window) {
 fn read_scale(display: rawptr) f32 {
   raw := resources(display)
   if raw == nil { return 1.0 }
-  found := c.bytes_from_string(raw, 1048576)
-  if parse.failed(found.failure) { return 1.0 }
-  text := found.value
+  reading: fail.Status
+  text := c.bytes_from_string(&reading, raw, 1048576)
+  if reading.failed { return 1.0 }
   key := "Xft.dpi:"
   at: usize = 0
   for at + #len(key) <= #len(text) {
@@ -696,9 +696,15 @@ fn clipboard_deliver(window: *Window) {
   }
 }
 
-pub fn paste_status(window: *const Window) Result {
-  if window.desktop.paste_pending { return Result{kind:io.Kind.InvalidState} }
-  return window.desktop.paste_result
+pub fn paste_status(status: *fail.Status, window: *const Window) {
+  if status.failed { return }
+  if window.desktop.paste_pending {
+    window_failed(status, fail.Kind.InvalidState, "paste status")
+    return
+  }
+  if window.desktop.paste_kind != fail.Kind.Ok {
+    window_failed(status, window.desktop.paste_kind, "paste")
+  }
 }
 
 fn clipboard_finish(window: *Window, deferred: bool) {
@@ -723,7 +729,7 @@ fn clipboard_finish(window: *Window, deferred: bool) {
     desktop.incoming_arena = nil
     desktop.received = clipboard_bytes(desktop.received_arena)
     desktop.received_length = #len(desktop.received)
-    desktop.paste_result = Result{}
+    desktop.paste_kind = fail.Kind.Ok
     if deferred { desktop.paste_ready = true } else { desktop.paste = true }
     clipboard_deliver(window)
   } else {
@@ -737,7 +743,7 @@ fn clipboard_fail(desktop: *Desktop) {
     desktop_loss(desktop)
   }
   desktop.incoming_failed = true
-  desktop.paste_result = Result{kind:io.Kind.InvalidInput}
+  desktop.paste_kind = fail.Kind.InvalidInput
 }
 
 // Asynchronous, including empty replies. The previous completed snapshot stays
@@ -759,7 +765,7 @@ fn clipboard_request(window: *Window, emit_ordered: bool) {
   }
   desktop.paste_ordered = emit_ordered
   desktop.incoming_failed = false
-  desktop.paste_result = Result{kind:io.Kind.InvalidState}
+  desktop.paste_kind = fail.Kind.InvalidState
   desktop.incoming = false
   mem.arena_release(desktop.incoming_arena)
   desktop.incoming_arena = nil
@@ -782,7 +788,7 @@ fn clipboard_request(window: *Window, emit_ordered: bool) {
   desktop.paste_pending = true
   if !clipboard_guard_end(window.display) {
     clipboard_fail(desktop)
-    desktop.paste_result = Result{kind:io.Kind.System}
+    desktop.paste_kind = fail.Kind.System
     clipboard_finish(window, true)
   }
   _ = flush(window.display)
@@ -798,7 +804,7 @@ fn clipboard_read(window: *Window, incremental: bool) {
   status := get_property(window.display, window.handle, desktop.property_atom, 0, #cast(isize, clipboard_limit / 4 + 1), 1, 0, &actual_kind, &actual_format, &count, &after, &data)
   if status != 0 {
     clipboard_fail(desktop)
-    desktop.paste_result = Result{kind:io.Kind.System}
+    desktop.paste_kind = fail.Kind.System
     clipboard_finish(window, false)
     return
   }
@@ -807,7 +813,7 @@ fn clipboard_read(window: *Window, incremental: bool) {
     if actual_format != 32 || count != 1 || data == nil || #cast(*usize, data).* > clipboard_limit || after != 0 {
       clipboard_fail(desktop)
       if actual_format == 32 && count == 1 && data != nil && #cast(*usize, data).* > clipboard_limit {
-        desktop.paste_result = Result{kind:io.Kind.Capacity}
+        desktop.paste_kind = fail.Kind.Capacity
       }
     }
     if data != nil {
@@ -820,7 +826,7 @@ fn clipboard_read(window: *Window, incremental: bool) {
   if actual_kind != desktop.utf8_atom || actual_format != 8 || after != 0 || count > clipboard_limit - clipboard_incoming_used(desktop) || (count != 0 && data == nil) {
     clipboard_fail(desktop)
     if count > clipboard_limit - clipboard_incoming_used(desktop) || after != 0 {
-      desktop.paste_result = Result{kind:io.Kind.Capacity}
+      desktop.paste_kind = fail.Kind.Capacity
     }
   }
   if !desktop.incoming_failed && count != 0 {
@@ -898,7 +904,7 @@ fn desktop_selection(window: *Window, event: *Event) {
     destroyed := #cast(*Configure, event)
     if desktop.paste_pending && destroyed.window == desktop.paste_owner {
       clipboard_fail(desktop)
-      desktop.paste_result = Result{kind:io.Kind.System}
+      desktop.paste_kind = fail.Kind.System
       clipboard_finish(window, false)
     }
     for i in 0..clipboard_transfers {
@@ -971,7 +977,7 @@ fn desktop_selection(window: *Window, event: *Event) {
     }
     if notify.property == 0 {
       clipboard_fail(desktop)
-      desktop.paste_result = Result{kind:io.Kind.Unsupported}
+      desktop.paste_kind = fail.Kind.Unsupported
       clipboard_finish(window, false)
       return
     }
@@ -982,12 +988,25 @@ fn desktop_selection(window: *Window, event: *Event) {
 
 // Offers an owned snapshot up to 16 MiB. Rejects before changing ownership or
 // bytes; in-flight INCR transfers retain their own independent snapshots.
-pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
-  if window.display == nil { return Result{kind:io.Kind.InvalidState} }
-  if #len(text) > clipboard_limit { return Result{kind:io.Kind.Capacity} }
-  if !utf8.valid(text) { return Result{kind:io.Kind.InvalidInput} }
+pub fn try_set_clipboard(status: *fail.Status, window: *Window, text: []const u8) {
+  if status.failed { return }
+  if window.display == nil {
+    window_failed(status, fail.Kind.InvalidState, "try set clipboard")
+    return
+  }
+  if #len(text) > clipboard_limit {
+    window_failed(status, fail.Kind.Capacity, "try set clipboard")
+    return
+  }
+  if !utf8.valid(text) {
+    window_failed(status, fail.Kind.InvalidInput, "try set clipboard")
+    return
+  }
   for byte in text {
-    if byte == 0 { return Result{kind:io.Kind.InvalidInput} }
+    if byte == 0 {
+      window_failed(status, fail.Kind.InvalidInput, "try set clipboard")
+      return
+    }
   }
   arena := clipboard_arena(#len(text))
   owned := mem.push_bytes_uninit(arena, #len(text))
@@ -996,7 +1015,8 @@ pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
   _ = set_owner(window.display, desktop.clipboard_atom, window.handle, 0)
   if get_owner(window.display, desktop.clipboard_atom) != window.handle {
     mem.arena_release(arena)
-    return Result{kind:io.Kind.System}
+    window_failed(status, fail.Kind.System, "try set clipboard")
+    return
   }
   mem.arena_release(desktop.owned_arena)
   desktop.owned_arena = nil
@@ -1006,10 +1026,11 @@ pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
   desktop.owned_length = #len(owned)
   desktop.owns = true
   _ = flush(window.display)
-  return Result{}
 }
+// Like try_set_clipboard, for callers with nothing to do about a failure.
 pub fn set_clipboard(window: *Window, text: []const u8) {
-  _ = try_set_clipboard(window, text)
+  status: fail.Status
+  try_set_clipboard(&status, window, text)
 }
 
 pub fn set_cursor(window: *Window, cursor: Cursor) {
@@ -1066,28 +1087,42 @@ pub fn box_input(window: *const Window) box.Input {
 }
 
 // GUI-thread window metadata changes. Dimensions remain bounded before Xlib.
-pub fn set_title(window: *Window, title: []const u8) Result {
-  if window.display == nil || window.handle == 0 { return Result{kind:io.Kind.InvalidState} }
-  if #len(title)>4095 { return Result{kind:io.Kind.Capacity} }
-  if !utf8.valid(title) { return Result{kind:io.Kind.InvalidInput} }
+pub fn set_title(status: *fail.Status, window: *Window, title: []const u8) {
+  if status.failed { return }
+  if window.display == nil || window.handle == 0 {
+    window_failed(status, fail.Kind.InvalidState, "set title")
+    return
+  }
+  if #len(title)>4095 {
+    window_failed(status, fail.Kind.Capacity, "set title")
+    return
+  }
+  if !utf8.valid(title) {
+    window_failed(status, fail.Kind.InvalidInput, "set title")
+    return
+  }
   storage: [4096]u8
-  name := c.string_into(storage[..], title)
-  if parse.failed(name.failure) { return Result{kind:io.Kind.InvalidInput} }
-  _ = store_name(window.display, window.handle, name.value)
+  name := c.string_into(status, storage[..], title)
+  if status.failed { return }
+  _ = store_name(window.display, window.handle, name)
   modern := atom(window.display, "_NET_WM_NAME\x00")
   unicode := atom(window.display, "UTF8_STRING\x00")
-  _ = change_property(window.display, window.handle, modern, unicode, 8, 0, name.value, #cast(i32, #len(title)))
-  return Result{}
+  _ = change_property(window.display, window.handle, modern, unicode, 8, 0, name, #cast(i32, #len(title)))
 }
 extern fn resize_window "XResizeWindow"(display:rawptr, window:usize, width, height:u32) i32
-pub fn set_size(window:*Window, width, height:i32) Result {
-  if window.display==nil || window.handle==0 { return Result{kind:io.Kind.InvalidState} }
+pub fn set_size(status: *fail.Status, window:*Window, width, height:i32) {
+  if status.failed { return }
+  if window.display==nil || window.handle==0 {
+    window_failed(status, fail.Kind.InvalidState, "set size")
+    return
+  }
   if width<=0 || height<=0 || width>16384 || height>16384 {
-    return Result{kind:io.Kind.InvalidInput}
+    window_failed(status, fail.Kind.InvalidInput, "set size")
+    return
   }
   _ = resize_window(window.display, window.handle, #cast(u32, width), #cast(u32, height))
   _ = sync(window.display, 0)
-  return poll(window)
+  poll(status, window)
 }
 
 fn clipboard_incoming_used(desktop: *Desktop) usize {

@@ -1,16 +1,19 @@
+use "std/fail"
 #link("zstd")
 
 pub const ContentSizeUnknown: u64 = 18446744073709551615
 pub const ContentSizeError: u64 = 18446744073709551614
-pub struct Result { written: usize, provider_code: usize, failure: io.Failure }
-pub struct SizeResult { size: u64, known: bool, failure: io.Failure }
+// A frame's decompressed size, when its header records it.
+pub struct FrameSize { size: u64, known: bool }
 pub fn version() u32 {
   return zstd_version_number()
 }
 pub fn compress_bound(source_size: usize) usize {
   return zstd_compress_bound(source_size)
 }
-pub fn compress(destination: []u8, source: []const u8, level: i32) Result {
+// The compressed size. Too small a destination fails with Capacity.
+pub fn compress(status: *fail.Status, destination: []u8, source: []const u8, level: i32) usize {
+  if status.failed { return 0 }
   destination_pointer: rawptr = nil
   source_pointer: rawptr = nil
   if #len(destination) > 0 {
@@ -20,9 +23,12 @@ pub fn compress(destination: []u8, source: []const u8, level: i32) Result {
     source_pointer = #cast(rawptr, &source[0])
   }
   code := zstd_compress(destination_pointer, #len(destination), source_pointer, #len(source), level)
-  return result_from_code(code)
+  return checked(status, "compress", code)
 }
-pub fn decompress(destination: []u8, source: []const u8) Result {
+// The decompressed size. Malformed input fails with InvalidInput, too small a
+// destination with Capacity.
+pub fn decompress(status: *fail.Status, destination: []u8, source: []const u8) usize {
+  if status.failed { return 0 }
   destination_pointer: rawptr = nil
   source_pointer: rawptr = nil
   if #len(destination) > 0 {
@@ -32,15 +38,20 @@ pub fn decompress(destination: []u8, source: []const u8) Result {
     source_pointer = #cast(rawptr, &source[0])
   }
   code := zstd_decompress(destination_pointer, #len(destination), source_pointer, #len(source))
-  return result_from_code(code)
+  return checked(status, "decompress", code)
 }
-pub fn frame_size(source: []const u8) SizeResult {
-  if #len(source) == 0 { return SizeResult{ failure: io.Failure{ kind: io.Kind.System } } }
-  size := zstd_frame_content_size(#cast(rawptr, &source[0]), #len(source))
-  if size == ContentSizeError {
-    return SizeResult{ size: size, failure: io.Failure{ kind: io.Kind.System } }
+// A malformed or empty frame header fails with InvalidInput.
+pub fn frame_size(status: *fail.Status, source: []const u8) FrameSize {
+  if status.failed { return FrameSize{} }
+  size := ContentSizeError
+  if #len(source) != 0 {
+    size = zstd_frame_content_size(#cast(rawptr, &source[0]), #len(source))
   }
-  return SizeResult{ size: size, known: size != ContentSizeUnknown }
+  if size == ContentSizeError {
+    fail.invalid(status, "read zstd frame", "", "malformed frame header")
+    return FrameSize{}
+  }
+  return FrameSize{ size: size, known: size != ContentSizeUnknown }
 }
 pub fn error_name(code: usize, maximum: usize) []const u8 {
   pointer := zstd_error_name(code)
@@ -54,18 +65,40 @@ pub fn error_name(code: usize, maximum: usize) []const u8 {
   return bytes[..length]
 }
 
-// Provider error codes are not byte counts. Failed output must be discarded.
-fn result_from_code(code: usize) Result {
-  if zstd_is_error(code) != 0 {
-    return Result{ provider_code: code, failure: io.Failure{ kind: io.Kind.System } }
+extern fn zstd_error_code "ZSTD_getErrorCode"(code: usize) i32
+
+// Records a zstd error code: the library's name for it, native keeps the code.
+fn provider_failed(status: *fail.Status, operation: []const u8, code: usize) {
+  // ZSTD_error_dstSize_tooSmall and memory_allocation; the rest is the data.
+  kind := fail.Kind.InvalidInput
+  number := zstd_error_code(code)
+  if number == 70 || number == 64 {
+    kind = fail.Kind.Capacity
   }
-  return Result{ written: code, provider_code: code }
+  message := error_name(code, 128)
+  if #len(message) == 0 {
+    message = "zstd failed"
+  }
+  failure := fail.make(kind, operation, "", message)
+  failure.native = #bitcast(isize, code)
+  fail.set(status, failure)
+}
+// Provider error codes are not byte counts. Failed output must be discarded.
+fn checked(status: *fail.Status, operation: []const u8, code: usize) usize {
+  if zstd_is_error(code) != 0 {
+    provider_failed(status, operation, code)
+    return 0
+  }
+  return code
 }
 
 // Static provider context borrows workspace; never allocates or frees heap memory.
 // Advanced zstd ABI: build and run against the same supported provider version.
-pub struct StreamContext { value: rawptr, provider_code: usize, failure: io.Failure }
-pub struct StreamResult { written: usize, consumed: usize, provider_code: usize, ended: bool, failure: io.Failure }
+// After a failure the context stays failed: later decodes fail with the same
+// code.
+pub struct StreamContext { value: rawptr, provider_code: usize, failed: bool }
+// One decode step: bytes written and consumed, and ended at a frame's end.
+pub struct Decoded { written: usize, consumed: usize, ended: bool }
 pub fn stream_workspace_size(window_log: u32) usize {
   if window_log < 10 || window_log > 30 { return 0 }
   window: usize = 1
@@ -74,25 +107,38 @@ pub fn stream_workspace_size(window_log: u32) usize {
   if zstd_is_error(size) != 0 || size > #cast(usize, -1) - 7 { return 0 }
   return size + 7
 }
-pub fn stream_context(workspace: []u8, window_log: u32) StreamContext {
+// Too small a workspace, or a window_log outside 10..30, fails with Capacity.
+pub fn stream_context(status: *fail.Status, workspace: []u8, window_log: u32) StreamContext {
+  if status.failed { return StreamContext{ failed: true } }
   required := stream_workspace_size(window_log)
   if required == 0 || #len(workspace) < required {
-    return StreamContext{ failure: io.Failure{ kind: io.Kind.System } }
+    fail.set(status, fail.make(fail.Kind.Capacity, "start zstd stream", "", "the workspace is too small"))
+    return StreamContext{ failed: true }
   }
   address := #cast(usize, &workspace[0])
   eight: usize = 8
   padding := (eight - (address & 7)) & 7
   value := zstd_init_static_dstream(#cast(rawptr, &workspace[padding]), #len(workspace) - padding)
-  if value == nil { return StreamContext{ failure: io.Failure{ kind: io.Kind.System } } }
+  if value == nil {
+    fail.set(status, fail.make(fail.Kind.Capacity, "start zstd stream", "", "the workspace is too small"))
+    return StreamContext{ failed: true }
+  }
   code := zstd_dctx_set_parameter(value, 100, #cast(i32, window_log))
   if zstd_is_error(code) != 0 {
-    return StreamContext{ provider_code: code, failure: io.Failure{ kind: io.Kind.System } }
+    provider_failed(status, "start zstd stream", code)
+    return StreamContext{ provider_code: code, failed: true }
   }
   return StreamContext{ value: value }
 }
-pub fn stream_decode(context: *StreamContext, destination: []u8, source: []const u8) StreamResult {
-  if io.failed(context.failure) {
-    return StreamResult{ provider_code: context.provider_code, failure: io.Failure{ kind: io.Kind.System } }
+pub fn stream_decode(status: *fail.Status, context: *StreamContext, destination: []u8, source: []const u8) Decoded {
+  if status.failed { return Decoded{} }
+  if context.failed {
+    if context.provider_code == 0 {
+      fail.set(status, fail.make(fail.Kind.InvalidState, "decompress", "", "the stream context failed"))
+    } else {
+      provider_failed(status, "decompress", context.provider_code)
+    }
+    return Decoded{}
   }
   output_pointer: rawptr = nil
   input_pointer: rawptr = nil
@@ -106,9 +152,10 @@ pub fn stream_decode(context: *StreamContext, destination: []u8, source: []const
   consumed: usize = 0
   code := zstd_decompress_stream(context.value, output_pointer, #len(destination), &written, input_pointer, #len(source), &consumed)
   if zstd_is_error(code) != 0 {
-    context.failure = io.Failure{ kind: io.Kind.System }
+    context.failed = true
     context.provider_code = code
-    return StreamResult{ provider_code: code, failure: io.Failure{ kind: io.Kind.System } }
+    provider_failed(status, "decompress", code)
+    return Decoded{}
   }
-  return StreamResult{ written: written, consumed: consumed, ended: code == 0, provider_code: code }
+  return Decoded{ written: written, consumed: consumed, ended: code == 0 }
 }

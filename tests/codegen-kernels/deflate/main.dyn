@@ -18,7 +18,7 @@ fn main() {
   for round in 0..4 {
     mark := mem.arena_mark(arena)
     encoded := gzip.compress(arena, text, 6)
-    total += #len(encoded.value)
+    total += #len(encoded)
     mem.arena_rewind(arena, mark)
     _ = round
   }

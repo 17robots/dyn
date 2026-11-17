@@ -108,8 +108,8 @@ pub fn make_asset(arena: *memory.Arena, path: []const u8, body: []const u8) Asse
   if compressible(item.content_type) && #len(body) > 256 {
     mark := memory.arena_mark(arena)
     encoded := gzip.compress(arena, body, 9)
-    if #len(encoded.value) > 0 && #len(encoded.value) < #len(body) {
-      item.gzip = encoded.value
+    if #len(encoded) > 0 && #len(encoded) < #len(body) {
+      item.gzip = encoded
     } else {
       memory.arena_rewind(arena, mark)
     }

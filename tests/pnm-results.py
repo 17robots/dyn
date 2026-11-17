@@ -8,47 +8,55 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/image/pnm" pnm
-use "std/parse" parse
+use "std/fail"
 use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("PNM contract") } }
+fn decode_fails(arena: *mem.Arena, data: []const u8) bool {
+ status: fail.Status
+ _ = pnm.decode(arena, &status, data)
+ return status.failed
+}
 fn main() {
  arena := mem.arena_alloc(0)
+ status := fail.Status{ on_failure: fail.panic_on_failure }
  defer { mem.arena_release(arena) }
- decoded := pnm.decode(arena,"P3\n# comment\n2 1\n15\n15 0 7 0 15 15\n")
- check(!parse.failed(decoded.failure) && decoded.value.info.width == 2 && decoded.value.info.height == 1 && decoded.value.info.channels == 3 && bytes.equal(decoded.value.pixels,"\xff\x00\x77\x00\xff\xff"))
- encoded := pnm.encode(arena,decoded.value.pixels,2,1,3)
- check(!parse.failed(encoded.failure) && bytes.equal(encoded.value,"P6\n2 1\n255\n\xff\x00\x77\x00\xff\xff"))
- check(!parse.failed(pnm.decode(arena,encoded.value).failure))
- decoded = pnm.decode(arena,"P5\n3 1\n65535\n\x00\x00\x80\x00\xff\xff")
- check(!parse.failed(decoded.failure) && bytes.equal(decoded.value.pixels,"\x00\x80\xff"))
- decoded = pnm.decode(arena,"P5\n3 1\n255\n\n# ")
- check(!parse.failed(decoded.failure) && bytes.equal(decoded.value.pixels,"\n# "))
- encoded = pnm.encode(arena,decoded.value.pixels,3,1,1)
- check(!parse.failed(encoded.failure) && bytes.equal(encoded.value,"P5\n3 1\n255\n\n# "))
- decoded = pnm.decode(arena,"P2\n3 1\n10\n0 5 10\n")
- check(!parse.failed(decoded.failure) && bytes.equal(decoded.value.pixels,"\x00\x80\xff"))
- decoded = pnm.decode(arena,"P5\n1 1\n255#comment\n\x7f")
- check(!parse.failed(decoded.failure) && bytes.equal(decoded.value.pixels,"\x7f"))
+ decoded := pnm.decode(arena,&status,"P3\n# comment\n2 1\n15\n15 0 7 0 15 15\n")
+ check(decoded.image.info.width == 2 && decoded.image.info.height == 1 && decoded.image.info.channels == 3 && bytes.equal(decoded.image.pixels,"\xff\x00\x77\x00\xff\xff"))
+ encoded := pnm.encode(arena,&status,decoded.image.pixels,2,1,3)
+ check(bytes.equal(encoded,"P6\n2 1\n255\n\xff\x00\x77\x00\xff\xff"))
+ _ = pnm.decode(arena,&status,encoded)
+ decoded = pnm.decode(arena,&status,"P5\n3 1\n65535\n\x00\x00\x80\x00\xff\xff")
+ check(bytes.equal(decoded.image.pixels,"\x00\x80\xff"))
+ decoded = pnm.decode(arena,&status,"P5\n3 1\n255\n\n# ")
+ check(bytes.equal(decoded.image.pixels,"\n# "))
+ encoded = pnm.encode(arena,&status,decoded.image.pixels,3,1,1)
+ check(bytes.equal(encoded,"P5\n3 1\n255\n\n# "))
+ decoded = pnm.decode(arena,&status,"P2\n3 1\n10\n0 5 10\n")
+ check(bytes.equal(decoded.image.pixels,"\x00\x80\xff"))
+ decoded = pnm.decode(arena,&status,"P5\n1 1\n255#comment\n\x7f")
+ check(bytes.equal(decoded.image.pixels,"\x7f"))
  mark := mem.arena_mark(arena)
- check(parse.failed(pnm.decode(arena,"P2\n1 1\n2\n3").failure) && mem.arena_mark(arena) == mark)
- check(parse.failed(pnm.decode(arena,"P6\n4294967295 4294967295\n255\n").failure) && mem.arena_mark(arena) == mark)
- check(parse.failed(pnm.decode(arena,"P5\n1 1\n65536\n\x00").failure) && mem.arena_mark(arena) == mark)
- check(parse.failed(pnm.decode(arena,"P5\n0 1\n255\n").failure) && mem.arena_mark(arena) == mark)
- check(parse.failed(pnm.decode(arena,"P5\n1 1\n255\n").failure) && mem.arena_mark(arena) == mark)
- check(parse.failed(pnm.decode(arena,"P2\n2 1\n255\n1").failure) && mem.arena_mark(arena) == mark)
+ check(decode_fails(arena,"P2\n1 1\n2\n3") && mem.arena_mark(arena) == mark)
+ check(decode_fails(arena,"P6\n4294967295 4294967295\n255\n") && mem.arena_mark(arena) == mark)
+ check(decode_fails(arena,"P5\n1 1\n65536\n\x00") && mem.arena_mark(arena) == mark)
+ check(decode_fails(arena,"P5\n0 1\n255\n") && mem.arena_mark(arena) == mark)
+ check(decode_fails(arena,"P5\n1 1\n255\n") && mem.arena_mark(arena) == mark)
+ check(decode_fails(arena,"P2\n2 1\n255\n1") && mem.arena_mark(arena) == mark)
  golden := "P6\n2 1\n255\n\xff\x00\x77\x00\xff\xff"
- for cut in 0..#len(golden) { check(parse.failed(pnm.decode(arena,golden[..cut]).failure) && mem.arena_mark(arena) == mark) }
+ for cut in 0..#len(golden) { check(decode_fails(arena,golden[..cut]) && mem.arena_mark(arena) == mark) }
  for i in 0..#len(golden) {
   for bit in 0..8 {
    data := mem.push_array(u8,arena,#len(golden))
    for j in 0..#len(data) { data[j] = golden[j] }
    data[i] ^= #cast(u8,1) << #cast(u8,bit)
-   _ = pnm.decode(arena,data)
+   _ = decode_fails(arena,data)
    mem.arena_rewind(arena,mark)
   }
  }
- check(pnm.encode(arena,"",1,1,4).failure.kind == parse.Kind.Syntax && mem.arena_mark(arena) == mark)
+ invalid: fail.Status
+ _ = pnm.encode(arena,&invalid,"",1,1,4)
+ check(invalid.failure.kind == fail.Kind.InvalidInput && mem.arena_mark(arena) == mark)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-pnm-') as directory:

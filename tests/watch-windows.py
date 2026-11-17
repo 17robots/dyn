@@ -10,74 +10,93 @@ import threading
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
 SOURCE = r'''use "std/fs/watch" watch
+use "std/fail"
 use "std/io" io
 use "std/bytes" bytes
 use "std/time" time
 fn require(value: bool) { if !value { #panic("Windows watch contract") } }
+fn added(state: *watch.Watcher, path: []const u8, mask: u32) i32 {
+  status: fail.Status
+  id := watch.add(&status, state, path, mask)
+  require(!status.failed)
+  return id
+}
+fn rejected(state: *watch.Watcher, path: []const u8, mask: u32) bool {
+  status: fail.Status
+  _ = watch.add(&status, state, path, mask)
+  return status.failed
+}
+fn removed(state: *watch.Watcher, id: i32) bool {
+  status: fail.Status
+  watch.remove(&status, state, id)
+  return !status.failed
+}
 fn main() {
   empty := watch.Watcher{}
   watch.close(&empty)
   tiny: [1]u8
-  failed := watch.open(tiny[..])
-  watch.close(&failed.value)
-  require(io.failed(failed.failure))
+  short: fail.Status
+  failed := watch.open(&short, tiny[..])
+  watch.close(&failed)
+  require(short.failed)
   scratch: [1024]u8
-  opened := watch.open(scratch[..])
-  require(!io.failed(opened.failure))
-  require(io.failed(watch.add(&opened.value,"missing-directory",watch.Changes).failure))
-  require(io.failed(watch.add(&opened.value,".",watch.CloseWrite).failure))
-  first := watch.add(&opened.value,"one",watch.Changes)
-  second := watch.add(&opened.value,"two",watch.Changes)
-  require(!io.failed(first.failure) && !io.failed(second.failure) && first.value != second.value)
+  status: fail.Status
+  opened := watch.open(&status, scratch[..])
+  require(!status.failed)
+  require(rejected(&opened,"missing-directory",watch.Changes))
+  require(rejected(&opened,".",watch.CloseWrite))
+  first := added(&opened,"one",watch.Changes)
+  second := added(&opened,"two",watch.Changes)
+  require(first != second)
   require(!watch.HasCloseWrite && !watch.HasMoveCookies && !watch.HasDirectoryFlag)
   capacity_scratch: [272]u8
-  capacity := watch.open(capacity_scratch[..])
-  require(!io.failed(capacity.failure))
+  capacity := watch.open(&status, capacity_scratch[..])
+  require(!status.failed)
   ids: [16]i32
   for i in 0..16 {
-    added := watch.add(&capacity.value,".",watch.Changes)
-    require(!io.failed(added.failure))
-    ids[i] = added.value
+    ids[i] = added(&capacity,".",watch.Changes)
   }
-  require(io.failed(watch.add(&capacity.value,".",watch.Changes).failure))
-  require(!io.failed(watch.remove(&capacity.value,ids[0]).failure))
-  replacement := watch.add(&capacity.value,".",watch.Changes)
-  require(!io.failed(replacement.failure) && replacement.value != ids[0])
-  require(io.failed(watch.remove(&capacity.value,ids[0]).failure))
+  require(rejected(&capacity,".",watch.Changes))
+  require(removed(&capacity,ids[0]))
+  replacement := added(&capacity,".",watch.Changes)
+  require(replacement != ids[0])
+  require(!removed(&capacity,ids[0]))
   // Closing all remaining idle watches must cancel pending native requests.
-  watch.close(&capacity.value)
-  watch.close(&capacity.value)
+  watch.close(&capacity)
+  watch.close(&capacity)
   io.println("READY")
   seen_first: u32 = 0
   seen_second: u32 = 0
   for attempt in 0..1000 {
-    event := watch.next(&opened.value)
-    require(!io.failed(event.failure))
-    if event.status == watch.Status.Event {
-      require(!event.event.rescan && event.event.cookie == 0)
-      if event.event.watch == first.value {
-        if bytes.equal(event.event.name,"café-😀.txt") {
-          seen_first = seen_first | (event.event.mask & (watch.Create | watch.MoveFrom))
+    next := watch.next(&status, &opened)
+    require(!status.failed)
+    if next.found {
+      event := next.event
+      require(!event.rescan && event.cookie == 0)
+      if event.watch == first {
+        if bytes.equal(event.name,"café-😀.txt") {
+          seen_first = seen_first | (event.mask & (watch.Create | watch.MoveFrom))
         }
-        if bytes.equal(event.event.name,"renamé-😀.txt") {
-          seen_first = seen_first | (event.event.mask & (watch.MoveTo | watch.Delete))
+        if bytes.equal(event.name,"renamé-😀.txt") {
+          seen_first = seen_first | (event.mask & (watch.MoveTo | watch.Delete))
         }
       }
-      if event.event.watch == second.value && bytes.equal(event.event.name,"二.txt") {
-        seen_second = seen_second | (event.event.mask & (watch.Create | watch.Delete))
+      if event.watch == second && bytes.equal(event.name,"二.txt") {
+        seen_second = seen_second | (event.mask & (watch.Create | watch.Delete))
       }
     }
     if seen_first == (watch.Create | watch.MoveFrom | watch.MoveTo | watch.Delete) && seen_second == (watch.Create | watch.Delete) { break }
-    if event.status == watch.Status.Empty { time.sleep(10000000) }
+    if !next.found { time.sleep(10000000) }
   }
   require(seen_first == (watch.Create | watch.MoveFrom | watch.MoveTo | watch.Delete))
   require(seen_second == (watch.Create | watch.Delete))
-  require(!io.failed(watch.remove(&opened.value,first.value).failure))
-  require(!io.failed(watch.remove(&opened.value,second.value).failure))
-  watch.close(&opened.value)
-  reopened := watch.open(scratch[..])
-  require(!io.failed(reopened.failure) && !io.failed(watch.add(&reopened.value,"one",watch.Changes).failure))
-  watch.close(&reopened.value)
+  require(removed(&opened,first))
+  require(removed(&opened,second))
+  watch.close(&opened)
+  reopened := watch.open(&status, scratch[..])
+  require(!status.failed)
+  _ = added(&reopened,"one",watch.Changes)
+  watch.close(&reopened)
   io.println("DONE")
 }
 '''

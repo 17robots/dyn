@@ -9,8 +9,13 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE='''use "std/embedded/uart" uart
 use "std/embedded/timer" timer
-use "std/io" errors
+use "std/fail"
 fn check(ok: bool) { if !ok { #panic("embedded helper") } }
+fn start(tick: *timer.SysTick, period: u32, interrupt: bool, clock: bool) fail.Kind {
+  status: fail.Status
+  timer.start(&status, tick, period, interrupt, clock)
+  return status.failure.kind
+}
 fn main() {
   registers: [8]u32
   address := #cast(usize, &registers[0])
@@ -25,10 +30,10 @@ fn main() {
   uart.write_byte(&device, 88)
   check(registers[0] == 88)
   tick := timer.SysTick{ base: address }
-  check(errors.failed(timer.start(&tick, 0, true, true).failure) && registers[0] == 88)
-  check(errors.failed(timer.start(&tick, 1, true, true).failure) && registers[0] == 88)
-  check(!errors.failed(timer.start(&tick, 2, false, false).failure) && registers[1] == 1)
-  check(!errors.failed(timer.start(&tick, 100, true, true).failure))
+  check(start(&tick, 0, true, true) != fail.Kind.Ok && registers[0] == 88)
+  check(start(&tick, 1, true, true) != fail.Kind.Ok && registers[0] == 88)
+  check(start(&tick, 2, false, false) == fail.Kind.Ok && registers[1] == 1)
+  check(start(&tick, 100, true, true) == fail.Kind.Ok)
   check(registers[0] == 7 && registers[1] == 99 && registers[2] == 0)
   registers[2] = 0xff123456
   check(timer.current(&tick) == 0x123456)
@@ -36,8 +41,8 @@ fn main() {
   check(timer.elapsed(&tick))
   timer.stop(&tick)
   check(registers[0] == 0)
-  check(!errors.failed(timer.start(&tick, 16777216, false, false).failure) && registers[1] == 0xffffff)
-  check(timer.start(&tick, 16777217, false, false).failure.kind == errors.Kind.InvalidInput)
+  check(start(&tick, 16777216, false, false) == fail.Kind.Ok && registers[1] == 0xffffff)
+  check(start(&tick, 16777217, false, false) == fail.Kind.InvalidInput)
   clock := timer.MachineTimer{ time: address, compare: address + 8 }
   registers[0] = 0x89abcdef
   registers[1] = 0x12345678

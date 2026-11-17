@@ -1,7 +1,6 @@
 use "std/mem" mem
 use "std/fail"
 use "std/io" stream
-use "std/parse" parse
 
 // done is false while the codec needs more input or output space; state.error
 // tells those cases from malformed input.
@@ -19,7 +18,6 @@ pub struct Decoder {
   source_ended: bool,
   finished: bool,
   error: isize,
-  source_kind: stream.Kind,
   gzip: bool,
   phase: u8,
   flags: u8,
@@ -36,7 +34,7 @@ pub fn decoder(input: stream.Reader, compressed_bytes: []u8, history: []u8) Deco
 }
 
 // Drop input already committed by the bit engine, retaining its partial byte.
-fn refill(state: *Decoder) bool {
+fn refill(status: *fail.Status, state: *Decoder) bool {
   consumed := state.engine.reader.at
   remaining := state.compressed_used - consumed
   for i in 0..remaining {
@@ -49,21 +47,21 @@ fn refill(state: *Decoder) bool {
     state.error = -28
     return false
   }
-  result := stream.read_transfer(state.source_reader, state.compressed_storage[remaining..])
-  state.compressed_used += result.transferred
-  if stream.failed(result.failure) {
-    state.error = result.failure.native
-    state.source_kind = result.failure.kind
+  count := stream.read(status, state.source_reader, state.compressed_storage[remaining..])
+  state.compressed_used += count
+  if status.failed {
+    // The source's own failure is in status; -5 stops the decoder.
+    state.error = -5
     return false
   }
-  if result.status == stream.Status.End || result.transferred == 0 {
+  if count == 0 {
     state.source_ended = true
   }
-  return result.transferred != 0
+  return count != 0
 }
-fn require_bytes(state: *Decoder, amount: usize) bool {
+fn require_bytes(status: *fail.Status, state: *Decoder, amount: usize) bool {
   for state.compressed_used - state.engine.reader.at < amount {
-    if !refill(state) {
+    if !refill(status, state) {
       if state.error == 0 {
         state.error = -74
       }
@@ -79,16 +77,16 @@ fn header_byte(state: *Decoder) u8 {
   return byte
 }
 // Header fields are consumed incrementally, even filenames larger than storage.
-fn gzip_header(state: *Decoder) bool {
+fn gzip_header(status: *fail.Status, state: *Decoder) bool {
   for state.phase < 6 && state.error == 0 {
     if state.phase == 0 {
       if state.members > 0 && state.engine.reader.at == state.compressed_used {
-        if !refill(state) && state.error == 0 && state.source_ended {
+        if !refill(status, state) && state.error == 0 && state.source_ended {
           state.finished = true
           return false
         }
       }
-      if !require_bytes(state, 10) { return false }
+      if !require_bytes(status, state, 10) { return false }
       at := state.engine.reader.at
       bytes := state.compressed_storage
       if bytes[at] != 31 || bytes[at + 1] != 139 || bytes[at + 2] != 8 || (bytes[at + 3] & 224) != 0 {
@@ -102,7 +100,7 @@ fn gzip_header(state: *Decoder) bool {
       state.phase = 1
     } else if state.phase == 1 {
       if (state.flags & 4) != 0 {
-        if !require_bytes(state, 2) { return false }
+        if !require_bytes(status, state, 2) { return false }
         low := #cast(usize, header_byte(state))
         high := #cast(usize, header_byte(state))
         state.extra = low + high * 256
@@ -110,7 +108,7 @@ fn gzip_header(state: *Decoder) bool {
       state.phase = 2
     } else if state.phase == 2 {
       for state.extra > 0 {
-        if !require_bytes(state, 1) { return false }
+        if !require_bytes(status, state, 1) { return false }
         _ = header_byte(state)
         state.extra -= 1
       }
@@ -122,14 +120,14 @@ fn gzip_header(state: *Decoder) bool {
       }
       if (state.flags & flag) != 0 {
         for {
-          if !require_bytes(state, 1) { return false }
+          if !require_bytes(status, state, 1) { return false }
           if header_byte(state) == 0 { break }
         }
       }
       state.phase += 1
     } else {
       if (state.flags & 2) != 0 {
-        if !require_bytes(state, 2) { return false }
+        if !require_bytes(status, state, 2) { return false }
         crc_at := state.engine.reader.at
         expected := #cast(u32, state.compressed_storage[crc_at]) + #cast(u32, state.compressed_storage[crc_at + 1]) * 256
         if ((state.header_crc ^ 4294967295) & 65535) != expected {
@@ -143,19 +141,23 @@ fn gzip_header(state: *Decoder) bool {
   }
   return state.error == 0
 }
-fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
+// A read of the decoded bytes. Malformed input fails with InvalidInput,
+// too little storage for a header or the history with Capacity; native
+// keeps the decoder's code (-74, -28). A failure of the source is reported
+// as it came.
+fn decoder_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
   state := #cast(*Decoder, data)
-  if #len(destination) == 0 { return stream.Transfer{} }
+  if status.failed || #len(destination) == 0 { return 0 }
   for state.offset == state.engine.written && !state.finished && state.error == 0 {
     if state.gzip && state.phase < 6 {
-      if !gzip_header(state) { break }
+      if !gzip_header(status, state) { break }
     }
     if state.engine.stage == 3 {
       if !state.gzip {
         state.finished = true
         break
       }
-      if !require_bytes(state, 8) { break }
+      if !require_bytes(status, state, 8) { break }
       at := state.engine.reader.at
       bytes := state.compressed_storage[..state.compressed_used]
       if little32(bytes, at) != (state.checksum ^ 4294967295) || little32(bytes, at + 4) != state.member_size {
@@ -195,7 +197,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
       state.error = -28
       break
     }
-    if !refill(state) {
+    if !refill(status, state) {
       if state.error == 0 {
         state.error = -74
       }
@@ -203,14 +205,17 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
     }
   }
   if state.error != 0 {
-    kind := state.source_kind
-    if kind == stream.Kind.Ok {
-      kind = stream.Kind.InvalidInput
+    if !status.failed {
+      failure := fail.make(fail.Kind.InvalidInput, "decompress", "", "malformed compressed data")
       if state.error == -28 {
-        kind = stream.Kind.Capacity
+        failure = fail.make(fail.Kind.Capacity, "decompress", "", "the storage is too small")
+      } else if state.error == -5 {
+        failure = fail.make(fail.Kind.InvalidState, "decompress", "", "the source failed earlier")
       }
+      failure.native = state.error
+      fail.set(status, failure)
     }
-    return stream.Transfer{ failure: stream.Failure{ kind: kind, native: state.error } }
+    return 0
   }
   remaining := state.engine.written - state.offset
   amount := remaining
@@ -221,14 +226,10 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
     destination[copy_at] = state.output_storage[(state.offset + copy_at) % #len(state.output_storage)]
   }
   state.offset += amount
-  status := stream.Status.Complete
-  if state.finished && amount == remaining {
-    status = stream.Status.End
-  }
-  return stream.Transfer{ transferred: amount, status: status }
+  return amount
 }
 pub fn decoder_reader(state: *Decoder) stream.Reader {
-  return stream.Reader{ data: state, read: decoder_read_stream }
+  return stream.Reader{ data: state, read: decoder_read }
 }
 
 // Emits byte-aligned stored DEFLATE blocks. Call with final=false for each
@@ -897,23 +898,26 @@ fn resume_impl(state: *InflateState, destination: []u8, input: []const u8, parti
   }
   return Result{ written: state.written, consumed: state.reader.at, done: state.stage == 3 && state.error == 0 }
 }
-// Output in arena and the input bytes used. Invalid input fails with nothing pushed.
-pub struct Inflated { value: []u8, consumed: usize, failure: parse.Failure }
+// Output in arena and the input bytes used. Malformed input fails with
+// InvalidInput, nothing pushed.
+pub struct Inflated { value: []u8, consumed: usize }
 
 // RFC 1951 stored, fixed-Huffman, and dynamic-Huffman DEFLATE, into arena.
-pub fn inflate(arena: *mem.Arena, input: []const u8) Inflated {
-  return grow_until_done(arena, input, false)
+pub fn inflate(arena: *mem.Arena, status: *fail.Status, input: []const u8) Inflated {
+  if status.failed { return Inflated{} }
+  return grow_until_done(arena, status, input, false)
 }
 
 // One RFC 1952 gzip member, into arena. consumed identifies any following
 // member or trailing data.
-pub fn gunzip(arena: *mem.Arena, input: []const u8) Inflated {
-  return grow_until_done(arena, input, true)
+pub fn gunzip(arena: *mem.Arena, status: *fail.Status, input: []const u8) Inflated {
+  if status.failed { return Inflated{} }
+  return grow_until_done(arena, status, input, true)
 }
 
 // The output size is unknown, so decode into a block from arena and retry with
 // a doubled block when it fills up. Each retry rewinds, so nothing is wasted.
-fn grow_until_done(arena: *mem.Arena, input: []const u8, gzip: bool) Inflated {
+fn grow_until_done(arena: *mem.Arena, status: *fail.Status, input: []const u8, gzip: bool) Inflated {
   capacity := mem.trial_size(arena, 4 * #len(input) + 1024)
   for capacity > 0 {
     mark := mem.arena_mark(arena)
@@ -934,7 +938,12 @@ fn grow_until_done(arena: *mem.Arena, input: []const u8, gzip: bool) Inflated {
       return Inflated{ value: space[..result.written], consumed: result.consumed }
     }
     mem.arena_rewind(arena, mark)
-    if !full { return Inflated{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
+    if !full {
+      failure := fail.make(fail.Kind.InvalidInput, "decompress", "", "malformed compressed data")
+      failure.native = -74
+      fail.set(status, failure)
+      return Inflated{}
+    }
     capacity = mem.trial_next(arena, capacity)
   }
   #panic("arena exhausted")
@@ -1034,6 +1043,4 @@ fn gunzip_internal(destination: []u8, input: []const u8) Result {
   return resume_gzip(&state, destination, input)
 }
 
-fn decoder_read_stream(data: rawptr, status: *fail.Status, destination: []u8) usize {
-  return stream.from_transfer(status, decoder_read(data, destination), "read", "")
-}
+

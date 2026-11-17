@@ -19,6 +19,87 @@ use "std/encoding/binary" binary
 use "std/ui" ui
 use "std/ui/software" software
 use "std/io" errors
+struct ft_face_metrics_Outcome { value: ft.FaceMetrics, failure: fail.Failure, kind: fail.Kind }
+fn ft_face_metrics(p0: rawptr) ft_face_metrics_Outcome {
+  status: fail.Status
+  value := ft.face_metrics(&status, p0)
+  return ft_face_metrics_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct ft_bitmap_Outcome { value: ft.BitmapView, failure: fail.Failure, kind: fail.Kind }
+fn ft_bitmap(p0: rawptr) ft_bitmap_Outcome {
+  status: fail.Status
+  value := ft.bitmap(&status, p0)
+  return ft_bitmap_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct ft_open_Outcome { failure: fail.Failure, kind: fail.Kind }
+fn ft_open(p0: *ft.Font, p1: ft.Api, p2: []const u8, p3: u32, p4: u32) ft_open_Outcome {
+  status: fail.Status
+  ft.open(&status, p0, p1, p2, p3, p4)
+  return ft_open_Outcome{ failure: status.failure, kind: status.failure.kind }
+}
+
+struct ft_load_Outcome { api: ft.Api, failure: fail.Failure, kind: fail.Kind }
+fn ft_load(p0: dynlib.Handle) ft_load_Outcome {
+  status: fail.Status
+  value := ft.load(&status, p0)
+  return ft_load_Outcome{ api: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct hb_font_owned_Outcome { value: rawptr, failure: fail.Failure, kind: fail.Kind }
+fn hb_font_owned(p0: *const hb.Api, p1: []const u8, p2: u32) hb_font_owned_Outcome {
+  status: fail.Status
+  value := hb.font_owned(&status, p0, p1, p2)
+  return hb_font_owned_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct hb_shape_Outcome { value: []hb.Glyph, failure: fail.Failure, kind: fail.Kind }
+fn hb_shape(a0: *mem.Arena, p0: *const hb.Api, p1: rawptr, p2: []const u8, p3: u32, p4: []const hb.Feature) hb_shape_Outcome {
+  status: fail.Status
+  value := hb.shape(a0, &status, p0, p1, p2, p3, p4)
+  return hb_shape_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct hb_shape_run_Outcome { value: []hb.Glyph, failure: fail.Failure, kind: fail.Kind }
+fn hb_shape_run(a0: *mem.Arena, p0: *const hb.Api, p1: rawptr, p2: []const u8, p3: hb.Options, p4: []const hb.Feature) hb_shape_run_Outcome {
+  status: fail.Status
+  value := hb.shape_run(a0, &status, p0, p1, p2, p3, p4)
+  return hb_shape_run_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct hb_load_Outcome { api: hb.Api, failure: fail.Failure, kind: fail.Kind }
+fn hb_load(p0: dynlib.Handle) hb_load_Outcome {
+  status: fail.Status
+  value := hb.load(&status, p0)
+  return hb_load_Outcome{ api: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct dynlib_open_Outcome { value: dynlib.Handle, failure: fail.Failure, kind: fail.Kind }
+fn dynlib_open(p0: []const u8, p1: i32) dynlib_open_Outcome {
+  status: fail.Status
+  value := dynlib.open(&status, p0, p1)
+  return dynlib_open_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct dynlib_close_Outcome { failure: fail.Failure, kind: fail.Kind }
+fn dynlib_close(p0: *dynlib.Handle) dynlib_close_Outcome {
+  status: fail.Status
+  dynlib.close(&status, p0)
+  return dynlib_close_Outcome{ failure: status.failure, kind: status.failure.kind }
+}
+
+struct software_render_Outcome { failure: fail.Failure, kind: fail.Kind }
+fn software_render(p0: *software.Surface, p1: *const ui.Command, p2: software.Font) software_render_Outcome {
+  status: fail.Status
+  software.render(&status, p0, p1, p2)
+  return software_render_Outcome{ failure: status.failure, kind: status.failure.kind }
+}
+
+fn failed(failure: fail.Failure) bool {
+  return failure.kind != fail.Kind.Ok
+}
+
 fn check(ok: bool){if !ok {#panic("font vendor contract")}}
 fn save(arena: *mem.Arena, glyphs: []const hb.Glyph, path: []const u8){
  output := mem.push_array(u8,arena,4+#len(glyphs)*24)
@@ -52,49 +133,49 @@ fn reject_empty_configuration(font: rawptr) { _ = font
 fn main(){
  arena := mem.arena_alloc(0)
  defer {mem.arena_release(arena)}
- library := dynlib.open("FT_LIBRARY",dynlib.Now)
- check(!errors.failed(library.failure))
- defer {_ = dynlib.close(&library.value)}
- ft_loaded := ft.load(library.value)
- check(!errors.failed(ft_loaded.failure) && errors.failed(ft.load(nil).failure))
+ library := dynlib_open("FT_LIBRARY",dynlib.Now)
+ check(!failed(library.failure))
+ defer {_ = dynlib_close(&library.value)}
+ ft_loaded := ft_load(library.value)
+ check(!failed(ft_loaded.failure) && failed(ft_load(nil).failure))
  font_bytes_file: fail.Status
  font_bytes := fs.read_all(arena, &font_bytes_file, "font.ttf", 10000000)
  check(!font_bytes_file.failed)
  font := ft.Font{}
- check(!errors.failed(ft.open(&font,ft_loaded.api,font_bytes,0,32).failure))
+ check(!failed(ft_open(&font,ft_loaded.api,font_bytes,0,32).failure))
  defer {ft.close(&font)}
- check(ft.open(&font,ft_loaded.api,font_bytes,0,32).kind == errors.Kind.InvalidState)
+ check(ft_open(&font,ft_loaded.api,font_bytes,0,32).kind == fail.Kind.InvalidState)
  index := ft_loaded.api.char_index(font.face,65)
  check(index != 0 && ft_loaded.api.load_glyph(font.face,index,ft.LoadRender) == 0)
- bitmap := ft.bitmap(font.face)
- check(!errors.failed(bitmap.failure) && bitmap.value.width > 0 && bitmap.value.height > 0)
+ bitmap := ft_bitmap(font.face)
+ check(!failed(bitmap.failure) && bitmap.value.width > 0 && bitmap.value.height > 0)
  value := bitmap.value
  output := mem.push_array(u8,arena,24+#cast(usize,value.width)*#cast(usize,value.height))
  fields: [6]u32 = [#cast(u32,value.width),#cast(u32,value.height),#cast(u32,value.left),#cast(u32,value.top),#cast(u32,value.advance_x),#cast(u32,value.advance_y)]
  for i in 0..6 {binary.store_u32_le(output[i*4..i*4+4],fields[i])}
  for row in 0..value.height {for x in 0..value.width {output[24+#cast(usize,row*value.width+x)] = value.pixels[#cast(usize,row)*value.stride+#cast(usize,x)]}}
  check(fs_write_file("ft-actual.bin",output))
- metrics:=ft.face_metrics(font.face)
- check(!errors.failed(metrics.failure) && ft.face_metrics(nil).kind==errors.Kind.InvalidInput)
+ metrics:=ft_face_metrics(font.face)
+ check(!failed(metrics.failure) && ft_face_metrics(nil).kind==fail.Kind.InvalidInput)
  values:=metrics.value
  metric_fields:[7]u32=[#cast(u32,values.units_per_em),#cast(u32,#cast(i32,values.ascent)),#cast(u32,#cast(i32,values.descent)),#cast(u32,#cast(i32,values.height)),values.glyph_count,values.face_count,values.face_index]
  metric_bytes:[28]u8
  for i in 0..7 {binary.store_u32_le(metric_bytes[i*4..i*4+4],metric_fields[i])}
  check(fs_write_file("metrics-actual.bin",metric_bytes[..]))
- shaping := dynlib.open("HB_LIBRARY",dynlib.Now)
- check(!errors.failed(shaping.failure))
- defer {_ = dynlib.close(&shaping.value)}
- loaded := hb.load(shaping.value)
- check(!errors.failed(loaded.failure) && errors.failed(hb.load(nil).failure))
- created := hb.font_owned(&loaded.api,font_bytes,0)
- check(!errors.failed(created.failure))
+ shaping := dynlib_open("HB_LIBRARY",dynlib.Now)
+ check(!failed(shaping.failure))
+ defer {_ = dynlib_close(&shaping.value)}
+ loaded := hb_load(shaping.value)
+ check(!failed(loaded.failure) && failed(hb_load(nil).failure))
+ created := hb_font_owned(&loaded.api,font_bytes,0)
+ check(!failed(created.failure))
  empty_font = loaded.api.font_get_empty()
  oom_api := loaded.api
  oom_api.font_create = empty_create
  oom_api.font_destroy = count_empty_destroy
  oom_api.ot_font_set_funcs = reject_empty_configuration
- failed_font := hb.font_owned(&oom_api,font_bytes,0)
- check(errors.failed(failed_font.failure) && failed_font.kind == errors.Kind.System && failed_font.value == nil && empty_destroyed == 1)
+ failed_font := hb_font_owned(&oom_api,font_bytes,0)
+ check(failed(failed_font.failure) && failed_font.kind == fail.Kind.System && failed_font.value == nil && empty_destroyed == 1)
  empty_face = loaded.api.face_get_empty()
  real_blob_destroy = loaded.api.blob_destroy
  face_oom := loaded.api
@@ -102,34 +183,34 @@ fn main(){
  face_oom.face_destroy = count_empty_face_destroy
  face_oom.blob_destroy = count_blob_destroy
  face_oom.face_glyph_count = reject_empty_glyph_count
- failed_face := hb.font_owned(&face_oom,font_bytes,0)
- check(errors.failed(failed_face.failure) && failed_face.kind == errors.Kind.System && failed_face.value == nil && empty_face_destroyed == 1 && blob_destroyed == 1)
+ failed_face := hb_font_owned(&face_oom,font_bytes,0)
+ check(failed(failed_face.failure) && failed_face.kind == fail.Kind.System && failed_face.value == nil && empty_face_destroyed == 1 && blob_destroyed == 1)
  defer {loaded.api.font_destroy(created.value)}
  loaded.api.font_set_scale(created.value,2048,2048)
  features: []const hb.Feature
- latin := hb.shape(arena,&loaded.api,created.value,"office AV",0,features)
- arabic := hb.shape(arena,&loaded.api,created.value,"السلام",0,features)
- check(!errors.failed(latin.failure) && #len(latin.value) < 9 && !errors.failed(arabic.failure) && #len(arabic.value) <= 6)
+ latin := hb_shape(arena,&loaded.api,created.value,"office AV",0,features)
+ arabic := hb_shape(arena,&loaded.api,created.value,"السلام",0,features)
+ check(!failed(latin.failure) && #len(latin.value) < 9 && !failed(arabic.failure) && #len(arabic.value) <= 6)
  check(arabic.value[0].cluster > arabic.value[#len(arabic.value)-1].cluster)
  for glyph in latin.value {check(glyph.index != 0)}
  for glyph in arabic.value {check(glyph.index != 0)}
  save(arena,latin.value,"latin-actual.bin")
  save(arena,arabic.value,"arabic-actual.bin")
- run := hb.shape_run(arena,&loaded.api,created.value,"السَلام",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:hb.MonotoneCharacters,flags:hb.BeginningOfText|hb.EndOfText},features)
- check(!errors.failed(run.failure))
+ run := hb_shape_run(arena,&loaded.api,created.value,"السَلام",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:hb.MonotoneCharacters,flags:hb.BeginningOfText|hb.EndOfText},features)
+ check(!failed(run.failure))
  save(arena,run.value,"run-actual.bin")
- context_run:=hb.shape_run(arena,&loaded.api,created.value,"بجح",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:1,item_offset:2,has_item_length:true,item_length:2},features)
- check(!errors.failed(context_run.failure) && #len(context_run.value)>0 && context_run.value[0].cluster==2)
+ context_run:=hb_shape_run(arena,&loaded.api,created.value,"بجح",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:1,item_offset:2,has_item_length:true,item_length:2},features)
+ check(!failed(context_run.failure) && #len(context_run.value)>0 && context_run.value[0].cluster==2)
  save(arena,context_run.value,"context-actual.bin")
  unicode := loaded.api.unicode_get_default()
  check(unicode!=nil && loaded.api.unicode_script(unicode,65)==1281455214 && loaded.api.script_horizontal_direction(1098015074)==hb.RightToLeft)
  checkpoint := mem.arena_mark(arena)
- check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{cluster_level:3},features).kind==errors.Kind.InvalidInput)
- check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{flags:256},features).kind==errors.Kind.InvalidInput)
- check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{language:"a\0r"},features).kind==errors.Kind.InvalidInput)
- check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{item_offset:2},features).kind==errors.Kind.InvalidInput)
- check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{has_item_length:true,item_length:2},features).kind==errors.Kind.InvalidInput)
- check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{has_item_length:true,item_length: -2},features).kind==errors.Kind.InvalidInput)
+ check(hb_shape_run(arena,&loaded.api,created.value,"x",hb.Options{cluster_level:3},features).kind==fail.Kind.InvalidInput)
+ check(hb_shape_run(arena,&loaded.api,created.value,"x",hb.Options{flags:256},features).kind==fail.Kind.InvalidInput)
+ check(hb_shape_run(arena,&loaded.api,created.value,"x",hb.Options{language:"a\0r"},features).kind==fail.Kind.InvalidInput)
+ check(hb_shape_run(arena,&loaded.api,created.value,"x",hb.Options{item_offset:2},features).kind==fail.Kind.InvalidInput)
+ check(hb_shape_run(arena,&loaded.api,created.value,"x",hb.Options{has_item_length:true,item_length:2},features).kind==fail.Kind.InvalidInput)
+ check(hb_shape_run(arena,&loaded.api,created.value,"x",hb.Options{has_item_length:true,item_length: -2},features).kind==fail.Kind.InvalidInput)
  check(mem.arena_mark(arena)==checkpoint)
  // The FreeType callback consumes shaped glyph IDs with baseline origins.
  adapter := ft.Adapter{font:&font,line_height:40,glyph_ids:true}
@@ -142,14 +223,14 @@ fn main(){
  ui.end(&context)
  pixels := mem.push_array(u8,arena,#cast(usize,256*64*4))
  surface := software.Surface{pixels:pixels,width:256,height:64,stride:256*4}
- check(!errors.failed(software.render(&surface,ui.first(&context),ft.renderer(&adapter)).failure))
+ check(!failed(software_render(&surface,ui.first(&context),ft.renderer(&adapter)).failure))
  ink: usize = 0
  for pixel in pixels {if pixel != 0 {ink += 1}}
- check(ink > 100 && adapter.kind == errors.Kind.Ok)
+ check(ink > 100 && adapter.kind == fail.Kind.Ok)
  bad := ft.Font{}
- check(errors.failed(ft.open(&bad,ft_loaded.api,"broken",0,32).failure) && bad.face == nil && bad.library == nil)
- check(hb.font_owned(&loaded.api,"broken",0).kind == errors.Kind.InvalidInput)
- check(hb.shape(arena,&loaded.api,created.value,"x",1,features).kind == errors.Kind.InvalidInput)
+ check(failed(ft_open(&bad,ft_loaded.api,"broken",0,32).failure) && bad.face == nil && bad.library == nil)
+ check(hb_font_owned(&loaded.api,"broken",0).kind == fail.Kind.InvalidInput)
+ check(hb_shape(arena,&loaded.api,created.value,"x",1,features).kind == fail.Kind.InvalidInput)
  ft.close(&font)
  ft.close(&font)
 }

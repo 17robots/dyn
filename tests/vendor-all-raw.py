@@ -80,20 +80,22 @@ cases = {
   pad := (16-(#cast(usize,&tiny[0])&15))&15
   exhausted := mem.arena_from_buffer(tiny[pad..pad+mem.ArenaHeader+1])
   if image.resize(exhausted, input[..], 2, 2, output[..], 4, 4, 1, false) { #panic("arena allocator replaced") }''',
-    'vulkan': '''library := dynlib.open("libvulkan.so.1", dynlib.Now)
-  if io.failed(library.failure) { #panic("loader") }
-  symbol := dynlib.symbol(library.value, "vkEnumerateInstanceVersion")
-  if io.failed(symbol.failure) { #panic("procedure") }
+    'vulkan': '''status: fail.Status
+  library := dynlib.open(&status, "libvulkan.so.1", dynlib.Now)
+  if status.failed { #panic("loader") }
+  symbol := dynlib.symbol(&status, library, "vkEnumerateInstanceVersion")
+  if status.failed { #panic("procedure") }
   version: u32 = 0
-  if raw.vkEnumerateInstanceVersion(#cast(raw.Procedure_vkEnumerateInstanceVersion, symbol.value), &version) != raw.VK_SUCCESS || version == 0 { #panic("dispatch") }
-  _ = dynlib.close(&library.value)''',
-    'opengl': '''library := dynlib.open("libGL.so.1", dynlib.Now)
-  if io.failed(library.failure) { #panic("loader") }
-  symbol := dynlib.symbol(library.value, "glGetError")
-  if io.failed(symbol.failure) { #panic("procedure") }
+  if raw.vkEnumerateInstanceVersion(#cast(raw.Procedure_vkEnumerateInstanceVersion, symbol), &version) != raw.VK_SUCCESS || version == 0 { #panic("dispatch") }
+  dynlib.close(&status, &library)''',
+    'opengl': '''status: fail.Status
+  library := dynlib.open(&status, "libGL.so.1", dynlib.Now)
+  if status.failed { #panic("loader") }
+  symbol := dynlib.symbol(&status, library, "glGetError")
+  if status.failed { #panic("procedure") }
   raw.glClear(record_clear, #cast(u32, raw.GL_COLOR_BUFFER_BIT))
   if recorded_mask != #cast(u32, raw.GL_COLOR_BUFFER_BIT) { #panic("dispatch") }
-  _ = dynlib.close(&library.value)''',
+  dynlib.close(&status, &library)''',
 }
 cases['lua'] = r'''state := raw.luaL_newstate()
   if state == nil { #panic("state") }
@@ -233,7 +235,7 @@ try:
             module = manifest[name]['module']
             imports = 'use "vendor/' + module + '" raw\nuse "std/c"\n'
             if name in ('vulkan', 'opengl'):
-                imports += 'use "std/dynlib"\nuse "std/io"\n#link("c")\n'
+                imports += 'use "std/dynlib"\nuse "std/fail"\n#link("c")\n'
             if name == 'sdl3':
                 imports += 'fn event_filter(data: rawptr, event: *raw.SDL_Event) bool {\n_ = event\nreturn data != nil\n}\n'
             if name == 'opengl':

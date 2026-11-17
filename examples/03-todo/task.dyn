@@ -2,6 +2,7 @@
 // belongs to the same module, so main.dyn and store.dyn see these names
 // without importing anything.
 
+use "std/fail"
 use "std/parse"
 
 // The first variant is the zero value, so a zero Task is an open task.
@@ -23,13 +24,13 @@ fn marker(state: State) []const u8 {
   }
 }
 
-// Parses one saved line. The result is {value, failure}: on failure the
-// value is a zero Task and failure says what went wrong and where.
-fn parse_task(line: []const u8) parse.Result(Task) {
+// Parses one saved line. A bad line fails like anything else that can fail:
+// parse.malformed records InvalidInput, a message and the byte offset where
+// the line went wrong, and the task is zero.
+fn parse_task(status: *fail.Status, line: []const u8) Task {
   if #len(line) < 4 {
-    return parse.Result(Task){
-      failure: parse.Failure{ kind: parse.Kind.Truncated, offset: #len(line), message: "a task needs a marker and text" },
-    }
+    parse.malformed(status, "read task", "a task needs a marker and text", #len(line))
+    return Task{}
   }
   task := Task{ text: line[4..] }
   case line[..4] {
@@ -38,10 +39,9 @@ fn parse_task(line: []const u8) parse.Result(Task) {
       task.state = State.Done
     }
     _ => {
-      return parse.Result(Task){
-        failure: parse.Failure{ kind: parse.Kind.Syntax, message: "a task starts with [ ] or [x]" },
-      }
+      parse.malformed(status, "read task", "a task starts with [ ] or [x]", 0)
+      return Task{}
     }
   }
-  return parse.Result(Task){ value: task }
+  return task
 }

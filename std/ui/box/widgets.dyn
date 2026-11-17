@@ -1,4 +1,4 @@
-use "std/parse" parse
+use "std/fail"
 // Widgets are builder code over boxes. Each returns its Signal; state such as
 // a checkbox value or text buffer belongs to the caller.
 
@@ -244,11 +244,12 @@ fn word_boundary(state: *State, text: []const u8, at: usize, forward: bool) usiz
   defer {
     mem.arena_rewind(state.frame, mark)
   }
-  boundaries := unicode_text.word_breaks(state.frame, text)
-  if parse.failed(boundaries.failure) { return at }
+  status: fail.Status
+  boundaries := unicode_text.word_breaks(state.frame, &status, text)
+  if status.failed { return at }
   if forward {
     target := #len(text)
-    for boundary in boundaries.value {
+    for boundary in boundaries {
       if boundary > at {
         target = boundary
         break
@@ -264,7 +265,7 @@ fn word_boundary(state: *State, text: []const u8, at: usize, forward: bool) usiz
     target -= 1
   }
   previous: usize = 0
-  for boundary in boundaries.value {
+  for boundary in boundaries {
     if boundary >= target { break }
     previous = boundary
   }

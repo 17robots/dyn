@@ -1,4 +1,4 @@
-use "std/parse" parse
+use "std/fail"
 use "std/mem" memory
 
 // C ABI names. Target files select long width and plain-char signedness. No wrappers,
@@ -24,14 +24,6 @@ pub type mutable_string = *u8
 pub type pointer = rawptr
 
 
-pub struct StringResult {
-  required: usize,
-  value: string,
-  failure: parse.Failure,
-}
-
-pub type BytesResult = parse.Result([]const u8)
-
 // Bounded scan: never reads beyond `maximum`; callers retain source ownership.
 pub fn string_length(value: string, maximum: usize) usize {
   if value == nil { return 0 }
@@ -43,11 +35,21 @@ pub fn string_length(value: string, maximum: usize) usize {
   return count
 }
 
-pub fn bytes_from_string(value: string, maximum: usize) BytesResult {
-  if value == nil { return BytesResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
+// The bytes of a NUL-terminated string, borrowed. InvalidInput for nil;
+// Capacity when no NUL comes within maximum bytes.
+pub fn bytes_from_string(status: *fail.Status, value: string, maximum: usize) []const u8 {
+  empty: []const u8 = ""
+  if status.failed { return empty }
+  if value == nil {
+    fail.invalid(status, "read C string", "", "nil string")
+    return empty
+  }
   count := string_length(value, maximum)
-  if count == maximum { return BytesResult{ failure: parse.Failure{ kind: parse.Kind.Truncated } } }
-  return BytesResult{ value: #slice(value, count) }
+  if count == maximum {
+    fail.set(status, fail.make(fail.Kind.Capacity, "read C string", "", "no NUL within the limit"))
+    return empty
+  }
+  return #slice(value, count)
 }
 
 pub fn errno_from_result(value: isize) isize {
@@ -59,34 +61,43 @@ pub fn succeeded(value: isize) bool {
 }
 
 // Raw C-ABI scratch conversion. Borrows caller storage; writes source plus NUL.
-// Invalid input or insufficient capacity leaves storage unchanged. This bounded
-// adapter allocates nothing; use string_from_bytes for arena-owned strings.
-pub fn string_into(destination: []u8, source: []const u8) StringResult {
+// An embedded NUL is InvalidInput and too little storage Capacity; either
+// leaves storage unchanged and returns nil, as does a source too long to
+// terminate (Overflow). Allocates nothing; use
+// string_from_bytes for arena-owned strings.
+pub fn string_into(status: *fail.Status, destination: []u8, source: []const u8) string {
+  if status.failed { return nil }
   if #len(source) == #cast(usize, -1) {
-    return StringResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
+    fail.set(status, fail.make(fail.Kind.Overflow, "make C string", "", "the text is too long"))
+    return nil
   }
   for byte in source {
-    if byte == 0 { return StringResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
+    if byte == 0 {
+      fail.invalid(status, "make C string", "", "the text holds NUL")
+      return nil
+    }
   }
-  required := #len(source) + 1
-  if #len(destination) < required {
-    return StringResult{ failure: parse.Failure{ kind: parse.Kind.Capacity }, required: required }
+  if #len(destination) <= #len(source) {
+    fail.set(status, fail.make(fail.Kind.Capacity, "make C string", "", "the text does not fit the storage"))
+    return nil
   }
   _ = memory.move(destination, source)
   destination[#len(source)] = 0
-  return StringResult{ value: &destination[0], required: required }
+  return &destination[0]
 }
 
-// source with a NUL appended, in arena. Embedded NUL is invalid input; failure
-// pushes nothing.
-pub fn string_from_bytes(arena: *memory.Arena, source: []const u8) StringResult {
+// source with a NUL appended, in arena. An embedded NUL is InvalidInput;
+// failure pushes nothing and returns nil.
+pub fn string_from_bytes(arena: *memory.Arena, status: *fail.Status, source: []const u8) string {
+  if status.failed { return nil }
   if #len(source) == #cast(usize, -1) {
-    return StringResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
+    fail.set(status, fail.make(fail.Kind.Overflow, "make C string", "", "the text is too long"))
+    return nil
   }
   mark := memory.arena_mark(arena)
   allocation := memory.arena_push_uninit(arena, #len(source) + 1, 1)
-  result := string_into(#slice(allocation, #len(source) + 1), source)
-  if parse.failed(result.failure) {
+  result := string_into(status, #slice(allocation, #len(source) + 1), source)
+  if status.failed {
     memory.arena_rewind(arena, mark)
   }
   return result

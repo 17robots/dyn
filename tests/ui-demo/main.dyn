@@ -1,6 +1,5 @@
 // Headless UI example. Writes ui-demo.png in the working directory.
 // The tiny bitmap alphabet is example-owned; no platform font service is used.
-use "std/parse" parse
 use "std/io" io
 use "std/ui" ui
 use "std/ui/software" software
@@ -55,11 +54,9 @@ fn glyph(data: rawptr, codepoint: u32) software.Glyph {
   index: usize = 36
   if codepoint >= 65 && codepoint <= 90 {
     index = #cast(usize, (codepoint - 65))
-  }
-  else if codepoint >= 48 && codepoint <= 57 {
+  } else if codepoint >= 48 && codepoint <= 57 {
     index = 26 + #cast(usize, (codepoint - 48))
-  }
-  else if codepoint == 32 {
+  } else if codepoint == 32 {
     index = 37
   }
   for y in 0..14 {
@@ -107,12 +104,14 @@ fn main() {
   ui.end(&context)
   pixels := mem.push_array(u8, output, #cast(usize, 480 * 240 * 4))
   surface := software.Surface{ pixels: pixels, width: 480, height: 240, stride: 480 * 4 }
-  rendered := software.render(&surface, ui.first(&context), software.Font{ glyph: glyph, line_height: 20 })
-  if io.failed(rendered.failure) || count != 3 {
+  rendering: fail.Status
+  software.render(&rendering, &surface, ui.first(&context), software.Font{ glyph: glyph, line_height: 20 })
+  if rendering.failed || count != 3 {
     #panic("UI demo render")
   }
-  encoded := png.encode(output, pixels, 480, 240, 4)
-  if parse.failed(encoded.failure) || !fs_write_file("ui-demo.png", encoded.value) {
+  encoding := fail.Status{ on_failure: fail.panic_on_failure }
+  encoded := png.encode(output, &encoding, pixels, 480, 240, 4)
+  if !fs_write_file("ui-demo.png", encoded) {
     #panic("UI demo output")
   }
 }

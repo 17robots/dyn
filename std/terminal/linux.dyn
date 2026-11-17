@@ -1,20 +1,29 @@
 use "std/io" io
+use "std/fail"
 use "std/os/linux/sys"
 #target(kernel: linux)
 
-// The terminal settings of descriptor. ok is false when it is not a terminal.
-pub fn read_state(descriptor: isize) Read {
-  result: Read
-  code := #syscall(sys.Ioctl, descriptor, 21505, &result.value.bytes[0])
-  if code < 0 { return Read{ failure: io.linux_failure(code) } }
+// The terminal settings of descriptor; fails when it is not a terminal.
+pub fn read_state(status: *fail.Status, descriptor: isize) State {
+  result: State
+  if status.failed { return result }
+  code := #syscall(sys.Ioctl, descriptor, 21505, &result.bytes[0])
+  if code < 0 {
+    fail.set(status, io.from_linux("read terminal", "", code))
+  }
   return result
 }
 
-pub fn restore(descriptor: isize, saved: *const State) Result {
-  if saved == nil { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
+pub fn restore(status: *fail.Status, descriptor: isize, saved: *const State) {
+  if status.failed { return }
+  if saved == nil {
+    fail.invalid(status, "restore terminal", "", "no saved settings")
+    return
+  }
   code := #syscall(sys.Ioctl, descriptor, 21506, &saved.bytes[0])
-  if code < 0 { return Result{ failure: io.linux_failure(code) } }
-  return Result{}
+  if code < 0 {
+    fail.set(status, io.from_linux("restore terminal", "", code))
+  }
 }
 
 // Clears IGNBRK, BRKINT, ICRNL, IXON, OPOST-adjacent input bits, ISIG,
@@ -28,10 +37,14 @@ fn make_raw(_descriptor: isize, state: *State) {
   state.bytes[23] = 1
 }
 
-pub fn size(descriptor: isize) Size {
+pub fn size(status: *fail.Status, descriptor: isize) Size {
+  if status.failed { return Size{} }
   bytes: [8]u8
   code := #syscall(sys.Ioctl, descriptor, 21523, &bytes[0])
-  if code < 0 { return Size{ failure: io.linux_failure(code) } }
+  if code < 0 {
+    fail.set(status, io.from_linux("terminal size", "", code))
+    return Size{}
+  }
   rows := #cast(usize, bytes[0]) + #cast(usize, bytes[1]) * 256
   columns := #cast(usize, bytes[2]) + #cast(usize, bytes[3]) * 256
   return Size{ columns: columns, rows: rows }

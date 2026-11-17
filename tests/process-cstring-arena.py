@@ -10,7 +10,7 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 macos = (ROOT / 'std/process/macos.dyn').read_text()
 process = (ROOT / 'std/process/process.dyn').read_text()
 # Compile the production conversion/setup bodies, replacing only OS entry points.
-adapter = ('use "std/mem" mem\nuse "std/c" c\nuse "std/parse" parse\nuse "std/bytes" bytes\n'
+adapter = ('use "std/mem" mem\nuse "std/c" c\nuse "std/bytes" bytes\n'
            'use "std/io" io\nuse "std/fail"\n'
            + process[process.index('pub struct Redirect'):process.index('// Starts path with arguments')]
            + macos[macos.index('struct CString'):macos.index('fn wait_native')])
@@ -41,8 +41,9 @@ fn main() {
     #panic("empty CString allocation")
   }
   text := c_string(arena, "café-😀")
-  parsed := c.bytes_from_string(text, 16)
-  if parse.failed(parsed.failure) || !bytes.equal(parsed.value, "café-😀") { #panic("CString bytes") }
+  reading: fail.Status
+  parsed := c.bytes_from_string(&reading, text, 16)
+  if reading.failed || !bytes.equal(parsed, "café-😀") { #panic("CString bytes") }
   before_invalid := mem.arena_mark(arena)
   invalid: [3]u8 = ['a', 0, 'b']
   if c_string(arena, invalid[..]) != nil || mem.arena_mark(arena) != before_invalid {
@@ -52,8 +53,8 @@ fn main() {
   vector := c_vector(arena, arguments[..])
   if vector == nil || #slice(vector, 4)[3].value != nil { #panic("vector sentinel") }
   for at in 0..3 {
-    item := c.bytes_from_string(#slice(vector, 4)[at].value, 32)
-    if parse.failed(item.failure) || !bytes.equal(item.value, arguments[at]) { #panic("vector bytes") }
+    item := c.bytes_from_string(&reading, #slice(vector, 4)[at].value, 32)
+    if reading.failed || !bytes.equal(item, arguments[at]) { #panic("vector bytes") }
   }
   before_spawn := mem.arena_mark(arena)
   environment: [1][]const u8 = ["KEY=value"]
@@ -65,7 +66,7 @@ fn main() {
   rejected: fail.Status
   _ = spawn_native(arena, &rejected, invalid[..], arguments[..], Options{})
   if !rejected.failed || mem.arena_mark(arena) != before_spawn { #panic("failed setup rewind") }
-  if !bytes.equal(c.bytes_from_string(text, 16).value, "café-😀") { #panic("live allocation") }
+  if !bytes.equal(c.bytes_from_string(&reading, text, 16), "café-😀") { #panic("live allocation") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-process-cstring-') as temporary:

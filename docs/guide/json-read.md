@@ -7,26 +7,27 @@ for the existing mutable tree, constructors, or writer.
 
 ```dyn
 use "std/encoding/json/read" json
+use "std/fail"
 use "std/mem"
-use "std/parse" parse
 
 fn main() {
   arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
-  parsed := json.parse(arena, "{\"count\":12}")
-  if parse.failed(parsed.failure) {
+  status: fail.Status
+  root := json.parse(arena, &status, "{\"count\":12}")
+  if status.failed {
     return
   }
-  count := json.as_u64(json.get(parsed.root, "count"))
+  count := json.as_u64(json.get(root, "count"))
   _ = count
 }
 ```
 
-`parse` returns `{root, offset, failure}`, where `failure` is a `parse.Failure`.
-A zero `failure.kind` is `parse.Kind.Ok`. A failed parse returns
-`&json.nil_value` and rewinds its allocations. Arena exhaustion panics.
-`offset` is the parser cursor; errors within strings may identify the beginning
-of the string's contents rather than the exact offending escape byte.
+`parse` returns the root. Malformed input fails with `InvalidInput` (or
+`Overflow`, below), with the parser's offset in the failure; a failed parse
+returns `&json.nil_value` and rewinds its allocations. Arena exhaustion panics.
+Errors within strings may name the beginning of the string's contents rather
+than the exact offending escape byte.
 
 Use `kind`, `length`, `get`, `at`, `as_text`, `as_bool`, `as_u64`, `as_i64`, and
 `as_f64` to inspect a value. Missing members and out-of-range array positions
@@ -55,7 +56,7 @@ through `next`. Copying an iterator copies its position and borrowed document.
 Positive integers through `u64::MAX` and negative integers through `i64::MIN`
 are retained exactly. Other integers and decimal/exponent forms become binary64,
 with its rounding and signed-zero behavior. Nonfinite real overflow is rejected
-with `parse.Kind.Overflow`. Original number spelling
+with `Overflow`. Original number spelling
 and arbitrary-precision integers are not retained. These rules differ from the
 mutable parser, which preserves number text. Strict UTF-8 and paired Unicode
 surrogates are required; maximum container nesting is 256.

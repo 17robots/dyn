@@ -11,8 +11,7 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
-SOURCE = r'''use "std/parse" parse
-use "std/compress/deflate" deflate
+SOURCE = r'''use "std/compress/deflate" deflate
 use "std/compress/gzip" gzip
 use "std/io" io
 use "std/fail"
@@ -20,19 +19,14 @@ use "std/fs" fs
 use "std/mem" memory
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 struct Source { bytes: []const u8, at: usize, chunk: usize }
-fn source_read_transfer(data: rawptr, destination: []u8) io.Transfer {
+fn source_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
   source := #cast(*Source, data)
   amount := #len(source.bytes) - source.at
   if amount > #len(destination) { amount = #len(destination) }
   if amount > source.chunk { amount = source.chunk }
   for i in 0..amount { destination[i] = source.bytes[source.at + i] }
   source.at += amount
-  status := io.Status.Complete
-  if source.at == #len(source.bytes) { status = io.Status.End }
-  return io.Transfer{ transferred: amount, status: status }
-}
-fn source_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
-  return io.from_transfer(status, source_read_transfer(data, destination), "read", "")
+  return amount
 }
 fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool, chunk: usize, source_chunk: usize, history_size: usize) {
   source := Source{ bytes: encoded, chunk: source_chunk }
@@ -43,23 +37,23 @@ fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool
   state := deflate.decoder(reader, compressed[..], history[..history_size])
   if wrapped { state = gzip.decoder(reader, compressed[..], history[..history_size]) }
   decoder := deflate.decoder_reader(&state)
-  empty := io.read_transfer(decoder, output[..0])
-  require(empty.transferred == 0 && source.at == 0, "zero destination")
+  empty: fail.Status
+  require(io.read(&empty, decoder, output[..0]) == 0 && source.at == 0, "zero destination")
   total: usize = 0
   for {
-    result := io.read_transfer(decoder, output[..chunk])
-    if io.failed(result.failure) {
-      require(corrupt && result.failure.native != 0, "unexpected decode error")
+    status: fail.Status
+    count := io.read(&status, decoder, output[..chunk])
+    if status.failed {
+      require(corrupt && status.failure.native != 0, "unexpected decode error")
       return
     }
-    require(total + result.transferred <= #len(expected), "extra output")
-    for i in 0..result.transferred { require(output[i] == expected[total + i], "output mismatch") }
-    total += result.transferred
-    if result.status == io.Status.End {
+    require(total + count <= #len(expected), "extra output")
+    for i in 0..count { require(output[i] == expected[total + i], "output mismatch") }
+    total += count
+    if count == 0 {
       require(!corrupt && total == #len(expected), "unexpected end")
       return
     }
-    require(result.transferred != 0, "decoder made no progress")
   }
 }
 fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, corrupt: bool) {
@@ -78,8 +72,9 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
     if chunk != 1 { check(encoded, expected, wrapped, corrupt, chunk, 1024, 65536) }
   }
   if !wrapped && !corrupt {
-    inflated := deflate.inflate(owned, encoded)
-    require(!parse.failed(inflated.failure) && #len(inflated.value) == #len(expected), "one-shot inflate")
+    inflating: fail.Status
+    inflated := deflate.inflate(owned, &inflating, encoded)
+    require(!inflating.failed && #len(inflated.value) == #len(expected), "one-shot inflate")
     for i in 0..#len(inflated.value) { require(inflated.value[i] == expected[i], "one-shot output") }
     destination := #slice(memory.arena_push(owned, #len(expected), 1), #len(expected))
     result: deflate.Result

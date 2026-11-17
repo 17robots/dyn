@@ -7,6 +7,7 @@
 // literal the peer does not index, Huffman-coded when that is shorter. The
 // encoder never uses a dynamic table, so it needs no state.
 use "std/parse" parse
+use "std/fail"
 
 // The table size both sides start with (SETTINGS_HEADER_TABLE_SIZE).
 pub const DefaultTableSize: usize = 4096
@@ -47,7 +48,6 @@ pub struct Field {
   update: bool,
   // A never-indexed literal: intermediaries must not compress it.
   sensitive: bool,
-  failure: parse.Failure,
 }
 
 // Storage bounds the table: limit is #len(storage) bytes, and at most
@@ -78,8 +78,15 @@ pub fn decode_begin(decoder: *Decoder) {
   decoder.fields = false
 }
 
-fn failed(kind: parse.Kind, offset: usize) Field {
-  return Field{ failure: parse.Failure{ kind: kind, offset: offset } }
+// Malformed or truncated input fails with InvalidInput, a field larger than
+// scratch with Capacity, at the offending offset in the block.
+fn failed(status: *fail.Status, kind: fail.Kind, offset: usize) Field {
+  message: []const u8 = "malformed HPACK field"
+  if kind == fail.Kind.Capacity {
+    message = "the field does not fit scratch"
+  }
+  parse.failed_at(status, kind, "decode HPACK", message, offset)
+  return Field{}
 }
 
 struct Integer { value: usize, consumed: usize, ok: bool }
@@ -280,16 +287,17 @@ fn copy_into(destination: []u8, source: []const u8) bool {
 // copied or decoded into scratch, so a table change cannot move them. Fails
 // with Syntax for malformed input (a COMPRESSION_ERROR) and Capacity when
 // scratch is too small.
-pub fn decode_field(decoder: *Decoder, block: []const u8, scratch: []u8) Field {
-  if #len(block) == 0 { return failed(parse.Kind.Truncated, 0) }
+pub fn decode_field(status: *fail.Status, decoder: *Decoder, block: []const u8, scratch: []u8) Field {
+  if status.failed { return Field{} }
+  if #len(block) == 0 { return failed(status, fail.Kind.InvalidInput, 0) }
   first := block[0]
   table := &decoder.table
   if (first & 0x80) != 0 {
     index := read_integer(block, 7)
     named := lookup(table, index.value)
-    if !index.ok || !named.ok { return failed(parse.Kind.Syntax, 0) }
+    if !index.ok || !named.ok { return failed(status, fail.Kind.InvalidInput, 0) }
     if !copy_into(scratch, named.name) || !copy_into(scratch[#len(named.name)..], named.value) {
-      return failed(parse.Kind.Capacity, 0)
+      return failed(status, fail.Kind.Capacity, 0)
     }
     decoder.fields = true
     name_length := #len(named.name)
@@ -298,7 +306,7 @@ pub fn decode_field(decoder: *Decoder, block: []const u8, scratch: []u8) Field {
   if (first & 0xe0) == 0x20 {
     size := read_integer(block, 5)
     if !size.ok || size.value > table.limit || decoder.fields {
-      return failed(parse.Kind.Syntax, 0)
+      return failed(status, fail.Kind.InvalidInput, 0)
     }
     table.max_size = size.value
     shrink(table, size.value)
@@ -310,22 +318,22 @@ pub fn decode_field(decoder: *Decoder, block: []const u8, scratch: []u8) Field {
     prefix = 6
   }
   index := read_integer(block, prefix)
-  if !index.ok { return failed(parse.Kind.Syntax, 0) }
+  if !index.ok { return failed(status, fail.Kind.InvalidInput, 0) }
   at := index.consumed
   name_length: usize = 0
   if index.value == 0 {
     name := read_string(block[at..], scratch)
-    if !name.ok { return failed(parse.Kind.Syntax, at) }
+    if !name.ok { return failed(status, fail.Kind.InvalidInput, at) }
     at += name.consumed
     name_length = name.length
   } else {
     named := lookup(table, index.value)
-    if !named.ok { return failed(parse.Kind.Syntax, 0) }
-    if !copy_into(scratch, named.name) { return failed(parse.Kind.Capacity, 0) }
+    if !named.ok { return failed(status, fail.Kind.InvalidInput, 0) }
+    if !copy_into(scratch, named.name) { return failed(status, fail.Kind.Capacity, 0) }
     name_length = #len(named.name)
   }
   value := read_string(block[at..], scratch[name_length..])
-  if !value.ok { return failed(parse.Kind.Syntax, at) }
+  if !value.ok { return failed(status, fail.Kind.InvalidInput, at) }
   at += value.consumed
   name := scratch[..name_length]
   text := scratch[name_length..name_length + value.length]

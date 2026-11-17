@@ -12,7 +12,6 @@ use "std/fail"
 // open. path borrows the text the file was opened with, for messages. ended
 // is set when a read finds the end of the file.
 pub struct File { descriptor: isize, active: bool, ended: bool, path: []const u8 }
-type FileResult = io.Result(File)
 
 // Size, inode, device and the POSIX mode (type and permission bits).
 pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16 }
@@ -53,16 +52,12 @@ fn check(status: *fail.Status, operation: []const u8, path: []const u8, code: is
 
 fn opened(status: *fail.Status, path: []const u8, mode: u8, operation: []const u8) File {
   if status.failed { return File{ path: path } }
-  result := native_open(path, mode)
-  if io.failed(result.failure) {
-    if result.failure.native != 0 {
-      fail_native(status, operation, path, result.failure.native)
-    } else {
-      fail_kind(status, operation, path, result.failure.kind, "")
-    }
+  handle := native_open(path, mode)
+  if handle < 0 {
+    fail_native(status, operation, path, handle)
     return File{ path: path }
   }
-  file := result.value
+  file := owned_file(handle)
   file.path = path
   return file
 }

@@ -162,9 +162,10 @@ fn main() {
   arguments_status: fail.Status
   arguments := process.arguments(arena, &arguments_status)
   if !arguments_status.failed && #len(arguments) > 1 {
-    parsed := parse.u64_decimal(arguments[1])
-    if !parse.failed(parsed.failure) && parsed.value > 0 {
-      scale = parsed.value
+    parsing: fail.Status
+    parsed := parse.u64_decimal(&parsing, arguments[1])
+    if !parsing.failed && parsed > 0 {
+      scale = parsed
     }
   }
   cases := #cast(usize, 20000 * scale)

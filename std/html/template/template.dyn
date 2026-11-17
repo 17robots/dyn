@@ -1,30 +1,16 @@
-use "std/parse" parse
+use "std/fail"
 use "std/io" io
 use "std/mem" memory
 use "std/text/template" core
 
 pub type Template = core.Template
 pub type Field = core.Field
-pub type ParseResult = core.ParseResult
-pub type RenderResult = core.RenderResult
 
-pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
-  return core.parse(arena, source)
+pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) Template {
+  return core.parse(arena, status, source)
 }
 
-fn write(destination: io.Writer, source: []const u8) RenderResult {
-  result := io.write_transfer(destination, source)
-  if io.failed(result.failure) {
-    kind:=result.failure.kind
-    if kind==io.Kind.Ok {
-      kind=io.Kind.System
-    }
-    return RenderResult{ failure: parse.io_failure(kind, result.failure.native) }
-  }
-  return RenderResult{}
-}
-
-fn write_escaped(destination: io.Writer, source: []const u8) RenderResult {
+fn write_escaped(status: *fail.Status, destination: io.Writer, source: []const u8) {
   start: usize = 0
   for i in 0..#len(source) {
     replacement: []const u8 = ""
@@ -41,19 +27,19 @@ fn write_escaped(destination: io.Writer, source: []const u8) RenderResult {
     }
     if #len(replacement) > 0 {
       if i > start {
-        literal_result := write(destination, source[start..i])
-        if literal_result.failure.kind != parse.StreamKind.Ok { return literal_result }
+        io.write(status, destination, source[start..i])
       }
-      replacement_result := write(destination, replacement)
-      if replacement_result.failure.kind != parse.StreamKind.Ok { return replacement_result }
+      io.write(status, destination, replacement)
+      if status.failed { return }
       start = i + 1
     }
   }
-  if start < #len(source) { return write(destination, source[start..]) }
-  return RenderResult{}
+  if start < #len(source) {
+    io.write(status, destination, source[start..])
+  }
 }
 
 // Escapes text and quoted attribute values. Not a JS/CSS/URL-context sanitizer.
-pub fn render(destination: io.Writer, template: *const Template, fields: []const Field) RenderResult {
-  return core.render_with(destination, template, fields, write_escaped)
+pub fn render(status: *fail.Status, destination: io.Writer, template: *const Template, fields: []const Field) {
+  core.render_with(status, destination, template, fields, write_escaped)
 }

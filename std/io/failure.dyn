@@ -37,26 +37,32 @@ pub fn wasi_failure(code: isize) Failure {
   return Failure{ kind: wasi(code), native: code }
 }
 
+// A failure always fails: a native code of zero (as GetLastError or errno can
+// report) is a System failure.
+fn failed_kind(kind: Kind) Kind {
+  if kind == Kind.Ok { return Kind.System }
+  return kind
+}
 // A fail.Failure for a native error code: its portable kind, the code in
 // native, and the system's text for it as the message. operation and path
 // say what was being done, as in fail.make.
 pub fn from_linux(operation: []const u8, path: []const u8, code: isize) fail.Failure {
-  failure := fail.make(linux(code), operation, path, linux_text(code))
+  failure := fail.make(failed_kind(linux(code)), operation, path, linux_text(code))
   failure.native = code
   return failure
 }
 pub fn from_darwin(operation: []const u8, path: []const u8, code: isize) fail.Failure {
-  failure := fail.make(darwin(code), operation, path, darwin_text(code))
+  failure := fail.make(failed_kind(darwin(code)), operation, path, darwin_text(code))
   failure.native = code
   return failure
 }
 pub fn from_windows(operation: []const u8, path: []const u8, code: isize) fail.Failure {
-  failure := fail.make(windows(code), operation, path, windows_text(code))
+  failure := fail.make(failed_kind(windows(code)), operation, path, windows_text(code))
   failure.native = code
   return failure
 }
 pub fn from_wasi(operation: []const u8, path: []const u8, code: isize) fail.Failure {
-  failure := fail.make(wasi(code), operation, path, wasi_text(code))
+  failure := fail.make(failed_kind(wasi(code)), operation, path, wasi_text(code))
   failure.native = code
   return failure
 }

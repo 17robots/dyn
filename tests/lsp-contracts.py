@@ -746,9 +746,9 @@ class Contracts(unittest.TestCase):
 
 
     def test_import_edit_uses_identifier_start_and_one_wire_conversion(self):
-        text = 'fn main() { /* 😀 */ _ = OpenResult{} }\n'
+        text = 'fn main() { /* 😀 */ _ = Validation{} }\n'
         path = self.file('main.dyn', text)
-        before = text[:text.index('OpenResult')]
+        before = text[:text.index('Validation')]
         for encoding in ['utf-16', 'utf-8']:
             start = len(before.encode('utf-16-le')) // 2 if encoding == 'utf-16' else len(before.encode())
             for inside in [0, 3]:
@@ -759,10 +759,10 @@ class Contracts(unittest.TestCase):
                     {'capabilities': {'general': {'positionEncodings': [encoding]}}})
                 self.assertEqual(stderr, '')
                 actions = next(r['result'] for r in responses if r.get('id') == 2)
-                action = next(a for a in actions if a['title'] == 'Import OpenResult from std/dynlib')
-                edit = next(e for e in action['edit']['changes'][path.as_uri()] if e['newText'] == 'dynlib.OpenResult')
+                action = next(a for a in actions if a['title'] == 'Import Validation from std/crypto/x509')
+                edit = next(e for e in action['edit']['changes'][path.as_uri()] if e['newText'] == 'x509.Validation')
                 self.assertEqual(edit['range'], {'start': {'line': 0, 'character': start},
-                                                'end': {'line': 0, 'character': start + len('OpenResult')}})
+                                                'end': {'line': 0, 'character': start + len('Validation')}})
 
     def test_identical_edits_reuse_analysis_and_real_edits_reuse_disk_syntax(self):
         from unittest.mock import patch

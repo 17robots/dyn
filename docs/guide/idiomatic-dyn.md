@@ -230,38 +230,39 @@ came from is gone; read the parts with `fail.operation_text`, `fail.path_text`
 and `fail.message_text`. `dyn vet` warns about a status that is passed to calls
 but never read, and about an empty result used as the failure test.
 
-Modules move to this model one at a time; `std/fs` is first. A module that has
-not moved yet returns `{value, failure}` (`io.Result(T)`, `parse.Result(T)`):
-check it with `io.failed(result.failure)` or `parse.failed(result.failure)`.
+Parsers and decoders work the same way: malformed input fails with
+`InvalidInput` and the byte offset where it went wrong, which your own parsers
+record with `parse.malformed(status, "read config", "expected '='", offset)`.
 
 - **Absence is not failure:** a lookup returns `nil` (`map.get`) or an empty
   stub for tree nodes, and every `find*` returns `#len(text)` on a miss.
-- **A step with several normal outcomes** returns a `Status` enum such as
-  `Complete`/`End` or `Event`/`Empty`. A status never has an `Error`
-  variant; the failure is its own field next to it.
+- **A step with several normal outcomes** says so in its value: `found`
+  false at the end of the input, or an enum such as `Want.Read`/`Want.Write`.
+  Failure is never one of those outcomes; it goes to the status.
 - **Yes-or-no questions** return `bool`, and only predicates do:
   `is_*`, `has_*`, `valid`.
 - **A broken invariant** is `#panic`. There is no recovery.
 
 ```dyn
-enum ParseStatus { Empty, Invalid, Complete }
-struct ParseResult { value: u64, offset: usize, status: ParseStatus }
+struct Next { value: Token, offset: usize, found: bool }
 ```
 
-A parser, writer or builder keeps its first error in its own state, as Go's
-`bufio.Scanner.Err()` does. The caller loops, then checks once:
+A scanner takes the status like any other call, so a loop over it reads
+straight through and checks once at the end; after a failure, `next` reports
+`found` false:
 
 ```dyn
+status: fail.Status
 scan := ini.scanner(text)
 for {
-  item := ini.next(&scan)
+  item := ini.next(&status, &scan)
   if !item.found {
     break
   }
   apply(item.value)
 }
-if parse.failed(scan.failure) {
-  report(scan.failure)
+if status.failed {
+  report(status.failure)
 }
 ```
 

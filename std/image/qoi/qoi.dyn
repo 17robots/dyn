@@ -1,39 +1,57 @@
 use "std/parse" parse
+use "std/fail"
 use "std/mem" mem
 pub struct Info { width: usize, height: usize, channels: u8, srgb: bool, valid: bool }
-// Result.ok / InfoResult.ok are authoritative. Info.ok is legacy parser state:
-// true inside successful values, false in the zero failure value.
-// On failure value is zero. error is zero: codec details are not native errors.
-// offset is a source byte offset when known, otherwise zero (also for encoding).
+// Info.valid is true inside successful values. Malformed data fails with
+// InvalidInput (at its offset when known), an impossible size with Overflow,
+// data past the codec's working limits with Capacity.
 pub struct Image { info: Info, pixels: []u8 }
-pub struct Result { value: Image, offset: usize, failure: parse.Failure }
-pub struct InfoResult { value: Info, offset: usize, failure: parse.Failure }
 struct DecodeWork { info: Info, pixels: []u8, error: isize, ok: bool, offset: usize }
-pub struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }
 struct EncodeWork { data: []u8, error: isize, ok: bool }
 
-fn codec_kind(detail: isize) parse.Kind {
-  if detail == -75 { return parse.Kind.Overflow }
-  if detail == -28 { return parse.Kind.Capacity }
-  return parse.Kind.Syntax
-}
-
-pub fn inspect(source: []const u8) InfoResult {
-  info := inspect_info(source)
-  if !info.valid { return InfoResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
-  return InfoResult{ value: info }
-}
-
-fn decode_result(work: DecodeWork) Result {
-  if !work.ok {
-    return Result{ offset: work.offset, failure: parse.Failure{ kind: codec_kind(work.error), offset: work.offset } }
+fn codec_failure(status: *fail.Status, operation: []const u8, detail: isize, offset: usize, located: bool) {
+  kind := fail.Kind.InvalidInput
+  message: []const u8 = "malformed QOI"
+  if detail == -75 {
+    kind = fail.Kind.Overflow
+    message = "the image is too large"
+  } else if detail == -28 {
+    kind = fail.Kind.Capacity
+    message = "the image exceeds the codec's limits"
+  } else if !located {
+    message = "invalid pixels or size"
   }
-  return Result{ value: Image{ info: work.info, pixels: work.pixels } }
+  failure := fail.make(kind, operation, "", message)
+  failure.offset = offset
+  failure.has_offset = located
+  fail.set(status, failure)
 }
 
-fn encode_result(work: EncodeWork) EncodeResult {
-  if !work.ok { return EncodeResult{ failure: parse.Failure{ kind: codec_kind(work.error) } } }
-  return EncodeResult{ value: work.data }
+// The header's description of the image, without decoding it.
+pub fn inspect(status: *fail.Status, source: []const u8) Info {
+  if status.failed { return Info{} }
+  info := inspect_info(source)
+  if !info.valid {
+    parse.malformed(status, "inspect QOI", "malformed QOI header", 0)
+    return Info{}
+  }
+  return info
+}
+
+fn decode_result(status: *fail.Status, work: DecodeWork) Image {
+  if !work.ok {
+    codec_failure(status, "decode QOI", work.error, work.offset, true)
+    return Image{}
+  }
+  return Image{ info: work.info, pixels: work.pixels }
+}
+
+fn encode_result(status: *fail.Status, work: EncodeWork) []u8 {
+  if !work.ok {
+    codec_failure(status, "encode QOI", work.error, 0, false)
+    return work.data[..0]
+  }
+  return work.data
 }
 
 fn u32be(source: []const u8, at: usize) u32 {
@@ -318,25 +336,37 @@ fn pixel_count(width: usize, height: usize, channels: u8) usize {
   return count * channels
 }
 
-pub fn decode(arena: *mem.Arena, source: []const u8) Result {
+pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image {
+  if status.failed { return Image{} }
   info := inspect_info(source)
-  if !info.valid { return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
+  if !info.valid {
+    fail.set(status, fail.make(fail.Kind.InvalidInput, "decode QOI", "", "malformed QOI"))
+    return Image{}
+  }
   size := pixel_count(info.width, info.height, 4)
-  if size == 0 { return Result{ failure: parse.Failure{ kind: parse.Kind.Overflow } } }
-  return decode_result(decode_work(arena, source))
+  if size == 0 {
+    fail.set(status, fail.make(fail.Kind.Overflow, "decode QOI", "", "the QOI is too large"))
+    return Image{}
+  }
+  return decode_result(status, decode_work(arena, source))
 }
 
-pub fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) EncodeResult {
+pub fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) []u8 {
+  empty: []u8
+  if status.failed { return empty }
   if width == 0 || height == 0 || width > 0xffffffff || height > 0xffffffff || (channels != 3 && channels != 4) {
-    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
+    fail.set(status, fail.make(fail.Kind.InvalidInput, "encode QOI", "", "invalid pixels or size"))
+    return empty
   }
   size := pixel_count(width, height, channels)
   bound_pixels := pixel_count(width, height, channels + 1)
   if size == 0 || bound_pixels == 0 || bound_pixels > #max(usize) - 22 {
-    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
+    fail.set(status, fail.make(fail.Kind.Overflow, "encode QOI", "", "the QOI is too large"))
+    return empty
   }
   if size != #len(pixels) {
-    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
+    fail.set(status, fail.make(fail.Kind.InvalidInput, "encode QOI", "", "invalid pixels or size"))
+    return empty
   }
-  return encode_result(encode_work(arena, pixels, width, height, channels, srgb))
+  return encode_result(status, encode_work(arena, pixels, width, height, channels, srgb))
 }

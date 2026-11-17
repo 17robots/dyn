@@ -7,16 +7,18 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
-COMMON = '''use "std/io"
+COMMON = '''use "std/fail"
 use "std/os/windows" win
 fn sockets() {
   for i in 0..32 {
-    opened := win.socket_open(2, 1, 6)
-    if io.failed(opened.failure) { #panic("socket_open without explicit WSAStartup") }
-    if !win.socket_close(#cast(usize, opened.value)) { #panic("socket_close") }
+    status: fail.Status
+    opened := win.socket_open(&status, 2, 1, 6)
+    if status.failed { #panic("socket_open without explicit WSAStartup") }
+    if !win.socket_close(#cast(usize, opened)) { #panic("socket_close") }
   }
-  invalid := win.socket_open(-1, 1, 0)
-  if !io.failed(invalid.failure) || invalid.failure.native == 0 || invalid.failure.native == 10093 || invalid.value != -1 {
+  invalid: fail.Status
+  socket := win.socket_open(&invalid, -1, 1, 0)
+  if !invalid.failed || invalid.failure.native == 0 || invalid.failure.native == 10093 || socket != -1 {
     #panic("native socket error lost or Winsock uninitialized")
   }
 }

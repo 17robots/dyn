@@ -146,6 +146,38 @@ Standard library:
   `fs.make_directory_exclusive`. `fs.make_directory` now succeeds when the
   directory exists.
 - `testing.remove_temporary` takes a status.
+- Decoders, parsers and codecs move to it, and `parse.Result` is gone. Each
+  takes the status (after the arena when it allocates) and returns its value:
+  `json`, `json/read`, `csv`, `xml`, `toml`, `ini`, `mdesk`, `msgpack`, `cbor`,
+  `protobuf`, `base32`, `base64`, `hex`, `math/big.parse`, `regex.compile`, `text/template` and
+  `html/template` (`render_with` callbacks take the status), `unicode`
+  (`case_fold`, `normalize`, `word_breaks`, `line_breaks`,
+  `next_grapheme(&status, &g)` returning a `Grapheme{ value, found }`),
+  `text/layout`, `font` (`open`, `raster`, `atlas`), `audio/wav`, the image
+  codecs (`bmp`, `tga`, `pnm`, `gif`, `jpeg`, `png`, `qoi`; `png.inspect`
+  and `qoi.inspect` return an `Info`), `compress/zstd`, `archive/zip`,
+  `archive/tar`, `crypto/der` (`der.next(&status, &cursor)`), `pem`,
+  `certificate`, `x509.inspect`, `aead.seal/open`, `aes`, `signature`,
+  `exchange`, `hpack`, `qpack`, `fs/watch` and `ui/software.render`.
+  Malformed input fails with `InvalidInput` and the byte offset
+  (`failure.offset` when `has_offset`); `parse.malformed(&status, op, msg,
+  offset)` records one. Iterators return `Next{ value, offset, found }`.
+  Readers that failed (zip and tar streams, watchers, der cursors) replay
+  the same failure. `x509.validate` returns a `Validation` with `valid` and
+  `reason`, not a failure. Authentication failures are `InvalidInput`
+  "authentication failed". The `std/encoding` module (its shared `Result`)
+  is gone.
+- Vendor packages move to it. `vendor/sqlite`: `open`, `prepare`, `step`,
+  `reset`, the binds, `column`, `execute`, `begin`/`commit`/`rollback`,
+  `run`, `first`, `query`, `next`, `cached`, `open_schema` and `transaction`
+  take the status; `finalize` and `cache_close` take none.
+  `sqlite.constraint(&status.failure)` replaces `constraint(statement)`,
+  `StepResult` is gone (`step` returns the `State`), and a failure keeps
+  SQLite's code in `failure.native`. The window, OpenGL, Vulkan, SDL3,
+  FreeType, HarfBuzz, FriBidi, `vendor/text/layout`, miniaudio, zstd, lz4,
+  pcre2, lua, libarchive, curl, tree-sitter, cgltf, stb, enet and box2d
+  bindings follow; library loaders (`opengl.load`, `freetype.load`, ...)
+  return their `Api` and fail with `NotFound` naming the missing symbol.
 
 Tools:
 

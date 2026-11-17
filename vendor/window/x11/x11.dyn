@@ -1,4 +1,5 @@
 use "std/parse" parse
+use "std/fail"
 #target(kernel: linux)
 use "std/mem" mem
 use "std/c" c
@@ -15,7 +16,6 @@ pub struct Window {
   desktop: Desktop,
   events: ordered.Queue, events_enabled: bool, wake_active: bool, wake_descriptor: i32, ordered_pressed: [256]u8,
 }
-pub type Result = io.Failure
 struct Visual { visual: rawptr, id: usize, screen: i32, depth: i32, class: i32, red: usize, green: usize, blue: usize, colormap_size: i32, bits: i32 }
 struct Attributes { background_pixmap: usize, background_pixel: usize, border_pixmap: usize, border_pixel: usize, bit_gravity: i32, win_gravity: i32, backing_store: i32, backing_planes: usize, backing_pixel: usize, save_under: i32, event_mask: isize, propagate: isize, override_redirect: i32, colormap: usize, cursor: usize }
 struct Event { kind: i32, serial: usize, sent: i32, display: rawptr, window: usize, rest: [19]usize }
@@ -62,16 +62,24 @@ pub extern fn gl_proc "glXGetProcAddressARB"(name: *const u8) rawptr
 // Creates a double-buffered GL 3.3 core context. All Xlib window creation
 // must be serialized on the GUI thread: the temporary X error handler is global.
 // Asynchronous X/GLX failures return System rather than terminating the process.
-pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
-  if window.display != nil { return Result{kind:io.Kind.InvalidState} }
+pub fn open(status: *fail.Status, window: *Window, title: []const u8, width, height: i32) {
+  if status.failed { return }
+  if window.display != nil {
+    window_failed(status, fail.Kind.InvalidState, "open")
+    return
+  }
   if width <= 0 || height <= 0 || width > 65535 || height > 65535 || #len(title) > 4095 {
-    return Result{kind:io.Kind.InvalidInput}
+    window_failed(status, fail.Kind.InvalidInput, "open")
+    return
   }
   storage: [4096]u8
-  name := c.string_into(storage[..], title)
-  if parse.failed(name.failure) { return Result{kind:io.Kind.InvalidInput} }
+  name := c.string_into(status, storage[..], title)
+  if status.failed { return }
   display := display_open(nil)
-  if display == nil { return Result{kind:io.Kind.System} }
+  if display == nil {
+    window_failed(status, fail.Kind.System, "open")
+    return
+  }
   window.* = Window{display:display, width:width, height:height}
   context_error_display = display
   context_error_seen = false
@@ -89,14 +97,16 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
       _ = free(configs)
     }
     close(window)
-    return Result{kind:io.Kind.System}
+    window_failed(status, fail.Kind.System, "open")
+    return
   }
   chosen := configs.*
   info := visual(display, chosen)
   if info == nil {
     _ = free(configs)
     close(window)
-    return Result{kind:io.Kind.System}
+    window_failed(status, fail.Kind.System, "open")
+    return
   }
   window.colormap = create_colormap(display, root(display, info.screen), info.visual, 0)
   attrs := Attributes{colormap:window.colormap, event_mask:1|2|4|8|64|32768|131072|2097152|4194304}
@@ -110,46 +120,61 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
   _ = sync(display, 0)
   _ = free(info)
   _ = free(configs)
-  if window.handle == 0 || window.context == nil || context_error_seen || make_current(window).kind != io.Kind.Ok {
+  current: fail.Status
+  if window.handle != 0 && window.context != nil && !context_error_seen {
+    make_current(&current, window)
+  }
+  if window.handle == 0 || window.context == nil || context_error_seen || current.failed {
     close(window)
-    return Result{kind:io.Kind.System}
+    window_failed(status, fail.Kind.System, "open")
+    return
   }
   atom_name: [17]u8 = ['W', 'M', '_', 'D', 'E', 'L', 'E', 'T', 'E', '_', 'W', 'I', 'N', 'D', 'O', 'W', 0]
   window.close_atom = intern_atom(display, &atom_name[0], 0)
   protocol_name := "WM_PROTOCOLS\x00"
   window.protocol_atom = intern_atom(display, &protocol_name[0], 0)
   _ = protocols(display, window.handle, &window.close_atom, 1)
-  _ = store_name(display, window.handle, name.value)
+  _ = store_name(display, window.handle, name)
   _ = map_window(display, window.handle)
   desktop_open(window)
   if !ordered_open(window) {
     close(window)
-    return Result{kind:io.Kind.System}
+    window_failed(status, fail.Kind.System, "open")
+    return
   }
   _ = flush(display)
   _ = sync(display, 0)
   if context_error_seen {
     close(window)
-    return Result{kind:io.Kind.System}
+    window_failed(status, fail.Kind.System, "open")
+    return
   }
-  return Result{}
 }
-pub fn make_current(window: *Window) Result {
+pub fn make_current(status: *fail.Status, window: *Window) {
+  if status.failed { return }
   if window.display == nil || window.context == nil || window.handle == 0 {
-    return Result{kind:io.Kind.InvalidState}
+    window_failed(status, fail.Kind.InvalidState, "make current")
+    return
   }
   if current(window.display, window.handle, window.context) == 0 {
-    return Result{kind:io.Kind.System}
+    window_failed(status, fail.Kind.System, "make current")
+    return
   }
-  return Result{}
 }
-pub fn swap(window: *Window) Result {
-  if window.display == nil || window.context == nil { return Result{kind:io.Kind.InvalidState} }
+pub fn swap(status: *fail.Status, window: *Window) {
+  if status.failed { return }
+  if window.display == nil || window.context == nil {
+    window_failed(status, fail.Kind.InvalidState, "swap")
+    return
+  }
   swap_buffers(window.display, window.handle)
-  return Result{}
 }
-pub fn poll(window: *Window) Result {
-  if window.display == nil { return Result{kind:io.Kind.InvalidState} }
+pub fn poll(status: *fail.Status, window: *Window) {
+  if status.failed { return }
+  if window.display == nil {
+    window_failed(status, fail.Kind.InvalidState, "poll")
+    return
+  }
   window.input.pressed = false
   window.input.released = false
   window.input.tab = false
@@ -236,7 +261,6 @@ pub fn poll(window: *Window) Result {
       desktop_selection(window, &event)
     }
   }
-  return Result{}
 }
 pub fn close(window: *Window) {
   if window.display == nil { return }
@@ -259,4 +283,19 @@ pub fn close(window: *Window) {
   }
   _ = display_close(window.display)
   window.* = Window{}
+}
+
+// Records a window-system failure of kind for operation.
+fn window_failed(status: *fail.Status, kind: fail.Kind, operation: []const u8) {
+  message: []const u8 = "the window system failed"
+  if kind == fail.Kind.InvalidState {
+    message = "the window is not in a state to do this"
+  } else if kind == fail.Kind.InvalidInput {
+    message = "invalid argument"
+  } else if kind == fail.Kind.Capacity {
+    message = "too large"
+  } else if kind == fail.Kind.Unsupported {
+    message = "not supported by this window system"
+  }
+  fail.set(status, fail.make(kind, operation, "", message))
 }

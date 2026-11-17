@@ -1,5 +1,6 @@
 // parse.u64_decimal and parse.i64_decimal edges: limits, overflow, offsets.
 use "std/io"
+use "std/fail"
 use "std/parse"
 
 fn check(ok: bool, label: []const u8) {
@@ -8,16 +9,31 @@ fn check(ok: bool, label: []const u8) {
   }
 }
 
+fn u64_failure(text: []const u8) fail.Failure {
+  status: fail.Status
+  _ = parse.u64_decimal(&status, text)
+  check(status.failed, "u64 should fail")
+  return status.failure
+}
+
+fn i64_failure(text: []const u8) fail.Failure {
+  status: fail.Status
+  _ = parse.i64_decimal(&status, text)
+  check(status.failed, "i64 should fail")
+  return status.failure
+}
+
 fn main() {
-  check(parse.u64_decimal("0").value == 0, "zero")
-  check(parse.u64_decimal("18446744073709551615").value == 18446744073709551615, "max")
-  check(parse.u64_decimal("18446744073709551616").failure.kind == parse.Kind.Overflow, "over")
-  check(parse.u64_decimal("").failure.kind == parse.Kind.Syntax, "empty")
-  check(parse.u64_decimal("12a").failure.offset == 2, "offset")
-  check(parse.i64_decimal("-9223372036854775808").value == -9223372036854775807 - 1, "min")
-  check(parse.i64_decimal("-9223372036854775809").failure.kind == parse.Kind.Overflow, "under")
-  check(parse.i64_decimal("9223372036854775808").failure.kind == parse.Kind.Overflow, "i64 over")
-  check(parse.i64_decimal("-").failure.offset == 1, "dash")
-  check(parse.i64_decimal("-42").value == -42, "neg")
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  check(parse.u64_decimal(&status, "0") == 0, "zero")
+  check(parse.u64_decimal(&status, "18446744073709551615") == 18446744073709551615, "max")
+  check(u64_failure("18446744073709551616").kind == fail.Kind.Overflow, "over")
+  check(u64_failure("").kind == fail.Kind.InvalidInput, "empty")
+  check(u64_failure("12a").offset == 2, "offset")
+  check(parse.i64_decimal(&status, "-9223372036854775808") == -9223372036854775807 - 1, "min")
+  check(i64_failure("-9223372036854775809").kind == fail.Kind.Overflow, "under")
+  check(i64_failure("9223372036854775808").kind == fail.Kind.Overflow, "i64 over")
+  check(i64_failure("-").offset == 1, "dash")
+  check(parse.i64_decimal(&status, "-42") == -42, "neg")
   io.println("ok")
 }

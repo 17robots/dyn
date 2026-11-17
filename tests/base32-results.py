@@ -9,9 +9,8 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 def literal(data): return '"'+''.join('\\x%02x'%b for b in data)+'"'
-source='''use "std/parse" parse
+source='''use "std/fail"
 use "std/encoding/base32" codec
-use "std/encoding" encoding
 use "std/mem" mem
 use "std/bytes" bytes
 fn good(raw,encoded:[]const u8) {
@@ -19,8 +18,9 @@ fn good(raw,encoded:[]const u8) {
   mem.fill(backing[..],99)
   arena:=mem.arena_from_buffer(backing[..])
   _=mem.push_bytes_uninit(arena,7)
-  decoded:=codec.decode(arena,encoded)
-  if parse.failed(decoded.failure) || decoded.failure.offset!=0 || parse.failed(decoded.failure) || !bytes.equal(decoded.value,raw) || mem.arena_mark(arena)!=mem.arena_start(arena)+7+#len(raw) { #panic("base32 oracle") }
+  status:fail.Status
+  decoded:=codec.decode(arena,&status,encoded)
+  if status.failed || !bytes.equal(decoded,raw) || mem.arena_mark(arena)!=mem.arena_start(arena)+7+#len(raw) { #panic("base32 oracle") }
   if !bytes.equal(codec.encode(arena,raw),encoded) { #panic("base32 encode") }
 }
 fn bad(encoded:[]const u8,offset:usize) {
@@ -30,8 +30,9 @@ fn bad(encoded:[]const u8,offset:usize) {
   prefix:=mem.push_bytes_uninit(arena,7)
   prefix[0]=91
   arena.poison_on_rewind=true
-  decoded:=codec.decode(arena,encoded)
-  if decoded.failure.offset!=offset || decoded.failure.kind != parse.Kind.Syntax || #len(decoded.value)!=0 || mem.arena_mark(arena)!=mem.arena_start(arena)+7 || prefix[0]!=91 || arena.data[mem.ArenaHeader+7]!=99 { #panic("base32 failure preflight") }
+  status:fail.Status
+  decoded:=codec.decode(arena,&status,encoded)
+  if status.failure.offset!=offset || status.failure.kind != fail.Kind.InvalidInput || #len(decoded)!=0 || mem.arena_mark(arena)!=mem.arena_start(arena)+7 || prefix[0]!=91 || arena.data[mem.ArenaHeader+7]!=99 { #panic("base32 failure preflight") }
 }
 fn main() {
 '''
@@ -49,10 +50,9 @@ source+='''
   arena:=mem.arena_from_buffer(backing[..])
   payload:=arena.data[mem.ArenaHeader..]
   _=mem.copy(payload,"MZXW6YTB")
-  overlap:=codec.decode(arena,payload[..8])
-  if overlap.failure.kind != parse.Kind.Overlap || mem.arena_mark(arena)!=mem.arena_start(arena) || !bytes.equal(payload[..8],"MZXW6YTB") { #panic("base32 overlap") }
-  zero:codec.Decoded
-  if zero.failure.offset!=0 || #len(zero.value)!=0 { #panic("base32 zero") }
+  status:fail.Status
+  _=codec.decode(arena,&status,payload[..8])
+  if status.failure.kind != fail.Kind.InvalidInput || mem.arena_mark(arena)!=mem.arena_start(arena) || !bytes.equal(payload[..8],"MZXW6YTB") { #panic("base32 overlap") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-base32-results-') as directory:

@@ -147,13 +147,14 @@ use "std/io" io
 use "std/mem" mem
 fn main() {
   arena := mem.arena_alloc(0)
-  created := t.temporary_directory(arena, "dyn-performance-contract")
-  t.expect(!io.failed(created.failure) && created.value.active, "temporary directory")
+  creating: fail.Status
+  created := t.temporary_directory(arena, &creating, "dyn-performance-contract")
+  t.expect(!creating.failed && created.active, "temporary directory")
   frames: [4]fs.RemovalFrame
   scratch: [4096]u8
   removed: fail.Status
-  t.remove_temporary(&removed, &created.value, frames[..], scratch[..])
-  t.expect(!removed.failed && !created.value.active, "remove temporary directory")
+  t.remove_temporary(&removed, &created, frames[..], scratch[..])
+  t.expect(!removed.failed && !created.active, "remove temporary directory")
 }
 ''')
         for flags in ([], ['--release']):

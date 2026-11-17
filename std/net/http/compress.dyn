@@ -1,5 +1,4 @@
 use "std/compress/gzip" gzip
-use "std/parse" parse
 
 // Gzip for dynamic responses. Static assets carry a precompressed copy
 // instead (see make_asset).
@@ -46,8 +45,9 @@ pub fn respond_compressed(status: *fail.Status, response: *Response, request: *c
     respond(status, response, body, varied)
     return
   }
-  encoded := gzip.write(storage, body, level, encoder)
-  if parse.failed(encoded.failure) || #len(encoded.value) >= #len(body) {
+  compressing: fail.Status
+  encoded := gzip.write(&compressing, storage, body, level, encoder)
+  if compressing.failed || #len(encoded) >= #len(body) {
     // The reservation lapses: respond queues its own copy.
     respond(status, response, body, varied)
     return
@@ -55,7 +55,7 @@ pub fn respond_compressed(status: *fail.Status, response: *Response, request: *c
   headers[count] = Header{ name: "Content-Encoding", value: "gzip" }
   count += 1
   varied.headers = headers[..count]
-  respond_buffered(status, response, #len(encoded.value), varied)
+  respond_buffered(status, response, #len(encoded), varied)
 }
 
 // Whether a response with these headers already names a content coding.

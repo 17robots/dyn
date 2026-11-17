@@ -7,7 +7,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/parse" parse
+SOURCE = r'''use "std/fail"
 use "std/bytes"
 use "std/encoding/mdesk"
 use "std/mem"
@@ -18,19 +18,19 @@ fn expect(condition: bool, message: []const u8) {
   }
 }
 
-fn fails(arena: *mem.Arena, source: []const u8, kind: parse.Kind, message: []const u8, offset: usize) {
-  result := mdesk.parse(arena, source)
-  expect(result.failure.kind == kind && bytes.equal(result.failure.message, message) && result.offset == offset, source)
-  expect(result.root == &mdesk.nil_node && mdesk.is_nil(result.root), "stub root on failure")
+fn fails(arena: *mem.Arena, source: []const u8, message: []const u8, offset: usize) {
+  status: fail.Status
+  root := mdesk.parse(arena, &status, source)
+  expect(status.failure.kind == fail.Kind.InvalidInput && bytes.equal(fail.message_text(&status.failure), message) && status.failure.offset == offset, source)
+  expect(root == &mdesk.nil_node && mdesk.is_nil(root), "stub root on failure")
 }
 
 fn main() {
   arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
   source := #load("types.mdesk")
-  parsed := mdesk.parse(arena, source)
-  expect(!parse.failed(parsed.failure), "parse")
-  root := parsed.root
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  root := mdesk.parse(arena, &status, source)
   expect(root.kind == mdesk.Kind.Root && mdesk.child_count(root) == 6, "root children")
 
   types := mdesk.child(root, "Types")
@@ -50,22 +50,22 @@ fn main() {
   expect(bytes.equal(mdesk.child_at(mdesk.child(root, "path"), 0).string, "a \"b\" c"), "triple string")
   empty_string := mdesk.child_at(mdesk.child(root, "empty"), 0)
   expect(empty_string.label == mdesk.Label.String && #len(empty_string.string) == 0, "empty string")
-  nested := mdesk.parse(arena, "op: + version: 1.2.3 a: b: c")
-  expect(!parse.failed(nested.failure) && mdesk.child_count(nested.root) == 3, "chained children")
-  expect(mdesk.child_at(mdesk.child(nested.root, "op"), 0).label == mdesk.Label.Symbol, "symbol")
-  expect(bytes.equal(mdesk.child(mdesk.child(mdesk.child(nested.root, "a"), "b"), "c").string, "c"), "a: b: c")
+  nested := mdesk.parse(arena, &status, "op: + version: 1.2.3 a: b: c")
+  expect(mdesk.child_count(nested) == 3, "chained children")
+  expect(mdesk.child_at(mdesk.child(nested, "op"), 0).label == mdesk.Label.Symbol, "symbol")
+  expect(bytes.equal(mdesk.child(mdesk.child(mdesk.child(nested, "a"), "b"), "c").string, "c"), "a: b: c")
 
   missing := mdesk.child(mdesk.child_at(mdesk.child(root, "Nope"), 4), "deeper")
   expect(mdesk.is_nil(missing) && missing == mdesk.empty(), "nil chain")
   expect(#len(missing.string) == 0 && mdesk.child_count(missing) == 0 && !mdesk.has_tag(missing, "x"), "nil reads")
   expect(mdesk.line_of(source, types.offset) == 3, "line_of")
 
-  fails(arena, "a: {b c", parse.Kind.Truncated, "unclosed scope", 3)
-  fails(arena, "a }", parse.Kind.Syntax, "unexpected token", 2)
-  fails(arena, "a: \"open", parse.Kind.Truncated, "unterminated string", 3)
-  fails(arena, "/* open", parse.Kind.Truncated, "unterminated comment", 0)
-  fails(arena, "@ x", parse.Kind.Syntax, "missing tag name", 0)
-  fails(arena, "a:", parse.Kind.Syntax, "unexpected token", 2)
+  fails(arena, "a: {b c", "unclosed scope", 3)
+  fails(arena, "a }", "unexpected token", 2)
+  fails(arena, "a: \"open", "unterminated string", 3)
+  fails(arena, "/* open", "unterminated comment", 0)
+  fails(arena, "@ x", "missing tag name", 0)
+  fails(arena, "a:", "unexpected token", 2)
 }
 '''
 DATA = """// Sizes of the scalar types.

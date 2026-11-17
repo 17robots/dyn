@@ -1,22 +1,35 @@
-use "std/parse" parse
 use "std/c"
+use "std/fail"
 use "vendor/sdl3"
-use "std/io"
 #link("SDL3_image")
-// SDL_image 3.x. Result surface is provider-owned; use sdl3.surface_destroy_owned.
-pub fn load_owned(path: []const u8, path_buffer: []u8) sdl3.SurfaceResult {
-  encoded := c.string_into(path_buffer, path)
-  if parse.failed(encoded.failure) { return sdl3.SurfaceResult{} }
-  value := native_load(encoded.value)
-  return sdl3.SurfaceResult{ value: value, failure: io.failure_if(value == nil) }
+// SDL_image 3.x. The surface is provider-owned; use sdl3.surface_destroy_owned.
+// nil after a failure, which carries SDL's message.
+pub fn load_owned(status: *fail.Status, path: []const u8, path_buffer: []u8) sdl3.Surface {
+  if status.failed { return nil }
+  encoded := c.string_into(status, path_buffer, path)
+  if status.failed { return nil }
+  value := native_load(encoded)
+  if value == nil {
+    sdl3.record_error(status, "load image")
+  }
+  return value
 }
 // Bytes borrowed only during synchronous decode. Decoder closes its temporary IO.
-pub fn decode_owned(bytes: []const u8) sdl3.SurfaceResult {
-  if #len(bytes) == 0 { return sdl3.SurfaceResult{} }
+pub fn decode_owned(status: *fail.Status, bytes: []const u8) sdl3.Surface {
+  if status.failed { return nil }
+  if #len(bytes) == 0 {
+    fail.invalid(status, "decode image", "", "no data")
+    return nil
+  }
   stream := native_io(#cast(rawptr, &bytes[0]), #len(bytes))
-  if stream == nil { return sdl3.SurfaceResult{} }
-  value := native_load_io(stream, true)
-  return sdl3.SurfaceResult{ value: value, failure: io.failure_if(value == nil) }
+  value: sdl3.Surface = nil
+  if stream != nil {
+    value = native_load_io(stream, true)
+  }
+  if value == nil {
+    sdl3.record_error(status, "decode image")
+  }
+  return value
 }
 extern fn native_load "IMG_Load"(path: c.string) sdl3.Surface
 extern fn native_io "SDL_IOFromConstMem"(bytes: rawptr, length: usize) rawptr

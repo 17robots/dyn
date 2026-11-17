@@ -4,11 +4,11 @@
 // limbs and is never negative.
 
 use "std/parse" parse
+use "std/fail"
 use "std/mem" mem
 use "std/io" io
 pub struct Int { limbs: []const u32, negative: bool }
 
-pub struct ParseResult { value: Int, offset: usize, failure: parse.Failure }
 pub struct Division { quotient: Int, remainder: Int, valid: bool }
 
 fn trimmed(limbs: []u32, negative: bool) Int {
@@ -361,11 +361,13 @@ fn digit_value(byte: u8) u32 {
   return 99
 }
 
-// Parses an optional sign and digits in base 2 through 36. Fails at the first
-// invalid byte, reporting its offset, and allocates nothing then.
-pub fn parse(arena: *mem.Arena, text: []const u8, base: u32) ParseResult {
+// Parses an optional sign and digits in base 2 through 36. Fails with
+// InvalidInput at the first invalid byte, and allocates nothing then.
+pub fn parse(arena: *mem.Arena, status: *fail.Status, text: []const u8, base: u32) Int {
+  if status.failed { return Int{} }
   if base < 2 || base > 36 {
-    return ParseResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
+    fail.invalid(status, "parse integer", "", "base must be 2 through 36")
+    return Int{}
   }
   at: usize = 0
   negative := false
@@ -374,11 +376,13 @@ pub fn parse(arena: *mem.Arena, text: []const u8, base: u32) ParseResult {
     at += 1
   }
   if at == #len(text) {
-    return ParseResult{ offset: at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: at } }
+    parse.malformed(status, "parse integer", "expected digits", at)
+    return Int{}
   }
   for i in at..#len(text) {
     if digit_value(text[i]) >= base {
-      return ParseResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: i } }
+      parse.malformed(status, "parse integer", "expected a digit", i)
+      return Int{}
     }
   }
   // Each digit needs at most log2(36) < 6 bits.
@@ -396,7 +400,7 @@ pub fn parse(arena: *mem.Arena, text: []const u8, base: u32) ParseResult {
       used += 1
     }
   }
-  return ParseResult{ value: trimmed(limbs[..used], negative) }
+  return trimmed(limbs[..used], negative)
 }
 
 // The value's digits in base 2 through 36, lowercase, with a leading '-' when

@@ -7,7 +7,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/parse" parse
+SOURCE = r'''use "std/fail"
 use "std/mem"
 use "std/strings"
 use "std/bytes"
@@ -73,17 +73,20 @@ fn main() {
   expect(bytes.equal(strings.clone(arena, "retained"), "retained"))
   parts: [2][]const u8 = ["one", "two"]
   expect(bytes.equal(strings.join(arena, parts[..], "/"), "one/two"))
-  parsed := ini.parse(arena, "[window]\nwidth=80\nheight=25\n")
-  expect(!parse.failed(parsed.failure) && #len(parsed.value) == 3)
-  expect(bytes.equal(parsed.value[2].section, "window") && bytes.equal(parsed.value[2].value, "25"))
+  status: fail.Status
+  parsed := ini.parse(arena, &status, "[window]\nwidth=80\nheight=25\n")
+  expect(!status.failed && #len(parsed) == 3)
+  expect(bytes.equal(parsed[2].section, "window") && bytes.equal(parsed[2].value, "25"))
   before := mem.arena_used(arena)
-  syntax := ini.parse(arena, "x=1\ninvalid\n")
-  expect(syntax.failure.kind == parse.Kind.Syntax && syntax.offset == 4 && syntax.line == 2)
+  syntax: fail.Status
+  _ = ini.parse(arena, &syntax, "x=1\ninvalid\n")
+  expect(syntax.failure.kind == fail.Kind.InvalidInput && syntax.failure.offset == 4)
   expect(mem.arena_used(arena) == before)
   tiny_storage: [mem.ArenaBufferOverhead]u8
   tiny := mem.arena_from_buffer(tiny_storage[..])
   tiny = mem.arena_from_buffer(tiny.data[..mem.ArenaHeader])
-  expect(!parse.failed(ini.parse(tiny, "# empty").failure))
+  _ = ini.parse(tiny, &status, "# empty")
+  expect(!status.failed)
   expect(#len(strings.clone(tiny, "")) == 0)
   expect(mem.arena_used(tiny) == 0)
 

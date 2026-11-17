@@ -11,8 +11,7 @@ import tempfile
 import tomllib
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-CLI='''use "std/parse" parse
-use "std/encoding/toml" toml
+CLI='''use "std/encoding/toml" toml
 use "std/io" io
 use "std/mem" mem
 use "std/fail"
@@ -28,15 +27,16 @@ fn main() {
  source := fs.read_all(arena, &source_file, args[1], 16777216)
  if source_file.failed { #panic("read") }
  mark := mem.arena_mark(arena)
- parsed := toml.parse(arena,source)
- if parse.failed(parsed.failure) {
+ parsing: fail.Status
+ root := toml.parse(arena,&parsing,source)
+ if parsing.failed {
   if mem.arena_mark(arena) != mark { #panic("rollback") }
-  io.println("ERR {}",parsed.offset)
+  io.println("ERR {}",parsing.failure.offset)
   return
  }
- encoded := toml.encode(arena,parsed.root)
- if parse.failed(encoded.failure) { #panic("encode") }
- if !fs_write_file(args[2],encoded.value) { #panic("write") }
+ encoding := fail.Status{ on_failure: fail.panic_on_failure }
+ encoded := toml.encode(arena,&encoding,root)
+ if !fs_write_file(args[2],encoded) { #panic("write") }
  io.println("OK")
 }
 
@@ -117,7 +117,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-toml-') as directory:
   for failure in failures:print(failure)
   raise SystemExit(f'{len(failures)} of {len(cases)} TOML cases failed')
  portable=work/'portable';portable.mkdir()
- probe='use "std/parse" parse\nuse "std/encoding/toml" toml\nuse "std/mem" mem\nfn main() {\n arena := mem.arena_alloc(0)\n defer { mem.arena_release(arena) }\n source: ['+str(len(VALID[2]))+']u8 = ['+','.join(map(str,VALID[2]))+']\n parsed := toml.parse(arena,source[..])\n if parse.failed(parsed.failure) { #panic("portable parse") }\n encoded := toml.encode(arena,parsed.root)\n if parse.failed(encoded.failure) || parse.failed(toml.parse(arena,encoded.value).failure) { #panic("portable encode") }\n cycle := toml.Value{kind:toml.Kind.Table}\n child := toml.Value{kind:toml.Kind.String,key:"x"}\n child.next = &child\n cycle.first = &child\n if !parse.failed(toml.encode(arena,&cycle).failure) { #panic("cycle") }\n}\n'
+ probe='use "std/fail"\nuse "std/encoding/toml" toml\nuse "std/mem" mem\nfn main() {\n status := fail.Status{ on_failure: fail.panic_on_failure }\n arena := mem.arena_alloc(0)\n defer { mem.arena_release(arena) }\n source: ['+str(len(VALID[2]))+']u8 = ['+','.join(map(str,VALID[2]))+']\n root := toml.parse(arena,&status,source[..])\n encoded := toml.encode(arena,&status,root)\n _ = toml.parse(arena,&status,encoded)\n cycle := toml.Value{kind:toml.Kind.Table}\n child := toml.Value{kind:toml.Kind.String,key:"x"}\n child.next = &child\n cycle.first = &child\n cycling: fail.Status\n _ = toml.encode(arena,&cycling,&cycle)\n if !cycling.failed { #panic("cycle") }\n}\n'
  (portable/'main.dyn').write_text(probe)
  for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
   output=work/target

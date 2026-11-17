@@ -34,13 +34,14 @@ fn show(tasks: []const Task) {
 }
 
 // Task numbers start at 1 on the command line and at 0 in the array.
-// parse.u64_decimal reports a failure instead of guessing at bad text.
+// parse.u64_decimal fails instead of guessing at bad text.
 fn task_index(text: []const u8, count: usize) usize {
-  number := parse.u64_decimal(text)
-  if parse.failed(number.failure) || number.value == 0 || number.value > count {
+  status: fail.Status
+  number := parse.u64_decimal(&status, text)
+  if status.failed || number == 0 || number > count {
     return count       // the miss value: one past the end, as find does
   }
-  return #cast(usize, number.value - 1)
+  return #cast(usize, number - 1)
 }
 
 // The task named by "todo done N", or count after reporting why not.

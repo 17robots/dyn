@@ -2,7 +2,7 @@ use "std/mem" mem
 use "std/compress/deflate" deflate
 use "std/io" stream
 use "std/hash" hash
-use "std/parse" parse
+use "std/fail"
 
 pub type Result = deflate.Result
 pub type Decoder = deflate.Decoder
@@ -10,12 +10,12 @@ pub type Decoder = deflate.Decoder
 pub type Inflated = deflate.Inflated
 
 // One member, into arena; consumed identifies the next member or trailing data.
-pub fn decompress(arena: *mem.Arena, source: []const u8) Inflated {
-  return deflate.gunzip(arena, source)
+pub fn decompress(arena: *mem.Arena, status: *fail.Status, source: []const u8) Inflated {
+  return deflate.gunzip(arena, status, source)
 }
 // Reads concatenated members through EOF, verifying every header/trailer.
 // Buffers borrow caller storage. 1024 input + 33026 history bytes suffice.
-// Returned output remains provisional until the reader reaches End.
+// Returned output remains provisional until the reader reaches the end.
 pub fn decoder(input: stream.Reader, compressed_bytes: []u8, history: []u8) Decoder {
   state := deflate.decoder(input, compressed_bytes, history)
   state.gzip = true
@@ -26,7 +26,6 @@ pub fn decoder_reader(state: *Decoder) stream.Reader {
 }
 
 pub type Encoder = deflate.Encoder
-pub type Encoded = deflate.Encoded
 
 // Destination bytes that always hold write's output for size bytes.
 pub fn compress_bound(size: usize) usize {
@@ -34,11 +33,14 @@ pub fn compress_bound(size: usize) usize {
 }
 
 // One gzip member (RFC 1952) holding source, compressed at level (1-9, see
-// std/compress/deflate) into destination. Fails with Capacity when destination
-// is shorter than needed; compress_bound always suffices.
-pub fn write(destination: []u8, source: []const u8, level: u8, encoder: *Encoder) Encoded {
+// std/compress/deflate) into destination; the bytes written. Fails with
+// Capacity when destination is shorter than needed; compress_bound always
+// suffices.
+pub fn write(status: *fail.Status, destination: []u8, source: []const u8, level: u8, encoder: *Encoder) []u8 {
+  if status.failed { return destination[..0] }
   if #len(destination) < 18 {
-    return Encoded{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
+    fail.set(status, fail.make(fail.Kind.Capacity, "compress", "", "the output does not fit destination"))
+    return destination[..0]
   }
   header: [10]u8 = [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255]
   if level >= 9 {
@@ -49,26 +51,27 @@ pub fn write(destination: []u8, source: []const u8, level: u8, encoder: *Encoder
   for i in 0..10 {
     destination[i] = header[i]
   }
-  body := deflate.deflate(destination[10..#len(destination) - 8], source, level, encoder)
-  if parse.failed(body.failure) { return body }
-  at := 10 + #len(body.value)
+  body := deflate.deflate(status, destination[10..#len(destination) - 8], source, level, encoder)
+  if status.failed { return destination[..0] }
+  at := 10 + #len(body)
   crc := hash.crc32(source)
   size := #cast(u32, #len(source))
   for i in 0..4 {
     destination[at + i] = #cast(u8, crc >> #cast(u32, 8 * i))
     destination[at + 4 + i] = #cast(u8, size >> #cast(u32, 8 * i))
   }
-  return Encoded{ value: destination[..at + 8] }
+  return destination[..at + 8]
 }
 
 // write with output in arena. The encoder workspace is taken from
-// arena and given back; only the output stays.
-pub fn compress(arena: *mem.Arena, source: []const u8, level: u8) Encoded {
+// arena and given back; only the output stays. It cannot fail: the output
+// is sized by compress_bound.
+pub fn compress(arena: *mem.Arena, source: []const u8, level: u8) []u8 {
   output := mem.push_bytes_uninit(arena, compress_bound(#len(source)))
   mark := mem.arena_mark(arena)
   encoder := #cast(*Encoder, mem.arena_push_uninit(arena, #sizeof(Encoder), #alignof(Encoder)))
-  encoded := write(output, source, level, encoder)
+  status: fail.Status
+  encoded := write(&status, output, source, level, encoder)
   mem.arena_rewind(arena, mark)
-  if parse.failed(encoded.failure) { return encoded }
   return encoded
 }

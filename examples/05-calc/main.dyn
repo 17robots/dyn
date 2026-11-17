@@ -13,7 +13,6 @@ use "std/container/map"
 use "std/io"
 use "std/math"
 use "std/mem"
-use "std/parse"
 use "std/strings"
 
 // Prints the line with a caret under offset.
@@ -59,11 +58,11 @@ fn main() {
     if #len(strings.trim(line)) == 0 { continue }
     io.println("> {}", line)
 
-    parsed := parse_line(frame, line)
-    if parse.failed(parsed.failure) {
-      point_at(parsed.failure.offset, parsed.failure.message)
+    parsing: fail.Status
+    statement := parse_line(frame, &parsing, line)
+    if parsing.failed {
+      point_at(parsing.failure.offset, fail.message_text(&parsing.failure))
     } else {
-      statement := parsed.value
       value := evaluate(statement.value, &names)
       if value.problem != Problem.None {
         point_at(value.offset, problem_text(value.problem))

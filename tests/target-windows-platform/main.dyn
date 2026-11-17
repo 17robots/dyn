@@ -1,4 +1,5 @@
 use "std/mem" mem
+use "std/fail"
 use "std/os/windows" platform
 
 #target(arch: x86_64, kernel: windows, abi: win64)
@@ -8,12 +9,14 @@ fn main() {
   memory := #slice(mem.arena_push(arena, 4096, 1), 4096)
   memory[0] = 42
   mem.arena_release(arena)
-  opened := platform.file_open("dyn-platform-probe", false, false)
-  descriptor := platform.io_value(&opened)
-  if descriptor >= 0 { _ = platform.file_close(descriptor) }
-  socket := platform.socket_open(2, 1, 6)
-  socket_value := platform.io_value(&socket)
-  if socket_value >= 0 { _ = platform.socket_close(#cast(usize, socket_value)) }
+  status: fail.Status
+  descriptor := platform.file_open(&status, "dyn-platform-probe", false, false)
+  if !status.failed {
+    platform.file_close(&status, descriptor)
+  }
+  opening: fail.Status
+  socket := platform.socket_open(&opening, 2, 1, 6)
+  if !opening.failed { _ = platform.socket_close(#cast(usize, socket)) }
   events: [1]platform.PollDescriptor
   _ = platform.event_poll(events[..0], 0)
 }

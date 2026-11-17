@@ -5,7 +5,6 @@ use "std/container/array"
 use "std/fail"
 use "std/fs"
 use "std/mem"
-use "std/parse"
 use "std/strings"
 
 const MaxFileBytes: usize = 1 << 20
@@ -30,13 +29,15 @@ fn load(tasks: *array.Array(Task), arena: *mem.Arena, status: *fail.Status, path
     if !line.found { break }
     line_number += 1
     if #len(line.value) == 0 { continue }
-    parsed := parse_task(line.value)
-    if parse.failed(parsed.failure) {
-      message := strings.format(arena, "line {}: {}", line_number, parsed.failure.message)
+    // Each line gets a status of its own, so the message can name the line.
+    parsing: fail.Status
+    task := parse_task(&parsing, line.value)
+    if parsing.failed {
+      message := strings.format(arena, "line {}: {}", line_number, fail.message_text(&parsing.failure))
       fail.invalid(status, "read", path, message)
       return
     }
-    array.push(tasks, parsed.value)
+    array.push(tasks, task)
   }
 }
 

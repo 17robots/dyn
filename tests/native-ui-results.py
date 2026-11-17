@@ -17,6 +17,47 @@ use "std/io"
 use "std/ui/software" software
 use "std/io" errors
 use "std/mem" mem
+use "std/fail"
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
+  status: fail.Status
+  window.open(&status, p0, p1, p2, p3)
+  return status.failure
+}
+
+fn window_poll(p0: *window.Window) fail.Failure {
+  status: fail.Status
+  window.poll(&status, p0)
+  return status.failure
+}
+
+fn window_swap(p0: *window.Window) fail.Failure {
+  status: fail.Status
+  window.swap(&status, p0)
+  return status.failure
+}
+
+fn gpu_open(p0: *gpu.Renderer, p1: gl.Api) fail.Failure {
+  status: fail.Status
+  gpu.open(&status, p0, p1)
+  return status.failure
+}
+
+fn gpu_render(p0: *gpu.Renderer, p1: *const ui.Command, p2, p3: i32, p4: software.Font) fail.Failure {
+  status: fail.Status
+  gpu.render(&status, p0, p1, p2, p3, p4)
+  return status.failure
+}
+
+fn software_render(p0: *software.Surface, p1: *const ui.Command, p2: software.Font) fail.Failure {
+  status: fail.Status
+  software.render(&status, p0, p1, p2)
+  return status.failure
+}
+
+fn failed(failure: fail.Failure) bool {
+  return failure.kind != fail.Kind.Ok
+}
+
 fn check(ok: bool) { if !ok { #panic("native GPU UI contract") } }
 fn bitmap(data: rawptr, codepoint: u32) software.Glyph {
  _ = data
@@ -34,16 +75,17 @@ fn no_textures(count: i32, output: *u32) { _ = count
  output.* = 0 }
 fn main() {
  host := window.Window{}
- check(window.open(&host,"bad",0,32).kind != errors.Kind.Ok)
- check(window.open(&host,"Dyn native renderer test",32,32).kind == errors.Kind.Ok)
+ check(window_open(&host,"bad",0,32).kind != fail.Kind.Ok)
+ check(window_open(&host,"Dyn native renderer test",32,32).kind == fail.Kind.Ok)
  defer { window.close(&host) }
- check(window.open(&host,"duplicate",32,32).kind == errors.Kind.InvalidState)
- loaded := gl.load(window.gl_proc)
- check(!errors.failed(loaded.failure))
+ check(window_open(&host,"duplicate",32,32).kind == fail.Kind.InvalidState)
+ loading: fail.Status
+ api := gl.load(&loading, window.gl_proc)
+ check(!loading.failed)
  renderer := gpu.Renderer{}
- check(!errors.failed(gpu.open(&renderer,loaded.api).failure))
+ check(!failed(gpu_open(&renderer,api)))
  defer { gpu.close(&renderer) }
- check(gpu.open(&renderer,loaded.api).kind == errors.Kind.InvalidState)
+ check(gpu_open(&renderer,api).kind == fail.Kind.InvalidState)
  commands: [5]ui.Command = [
  ui.Command{kind:ui.Kind.Rectangle,bounds:ui.Rect{width:32,height:32},clip:ui.Rect{width:32,height:32},color:ui.Color{r:10,g:20,b:30,a:255}},
  ui.Command{kind:ui.Kind.Rectangle,bounds:ui.Rect{x:2,y:3,width:12,height:9},clip:ui.Rect{x:5,y:4,width:6,height:5},color:ui.Color{r:230,g:60,b:90,a:128}},
@@ -54,18 +96,18 @@ fn main() {
  pixels: [4096]u8
  surface := software.Surface{pixels:pixels[..],width:32,height:32,stride:128}
  font := software.Font{glyph:bitmap,line_height:3}
- check(!errors.failed(software.render(&surface,&commands[0],font).failure))
- loaded.api.enable(gl.FramebufferSrgb)
- loaded.api.enable(gl.ColorLogicOp)
- loaded.api.enable(gl.RasterizerDiscard)
- loaded.api.enable(gl.Dither)
- loaded.api.enable(gl.ClipDistance0)
- loaded.api.color_mask(0,0,0,0)
- loaded.api.polygon_mode(gl.FrontAndBack,0x1b01)
- check(!errors.failed(gpu.render(&renderer,&commands[0],32,32,font).failure))
- check(loaded.api.is_enabled(gl.RasterizerDiscard) == 0 && loaded.api.is_enabled(gl.FramebufferSrgb) == 0 && loaded.api.is_enabled(gl.ColorLogicOp) == 0 && loaded.api.is_enabled(gl.Dither) == 0 && loaded.api.is_enabled(gl.ClipDistance0) == 0)
+ check(!failed(software_render(&surface,&commands[0],font)))
+ api.enable(gl.FramebufferSrgb)
+ api.enable(gl.ColorLogicOp)
+ api.enable(gl.RasterizerDiscard)
+ api.enable(gl.Dither)
+ api.enable(gl.ClipDistance0)
+ api.color_mask(0,0,0,0)
+ api.polygon_mode(gl.FrontAndBack,0x1b01)
+ check(!failed(gpu_render(&renderer,&commands[0],32,32,font)))
+ check(api.is_enabled(gl.RasterizerDiscard) == 0 && api.is_enabled(gl.FramebufferSrgb) == 0 && api.is_enabled(gl.ColorLogicOp) == 0 && api.is_enabled(gl.Dither) == 0 && api.is_enabled(gl.ClipDistance0) == 0)
  actual: [4096]u8
- loaded.api.read_pixels(0,0,32,32,gl.Rgba,gl.UnsignedByte,&actual[0])
+ api.read_pixels(0,0,32,32,gl.Rgba,gl.UnsignedByte,&actual[0])
  for y in 0..32 {
  for x in 0..32 {
  for channel in 0..4 {
@@ -76,7 +118,7 @@ fn main() {
  }
  }
  }
- check(loaded.api.get_error() == 0)
+ check(api.get_error() == 0)
  // A glyph wider than hardware textures succeeds when only one pixel is visible.
  arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
@@ -84,26 +126,26 @@ fn main() {
  wide := Wide{pixels:mem.push_array(u8,arena,#cast(usize,renderer.max_texture)+1)}
  wide.pixels[0] = 255
  single := ui.Command{kind:ui.Kind.Glyph,bounds:ui.Rect{width:32,height:32},clip:ui.Rect{x:2,y:2,width:1,height:1},glyph_x:2,glyph_y:2,color:ui.Color{r:255,a:255}}
- check(!errors.failed(gpu.render(&renderer,&single,32,32,software.Font{data:&wide,glyph:wide_bitmap,line_height:1}).failure))
+ check(!failed(gpu_render(&renderer,&single,32,32,software.Font{data:&wide,glyph:wide_bitmap,line_height:1})))
  pixel: [4]u8
- loaded.api.read_pixels(2,29,1,1,gl.Rgba,gl.UnsignedByte,&pixel[0])
- check(pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 255 && loaded.api.get_error() == 0)
- loaded.api.enable(0xffffffff)
- check(gpu.render(&renderer,&commands[0],32,32,font).kind == errors.Kind.System && loaded.api.get_error() == 0)
- broken := loaded.api
+ api.read_pixels(2,29,1,1,gl.Rgba,gl.UnsignedByte,&pixel[0])
+ check(pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 255 && api.get_error() == 0)
+ api.enable(0xffffffff)
+ check(gpu_render(&renderer,&commands[0],32,32,font).kind == fail.Kind.System && api.get_error() == 0)
+ broken := api
  broken.gen_textures = no_textures
  rejected := gpu.Renderer{}
- check(gpu.open(&rejected,broken).kind == errors.Kind.System && rejected.program == 0)
- check(window.poll(&host).kind == errors.Kind.Ok && window.swap(&host).kind == errors.Kind.Ok)
+ check(gpu_open(&rejected,broken).kind == fail.Kind.System && rejected.program == 0)
+ check(window_poll(&host).kind == fail.Kind.Ok && window_swap(&host).kind == fail.Kind.Ok)
  bad := commands[3]
  bad.codepoint = 0
- check(gpu.render(&renderer,&bad,32,32,font).kind == errors.Kind.InvalidInput)
+ check(gpu_render(&renderer,&bad,32,32,font).kind == fail.Kind.InvalidInput)
  gpu.close(&renderer)
  gpu.close(&renderer)
- check(gpu.render(&renderer,&commands[0],32,32,font).kind == errors.Kind.InvalidState)
+ check(gpu_render(&renderer,&commands[0],32,32,font).kind == fail.Kind.InvalidState)
  window.close(&host)
  window.close(&host)
- check(window.poll(&host).kind != errors.Kind.Ok && window.swap(&host).kind != errors.Kind.Ok)
+ check(window_poll(&host).kind != fail.Kind.Ok && window_swap(&host).kind != fail.Kind.Ok)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-native-ui-') as directory:
@@ -140,7 +182,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-ui-') as directory:
     if sys.platform.startswith('linux') and os.environ.get('DISPLAY'):
         shim=work/'glx-failure.so'
         subprocess.run([*shlex.split(os.environ.get('CC','cc')),'-shared','-fPIC','-Wall','-Wextra','-Werror',str(ROOT/'tests/x11-context-failure.c'),'-ldl','-o',str(shim)],check=True,timeout=60)
-        (work/'main.dyn').write_text('use "vendor/window" window\nuse "std/io" errors\nfn main(){ host := window.Window{}\n result := window.open(&host,"Expected failure",32,32)\n if result.kind == errors.Kind.Ok || result.kind != errors.Kind.System || host.display != nil { #panic("GLX error was not recovered") }\n window.close(&host)\n}\n', encoding='utf-8')
+        (work/'main.dyn').write_text('use "vendor/window" window\nuse "std/fail"\nfn main(){ host := window.Window{}\n result: fail.Status\n window.open(&result,&host,"Expected failure",32,32)\n if !result.failed || result.failure.kind != fail.Kind.System || host.display != nil { #panic("GLX error was not recovered") }\n window.close(&host)\n}\n', encoding='utf-8')
         output=work/'context-failure'
         subprocess.run([DYN,'build',str(work),'--debug','--quiet','--output',str(output)],check=True,timeout=300)
         subprocess.run([str(output)],env={**os.environ,'LD_PRELOAD':str(shim)},check=True,timeout=60)

@@ -7,25 +7,28 @@ use "std/fs" fs
 use "std/io" io
 use "std/mem" mem
 pub struct TemporaryDirectory { path: []const u8, active: bool }
-pub type TemporaryResult = io.Result(TemporaryDirectory)
 // Reserves a private 0700 directory. Its path is in arena.
-pub fn temporary_directory(arena: *mem.Arena, prefix: []const u8) TemporaryResult {
+pub fn temporary_directory(arena: *mem.Arena, status: *fail.Status, prefix: []const u8) TemporaryDirectory {
+  if status.failed { return TemporaryDirectory{} }
   for byte in prefix {
-    if byte == 0 || byte == '/' { return TemporaryResult{ failure: io.linux_failure(-22) } }
+    if byte == 0 || byte == '/' {
+      fail.set(status, io.from_linux("make temporary directory", prefix, -22))
+      return TemporaryDirectory{}
+    }
   }
   for attempt in 0..128 {
     path := temporary_path(arena, prefix, "")
     // create_exclusive semantics: an existing name is tried again.
-    status: fail.Status
-    fs.make_directory_exclusive(&status, path, 448)
-    if !status.failed {
-      return TemporaryResult{ value: TemporaryDirectory{ path: path, active: true } }
-    }
-    if status.failure.kind != io.Kind.AlreadyExists {
-      return TemporaryResult{ failure: io.Failure{ kind: status.failure.kind, native: status.failure.native } }
+    attempted: fail.Status
+    fs.make_directory_exclusive(&attempted, path, 448)
+    if !attempted.failed { return TemporaryDirectory{ path: path, active: true } }
+    if attempted.failure.kind != fail.Kind.AlreadyExists {
+      fail.set(status, attempted.failure)
+      return TemporaryDirectory{}
     }
   }
-  return TemporaryResult{ failure: io.linux_failure(-17) }
+  fail.set(status, io.from_linux("make temporary directory", prefix, -17))
+  return TemporaryDirectory{}
 }
 pub fn remove_temporary(status: *fail.Status, directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8) {
   if !directory.active { return }

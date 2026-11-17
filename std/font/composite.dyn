@@ -13,23 +13,23 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
   instructions := false
   component_number: usize = 0
   for true {
-    if !fits(data, at, 4) { return Outline{ kind: parse.Kind.Syntax } }
+    if !fits(data, at, 4) { return Outline{ kind: fail.Kind.InvalidInput } }
     flags := u16be(data, at)
     index := u16be(data, at + 2)
     at += 4
-    if (flags & 0xe010) != 0 { return Outline{ kind: parse.Kind.Syntax } }
+    if (flags & 0xe010) != 0 { return Outline{ kind: fail.Kind.InvalidInput } }
     forms := flags & 0xc8
     if forms != 0 && forms != 8 && forms != 64 && forms != 128 {
-      return Outline{ kind: parse.Kind.Syntax }
+      return Outline{ kind: fail.Kind.InvalidInput }
     }
     words := (flags & 1) != 0
     xy := (flags & 2) != 0
-    if !xy && component_number == 0 { return Outline{ kind: parse.Kind.Syntax } }
+    if !xy && component_number == 0 { return Outline{ kind: fail.Kind.InvalidInput } }
     length: usize = 2
     if words {
       length = 4
     }
-    if !fits(data, at, length) { return Outline{ kind: parse.Kind.Syntax } }
+    if !fits(data, at, length) { return Outline{ kind: fail.Kind.InvalidInput } }
     a: i32 = 0
     b: i32 = 0
     if words {
@@ -59,7 +59,7 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
       if forms == 128 {
         size = 8
       }
-      if !fits(data, at, size) { return Outline{ kind: parse.Kind.Syntax } }
+      if !fits(data, at, size) { return Outline{ kind: fail.Kind.InvalidInput } }
       matrix.xx = f2dot14(data, at)
       matrix.yy = matrix.xx
       if forms == 64 {
@@ -87,9 +87,9 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
     } else {
       if #cast(usize, a) >= #len(result.points) || #cast(usize, b) >= #len(child.points) {
         if #cast(usize, a) < #len(result.points) + 4 && #cast(usize, b) < #len(child.points) + 4 {
-          return Outline{ kind: parse.Kind.Unsupported }
+          return Outline{ kind: fail.Kind.Unsupported }
         }
-        return Outline{ kind: parse.Kind.Syntax }
+        return Outline{ kind: fail.Kind.InvalidInput }
       }
       offset.x = result.points[a].x - child.points[b].x
       offset.y = result.points[a].y - child.points[b].y
@@ -98,19 +98,19 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
       point.x += offset.x
       point.y += offset.y
       if math.abs(point.x) > 1048576.0 || math.abs(point.y) > 1048576.0 {
-        return Outline{ kind: parse.Kind.Capacity }
+        return Outline{ kind: fail.Kind.Capacity }
       }
     }
     if (flags & 512) != 0 {
       if matrix.xy != 0.0 || matrix.yx != 0.0 || matrix.xx < 0.0 {
-        return Outline{ kind: parse.Kind.Unsupported }
+        return Outline{ kind: fail.Kind.Unsupported }
       }
       result.origin = transformed(child.origin, matrix)
       result.origin.x += offset.x
       result.origin.y += offset.y
       result.advance = transformed(child.advance, matrix)
       if math.abs(result.origin.x) > 1048576.0 || math.abs(result.origin.y) > 1048576.0 || math.abs(result.advance.x) > 1048576.0 {
-        return Outline{ kind: parse.Kind.Capacity }
+        return Outline{ kind: fail.Kind.Capacity }
       }
     }
     old_count := #len(result.points)
@@ -129,9 +129,9 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
     if (flags & 32) == 0 { break }
   }
   if instructions {
-    if !fits(data, at, 2) { return Outline{ kind: parse.Kind.Syntax } }
+    if !fits(data, at, 2) { return Outline{ kind: fail.Kind.InvalidInput } }
     length := #cast(usize, u16be(data, at))
-    if !fits(data, at + 2, length) { return Outline{ kind: parse.Kind.Syntax } }
+    if !fits(data, at + 2, length) { return Outline{ kind: fail.Kind.InvalidInput } }
   }
   result.ok = true
   return result

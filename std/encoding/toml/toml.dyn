@@ -1,5 +1,6 @@
 use "std/mem" mem
 use "std/parse" parse
+use "std/fail"
 use "std/unicode/utf8" utf8
 use "std/bytes"
 // TOML 1.0 tree. All parsed strings, keys and scalar lexemes are arena-owned.
@@ -8,8 +9,6 @@ use "std/bytes"
 pub enum Kind { Missing, String, Integer, Float, Bool, DateTime, Array, Table }
 pub struct Value { kind: Kind, text: []const u8, boolean: bool, key: []const u8, first: *Value, last: *Value, next: *Value, defined: bool, header_defined: bool, sealed: bool, table_array: bool }
 pub const nil_value: Value = Value{}
-pub struct ParseResult { root: *const Value, offset: usize, failure: parse.Failure }
-pub type EncodeResult = parse.Bytes
 struct Parser { arena: *mem.Arena, source: []const u8, at: usize, failed: bool, depth: usize }
 fn copy(arena: *mem.Arena, source: []const u8) []u8 {
   result := mem.push_array(u8, arena, #len(source))
@@ -577,9 +576,12 @@ fn bounded(value: *const Value, depth: usize) bool {
 // successful trees own all input text.
 // Inputs must be UTF-8. Nesting is limited to 64
 // exhausted arenas panic.
-pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
+// Malformed input fails with InvalidInput at the offending byte.
+pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *const Value {
+  if status.failed { return &nil_value }
   if !utf8.valid(source) {
-    return ParseResult{ root: &nil_value, failure: parse.Failure{ kind: parse.Kind.Syntax } }
+    parse.malformed(status, "parse TOML", "the text is not UTF-8", 0)
+    return &nil_value
   }
   mark := mem.arena_mark(arena)
   parser := Parser{ arena: arena, source: source }
@@ -600,9 +602,10 @@ pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   }
   if parser.failed {
     mem.arena_rewind(arena, mark)
-    return ParseResult{ root: &nil_value, offset: parser.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: parser.at } }
+    parse.malformed(status, "parse TOML", "malformed TOML", parser.at)
+    return &nil_value
   }
-  return ParseResult{ root: root }
+  return root
 }
 fn emit_string(arena: *mem.Arena, output: *[]u8, text: []const u8) {
   _ = mem.append_grow(arena, output, #cast(u8, 34))
@@ -686,26 +689,32 @@ fn emit(arena: *mem.Arena, output: *[]u8, current: *const Value, depth: usize) b
 // Inputs must not borrow unused backing of the output arena.
 // Output borrows arena
 // malformed/manual trees return InvalidInput and rewind.
-pub fn encode(arena: *mem.Arena, root: *const Value) EncodeResult {
-  if root == nil || root.kind != Kind.Table || !valid_children(root) {
-    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
-  }
+pub fn encode(arena: *mem.Arena, status: *fail.Status, root: *const Value) []u8 {
+  empty: []u8
+  if status.failed { return empty }
+  if root == nil || root.kind != Kind.Table || !valid_children(root) { return unencodable(status) }
   mark := mem.arena_mark(arena)
   output: []u8
   child := root.first
   for child != nil {
     if !utf8.valid(child.key) {
       mem.arena_rewind(arena, mark)
-      return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
+      return unencodable(status)
     }
     emit_string(arena, &output, child.key)
     mem.append_many_grow(arena, &output, " = ")
     if !emit(arena, &output, child, 0) {
       mem.arena_rewind(arena, mark)
-      return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
+      return unencodable(status)
     }
     _ = mem.append_grow(arena, &output, #cast(u8, 10))
     child = child.next
   }
-  return EncodeResult{ value: output }
+  return output
+}
+
+fn unencodable(status: *fail.Status) []u8 {
+  fail.invalid(status, "encode TOML", "", "the tree is not a valid TOML document")
+  empty: []u8
+  return empty
 }

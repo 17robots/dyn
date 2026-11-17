@@ -23,6 +23,59 @@ use "std/fs" fs
 use "std/dynlib" dynlib
 use "std/io" errors
 use "std/encoding/binary" binary
+struct layout_build_Outcome { value: layout.Layout, failure: fail.Failure, kind: fail.Kind }
+fn layout_build(a0: *mem.Arena, p0:[]const u8, p1:layout.Font, p2:*const hb.Api, p3:*const bidi.Api, p4:layout.Options) layout_build_Outcome {
+  status: fail.Status
+  value := layout.build(a0, &status, p0, p1, p2, p3, p4)
+  return layout_build_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct layout_selection_Outcome { value: []layout.SelectionRect, failure: fail.Failure, kind: fail.Kind }
+fn layout_selection(a0: *mem.Arena, p0: *const layout.Layout, p1, p2: usize) layout_selection_Outcome {
+  status: fail.Status
+  value := layout.selection(a0, &status, p0, p1, p2)
+  return layout_selection_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct hb_font_owned_Outcome { value: rawptr, failure: fail.Failure, kind: fail.Kind }
+fn hb_font_owned(p0: *const hb.Api, p1: []const u8, p2: u32) hb_font_owned_Outcome {
+  status: fail.Status
+  value := hb.font_owned(&status, p0, p1, p2)
+  return hb_font_owned_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct hb_load_Outcome { api: hb.Api, failure: fail.Failure, kind: fail.Kind }
+fn hb_load(p0: dynlib.Handle) hb_load_Outcome {
+  status: fail.Status
+  value := hb.load(&status, p0)
+  return hb_load_Outcome{ api: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct bidi_load_Outcome { api: bidi.Api, failure: fail.Failure, kind: fail.Kind }
+fn bidi_load(p0: dynlib.Handle) bidi_load_Outcome {
+  status: fail.Status
+  value := bidi.load(&status, p0)
+  return bidi_load_Outcome{ api: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct dynlib_open_Outcome { value: dynlib.Handle, failure: fail.Failure, kind: fail.Kind }
+fn dynlib_open(p0: []const u8, p1: i32) dynlib_open_Outcome {
+  status: fail.Status
+  value := dynlib.open(&status, p0, p1)
+  return dynlib_open_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct dynlib_close_Outcome { failure: fail.Failure, kind: fail.Kind }
+fn dynlib_close(p0: *dynlib.Handle) dynlib_close_Outcome {
+  status: fail.Status
+  dynlib.close(&status, p0)
+  return dynlib_close_Outcome{ failure: status.failure, kind: status.failure.kind }
+}
+
+fn failed(failure: fail.Failure) bool {
+  return failure.kind != fail.Kind.Ok
+}
+
 fn check(ok:bool) {if !ok {#panic("shaped selection")}}
 fn select(data:rawptr,text:[]const u8) layout.Face {return layout.Face{font:data,data:data}}
 struct Range {start:usize,end:usize,path:[]const u8}
@@ -41,79 +94,79 @@ fn main() {
  scratch:=mem.arena_alloc(0)
  defer {mem.arena_release(scratch)
   mem.arena_release(owner)}
- library:=dynlib.open("HB_LIBRARY",dynlib.Now)
- bidi_library:=dynlib.open("BIDI_LIBRARY",dynlib.Now)
- check(!errors.failed(library.failure) && !errors.failed(bidi_library.failure))
- defer {_=dynlib.close(&library.value)
-  _=dynlib.close(&bidi_library.value)}
- h:=hb.load(library.value)
- b:=bidi.load(bidi_library.value)
- check(!errors.failed(h.failure) && !errors.failed(b.failure))
+ library:=dynlib_open("HB_LIBRARY",dynlib.Now)
+ bidi_library:=dynlib_open("BIDI_LIBRARY",dynlib.Now)
+ check(!failed(library.failure) && !failed(bidi_library.failure))
+ defer {_=dynlib_close(&library.value)
+  _=dynlib_close(&bidi_library.value)}
+ h:=hb_load(library.value)
+ b:=bidi_load(bidi_library.value)
+ check(!failed(h.failure) && !failed(b.failure))
  bytes_file: fail.Status
  bytes := fs.read_all(owner, &bytes_file, "font.ttf", 10000000)
  check(!bytes_file.failed)
- font:=hb.font_owned(&h.api,bytes,0)
- check(!errors.failed(font.failure))
+ font:=hb_font_owned(&h.api,bytes,0)
+ check(!failed(font.failure))
  defer h.api.font_destroy(font.value)
  h.api.font_set_scale(font.value,2048,2048)
  descriptor:=layout.Font{data:font.value,select:select,line_height:40,space_advance:10.171875}
  CASES
  // Results own plain geometry even when the destination arena owns the layout.
- owned_layout:=layout.build(owner,"alias",descriptor,&h.api,&b.api,layout.Options{})
- check(!errors.failed(owned_layout.failure))
- aliased:=layout.selection(owner,&owned_layout.value,0,5)
- check(!errors.failed(aliased.failure) && #len(aliased.value)==1 && aliased.value[0].x==0.0 && aliased.value[0].width==owned_layout.value.width)
+ owned_layout:=layout_build(owner,"alias",descriptor,&h.api,&b.api,layout.Options{})
+ check(!failed(owned_layout.failure))
+ aliased:=layout_selection(owner,&owned_layout.value,0,5)
+ check(!failed(aliased.failure) && #len(aliased.value)==1 && aliased.value[0].x==0.0 && aliased.value[0].width==owned_layout.value.width)
  retained:=aliased.value[0]
  owned_layout.value.glyphs[0].x=123.0
  check(aliased.value[0].x==retained.x && aliased.value[0].width==retained.width && aliased.value[0].start==0 && aliased.value[0].end==5)
  // Public records can be forged; reject malformed slices before allocation.
- source:=layout.build(owner,"aéz",descriptor,&h.api,&b.api,layout.Options{})
- check(!errors.failed(source.failure))
+ source:=layout_build(owner,"aéz",descriptor,&h.api,&b.api,layout.Options{})
+ check(!failed(source.failure))
  mark:=mem.arena_mark(scratch)
- check(layout.selection(scratch,&source.value,2,3).kind==errors.Kind.InvalidInput)
- check(layout.selection(scratch,&source.value,0,2).kind==errors.Kind.InvalidInput)
- check(layout.selection(scratch,&source.value,4,3).kind==errors.Kind.InvalidInput)
- check(layout.selection(scratch,&source.value,0,5).kind==errors.Kind.InvalidInput)
- check(errors.failed(layout.selection(scratch,nil,0,0).failure))
- check(errors.failed(layout.selection(nil,&source.value,0,1).failure))
+ check(layout_selection(scratch,&source.value,2,3).kind==fail.Kind.InvalidInput)
+ check(layout_selection(scratch,&source.value,0,2).kind==fail.Kind.InvalidInput)
+ check(layout_selection(scratch,&source.value,4,3).kind==fail.Kind.InvalidInput)
+ check(layout_selection(scratch,&source.value,0,5).kind==fail.Kind.InvalidInput)
+ check(failed(layout_selection(scratch,nil,0,0).failure))
+ check(failed(layout_selection(nil,&source.value,0,1).failure))
  check(mem.arena_mark(scratch)==mark)
- empty:=layout.selection(scratch,&source.value,1,1)
- check(!errors.failed(empty.failure) && #len(empty.value)==0 && mem.arena_mark(scratch)==mark)
+ empty:=layout_selection(scratch,&source.value,1,1)
+ check(!failed(empty.failure) && #len(empty.value)==0 && mem.arena_mark(scratch)==mark)
  broken:=source.value
  broken.lines[0].glyph_count+=1
- check(layout.selection(scratch,&broken,0,1).kind==errors.Kind.InvalidInput && mem.arena_mark(scratch)==mark)
+ check(layout_selection(scratch,&broken,0,1).kind==fail.Kind.InvalidInput && mem.arena_mark(scratch)==mark)
  broken.lines[0].glyph_count-=1
  // Newline bytes have no glyph cells; extension belongs to the editor.
- multiline:=layout.build(owner,"ab\n\nאב",descriptor,&h.api,&b.api,layout.Options{})
- check(!errors.failed(multiline.failure))
- newline:=layout.selection(scratch,&multiline.value,2,4)
- check(!errors.failed(newline.failure) && #len(newline.value)==0 && mem.arena_mark(scratch)==mark)
- whole:=layout.selection(scratch,&multiline.value,0,#len(multiline.value.text))
- check(!errors.failed(whole.failure) && #len(whole.value)==2 && whole.value[0].line==0 && whole.value[1].line==2 && whole.value[1].y==80.0)
+ multiline:=layout_build(owner,"ab\n\nאב",descriptor,&h.api,&b.api,layout.Options{})
+ check(!failed(multiline.failure))
+ newline:=layout_selection(scratch,&multiline.value,2,4)
+ check(!failed(newline.failure) && #len(newline.value)==0 && mem.arena_mark(scratch)==mark)
+ whole:=layout_selection(scratch,&multiline.value,0,#len(multiline.value.text))
+ check(!failed(whole.failure) && #len(whole.value)==2 && whole.value[0].line==0 && whole.value[1].line==2 && whole.value[1].y==80.0)
  mem.arena_reset(scratch)
  // Source cluster expansion includes ligature bytes and combining marks.
- ligature:=layout.build(owner,"office",descriptor,&h.api,&b.api,layout.Options{})
- check(!errors.failed(ligature.failure))
- inside:=layout.selection(scratch,&ligature.value,2,3)
- check(!errors.failed(inside.failure) && #len(inside.value)==1 && inside.value[0].start==1 && inside.value[0].end==4)
+ ligature:=layout_build(owner,"office",descriptor,&h.api,&b.api,layout.Options{})
+ check(!failed(ligature.failure))
+ inside:=layout_selection(scratch,&ligature.value,2,3)
+ check(!failed(inside.failure) && #len(inside.value)==1 && inside.value[0].start==1 && inside.value[0].end==4)
  mem.arena_reset(scratch)
- marked:=layout.build(owner,"e\xcc\x81",descriptor,&h.api,&b.api,layout.Options{})
- check(!errors.failed(marked.failure))
- accent:=layout.selection(scratch,&marked.value,1,3)
- check(!errors.failed(accent.failure) && #len(accent.value)==1 && accent.value[0].start==0 && accent.value[0].end==3)
+ marked:=layout_build(owner,"e\xcc\x81",descriptor,&h.api,&b.api,layout.Options{})
+ check(!failed(marked.failure))
+ accent:=layout_selection(scratch,&marked.value,1,3)
+ check(!failed(accent.failure) && #len(accent.value)==1 && accent.value[0].start==0 && accent.value[0].end==3)
  mem.arena_reset(scratch)
  // Non-contiguous visual cells retain their unselected bidi gap.
- mixed:=layout.build(owner,"abc אבג xyz",descriptor,&h.api,&b.api,layout.Options{})
- check(!errors.failed(mixed.failure))
- split:=layout.selection(scratch,&mixed.value,2,6)
- check(!errors.failed(split.failure) && #len(split.value)==2 && split.value[0].x+split.value[0].width<split.value[1].x)
+ mixed:=layout_build(owner,"abc אבג xyz",descriptor,&h.api,&b.api,layout.Options{})
+ check(!failed(mixed.failure))
+ split:=layout_selection(scratch,&mixed.value,2,6)
+ check(!failed(split.failure) && #len(split.value)==2 && split.value[0].x+split.value[0].width<split.value[1].x)
  mem.arena_reset(scratch)
  // Equal RTL parity does not imply visual adjacency: digits have level 2,
  // letters level 0, and their source-adjacent LTR cells flank unselected Hebrew.
- parity:=layout.build(owner,"abc אבג123def",descriptor,&h.api,&b.api,layout.Options{})
- check(!errors.failed(parity.failure))
- parity_selection:=layout.selection(scratch,&parity.value,10,16)
- check(!errors.failed(parity_selection.failure) && #len(parity_selection.value)==2)
+ parity:=layout_build(owner,"abc אבג123def",descriptor,&h.api,&b.api,layout.Options{})
+ check(!failed(parity.failure))
+ parity_selection:=layout_selection(scratch,&parity.value,10,16)
+ check(!failed(parity_selection.failure) && #len(parity_selection.value)==2)
  check(parity_selection.value[0].x+parity_selection.value[0].width<parity_selection.value[1].x)
  check(parity_selection.value[0].start==10 && parity_selection.value[0].end==13 && parity_selection.value[1].start==13 && parity_selection.value[1].end==16)
  check(!layout.cluster_at(&parity.value,10).rtl && !layout.cluster_at(&parity.value,13).rtl)
@@ -121,10 +174,10 @@ fn main() {
  // Long lines must remain linear in glyph count, including selection queries.
  long_bytes:=mem.push_bytes_uninit(owner,20000)
  for i in 0..#len(long_bytes) {long_bytes[i]=97}
- long_line:=layout.build(owner,long_bytes,descriptor,&h.api,&b.api,layout.Options{})
- check(!errors.failed(long_line.failure))
- long_selection:=layout.selection(scratch,&long_line.value,1,19999)
- check(!errors.failed(long_selection.failure) && #len(long_selection.value)==1 && long_selection.value[0].start==1 && long_selection.value[0].end==19999)
+ long_line:=layout_build(owner,long_bytes,descriptor,&h.api,&b.api,layout.Options{})
+ check(!failed(long_line.failure))
+ long_selection:=layout_selection(scratch,&long_line.value,1,19999)
+ check(!failed(long_selection.failure) && #len(long_selection.value)==1 && long_selection.value[0].start==1 && long_selection.value[0].end==19999)
 }
 
 // Writes data to path; whether it worked.
@@ -176,7 +229,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-shaped-selection-') as directory:
                 path=f'case-{index}-{low}-{high}.bin';paths.append(path)
                 (work/('expected-'+path)).write_bytes(expected(records,low,high))
                 ranges.append(f'Range{{start:{low},end:{high},path:"{path}"}}')
-        cases.append('if true {\nresult:=layout.build(owner,'+lit(text)+',descriptor,&h.api,&b.api,layout.Options{})\ncheck(!errors.failed(result.failure))\nranges:['+str(len(ranges))+']Range=['+','.join(ranges)+']\nfor range in ranges {\nchosen:=layout.selection(scratch,&result.value,range.start,range.end)\ncheck(!errors.failed(chosen.failure))\nsave(scratch,chosen.value,range.path)\nmem.arena_reset(scratch)\n}\n}')
+        cases.append('if true {\nresult:=layout_build(owner,'+lit(text)+',descriptor,&h.api,&b.api,layout.Options{})\ncheck(!failed(result.failure))\nranges:['+str(len(ranges))+']Range=['+','.join(ranges)+']\nfor range in ranges {\nchosen:=layout_selection(scratch,&result.value,range.start,range.end)\ncheck(!failed(chosen.failure))\nsave(scratch,chosen.value,range.path)\nmem.arena_reset(scratch)\n}\n}')
     source=SOURCE.replace('CASES','\n'.join(cases)).replace('HB_LIBRARY',ctypes.util.find_library('harfbuzz') or 'libharfbuzz.so.0').replace('BIDI_LIBRARY',ctypes.util.find_library('fribidi') or 'libfribidi.so.0')
     (work/'main.dyn').write_text(source,encoding='utf-8')
     for flags in (['--debug'],['--release'],['--release','--opt-level','3']):

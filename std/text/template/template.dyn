@@ -2,14 +2,10 @@ use "std/bytes" byte_ops
 use "std/io" stream
 use "std/mem" memory
 use "std/parse" parse
+use "std/fail"
 
 pub struct Template { source: []const u8 }
 pub struct Field { name: []const u8, value: []const u8 }
-// Offsets identify source positions when known; zero also represents unknown.
-pub struct ParseResult { value: Template, offset: usize, failure: parse.Failure }
-pub struct RenderResult { offset: usize, failure: parse.StreamFailure }
-
-
 
 fn trim(source: []const u8) []const u8 {
   start: usize = 0
@@ -37,7 +33,9 @@ fn valid_name(name: []const u8) bool {
 
 // Validates before allocating; the retained source borrows the arena's lifetime.
 // Required storage exhaustion panics, including for nonempty literal templates.
-pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
+// A malformed {{field}} fails with InvalidInput at its offset.
+pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) Template {
+  if status.failed { return Template{} }
   cursor: usize = 0
   for cursor < #len(source) {
     if cursor + 1 < #len(source) && source[cursor] == '{' && source[cursor + 1] == '{' {
@@ -46,7 +44,8 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
         end += 1
       }
       if end + 1 >= #len(source) || !valid_name(trim(source[cursor + 2..end])) {
-        return ParseResult{ offset: cursor, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cursor } }
+        parse.malformed(status, "parse template", "malformed field", cursor)
+        return Template{}
       }
       cursor = end + 2
     } else {
@@ -60,7 +59,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
       retained[i] = source[i]
     }
   }
-  return ParseResult{ value: Template{ source: retained } }
+  return Template{ source: retained }
 }
 
 fn value(fields: []const Field, name: []const u8) []const u8 {
@@ -70,50 +69,41 @@ fn value(fields: []const Field, name: []const u8) []const u8 {
   return ""
 }
 
-fn write(destination: stream.Writer, source: []const u8) RenderResult {
-  result := stream.write_transfer(destination, source)
-  if stream.failed(result.failure) {
-    return RenderResult{ failure: parse.io_failure(result.failure.kind, result.failure.native) }
-  }
-  return RenderResult{}
+fn write(status: *fail.Status, destination: stream.Writer, source: []const u8) {
+  stream.write(status, destination, source)
 }
 
-// Literal output maps directly to source bytes, unlike expanded field values.
-fn write_literal(destination: stream.Writer, source: []const u8, offset: usize) RenderResult {
-  result := stream.write_transfer(destination, source)
-  if stream.failed(result.failure) {
-    return RenderResult{ offset: offset + result.transferred, failure: parse.io_failure(result.failure.kind, result.failure.native) }
-  }
-  return RenderResult{}
+pub fn render(status: *fail.Status, destination: stream.Writer, template: *const Template, fields: []const Field) {
+  render_with(status, destination, template, fields, write)
 }
 
-pub fn render(destination: stream.Writer, template: *const Template, fields: []const Field) RenderResult {
-  return render_with(destination, template, fields, write)
-}
-
-// Field rendering seam shared by plain-text and HTML templates. Literal text is unchanged.
-pub fn render_with(destination: stream.Writer, template: *const Template, fields: []const Field,
-  render_field: fn(stream.Writer, []const u8) RenderResult) RenderResult {
+// Field rendering seam shared by plain-text and HTML templates. Literal text
+// is unchanged. A malformed field fails with InvalidInput at its offset.
+pub fn render_with(status: *fail.Status, destination: stream.Writer, template: *const Template, fields: []const Field,
+  render_field: fn(*fail.Status, stream.Writer, []const u8)) {
+  if status.failed { return }
   if template == nil || render_field == nil {
-    return RenderResult{ failure: parse.parse_failure(parse.Kind.Syntax, 0, "") }
+    fail.invalid(status, "render template", "", "no template or field renderer")
+    return
   }
   cursor: usize = 0
   literal: usize = 0
   for cursor < #len(template.source) {
     if cursor + 1 < #len(template.source) && template.source[cursor] == '{' && template.source[cursor + 1] == '{' {
       if cursor > literal {
-        literal_result := write_literal(destination, template.source[literal..cursor], literal)
-        if literal_result.failure.kind != parse.StreamKind.Ok { return literal_result }
+        stream.write(status, destination, template.source[literal..cursor])
+        if status.failed { return }
       }
       end := cursor + 2
       for end + 1 < #len(template.source) && !(template.source[end] == '}' && template.source[end + 1] == '}') {
         end += 1
       }
       if end + 1 >= #len(template.source) || !valid_name(trim(template.source[cursor + 2..end])) {
-        return RenderResult{ offset: cursor, failure: parse.parse_failure(parse.Kind.Syntax, cursor, "") }
+        parse.malformed(status, "render template", "malformed field", cursor)
+        return
       }
-      field_result := render_field(destination, value(fields, trim(template.source[cursor + 2..end])))
-      if field_result.failure.kind != parse.StreamKind.Ok { return field_result }
+      render_field(status, destination, value(fields, trim(template.source[cursor + 2..end])))
+      if status.failed { return }
       cursor = end + 2
       literal = cursor
     } else {
@@ -121,7 +111,6 @@ pub fn render_with(destination: stream.Writer, template: *const Template, fields
     }
   }
   if literal < #len(template.source) {
-    return write_literal(destination, template.source[literal..], literal)
+    stream.write(status, destination, template.source[literal..])
   }
-  return RenderResult{}
 }

@@ -1,4 +1,4 @@
-use "std/parse" parse
+use "std/fail"
 #target(kernel: linux)
 use "std/c"
 use "std/mem"
@@ -21,9 +21,9 @@ pub enum ErrorKind {
   WantWrite,
 }
 
-pub struct ContextResult { value: Context, error: ErrorKind, provider_code: u64, failure: io.Failure }
-pub struct ConnectionResult { value: Connection, error: ErrorKind, provider_code: u64, failure: io.Failure }
-pub struct Result { count: usize, error: ErrorKind, provider_code: u64, provider_status: i32, failure: io.Failure }
+pub struct ContextResult { value: Context, error: ErrorKind, provider_code: u64 }
+pub struct ConnectionResult { value: Connection, error: ErrorKind, provider_code: u64 }
+pub struct Result { count: usize, error: ErrorKind, provider_code: u64, provider_status: i32 }
 
 const VerifyPeer: i32 = 1
 const SetTlsExtensionHostname: i32 = 55
@@ -34,10 +34,8 @@ const ErrorWantWrite: i32 = 3
 
 
 fn failure(kind: ErrorKind, status: i32) Result {
-  if kind == ErrorKind.InvalidArgument {
-    return Result{ error: kind, provider_status: status, failure: io.Failure{ kind: io.Kind.System } }
-  }
-  return Result{ count: 0, error: kind, provider_code: provider_error(), provider_status: status, failure: io.Failure{ kind: io.Kind.System } }
+  if kind == ErrorKind.InvalidArgument { return Result{ error: kind, provider_status: status } }
+  return Result{ count: 0, error: kind, provider_code: provider_error(), provider_status: status }
 }
 
 fn operation_failure(connection: Connection, status: i32) Result {
@@ -48,7 +46,7 @@ fn operation_failure(connection: Connection, status: i32) Result {
   } else if code == ErrorWantWrite {
     kind = ErrorKind.WantWrite
   }
-  return Result{ count: 0, error: kind, provider_code: provider_error(), provider_status: code, failure: io.Failure{ kind: io.Kind.System } }
+  return Result{ count: 0, error: kind, provider_code: provider_error(), provider_status: code }
 }
 
 // Loads provider-default trust roots and enables peer-certificate verification.
@@ -56,16 +54,16 @@ pub fn context_create_owned() ContextResult {
   provider_clear_error()
   method := tls_client_method()
   if method == nil {
-    return ContextResult{ value: nil, error: ErrorKind.Provider, provider_code: provider_error(), failure: io.Failure{ kind: io.Kind.System } }
+    return ContextResult{ value: nil, error: ErrorKind.Provider, provider_code: provider_error() }
   }
   context := ssl_context_new(method)
   if context == nil {
-    return ContextResult{ value: nil, error: ErrorKind.Provider, provider_code: provider_error(), failure: io.Failure{ kind: io.Kind.System } }
+    return ContextResult{ value: nil, error: ErrorKind.Provider, provider_code: provider_error() }
   }
   if ssl_context_default_roots(context) != 1 {
     code := provider_error()
     ssl_context_free(context)
-    return ContextResult{ value: nil, error: ErrorKind.Provider, provider_code: code, failure: io.Failure{ kind: io.Kind.System } }
+    return ContextResult{ value: nil, error: ErrorKind.Provider, provider_code: code }
   }
   ssl_context_set_verify(context, VerifyPeer, nil)
   return ContextResult{ value: context, error: ErrorKind.None, provider_code: 0 }
@@ -80,29 +78,28 @@ pub fn context_free_owned(context: Context) {
 // Creates a server context and loads PEM certificate chain/private key.
 pub fn server_context_create_owned(certificate: []const u8, key: []const u8,
   certificate_buffer: []u8, key_buffer: []u8) ContextResult {
-  certificate_path := c.string_into(certificate_buffer, certificate)
-  key_path := c.string_into(key_buffer, key)
-  if parse.failed(certificate_path.failure) || parse.failed(key_path.failure) {
-    return ContextResult{ error: ErrorKind.InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
-  }
-  return server_context_from_paths(certificate_path.value, key_path.value)
+  converting: fail.Status
+  certificate_path := c.string_into(&converting, certificate_buffer, certificate)
+  key_path := c.string_into(&converting, key_buffer, key)
+  if converting.failed { return ContextResult{ error: ErrorKind.InvalidArgument } }
+  return server_context_from_paths(certificate_path, key_path)
 }
 
 fn server_context_from_paths(certificate: *const u8, key: *const u8) ContextResult {
   provider_clear_error()
   method := tls_server_method()
   if method == nil {
-    return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error(), failure: io.Failure{ kind: io.Kind.System } }
+    return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error() }
   }
   context := ssl_context_new(method)
   if context == nil {
-    return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error(), failure: io.Failure{ kind: io.Kind.System } }
+    return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error() }
   }
   if context_use_certificate(context, certificate) != 1 ||
     context_use_key(context, key, FileTypePem) != 1 || context_check_key(context) != 1 {
     code := provider_error()
     ssl_context_free(context)
-    return ContextResult{ error: ErrorKind.Provider, provider_code: code, failure: io.Failure{ kind: io.Kind.System } }
+    return ContextResult{ error: ErrorKind.Provider, provider_code: code }
   }
   return ContextResult{ value: context }
 }
@@ -111,26 +108,25 @@ fn server_context_from_paths(certificate: *const u8, key: *const u8) ContextResu
 pub fn server_context_create(arena: *mem.Arena, certificate: []const u8, key: []const u8) ContextResult {
   mark := mem.arena_mark(arena)
   defer mem.arena_rewind(arena, mark)
-  certificate_path := c.string_from_bytes(arena, certificate)
-  key_path := c.string_from_bytes(arena, key)
-  if parse.failed(certificate_path.failure) || parse.failed(key_path.failure) {
-    return ContextResult{ error: ErrorKind.InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
-  }
-  return server_context_from_paths(certificate_path.value, key_path.value)
+  converting: fail.Status
+  certificate_path := c.string_from_bytes(arena, &converting, certificate)
+  key_path := c.string_from_bytes(arena, &converting, key)
+  if converting.failed { return ContextResult{ error: ErrorKind.InvalidArgument } }
+  return server_context_from_paths(certificate_path, key_path)
 }
 
 pub fn server_connection_create_owned(context: Context, descriptor: i32) ConnectionResult {
   if context == nil || descriptor < 0 {
-    return ConnectionResult{ error: ErrorKind.InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
+    return ConnectionResult{ error: ErrorKind.InvalidArgument }
   }
   connection := ssl_new(context)
   if connection == nil {
-    return ConnectionResult{ error: ErrorKind.Provider, provider_code: provider_error(), failure: io.Failure{ kind: io.Kind.System } }
+    return ConnectionResult{ error: ErrorKind.Provider, provider_code: provider_error() }
   }
   if ssl_set_fd(connection, descriptor) != 1 {
     code := provider_error()
     ssl_free(connection)
-    return ConnectionResult{ error: ErrorKind.Provider, provider_code: code, failure: io.Failure{ kind: io.Kind.System } }
+    return ConnectionResult{ error: ErrorKind.Provider, provider_code: code }
   }
   return ConnectionResult{ value: connection, error: ErrorKind.None }
 }
@@ -235,20 +231,21 @@ pub fn certificate_subject(destination: []u8, certificate: Certificate) []u8 {
 // fit hostname plus NUL and is only borrowed during this call.
 pub fn connection_create_owned(context: Context, descriptor: i32, hostname: []const u8, name_buffer: []u8) ConnectionResult {
   if context == nil || descriptor < 0 || #len(hostname) == 0 {
-    return ConnectionResult{ value: nil, error: ErrorKind.InvalidArgument, provider_code: 0, failure: io.Failure{ kind: io.Kind.System } }
+    return ConnectionResult{ value: nil, error: ErrorKind.InvalidArgument, provider_code: 0 }
   }
-  name := c.string_into(name_buffer, hostname)
-  if parse.failed(name.failure) {
-    return ConnectionResult{ value: nil, error: ErrorKind.InvalidArgument, provider_code: 0, failure: io.Failure{ kind: io.Kind.System } }
+  converting: fail.Status
+  name := c.string_into(&converting, name_buffer, hostname)
+  if converting.failed {
+    return ConnectionResult{ value: nil, error: ErrorKind.InvalidArgument, provider_code: 0 }
   }
-  return connection_from_name(context, descriptor, name.value, #len(hostname))
+  return connection_from_name(context, descriptor, name, #len(hostname))
 }
 
 fn connection_from_name(context: Context, descriptor: i32, name: *const u8, length: usize) ConnectionResult {
   provider_clear_error()
   connection := ssl_new(context)
   if connection == nil {
-    return ConnectionResult{ error: ErrorKind.Provider, provider_code: provider_error(), failure: io.Failure{ kind: io.Kind.System } }
+    return ConnectionResult{ error: ErrorKind.Provider, provider_code: provider_error() }
   }
   parameters := ssl_get_parameters(connection)
   configured := ssl_set_fd(connection, descriptor) == 1 && parameters != nil
@@ -261,22 +258,21 @@ fn connection_from_name(context: Context, descriptor: i32, name: *const u8, leng
   if !configured {
     code := provider_error()
     ssl_free(connection)
-    return ConnectionResult{ error: ErrorKind.Provider, provider_code: code, failure: io.Failure{ kind: io.Kind.System } }
+    return ConnectionResult{ error: ErrorKind.Provider, provider_code: code }
   }
   return ConnectionResult{ value: connection }
 }
 
 pub fn connection_create(arena: *mem.Arena, context: Context, descriptor: i32, hostname: []const u8) ConnectionResult {
   if context == nil || descriptor < 0 || #len(hostname) == 0 {
-    return ConnectionResult{ error: ErrorKind.InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
+    return ConnectionResult{ error: ErrorKind.InvalidArgument }
   }
   mark := mem.arena_mark(arena)
   defer mem.arena_rewind(arena, mark)
-  name := c.string_from_bytes(arena, hostname)
-  if parse.failed(name.failure) {
-    return ConnectionResult{ error: ErrorKind.InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
-  }
-  return connection_from_name(context, descriptor, name.value, #len(hostname))
+  converting: fail.Status
+  name := c.string_from_bytes(arena, &converting, hostname)
+  if converting.failed { return ConnectionResult{ error: ErrorKind.InvalidArgument } }
+  return connection_from_name(context, descriptor, name, #len(hostname))
 }
 
 pub fn connection_free_owned(connection: Connection) {
@@ -289,13 +285,13 @@ pub fn handshake(connection: Connection) Result {
   if connection == nil { return failure(ErrorKind.InvalidArgument, 0) }
   provider_clear_error()
   connected := ssl_connect(connection)
-  failed := Result{ failure: io.Failure{ kind: io.Kind.System } }
+  failed := Result{}
   if connected != 1 {
     failed = operation_failure(connection, connected)
   }
   verified := ssl_verify_result(connection)
   if verified != 0 {
-    return Result{ count: 0, error: ErrorKind.Verification, provider_code: #cast(u64, verified), provider_status: connected, failure: io.Failure{ kind: io.Kind.System } }
+    return Result{ count: 0, error: ErrorKind.Verification, provider_code: #cast(u64, verified), provider_status: connected }
   }
   if connected != 1 { return failed }
   return Result{ count: 0, error: ErrorKind.None, provider_code: 0, provider_status: connected }
@@ -362,19 +358,15 @@ pub fn error_string(destination: []u8, code: u64) []u8 {
 
 // Complete allocated subject text. Release with subject_text_free_owned.
 // A nil formatting buffer asks OpenSSL to allocate the complete representation.
-pub struct SubjectTextResult { value: *u8, provider_code: u64, failure: io.Failure }
+pub struct SubjectTextResult { value: *u8, provider_code: u64 }
 extern fn provider_text_free "CRYPTO_free"(pointer: rawptr, file: *const u8, line: i32)
 pub fn subject_text_owned(certificate: Certificate) SubjectTextResult {
-  if certificate == nil { return SubjectTextResult{ failure: io.Failure{ kind: io.Kind.System } } }
+  if certificate == nil { return SubjectTextResult{} }
   provider_clear_error()
   name := certificate_subject_name(certificate)
-  if name == nil {
-    return SubjectTextResult{ provider_code: provider_error(), failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if name == nil { return SubjectTextResult{ provider_code: provider_error() } }
   text := name_text(name, nil, 0)
-  if text == nil {
-    return SubjectTextResult{ provider_code: provider_error(), failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if text == nil { return SubjectTextResult{ provider_code: provider_error() } }
   return SubjectTextResult{ value: text }
 }
 pub fn subject_text_free_owned(text: *u8) {
@@ -387,9 +379,7 @@ pub fn shutdown_result(connection: Connection) Result {
   provider_clear_error()
   status := ssl_shutdown(connection)
   if status == 1 { return Result{ provider_status: status } }
-  if status == 0 {
-    return Result{ error: ErrorKind.WantRead, provider_status: 0, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if status == 0 { return Result{ error: ErrorKind.WantRead, provider_status: 0 } }
   return operation_failure(connection, status)
 }
 pub fn set_alpn_result(connection: Connection, protocols: []const u8) Result {

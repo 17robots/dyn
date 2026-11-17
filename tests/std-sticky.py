@@ -6,8 +6,7 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE = r'''use "std/parse" parse
-use "std/fail"
+SOURCE = r'''use "std/fail"
 use "std/io"
 use "std/bufio"
 use "std/encoding/ini"
@@ -60,10 +59,12 @@ fn main() {
     if line.status != bufio.ReadStatus.End || until.status != bufio.ReadStatus.End { #panic("records end after a failure") }
   }
   scan := ini.scanner("bad\nx=1")
-  item := ini.next(&scan)
+  scanning: fail.Status
+  item := ini.next(&scanning, &scan)
   offset := scan.offset
-  later := ini.next(&scan)
-  if item.found || later.found || scan.failure.kind != parse.Kind.Syntax || scan.error_line != 1 || scan.errors != 1 || scan.offset != offset { #panic("ini sticky failure") }
+  again: fail.Status
+  later := ini.next(&again, &scan)
+  if item.found || later.found || scanning.failure.kind != fail.Kind.InvalidInput || scan.error_line != 1 || scan.offset != offset { #panic("ini sticky failure") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-std-sticky-') as directory:

@@ -4,7 +4,6 @@
 // Faces that std/font cannot open (CFF-flavored OpenType and collections)
 // are skipped.
 
-use "std/parse" parse
 use "std/io" io
 use "std/mem" mem
 use "std/fail"
@@ -156,8 +155,9 @@ fn describe_data(arena: *mem.Arena, path: []const u8, data: []const u8) Entry {
     length := #cast(usize, u32be(data, at + 12))
     if offset > #len(data) || length > #len(data) - offset { return nil_entry }
   }
-  opened := font.open(data)
-  if parse.failed(opened.failure) { return nil_entry }
+  opening: fail.Status
+  _ = font.open(&opening, data)
+  if opening.failed { return nil_entry }
   names := table(data, 0x6e616d65)
   if !names.ok { return nil_entry }
   // Typographic family and subfamily (16, 17) group weights under one name.
@@ -359,8 +359,8 @@ pub fn covering(entries: []const Entry, codepoint: u32, regular_only: bool) *con
     mapped := fs.map(&status, &handle)
     fs.close(&handle)
     if status.failed { continue }
-    face := font.open(mapped)
-    found := !parse.failed(face.failure) && font.glyph_index(&face.value, codepoint) != 0
+    face := font.open(&status, mapped)
+    found := !status.failed && font.glyph_index(&face, codepoint) != 0
     fs.unmap(&mapped)
     if found { return entry }
   }

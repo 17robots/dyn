@@ -1,6 +1,5 @@
 use "std/mmio" mmio
-use "std/io" io
-pub struct Result { failure: io.Failure }
+use "std/fail"
 // Little-endian split 64-bit MTIME/MTIMECMP registers. These descriptors borrow
 // hardware registers; clock frequency and hart ownership belong to the caller.
 // Split accesses require strongly ordered device I/O (the RISC-V MTIMER
@@ -32,10 +31,13 @@ pub struct SysTick { base: usize }
 pub const systick: SysTick = SysTick{ base: 0xe000e010 }
 // periods are 2..2^24 clock ticks. Device initialization, interrupt handler and
 // processor clock frequency remain caller responsibilities. Invalid periods
-// leave registers untouched. CTRL reads clear COUNTFLAG on real hardware.
-pub fn start(timer: *const SysTick, period: u32, interrupt: bool, processor_clock: bool) Result {
+// leave registers untouched and fail with InvalidInput. CTRL reads clear
+// COUNTFLAG on real hardware.
+pub fn start(status: *fail.Status, timer: *const SysTick, period: u32, interrupt: bool, processor_clock: bool) {
+  if status.failed { return }
   if period < 2 || period > 16777216 {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+    fail.invalid(status, "start timer", "", "the period must be 2 to 2^24 ticks")
+    return
   }
   control: u32 = 1
   if interrupt {
@@ -48,7 +50,6 @@ pub fn start(timer: *const SysTick, period: u32, interrupt: bool, processor_cloc
   mmio.store_u32(timer.base + 4, period - 1)
   mmio.store_u32(timer.base + 8, 0)
   mmio.store_u32(timer.base, control)
-  return Result{}
 }
 pub fn stop(timer: *const SysTick) {
   mmio.store_u32(timer.base, 0)

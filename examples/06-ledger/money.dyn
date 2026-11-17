@@ -3,47 +3,46 @@
 // accident. Converting either way takes an explicit #cast.
 
 use "std/bytes"
+use "std/fail"
 use "std/fmt"
 use "std/parse"
 
 distinct type Cents = i64
 
-// "12", "12.5", "12.50" or "-3.25" as cents.
-fn parse_cents(text: []const u8) parse.Result(Cents) {
+// "12", "12.5", "12.50" or "-3.25" as cents. Bad text fails with
+// InvalidInput, an amount too large to add up safely with Overflow.
+fn parse_cents(status: *fail.Status, text: []const u8) Cents {
   negative := #len(text) > 0 && text[0] == '-'
   digits := text
   if negative {
     digits = text[1..]
   }
   dot := bytes.find_byte(digits, '.')       // #len(digits) when absent
-  whole := parse.u64_decimal(digits[..dot])
-  if parse.failed(whole.failure) { return parse.Result(Cents){ failure: whole.failure } }
+  whole := parse.u64_decimal(status, digits[..dot])
   fraction: u64 = 0
   if dot < #len(digits) {
     decimals := digits[dot + 1..]
-    parsed := parse.u64_decimal(decimals)
-    if parse.failed(parsed.failure) || #len(decimals) > 2 {
-      return parse.Result(Cents){
-        failure: parse.Failure{ kind: parse.Kind.Syntax, offset: dot + 1, message: "an amount has at most two decimals" },
-      }
+    if #len(decimals) > 2 {
+      parse.malformed(status, "parse amount", "an amount has at most two decimals", dot + 1)
+      return #cast(Cents, 0)
     }
-    fraction = parsed.value
+    fraction = parse.u64_decimal(status, decimals)
     if #len(decimals) == 1 {
       fraction *= 10
     }
   }
   // A debug build checks every + and * for overflow; a release build wraps.
   // An amount this large is bad input, not a reason to crash, so test it.
-  if whole.value > 1000000000000 {
-    return parse.Result(Cents){
-      failure: parse.Failure{ kind: parse.Kind.Overflow, message: "amount too large" },
-    }
+  if status.failed { return #cast(Cents, 0) }
+  if whole > 1000000000000 {
+    fail.set(status, fail.make(fail.Kind.Overflow, "parse amount", "", "amount too large"))
+    return #cast(Cents, 0)
   }
-  cents := #cast(Cents, whole.value * 100 + fraction)
+  cents := #cast(Cents, whole * 100 + fraction)
   if negative {
     cents = -cents
   }
-  return parse.Result(Cents){ value: cents }
+  return cents
 }
 
 // 1234 as "12.34", into a sticky fmt.Buffer.

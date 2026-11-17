@@ -16,6 +16,47 @@ use "std/ui/box" box
 use "std/ui/software" software
 use "std/mem" mem
 use "std/io" errors
+use "std/fail"
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
+  status: fail.Status
+  window.open(&status, p0, p1, p2, p3)
+  return status.failure
+}
+
+fn window_poll(p0: *window.Window) fail.Failure {
+  status: fail.Status
+  window.poll(&status, p0)
+  return status.failure
+}
+
+fn window_swap(p0: *window.Window) fail.Failure {
+  status: fail.Status
+  window.swap(&status, p0)
+  return status.failure
+}
+
+fn gpu_open_batch(p0: *gpu.Batch, p1: gl.Api) fail.Failure {
+  status: fail.Status
+  gpu.open_batch(&status, p0, p1)
+  return status.failure
+}
+
+fn gpu_render_batch(p0: *gpu.Batch, p1: *const ui.Command, p2, p3: i32, p4: software.Font, p5: []f32) fail.Failure {
+  status: fail.Status
+  gpu.render_batch(&status, p0, p1, p2, p3, p4, p5)
+  return status.failure
+}
+
+fn software_render(p0: *software.Surface, p1: *const ui.Command, p2: software.Font) fail.Failure {
+  status: fail.Status
+  software.render(&status, p0, p1, p2)
+  return status.failure
+}
+
+fn failed(failure: fail.Failure) bool {
+  return failure.kind != fail.Kind.Ok
+}
+
 
 fn check(ok: bool, message: []const u8) {
   if !ok {
@@ -69,14 +110,15 @@ fn main() {
     }
   }
   host := window.Window{}
-  check(window.open(&host, "Dyn batched UI test", 160, 96).kind == errors.Kind.Ok, "window")
+  check(window_open(&host, "Dyn batched UI test", 160, 96).kind == fail.Kind.Ok, "window")
   defer {
     window.close(&host)
   }
-  loaded := gl.load(window.gl_proc)
-  check(!errors.failed(loaded.failure), "gl")
+  loading: fail.Status
+  api := gl.load(&loading, window.gl_proc)
+  check(!loading.failed, "gl")
   batch := mem.push(gpu.Batch, persistent_arena)
-  check(!errors.failed(gpu.open_batch(batch, loaded.api).failure), "open batch")
+  check(!failed(gpu_open_batch(batch, api)), "open batch")
   defer {
     gpu.close_batch(batch)
   }
@@ -91,13 +133,13 @@ fn main() {
   font := software.Font{ glyph: bitmap, line_height: 12 }
   pixels := mem.push_array(u8, persistent_arena, #cast(usize, 61440))
   surface := software.Surface{ pixels: pixels, width: 160, height: 96, stride: 640 }
-  check(!errors.failed(software.render(&surface, ui.first(&context), font).failure), "software")
+  check(!failed(software_render(&surface, ui.first(&context), font)), "software")
   vertices := mem.push_array(f32, persistent_arena, #cast(usize, 86016))
-  loaded.api.clear_color(0.0, 0.0, 0.0, 0.0)
-  loaded.api.clear(gl.ColorBufferBit)
-  check(!errors.failed(gpu.render_batch(batch, ui.first(&context), 160, 96, font, vertices).failure), "batch render")
+  api.clear_color(0.0, 0.0, 0.0, 0.0)
+  api.clear(gl.ColorBufferBit)
+  check(!failed(gpu_render_batch(batch, ui.first(&context), 160, 96, font, vertices)), "batch render")
   actual := mem.push_array(u8, persistent_arena, #cast(usize, 61440))
-  loaded.api.read_pixels(0, 0, 160, 96, gl.Rgba, gl.UnsignedByte, &actual[0])
+  api.read_pixels(0, 0, 160, 96, gl.Rgba, gl.UnsignedByte, &actual[0])
   worst: i32 = 0
   for y in 0..96 {
     for x in 0..160 {
@@ -117,15 +159,15 @@ fn main() {
   check(batch.draw_calls == 1, "single draw call")
   uploads := batch.uploads
   check(uploads >= 1 && uploads <= 12, "atlas uploads distinct glyphs")
-  check(!errors.failed(gpu.render_batch(batch, ui.first(&context), 160, 96, font, vertices).failure), "second render")
+  check(!failed(gpu_render_batch(batch, ui.first(&context), 160, 96, font, vertices)), "second render")
   check(batch.uploads == uploads, "cached glyphs are not uploaded again")
   // Tiny vertex storage still renders, with more draw calls.
   tiny: [84]f32
   calls := batch.draw_calls
-  check(!errors.failed(gpu.render_batch(batch, ui.first(&context), 160, 96, font, tiny[..]).failure), "tiny stream")
+  check(!failed(gpu_render_batch(batch, ui.first(&context), 160, 96, font, tiny[..])), "tiny stream")
   check(batch.draw_calls - calls > 5, "tiny stream flushes often")
-  check(gpu.render_batch(batch, ui.first(&context), 160, 96, font, tiny[..10]).kind == errors.Kind.InvalidInput, "stream too small")
-  check(window.poll(&host).kind == errors.Kind.Ok && window.swap(&host).kind == errors.Kind.Ok, "present")
+  check(gpu_render_batch(batch, ui.first(&context), 160, 96, font, tiny[..10]).kind == fail.Kind.InvalidInput, "stream too small")
+  check(window_poll(&host).kind == fail.Kind.Ok && window_swap(&host).kind == fail.Kind.Ok, "present")
 }
 
 persistent_arena: *mem.Arena
@@ -134,6 +176,19 @@ CLIPBOARD = r'''use "std/io" errors
 use "vendor/window" window
 use "std/bytes" bytes
 use "std/time" time
+use "std/fail"
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
+  status: fail.Status
+  window.open(&status, p0, p1, p2, p3)
+  return status.failure
+}
+
+fn window_poll(p0: *window.Window) fail.Failure {
+  status: fail.Status
+  window.poll(&status, p0)
+  return status.failure
+}
+
 
 fn check(ok: bool, message: []const u8) {
   if !ok {
@@ -144,11 +199,11 @@ fn check(ok: bool, message: []const u8) {
 fn main() {
   source := window.Window{}
   target := window.Window{}
-  check(window.open(&source, "source", 64, 64).kind == errors.Kind.Ok, "source")
+  check(window_open(&source, "source", 64, 64).kind == fail.Kind.Ok, "source")
   defer {
     window.close(&source)
   }
-  check(window.open(&target, "target", 64, 64).kind == errors.Kind.Ok, "target")
+  check(window_open(&target, "target", 64, 64).kind == fail.Kind.Ok, "target")
   defer {
     window.close(&target)
   }
@@ -159,8 +214,8 @@ fn main() {
   window.request_paste(&target)
   got := false
   for i in 0..200 {
-    _ = window.poll(&source)
-    _ = window.poll(&target)
+    _ = window_poll(&source)
+    _ = window_poll(&target)
     input := window.box_input(&target)
     if input.paste {
       check(bytes.equal(input.clipboard, "héllo clipboard"), "pasted text")
@@ -172,9 +227,9 @@ fn main() {
   check(got, "paste arrived")
   // Pasting into the owner needs no round trip.
   window.request_paste(&source)
-  _ = window.poll(&source)
+  _ = window_poll(&source)
   check(window.box_input(&source).paste && bytes.equal(window.box_input(&source).clipboard, "héllo clipboard"), "owner paste on the next poll")
-  _ = window.poll(&source)
+  _ = window_poll(&source)
   check(!window.box_input(&source).paste, "paste lasts one frame")
   start := time.monotonic_now()
   window.wait(&source, 50)

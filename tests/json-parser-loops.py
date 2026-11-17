@@ -33,8 +33,8 @@ checks = []
 for index, raw in enumerate(valid):
     checks.append('''if true {
       raw := %s
-      result := json.parse(arena, raw)
-      require(!parse.failed(result.failure) && result.root.kind == json.KindNumber, "numeric kind %d")
+      result := parse(arena, raw)
+      require(result.failure.kind == fail.Kind.Ok && result.root.kind == json.KindNumber, "numeric kind %d")
       require(mem.equal(result.root.text, raw), "numeric exact token %d")
       state := json.tokenizer(raw)
       token := json.token_next(&state)
@@ -43,10 +43,10 @@ for index, raw in enumerate(valid):
       mem.arena_rewind(arena, mark)
     }''' % (quote(raw), index, index, index))
 for index, (raw, offset) in enumerate(invalid):
-    detail = 'trailing data' if raw in (b'01', b'-01', b'1 2', b'0x1') else ''
+    detail = 'trailing data' if raw in (b'01', b'-01', b'1 2', b'0x1') else 'malformed JSON'
     checks.append('''if true {
-      result := json.parse(arena, %s)
-      require(parse.failed(result.failure) && result.offset == %d && result.failure.kind == parse.Kind.Syntax && mem.equal(result.failure.message, "%s"), "failure offset %d")
+      result := parse(arena, %s)
+      require(result.failure.kind != fail.Kind.Ok && result.offset == %d && result.failure.kind == fail.Kind.InvalidInput && mem.equal(fail.message_text(&result.failure), "%s"), "failure offset %d")
       require(json.is_missing(result.root) && result.root == &json.nil_value && mem.arena_mark(arena) == mark, "failure stub/rollback %d")
     }''' % (quote(raw), offset, detail, index, index))
 # These malformed numeric tokens fail as a whole; tokenizer resumes one byte
@@ -57,10 +57,16 @@ for raw in [b'-', b'1.', b'1e', b'1e+', b'1e-', b'1.e2', b'1e.2']:
       token := json.token_next(&state)
       require(token.kind == json.TokenKind.Invalid && token.offset == 0 && state.offset == 1 && #len(token.text) == 1, "invalid tokenizer progress")
     }''' % quote(raw))
-source = '''use "std/parse" parse
+source = '''use "std/fail"
 use "std/encoding/json" json
 use "std/mem" mem
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
+struct Parsed { root: *const json.Value, offset: usize, failure: fail.Failure }
+fn parse(arena: *mem.Arena, source: []const u8) Parsed {
+  status: fail.Status
+  root := json.parse(arena, &status, source)
+  return Parsed{ root: root, offset: status.failure.offset, failure: status.failure }
+}
 fn main() {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
@@ -70,8 +76,8 @@ fn main() {
     byte := #cast(u8, item)
     accepted := byte == 32 || byte == 9 || byte == 10 || byte == 13
     data: [5]u8 = [byte, 'n', 'u', 'l', 'l']
-    result := json.parse(arena, data[..])
-    require((!parse.failed(result.failure)) == accepted, "all-byte whitespace acceptance")
+    result := parse(arena, data[..])
+    require((result.failure.kind == fail.Kind.Ok) == accepted, "all-byte whitespace acceptance")
     state := json.tokenizer(data[..])
     token := json.token_next(&state)
     if accepted {
@@ -83,14 +89,14 @@ fn main() {
     }
     mem.arena_rewind(arena, mark)
     suffix: [5]u8 = ['n', 'u', 'l', 'l', byte]
-    result = json.parse(arena, suffix[..])
-    require((!parse.failed(result.failure)) == accepted, "all-byte trailing whitespace")
+    result = parse(arena, suffix[..])
+    require((result.failure.kind == fail.Kind.Ok) == accepted, "all-byte trailing whitespace")
     mem.arena_rewind(arena, mark)
     numeric: [2]u8 = ['1', byte]
-    result = json.parse(arena, numeric[..])
+    result = parse(arena, numeric[..])
     decimal := byte >= '0' && byte <= '9'
-    require((!parse.failed(result.failure)) == (accepted || decimal), "all-byte numeric continuation")
-    if !parse.failed(result.failure) {
+    require((result.failure.kind == fail.Kind.Ok) == (accepted || decimal), "all-byte numeric continuation")
+    if result.failure.kind == fail.Kind.Ok {
       expected_width: usize = 1
       if decimal { expected_width = 2 }
       require(#len(result.root.text) == expected_width, "numeric continuation width")
@@ -103,24 +109,24 @@ fn main() {
     for i in 0..#len(whitespace) { whitespace[i] = 32 }
     whitespace[131071] = '0'
     hold := mem.arena_mark(arena)
-    result := json.parse(arena, whitespace)
-    require(!parse.failed(result.failure) && mem.equal(result.root.text, "0"), "large whitespace bounds")
+    result := parse(arena, whitespace)
+    require(result.failure.kind == fail.Kind.Ok && mem.equal(result.root.text, "0"), "large whitespace bounds")
     mem.arena_rewind(arena, hold)
     whitespace[131071] = 32
-    result = json.parse(arena, whitespace)
-    require(parse.failed(result.failure) && result.offset == #len(whitespace) && mem.arena_mark(arena) == hold, "all whitespace EOF bounds")
+    result = parse(arena, whitespace)
+    require(result.failure.kind != fail.Kind.Ok && result.offset == #len(whitespace) && mem.arena_mark(arena) == hold, "all whitespace EOF bounds")
     mem.arena_rewind(arena, mark)
   }
   if true {
     digits := mem.push_bytes_uninit(arena, 65536)
     for i in 0..#len(digits) { digits[i] = '9' }
     hold := mem.arena_mark(arena)
-    result := json.parse(arena, digits)
-    require(!parse.failed(result.failure) && #len(result.root.text) == #len(digits) && mem.equal(result.root.text, digits), "large number bounds")
+    result := parse(arena, digits)
+    require(result.failure.kind == fail.Kind.Ok && #len(result.root.text) == #len(digits) && mem.equal(result.root.text, digits), "large number bounds")
     mem.arena_rewind(arena, hold)
     digits[#len(digits)-1] = '.'
-    result = json.parse(arena, digits)
-    require(parse.failed(result.failure) && result.offset == #len(digits) && mem.arena_mark(arena) == hold, "large fraction EOF bounds")
+    result = parse(arena, digits)
+    require(result.failure.kind != fail.Kind.Ok && result.offset == #len(digits) && mem.arena_mark(arena) == hold, "large fraction EOF bounds")
     mem.arena_rewind(arena, mark)
   }
 }

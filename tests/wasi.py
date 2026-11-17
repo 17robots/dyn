@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 DYN=os.environ.get('DYN',str(ROOT/'build/dyn'))
 source=r'''
+use "std/fail"
 use "std/io" io
 use "std/mem" mem
 use "std/os/wasi" wasi
@@ -12,29 +13,33 @@ use "std/terminal" terminal
 fn main() {
   arena := mem.arena_alloc(65536)
   defer { mem.arena_release(arena) }
-  arguments := wasi.arguments(arena)
-  if io.failed(arguments.failure) || #len(arguments.values) != 3 || #len(arguments.values[2]) != 5 { #panic("args") }
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  arguments := wasi.arguments(arena, &status)
+  if #len(arguments) != 3 || #len(arguments[2]) != 5 { #panic("args") }
   tiny: [1 + mem.ArenaBufferOverhead]u8
   buffer := mem.arena_from_buffer(tiny[..])
-  failed := wasi.arguments(buffer)
-  if !io.failed(failed.failure) || mem.arena_used(buffer) != 0 { #panic("args rollback") }
-  file := wasi.open_read(3, "input.txt")
-  if #len(arguments.values[1]) == 4 {
-    if !io.failed(file.failure) { #panic("unexpected preopen") }
+  failed: fail.Status
+  _ = wasi.arguments(buffer, &failed)
+  if !failed.failed || mem.arena_used(buffer) != 0 { #panic("args rollback") }
+  opening: fail.Status
+  fd := wasi.open_read(&opening, 3, "input.txt")
+  if #len(arguments[1]) == 4 {
+    if !opening.failed { #panic("unexpected preopen") }
     io.println("denied")
     return
   }
-  if io.failed(file.failure) { #panic("open") }
-  defer { _ = wasi.close(file.fd) }
+  if opening.failed { #panic("open") }
+  defer { _ = wasi.close(fd) }
   data: [16]u8
-  result := wasi.read(file.fd, data[..])
-  if (result.status != io.Status.Complete || io.failed(result.failure)) || result.transferred != 5 { #panic("read") }
-  _ = io.write_transfer(io.stdout(), data[..result.transferred])
-  if wasi.read(file.fd, data[..]).status != io.Status.End { #panic("EOF") }
-  if !io.failed(wasi.read(999999, data[..]).failure) { #panic("bad fd") }
-  result = io.read_exact_transfer(io.stdin(), data[..3])
-  if result.transferred != 3 { #panic("stdin") }
-  _ = io.write_transfer(io.stdout(), data[..3])
+  count := wasi.read(&status, fd, data[..])
+  if count != 5 { #panic("read") }
+  io.write(&status, io.stdout(), data[..count])
+  if wasi.read(&status, fd, data[..]) != 0 { #panic("EOF") }
+  bad: fail.Status
+  _ = wasi.read(&bad, 999999, data[..])
+  if !bad.failed { #panic("bad fd") }
+  if io.read_exact(&status, io.stdin(), data[..3]) != 3 { #panic("stdin") }
+  io.write(&status, io.stdout(), data[..3])
   if wasi.random(data[..]) != 0 { #panic("random") }
   now: u64 = 0
   if wasi.clock_time(1, 0, &now) != 0 || now == 0 { #panic("clock") }

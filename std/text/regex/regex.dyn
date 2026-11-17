@@ -1,15 +1,16 @@
 use "std/mem" mem
 use "std/parse" parse
+use "std/fail"
 pub struct Match { start: usize, end: usize, found: bool }
 struct Instruction { op: u8, byte: u8, x: usize, y: usize, z: usize }
 // All slices belong to the compile arena, including the retained pattern bytes.
 // Copies share mutable workspace: serialize find/next calls on a program and its
 // copies. Compile separately for concurrent use. Reset/release invalidates all.
-pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Match, error: parse.Kind, valid: bool }
-pub struct Result { value: Program, offset: usize, failure: parse.Failure }
-// failure names a broken program. value.found distinguishes a match from a miss.
-// Capture slices are borrowed until the next operation on this program.
-pub struct MatchResult { value: Match, captures: []Match, failure: parse.Failure }
+pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Match, error: fail.Kind, valid: bool }
+// value.found distinguishes a match from a miss. Capture slices are borrowed
+// until the next operation on this program. A program from a failed compile
+// matches nothing.
+pub struct Found { value: Match, captures: []Match }
 
 const Char: u8 = 1
 const Any: u8 = 2
@@ -330,15 +331,15 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       in_class = false
     } else if !in_class && byte == '(' {
       nesting += 1
-      if nesting > 128 { return Program{ error: parse.Kind.Capacity } }
+      if nesting > 128 { return Program{ error: fail.Kind.Capacity } }
     } else if !in_class && byte == ')' && nesting > 0 {
       nesting -= 1
     }
   }
   state := CompileState{ pattern: pattern, tokens: workspace, ok: true }
   if #len(pattern) == 0 || !expression(&state, 0, #len(pattern)) || !state.ok {
-    if state.capacity { return Program{ error: parse.Kind.Capacity } }
-    return Program{ error: parse.Kind.Syntax }
+    if state.capacity { return Program{ error: fail.Kind.Capacity } }
+    return Program{ error: fail.Kind.InvalidInput }
   }
   top: usize = 0
   used: usize = 0
@@ -347,7 +348,7 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
     item := workspace[i]
     if item.op < ConcatToken {
       if used >= #len(storage) || top * 2 + 1 >= #len(scratch) {
-        return Program{ error: parse.Kind.Capacity }
+        return Program{ error: fail.Kind.Capacity }
       }
       storage[used] = item
       part: usize = 0
@@ -361,7 +362,7 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       used += 1
       top += 1
     } else if item.op == ConcatToken {
-      if top < 2 { return Program{ error: parse.Kind.Syntax } }
+      if top < 2 { return Program{ error: fail.Kind.InvalidInput } }
       right := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       left := Fragment{ start: scratch[(top - 2) * 2], out: scratch[(top - 2) * 2 + 1] }
       patch_list(storage, left.out, right.start)
@@ -369,8 +370,8 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       scratch[(top - 1) * 2] = left.start
       scratch[(top - 1) * 2 + 1] = right.out
     } else if item.op == AlternateToken {
-      if top < 2 { return Program{ error: parse.Kind.Syntax } }
-      if used >= #len(storage) { return Program{ error: parse.Kind.Capacity } }
+      if top < 2 { return Program{ error: fail.Kind.InvalidInput } }
+      if used >= #len(storage) { return Program{ error: fail.Kind.Capacity } }
       right2 := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       left2 := Fragment{ start: scratch[(top - 2) * 2], out: scratch[(top - 2) * 2 + 1] }
       storage[used] = Instruction{ op: Split, x: left2.start, y: right2.start }
@@ -380,8 +381,8 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       scratch[(top - 1) * 2 + 1] = joined
       used += 1
     } else if item.op == StarToken || item.op == PlusToken || item.op == OptionalToken {
-      if top < 1 { return Program{ error: parse.Kind.Syntax } }
-      if used >= #len(storage) { return Program{ error: parse.Kind.Capacity } }
+      if top < 1 { return Program{ error: fail.Kind.InvalidInput } }
+      if used >= #len(storage) { return Program{ error: fail.Kind.Capacity } }
       value := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       storage[used] = Instruction{ op: Split, x: value.start }
       if item.op == StarToken {
@@ -399,19 +400,20 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
     }
     i += 1
   }
-  if top != 1 { return Program{ error: parse.Kind.Syntax } }
-  if used >= #len(storage) { return Program{ error: parse.Kind.Capacity } }
+  if top != 1 { return Program{ error: fail.Kind.InvalidInput } }
+  if used >= #len(storage) { return Program{ error: fail.Kind.Capacity } }
   start := scratch[0]
   storage[used] = Instruction{ op: Accept }
   patch_list(storage, scratch[1], used)
   used += 1
-  return Program{ pattern: pattern, code: storage[..used], start: start, groups: state.groups, error: parse.Kind.Ok, valid: true }
+  return Program{ pattern: pattern, code: storage[..used], start: start, groups: state.groups, error: fail.Kind.Ok, valid: true }
 }
 
-// Arena exhaustion/size overflow panics, like other arena producers. Syntax
-// failures return InvalidInput with native error 0 and the offending byte offset.
-// No options existed on the native compiler. Parsing nesting is limited to 128.
-pub fn compile(arena: *mem.Arena, pattern: []const u8) Result {
+// Arena exhaustion/size overflow panics, like other arena producers. A
+// malformed pattern fails with InvalidInput at the offending byte. Nesting is
+// limited to 128.
+pub fn compile(arena: *mem.Arena, status: *fail.Status, pattern: []const u8) Program {
+  if status.failed { return Program{} }
   depth: usize = 0
   escaped := false
   in_class := false
@@ -428,7 +430,8 @@ pub fn compile(arena: *mem.Arena, pattern: []const u8) Result {
     } else if !in_class && b == '(' {
       depth += 1
       if depth > 128 {
-        return Result{ offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: i, message: "nesting too deep" } }
+        parse.malformed(status, "compile pattern", "nesting too deep", i)
+        return Program{}
       }
     } else if !in_class && b == ')' && depth > 0 {
       depth -= 1
@@ -439,7 +442,8 @@ pub fn compile(arena: *mem.Arena, pattern: []const u8) Result {
     if count.capacity {
       #panic("regex compile size overflow")
     }
-    return Result{ offset: count.offset, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: count.offset } }
+    parse.malformed(status, "compile pattern", "malformed pattern", count.offset)
+    return Program{}
   }
   if count.used > (NoPatch - 1) / 2 {
     #panic("regex compile size overflow")
@@ -464,7 +468,7 @@ pub fn compile(arena: *mem.Arena, pattern: []const u8) Result {
   }
   program.workspace = mem.push_array(usize, arena, required)
   program.captures = mem.push_array(Match, arena, program.groups)
-  return Result{ value: program }
+  return program
 }
 
 fn class_matches(program: Program, instruction: Instruction, byte: u8) bool {
@@ -622,15 +626,13 @@ fn execute(program: Program, text: []const u8, captures: []Match, workspace: []u
 
 // Reuses arena-reserved workspace. Matching itself allocates nothing.
 // Capture 0 corresponds to the first parenthesized group.
-pub fn find(program: Program, text: []const u8) MatchResult {
+pub fn find(program: Program, text: []const u8) Found {
   return find_from(program, text, 0)
 }
-fn find_from(program: Program, text: []const u8, from: usize) MatchResult {
-  if !program.valid {
-    return MatchResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "program not compiled" } }
-  }
+fn find_from(program: Program, text: []const u8, from: usize) Found {
+  if !program.valid { return Found{} }
   value := execute(program, text, program.captures, program.workspace, from)
-  return MatchResult{ value: value, captures: program.captures }
+  return Found{ value: value, captures: program.captures }
 }
 pub fn matches(program: Program, text: []const u8) bool {
   return find(program, text).value.found
@@ -731,11 +733,8 @@ pub struct Iterator { program: Program, text: []const u8, offset: usize, done: b
 pub fn iterator(program: Program, text: []const u8) Iterator {
   return Iterator{ program: program, text: text }
 }
-pub fn next(state: *Iterator) MatchResult {
-  if !state.program.valid {
-    return MatchResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "program not compiled" } }
-  }
-  if state.done || state.offset > #len(state.text) { return MatchResult{} }
+pub fn next(state: *Iterator) Found {
+  if !state.program.valid || state.done || state.offset > #len(state.text) { return Found{} }
   result := find_from(state.program, state.text, state.offset)
   if !result.value.found {
     state.done = true

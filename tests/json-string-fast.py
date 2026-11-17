@@ -41,8 +41,8 @@ checks = []
 deep = b'[' * 257 + b'"plain"' + b']' * 257
 checks.append(f'''  if true {{
     data: [{len(deep)}]u8{initializer(deep)}
-    result := json.parse(arena, data[..])
-    require(parse.failed(result.failure) && result.failure.kind == parse.Kind.Syntax && mem.arena_mark(arena) == mem.arena_start(arena), "depth rollback")
+    result := parse(arena, data[..])
+    require(result.failure.kind != fail.Kind.Ok && result.failure.kind == fail.Kind.InvalidInput && mem.arena_mark(arena) == mem.arena_start(arena), "depth rollback")
   }}''')
 for n, (raw, expected) in enumerate(valid):
     # Both object keys and values must survive mutation of all source bytes.
@@ -50,8 +50,8 @@ for n, (raw, expected) in enumerate(valid):
     checks.append(f'''  if true {{
     data: [{len(doc)}]u8{initializer(doc)}
     expected: [{len(expected)}]u8{initializer(expected)}
-    result := json.parse(arena, data[..])
-    require(!parse.failed(result.failure), "valid {n}")
+    result := parse(arena, data[..])
+    require(result.failure.kind == fail.Kind.Ok, "valid {n}")
     member := result.root.first
     for i in 0..#len(data) {{ data[i] = 255 }}
     require(mem.equal(member.key, expected[..]) && mem.equal(member.text, expected[..]), "owned key/value {n}")
@@ -61,20 +61,26 @@ for n, raw in enumerate(invalid):
     checks.append(f'''  if true {{
     data: [{len(raw)}]u8{initializer(raw)}
     mark := mem.arena_mark(arena)
-    result := json.parse(arena, data[..])
-    require(parse.failed(result.failure) && result.offset == 1 && result.failure.kind == parse.Kind.Syntax && json.is_missing(result.root), "invalid {n}")
+    result := parse(arena, data[..])
+    require(result.failure.kind != fail.Kind.Ok && result.offset == 1 && result.failure.kind == fail.Kind.InvalidInput && json.is_missing(result.root), "invalid {n}")
     require(mem.arena_mark(arena) == mark, "rollback {n}")
   }}''')
-source = '''use "std/parse" parse
+source = '''use "std/fail"
 use "std/encoding/json" json
 use "std/mem" mem
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
+struct Parsed { root: *const json.Value, offset: usize, failure: fail.Failure }
+fn parse(arena: *mem.Arena, source: []const u8) Parsed {
+  status: fail.Status
+  root := json.parse(arena, &status, source)
+  return Parsed{ root: root, offset: status.failure.offset, failure: status.failure }
+}
 fn main() {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
 ''' + '\n'.join(checks) + '''
-  trailing := json.parse(arena, "\\\"abc\\\" x")
-  require(parse.failed(trailing.failure) && trailing.offset == 6 && mem.equal(trailing.failure.message, "trailing data") && mem.arena_mark(arena) == mem.arena_start(arena), "trailing rollback")
+  trailing := parse(arena, "\\\"abc\\\" x")
+  require(trailing.failure.kind != fail.Kind.Ok && trailing.offset == 6 && mem.equal(fail.message_text(&trailing.failure), "trailing data") && mem.arena_mark(arena) == mem.arena_start(arena), "trailing rollback")
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-json-string-') as directory:
@@ -84,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-json-string-') as directory:
     (project / 'main.dyn').write_text(source)
     capacity = work / 'capacity'
     capacity.mkdir()
-    (capacity / 'main.dyn').write_text('use "std/encoding/json" json\nuse "std/mem" mem\nfn main() {\n  backing: [2+mem.ArenaBufferOverhead]u8\n  pad := (16-(#cast(usize,&backing[0])&15))&15\n  arena := mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+2])\n  _ = json.parse(arena, "\\"plain\\"")\n}\n')
+    (capacity / 'main.dyn').write_text('use "std/encoding/json" json\nuse "std/fail"\nuse "std/mem" mem\nfn main() {\n  backing: [2+mem.ArenaBufferOverhead]u8\n  pad := (16-(#cast(usize,&backing[0])&15))&15\n  arena := mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+2])\n  status: fail.Status\n  _ = json.parse(arena, &status, "\\"plain\\"")\n}\n')
     for mode in ('--debug', '--release'):
         output = work / 'out'
         subprocess.run([str(DYN), 'build', str(project), '--no-cache', '--quiet', '--output', str(output), mode], cwd=ROOT, check=True, timeout=120)

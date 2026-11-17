@@ -1,9 +1,11 @@
 use "std/parse" parse
 use "std/mem" mem
-use "std/io" io
+use "std/fail"
 use "std/encoding/base64" base64
 
-pub struct Result { value: []u8, label: []const u8, consumed: usize, offset: usize, failure: parse.Failure }
+// A decoded block: data is arena-owned, label borrows the source, consumed
+// counts the source bytes through the END line.
+pub struct Block { data: []u8, label: []const u8, consumed: usize }
 fn equal_at(source: []const u8, at: usize, expected: []const u8) bool {
   if at > #len(source) || #len(expected) > #len(source) - at { return false }
   for i in 0..#len(expected) {
@@ -20,13 +22,15 @@ fn append(destination: []u8, at: *usize, source: []const u8) bool {
   return true
 }
 
-fn fail(arena: *mem.Arena, mark: usize, offset: usize, kind: parse.Kind) Result {
+fn malformed(arena: *mem.Arena, status: *fail.Status, mark: usize, offset: usize) Block {
   mem.arena_rewind(arena, mark)
-  return Result{ offset: offset, failure: parse.Failure{ kind: kind, offset: offset } }
+  parse.malformed(status, "decode PEM", "malformed PEM", offset)
+  return Block{}
 }
-// Decodes the first PEM block. value is arena-owned; label borrows source.
-// Failure returns an empty payload and restores the entry arena mark.
-pub fn decode(arena: *mem.Arena, source: []const u8) Result {
+// Decodes the first PEM block. Malformed text fails with InvalidInput at the
+// offending line and restores the entry arena mark.
+pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Block {
+  if status.failed { return Block{} }
   mark := mem.arena_mark(arena)
   base64_storage := mem.push_bytes_uninit(arena, #len(source))
   begin: []const u8 = "-----BEGIN "
@@ -35,23 +39,21 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   for start + #len(begin) <= #len(source) && !equal_at(source, start, begin) {
     start += 1
   }
-  if start + #len(begin) > #len(source) {
-    return fail(arena, mark, #len(source), parse.Kind.Syntax)
-  }
+  if start + #len(begin) > #len(source) { return malformed(arena, status, mark, #len(source)) }
   label_start := start + #len(begin)
   label_end := label_start
   for label_end + 5 <= #len(source) && !equal_at(source, label_end, "-----") {
     label_end += 1
   }
   if label_end == label_start || label_end + 5 > #len(source) {
-    return fail(arena, mark, label_end, parse.Kind.Syntax)
+    return malformed(arena, status, mark, label_end)
   }
   label := source[label_start..label_end]
   at := label_end + 5
   if at < #len(source) && source[at] == '\r' {
     at += 1
   }
-  if at >= #len(source) || source[at] != '\n' { return fail(arena, mark, at, parse.Kind.Syntax) }
+  if at >= #len(source) || source[at] != '\n' { return malformed(arena, status, mark, at) }
   at += 1
   body_start := at
   encoded_length: usize = 0
@@ -64,7 +66,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
     line := source[line_start..at]
     if #len(line) >= #len(end_prefix) && equal_at(line, 0, end_prefix) {
       if #len(line) != #len(end_prefix) + #len(label) + 5 || !equal_at(line, #len(end_prefix), label) || !equal_at(line, #len(end_prefix) + #len(label), "-----") {
-        return fail(arena, mark, line_start, parse.Kind.Syntax)
+        return malformed(arena, status, mark, line_start)
       }
       found_end = true
       if at < #len(source) && source[at] == '\r' {
@@ -76,7 +78,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
       break
     }
     if !append(base64_storage, &encoded_length, line) {
-      return fail(arena, mark, line_start, parse.Kind.Syntax)
+      return malformed(arena, status, mark, line_start)
     }
     if at < #len(source) && source[at] == '\r' {
       at += 1
@@ -85,8 +87,9 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
       at += 1
     }
   }
-  if !found_end { return fail(arena, mark, at, parse.Kind.Syntax) }
-  decoded := base64.decode(arena, base64_storage[..encoded_length])
-  if parse.failed(decoded.failure) { return fail(arena, mark, body_start, parse.Kind.Syntax) }
-  return Result{ value: decoded.value, label: label, consumed: at }
+  if !found_end { return malformed(arena, status, mark, at) }
+  decoding: fail.Status
+  decoded := base64.decode(arena, &decoding, base64_storage[..encoded_length])
+  if decoding.failed { return malformed(arena, status, mark, body_start) }
+  return Block{ data: decoded, label: label, consumed: at }
 }
