@@ -11,6 +11,7 @@ SOURCE = r'''use "std/mem" mem
 use "std/strings" strings
 use "std/bytes" bytes
 use "std/encoding/json" json
+use "std/encoding/ini" ini
 use "std/fail"
 use "std/encoding/hex" hex
 use "std/unicode/utf8" utf8
@@ -66,15 +67,30 @@ fn main() {
   check(bytes.equal(text.next_field(&fields).value, "a") && bytes.equal(text.next_field(&fields).value, "bc"), "fields")
   doc := parse(arena, "{\"x\": 2.5, \"name\": \"boss\", \"hp\": 40, \"alive\": true, \"tags\": [1, 2]}")
   check(doc.failure.kind == fail.Kind.Ok, "json parse")
-  check(json.get(f32, doc.root, "x") == 2.5 && json.get(i32, doc.root, "hp") == 40, "json numbers")
-  check(bytes.equal(json.get([]const u8, doc.root, "name"), "boss") && json.get(bool, doc.root, "alive"), "json text")
-  tags := json.get(*const json.Value, doc.root, "tags")
-  check(json.array_length(tags) == 2 && json.as(u8, json.array_get(tags, 1)) == 2, "json nested")
-  check(json.get(i32, doc.root, "nope") == 0 && #len(json.get([]const u8, doc.root, "hp")) == 0, "json misses")
-  nothing := json.get(*const json.Value, json.get(*const json.Value, doc.root, "a"), "b")
-  check(nothing == &json.nil_value && json.is_missing(nothing) && !json.is_null(nothing), "json chained miss")
+  reading: fail.Status
+  check(json.get(f32, &reading, doc.root, "x") == 2.5 && json.get(i32, &reading, doc.root, "hp") == 40, "json numbers")
+  check(bytes.equal(json.get([]const u8, &reading, doc.root, "name"), "boss") && json.get(bool, &reading, doc.root, "alive"), "json text")
+  tags := json.get(*const json.Value, &reading, doc.root, "tags")
+  check(json.array_length(tags) == 2 && json.as(u8, &reading, json.array_get(tags, 1)) == 2, "json nested")
+  check(!reading.failed, "json reads")
+  absent: fail.Status
+  check(json.get(i32, &absent, doc.root, "nope") == 0 && absent.failure.kind == fail.Kind.NotFound, "json missing member")
+  wrong: fail.Status
+  check(#len(json.get([]const u8, &wrong, doc.root, "hp")) == 0 && wrong.failure.kind == fail.Kind.InvalidInput, "json wrong kind")
+  fraction: fail.Status
+  check(json.get(i32, &fraction, doc.root, "x") == 0 && fraction.failure.kind == fail.Kind.InvalidInput, "json not whole")
+  chained: fail.Status
+  nothing := json.get(*const json.Value, &chained, json.get(*const json.Value, &chained, doc.root, "a"), "b")
+  check(nothing == &json.nil_value && json.is_missing(nothing) && chained.failure.kind == fail.Kind.NotFound, "json chained miss")
   broken := parse(arena, "{\"x\": ")
-  check(broken.failure.kind != fail.Kind.Ok && broken.root == &json.nil_value && json.get(i32, broken.root, "x") == 0, "json failed root")
+  failed_root: fail.Status
+  check(broken.failure.kind != fail.Kind.Ok && broken.root == &json.nil_value && json.get(i32, &failed_root, broken.root, "x") == 0, "json failed root")
+  settings: fail.Status
+  check(bytes.equal(ini.find(&settings, "[server]\nport = 80\n", "server", "port"), "80") && !settings.failed, "ini find")
+  host: fail.Status
+  check(#len(ini.find(&host, "[server]\nport = 80\n", "server", "host")) == 0 && host.failure.kind == fail.Kind.NotFound, "ini missing")
+  malformed: fail.Status
+  check(#len(ini.find(&malformed, "[server\nport = 80\n", "server", "port")) == 0 && malformed.failure.kind == fail.Kind.InvalidInput, "ini malformed")
   status: fail.Status
   decoded := hex.decode(arena, &status, "abcd")
   bad: fail.Status

@@ -288,16 +288,42 @@ pub fn parse_request(status: *fail.Status, input: []const u8) HttpHead {
   return parse_head(status, input, false)
 }
 
-// The first header field called name, matched without case, in a complete
-// head. A missing field is no failure: found is false.
-pub fn header(status: *fail.Status, input: []const u8, name: []const u8) HttpHeader {
-  if status.failed { return HttpHeader{} }
+// The value of the first header field called name, matched without case, in
+// a complete head; "" when it cannot be read, and then the status says why: a
+// missing field is NotFound, a malformed head InvalidInput at its offset.
+// Read an optional field with a status of its own.
+pub fn header(status: *fail.Status, input: []const u8, name: []const u8) []const u8 {
+  if status.failed { return input[..0] }
   parsed := http_parse_head(input, starts_ascii_case(input, 0, "HTTP/"))
   if parsed.failed {
     malformed(status, "parse HTTP head", "malformed HTTP head", parsed.offset)
-    return HttpHeader{}
+    return input[..0]
   }
-  return field(input, parsed.head, name)
+  return present(status, field(input, parsed.head, name), "read header", name)
+}
+
+// The value of found, or "" and NotFound naming the field ("\"Host\" is
+// missing"): the shared end of every public lookup.
+fn present(status: *fail.Status, found: HttpHeader, operation: []const u8, name: []const u8) []const u8 {
+  if status.failed { return found.value[..0] }
+  if found.found { return found.value }
+  missing(status, operation, name)
+  return found.value[..0]
+}
+
+fn missing(status: *fail.Status, operation: []const u8, name: []const u8) {
+  message: [160]u8
+  used: usize = 0
+  parts: [3][]const u8 = ["\"", name, "\" is missing"]
+  for part in parts {
+    for byte in part {
+      if used < #len(message) {
+        message[used] = byte
+        used += 1
+      }
+    }
+  }
+  fail.set(status, fail.make(fail.Kind.NotFound, operation, "", message[..used]))
 }
 
 // Finds name in the fields of a head already parsed.
@@ -1072,8 +1098,13 @@ fn match_captures(pattern: []const u8, path: []const u8, captures: []Header) isi
   return #cast(isize, count)
 }
 
-// Path parameter captured by a Routes pattern, still percent-encoded.
-pub fn param(request: *const Request, name: []const u8) HttpHeader {
+// Path parameter captured by a Routes pattern, still percent-encoded; ""
+// and NotFound when the pattern has no such parameter.
+pub fn param(status: *fail.Status, request: *const Request, name: []const u8) []const u8 {
+  return present(status, find_param(request, name), "read path parameter", name)
+}
+
+fn find_param(request: *const Request, name: []const u8) HttpHeader {
   for i in 0..request.param_count {
     if bytes.equal(request.params[i].name, name) {
       return HttpHeader{ name: request.params[i].name, value: request.params[i].value, found: true }
@@ -1666,9 +1697,14 @@ fn response_begin(status: *fail.Status, response: *Response, options: ResponseOp
   response_output(status, response, payload)
 }
 
-// First request header named name (ASCII case-insensitive). The value borrows
-// request.raw. Each call scans the head.
-pub fn request_header(request: *const Request, name: []const u8) HttpHeader {
+// The value of the first request header named name (ASCII case-insensitive),
+// borrowing request.raw; "" and NotFound when there is none. Each call scans
+// the head. Read an optional header with a status of its own.
+pub fn request_header(status: *fail.Status, request: *const Request, name: []const u8) []const u8 {
+  return present(status, find_header(request, name), "read header", name)
+}
+
+fn find_header(request: *const Request, name: []const u8) HttpHeader {
   raw := request.raw[..request.header_length]
   parsed := http_parse_head(raw, false)
   if parsed.failed { return HttpHeader{} }
@@ -1676,9 +1712,13 @@ pub fn request_header(request: *const Request, name: []const u8) HttpHeader {
 }
 
 // Value of cookie name from the request's Cookie headers (RFC 6265 5.4).
-// Surrounding double quotes are removed; the value borrows request.raw.
-// found is false when absent.
-pub fn cookie(request: *const Request, name: []const u8) HttpHeader {
+// Surrounding double quotes are removed; the value borrows request.raw. ""
+// and NotFound when the request has no such cookie.
+pub fn cookie(status: *fail.Status, request: *const Request, name: []const u8) []const u8 {
+  return present(status, find_cookie(request, name), "read cookie", name)
+}
+
+fn find_cookie(request: *const Request, name: []const u8) HttpHeader {
   head := request.raw[..request.header_length]
   at: usize = 0
   for at < #len(head) {
@@ -1687,14 +1727,19 @@ pub fn cookie(request: *const Request, name: []const u8) HttpHeader {
     at = line_end + 2
     colon := bytes.find_byte(line, ':')
     if colon == #len(line) || !ascii_equal(line[..colon], "cookie") { continue }
-    found := cookie_in(line[colon + 1..], name)
+    found := find_cookie_in(line[colon + 1..], name)
     if found.found { return found }
   }
   return HttpHeader{}
 }
 
-// The cookie named name in one Cookie header value, such as "a=1; b=2".
-pub fn cookie_in(header_value: []const u8, name: []const u8) HttpHeader {
+// The cookie named name in one Cookie header value, such as "a=1; b=2"; ""
+// and NotFound when it is not there.
+pub fn cookie_in(status: *fail.Status, header_value: []const u8, name: []const u8) []const u8 {
+  return present(status, find_cookie_in(header_value, name), "read cookie", name)
+}
+
+fn find_cookie_in(header_value: []const u8, name: []const u8) HttpHeader {
   rest := header_value
   for #len(rest) > 0 {
     end := bytes.find_byte(rest, ';')
@@ -1866,7 +1911,6 @@ pub fn sse_event(status: *fail.Status, destination: []u8, event: []const u8, id:
   return destination[..out.length]
 }
 
-pub struct FieldValue { value: []u8, found: bool }
 
 // application/x-www-form-urlencoded value into destination: '+' becomes a
 // space and %XX a byte. Fails with InvalidInput on a bad escape and Capacity
@@ -1904,8 +1948,12 @@ pub fn form_decode(status: *fail.Status, destination: []u8, source: []const u8) 
 }
 
 // Raw, still-encoded value of the first field named name in an urlencoded
-// form or query string.
-pub fn form_field(form: []const u8, name: []const u8) HttpHeader {
+// form or query string; "" and NotFound when there is none.
+pub fn form_field(status: *fail.Status, form: []const u8, name: []const u8) []const u8 {
+  return present(status, find_form_field(form, name), "read form field", name)
+}
+
+fn find_form_field(form: []const u8, name: []const u8) HttpHeader {
   start: usize = 0
   for start <= #len(form) {
     end := start + bytes.find_byte(form[start..], '&')
@@ -1923,22 +1971,29 @@ pub fn form_field(form: []const u8, name: []const u8) HttpHeader {
 // Whether the query has a parameter called name, with or without a value
 // ("?debug" and "?debug=1" both have debug).
 pub fn query_has(request: *const Request, name: []const u8) bool {
-  return form_field(request.query, name).found
+  return find_form_field(request.query, name).found
 }
 
-// Decoded query parameter name into destination. found is false when absent.
-pub fn query_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) FieldValue {
-  field := form_field(request.query, name)
-  if status.failed || !field.found { return FieldValue{} }
-  return FieldValue{ value: form_decode(status, destination, field.value), found: true }
+// Decoded query parameter name into destination; empty when it cannot be
+// read, and then the status says why: NotFound when absent, InvalidInput for
+// bad percent-encoding, Capacity when destination is too small.
+pub fn query_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) []u8 {
+  return decoded_field(status, find_form_field(request.query, name), "read query parameter", name, destination)
 }
 
-// Decoded urlencoded body field name into destination. The caller checks the
-// content type when it matters. found is false when absent.
-pub fn form_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) FieldValue {
-  field := form_field(request.body, name)
-  if status.failed || !field.found { return FieldValue{} }
-  return FieldValue{ value: form_decode(status, destination, field.value), found: true }
+fn decoded_field(status: *fail.Status, found: HttpHeader, operation: []const u8, name: []const u8, destination: []u8) []u8 {
+  if status.failed { return destination[..0] }
+  if !found.found {
+    missing(status, operation, name)
+    return destination[..0]
+  }
+  return form_decode(status, destination, found.value)
+}
+
+// Decoded urlencoded body field name into destination, by the rules of
+// query_value. The caller checks the content type when it matters.
+pub fn form_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) []u8 {
+  return decoded_field(status, find_form_field(request.body, name), "read form field", name, destination)
 }
 
 // Returns exclusive transport-owned body storage, or empty when unavailable.

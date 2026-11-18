@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """dyn vet, by shape: a struct local declared without a value and only ever
-passed by pointer is never read (what the calls record in it is lost), and a
+passed by pointer is never read (what the calls record in it is lost), or is
+given a new value before what was recorded in it is read, and a
 result tested for being empty before the state its call filled in is read.
 No function or type is known by name."""
 import os
@@ -57,6 +58,17 @@ fn main() {
   io.println("{}", counts.lines)
   mine: Note
   record(&mine)
+  reused: fail.Status
+  fs.remove(&reused, "a.txt")
+  reused = fail.Status{}
+  fs.remove(&reused, "b.txt")
+  if reused.failed { return }
+  looked: fail.Status
+  fs.remove(&looked, "c.txt")
+  if looked.failed { io.println("c") }
+  looked = fail.Status{}
+  fs.remove(&looked, "d.txt")
+  _ = looked
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-vet-unread-') as temporary:
@@ -65,13 +77,16 @@ with tempfile.TemporaryDirectory(prefix='dyn-vet-unread-') as temporary:
     env = dict(os.environ, DYN_SDK=str(ROOT))
     vetted = subprocess.run([DYN, 'vet', str(project)], capture_output=True, text=True, timeout=60, env=env)
     warnings = [line for line in vetted.stderr.splitlines() if 'warning:' in line]
-    assert vetted.returncode == 1 and len(warnings) == 3, vetted.stderr
+    assert vetted.returncode == 1 and len(warnings) == 4, vetted.stderr
     def found(*parts):
         return any(all(part in line for part in parts) for line in warnings)
     assert found('main.dyn:20:3:', "'lost' is only ever passed by pointer and never read"), warnings
     assert found('main.dyn:28:6:', "an empty 'data' does not mean the call failed", "test 'other'"), warnings
     # A type of the user's own with the same shape is found the same way.
     assert found('main.dyn:46:3:', "'mine' is only ever passed by pointer"), warnings
+    # A status given a new value before what was recorded in it is read; one
+    # read in between, or none passed since, is fine.
+    assert found('main.dyn:50:3:', "'reused' gets a new value before what the calls recorded in it is read"), warnings
     checked = subprocess.run([DYN, 'check', str(project)], capture_output=True, text=True, timeout=60, env=env)
     assert checked.returncode == 0, checked.stderr
-print('PASS vet unread state: lost failures and empty results as failure tests, by shape')
+print('PASS vet unread state: lost failures, statuses reset before they are read, and empty results as failure tests, by shape')

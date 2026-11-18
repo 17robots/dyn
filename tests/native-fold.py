@@ -33,5 +33,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-fold-') as temporary:
         start = text.index('"main":')
         ops = [m.group(1) for m in re.finditer(r'// \+0x[0-9a-f]+: (\w+)', text[start:text.find('\n"', start + 1)])]
         branches = sum(op.startswith('j') and op != 'jmp' for op in ops)
+        # Zeroing a local over 256 bytes is a store loop (dec r10d; jne):
+        # a back-edge, not a check.
+        branches -= sum(ops[i] == 'dec' and ops[i + 1] == 'jne' for i in range(len(ops) - 1))
         assert branches <= 8 and ops.count('imul') <= 9, (branches, ops.count('imul'))
 print('PASS native folds: constant-length subslices, multiply-add, commuted constants (debug/release/O3)')

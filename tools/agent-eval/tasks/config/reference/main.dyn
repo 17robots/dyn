@@ -28,19 +28,12 @@ fn main() i32 {
   status: fail.Status
   text := fs.read_all(arena, &status, path, mem.MiB)
   root := json.parse(arena, &status, text)
-  if !status.failed {
-    name := json.get(*const json.Value, root, "name")
-    port := json.get(*const json.Value, root, "port")
-    if !json.is_string(name) {
-      fail.invalid(&status, "read", path, "\"name\" is not a string")
-    } else if !json.is_number(port) {
-      fail.invalid(&status, "read", path, "\"port\" is not a number")
-    }
-  }
+  name := json.get([]const u8, &status, root, "name")
+  port := json.get(i64, &status, root, "port")
   if status.failed {
     report(path, status.failure)
     return 1
   }
-  io.println("name={} port={}", json.get([]const u8, root, "name"), json.get(i64, root, "port"))
+  io.println("name={} port={}", name, port)
   return 0
 }

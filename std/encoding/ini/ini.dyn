@@ -96,20 +96,36 @@ pub fn next(status: *fail.Status, state: *Scanner) Next {
   return Next{}
 }
 
-// The value of key in section, or empty when absent or the text is malformed.
-pub fn find(source: []const u8, section: []const u8, key: []const u8) []const u8 {
+// The value of key in section, borrowing source; "" when it cannot be read,
+// and then the status says why: an absent key is NotFound, malformed text up
+// to the key InvalidInput at its offset, as next reports it. Read an optional
+// key with a status of its own.
+pub fn find(status: *fail.Status, source: []const u8, section: []const u8, key: []const u8) []const u8 {
+  if status.failed { return source[..0] }
   state := scanner(source)
-  status: fail.Status
   for {
-    item := next(&status, &state)
-    if !item.found { return source[..0] }
+    item := next(status, &state)
+    if status.failed { return source[..0] }
+    if !item.found { break }
     if item.value.kind == Kind.Pair && byte_ops.equal(item.value.section, section) && byte_ops.equal(item.value.key, key) {
       return item.value.value
     }
   }
+  // "\"host\" is missing", leaving the path for the caller's file.
+  message: [160]u8
+  used: usize = 0
+  parts: [3][]const u8 = ["\"", key, "\" is missing"]
+  for part in parts {
+    for byte in part {
+      if used < #len(message) {
+        message[used] = byte
+        used += 1
+      }
+    }
+  }
+  fail.set(status, fail.make(fail.Kind.NotFound, "find INI key", "", message[..used]))
   return source[..0]
 }
-
 
 // A materialized entry table. Entries still borrow source bytes, including
 // section names. Any malformed line fails the whole parse with InvalidInput

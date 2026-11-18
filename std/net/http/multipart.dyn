@@ -55,7 +55,7 @@ fn boundary_of(content_type: []const u8) []const u8 {
 // bytes), or the body does not start with the first delimiter.
 pub fn multipart(status: *fail.Status, request: *const Request) Parts {
   if status.failed { return Parts{ failed: true } }
-  header := request_header(request, "Content-Type")
+  header := find_header(request, "Content-Type")
   if !header.found || #len(header.value) < 19 || !ascii_equal(header.value[..19], "multipart/form-data") {
     multipart_failure(status, "not multipart/form-data")
     return Parts{ failed: true }

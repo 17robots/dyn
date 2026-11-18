@@ -20,7 +20,7 @@ sid=abc; Path=/; Max-Age=60; Secure; HttpOnly; SameSite=Strict
 sid=; Max-Age=0
 InvalidInput
 InvalidInput
-dark s3 false
+dark s3 true
 event: update
 id: 42
 data: one

@@ -230,6 +230,21 @@ Standard library:
   - Matrix and quaternion functions return plain values (`Mat3`, `Mat4`,
     `Quat`, `Vec3`); degenerate input gives the zero value, and the
     `*Result` types are gone.
+  - Lookups return a usable value and put the reason on the status: zero or
+    empty when the thing is not there, with `NotFound`. `json.get(T, &status,
+    value, key)` and `json.as(T, &status, value)` take the status; a missing
+    or null member records `NotFound` ("read JSON member: \"port\" is
+    missing"), a member of the wrong kind or a number that does not fit an
+    integer `T` or is not whole `InvalidInput`. They gave zero for all of
+    these. `ini.find(&status, ...)` records `NotFound`, and malformed text
+    fails instead of reading as absent. `http.header`, `request_header`,
+    `param`, `cookie`, `cookie_in` and `form_field` take the status and
+    return the value; `query_value` and `form_value` return the decoded
+    bytes; `process.environment` returns the value. Their `found` results
+    (`HttpHeader` from the lookups, `FieldValue`, `process.Variable`) are
+    gone from these calls. Read an optional value with its own status.
+  - `dns.query_ipv4` and `query_ipv6` take the status: an invalid name fails
+    with `InvalidInput` instead of giving an empty query.
   - `parse.malformed` and `parse.failed_at` become `fail.at(&status, kind,
     operation, message, offset)`.
   - `vendor/openssl/tls` takes the status and returns a `Want` when the
@@ -343,6 +358,10 @@ Compiler speed of generated code:
   bytes of code instead of 386, and the example programs are 5-23% smaller
   than before this change (all now smaller than on preview 39). Kernel
   speed is unchanged.
+- Locals of 257 bytes to 4 KiB, such as a `fail.Status`, are zeroed with a
+  loop of 16-byte stores instead of `rep stosb`, whose fixed start-up cost
+  made declaring a status take about 9 ns; it now takes about 1 ns, and code
+  is slightly smaller.
 - `tools/bench/run.py` also builds each kernel with Zig (ReleaseFast and
   ReleaseSafe); see PERFORMANCE.md.
 
@@ -386,6 +405,8 @@ Tools:
   the program can reach them; `dyn check` on a library module still checks
   all of it. Checking the compile-budget fixture makes 16% fewer
   allocations and peaks at 31 MiB instead of 42.
+- `dyn vet` warns about a status given a new value (`status = fail.Status{}`)
+  before what the calls recorded in it is read.
 - `dyn vet` warns about a struct local declared without a value that is only
   ever passed by pointer and never read, such as a `fail.Status` nothing
   checks (`_ = status` drops it on purpose), and about a result tested for

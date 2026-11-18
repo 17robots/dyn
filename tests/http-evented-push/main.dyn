@@ -76,9 +76,10 @@ fn report(status: *fail.Status, response: *http.Response, request: *const http.R
   storage: [64 * mem.KiB]u8
   page := fmt.buffer(status, storage[..])
   count_storage: [8]u8
-  count := http.query_value(status, request, "n", count_storage[..])
+  optional: fail.Status
+  count := http.query_value(&optional, request, "n", count_storage[..])
   rows := 400
-  if count.found && bytes.equal(count.value, "2") {
+  if bytes.equal(count, "2") {
     rows = 2
   }
   fmt.write(&page, "[")
@@ -198,7 +199,7 @@ fn broadcast(status: *fail.Status, response: *http.Response, request: *const htt
 }
 
 fn asset(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
-  found := http.find_asset(&app.assets, http.param(request, "name").value)
+  found := http.find_asset(&app.assets, http.param(status, request, "name"))
   if found == nil {
     text(status, response, 404, "no asset\n")
     return
@@ -306,10 +307,11 @@ fn large_body(status: *fail.Status, response: *http.Response, request: *const ht
   }
   job.app = typed.state
   storage: [16]u8
-  limit := http.query_value(status, request, "limit", storage[..])
-  if limit.found {
+  optional: fail.Status
+  limit := http.query_value(&optional, request, "limit", storage[..])
+  if !optional.failed {
     parsing: fail.Status
-    job.limit = #cast(usize, parse.u64_decimal(&parsing, limit.value))
+    job.limit = #cast(usize, parse.u64_decimal(&parsing, limit))
   }
   reading: fail.Status
   evented.receive_body(&reading, response, job, large_chunk, large_finish)

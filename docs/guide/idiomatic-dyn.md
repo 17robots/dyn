@@ -208,8 +208,20 @@ Three rules cover every std and vendor call:
 
 1. **If it can fail, it takes `&status`.** Its result is the value itself,
    zero or empty after a failure.
-2. **If it can come up empty, the result has `found`:** a lookup, a search, an
-   iterator at its end. Coming up empty is not a failure.
+2. **A lookup always returns a usable value.** When it is not there the value
+   is zero or empty and the status records `NotFound`; when it is there but
+   wrong, `InvalidInput`. Read an optional value with a status of its own, so
+   a missing one stops nothing else:
+
+   ```dyn
+   status: fail.Status
+   port := json.get(i64, &status, root, "port")        // required
+   optional: fail.Status
+   debug := json.get(bool, &optional, root, "debug")   // false when missing
+   ```
+
+   Iterators are the exception: `next` reports the end of the input with
+   `found`, because reaching the end is not a failure.
 3. **Check `status.failed` before you use what you got:** before printing
    results, reporting success, or using a computed number as a size or index.
 
@@ -219,7 +231,8 @@ no status (`fs.close`, `*_free_owned`, `*_destroy`), so it works after a
 failure. To react to one kind of failure, such as falling back when a file is
 missing, give that step its own status and look at `status.failure.kind`. An
 empty result is not a failure test; `status.failed` is, and `dyn vet` warns
-about a status that is never read and about an empty result used as the test.
+about a status that is never read, one given a new value before it is read, and
+an empty result used as the test.
 A failure keeps its own copy of its text; read the parts with
 `fail.operation_text`, `fail.path_text` and `fail.message_text`.
 
@@ -245,7 +258,7 @@ The same three rules, from the other side:
 ```dyn
 pub fn load(arena: *mem.Arena, status: *fail.Status, path: []const u8) Config {
   doc := json.parse(arena, status, fs.read_all(arena, status, path, 1 << 20))
-  port := json.integer(status, doc, "port")
+  port := json.get(i64, status, doc, "port")
   if port > 65535 {
     fail.invalid(status, "config", path, "port out of range")
   }
@@ -255,9 +268,10 @@ pub fn load(arena: *mem.Arena, status: *fail.Status, path: []const u8) Config {
 
 Other outcomes are values, not failures:
 
-- **Absence:** a lookup returns `nil` (`map.get`) or an empty stub for tree
-  nodes, every `find*` returns `#len(text)` on a miss, and results that can
-  come up empty carry `found`.
+- **Absence in memory you own:** `map.get` returns `nil`, tree navigation
+  returns an empty stub, and every byte `find*` returns `#len(text)` on a
+  miss. Lookups into input (JSON, INI, HTTP, the environment) record
+  `NotFound` instead (rule 2).
 - **A step with several normal outcomes** says so in its value: `found` false
   at the end of the input, or an enum such as `Want.Read`/`Want.Write` for a
   nonblocking socket.

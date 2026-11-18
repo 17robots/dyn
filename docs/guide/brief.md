@@ -93,13 +93,20 @@ fn main() i32 {
 ## Failure: one shape everywhere
 
 1. A call that can fail takes `&status` (a `fail.Status`) and returns its value.
-2. A result that can come up empty has `found`.
+2. A lookup always returns a usable value: zero or empty when it is not
+   there, with `NotFound` on the status, or `InvalidInput` when it is there
+   but wrong (a string where a number goes):
+   `port := json.get(i64, &status, root, "port")`. Read an optional value
+   with a status of its own, so a missing one stops nothing else.
+   Iterators are the exception: `next` reports the end with `found`.
 3. Check `status.failed` before you act on what you got. After the first
    failure every call given that status does nothing and returns zero, so
    one check at the end of a unit of work is enough.
 
 `fail.describe(storage, status.failure)` gives "open app.json: no such file
-or directory". Use a fresh status for cleanup after a failure.
+or directory". Cleanup takes no status (`fs.close(&file)`,
+`mem.arena_release(arena)`), so it works after a failure; other cleanup that
+can fail gets a fresh status.
 
 ## Memory: arenas only
 
@@ -125,7 +132,7 @@ Qualify with the module's last path element: `use "std/encoding/json"` gives
 | `std/bufio` | `reader(io.stdin(), storage)`, `read_line`, buffered `writer` |
 | `std/fs` | `open`, `create`, `read`, `write`, `close`, `read_all`, `write_all`, `list`, `remove`, `rename`, `metadata`, `make_directory`, `atomic_begin`/`atomic_commit` |
 | `std/process` | `start().args`, `environment`, `spawn`, `wait` |
-| `std/encoding/json` | `parse`, `get(T, value, key)`, `is_string`, `is_number`, `writer` |
+| `std/encoding/json` | `parse`, `get(T, &status, value, key)`, `is_string`, `is_number`, `writer` |
 | `std/strings` | `format`, `split`, `join`, `trim`, `clone`, `parse` |
 | `std/bytes` | `equal`, `find`, `contains`, `starts_with`, `ends_with`, `count_occurrences` |
 | `std/path` | `join`, `basename`, `extension` |
