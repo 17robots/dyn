@@ -353,6 +353,9 @@ struct Connection {
   parked: bool,
   // WebSocket: message assembly state; assembled bytes lead input.
   frames: websocket.WebSocketMessageState,
+  // Set by upgrade: reads the WebSocket frames in input. A program that never
+  // upgrades never reaches the frame code, so it is not linked.
+  on_frames: fn(*Worker, usize) bool,
   close_sent: bool,
   // A large body: the request head stays at input[..body_head] while body
   // bytes pass through behind it. body_left counts Content-Length bytes.
@@ -951,7 +954,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
     }
   }
   if connection.mode == Mode.WebSocket && !connection.writing && !connection.close_after {
-    if !websocket_frames(worker, index) { return false }
+    if !connection.on_frames(worker, index) { return false }
   }
   if connection.failed || !flush(connection) { return false }
   if connection.queued > 0 {
@@ -2388,6 +2391,7 @@ pub fn upgrade(status: *fail.Status, response: *http.Response, request: *const h
   connection.mode = Mode.WebSocket
   connection.topic = topic
   connection.frames = websocket.message_state(true)
+  connection.on_frames = websocket_frames
   return peer_of(connection.worker, connection.index)
 }
 
