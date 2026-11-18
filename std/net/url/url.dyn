@@ -18,6 +18,7 @@ fn malformed(status: *fail.Status, operation: []const u8, message: []const u8, o
 // Splits text into its parts (RFC 3986), borrowing text. Only the scheme is
 // checked; a bad scheme fails with InvalidInput at its offset.
 pub fn parse(status: *fail.Status, text: []const u8) URL {
+  if status == nil { return parse(&fail.Status{}, text) }
   empty := text[0..0]
   if status.failed { return URL{ scheme: empty, authority: empty, path: empty, query: empty, fragment: empty } }
   result := URL{ scheme: empty, authority: empty, path: empty, query: empty, fragment: empty }
@@ -163,6 +164,7 @@ pub fn percent_encode(arena: *mem.Arena, source: []const u8) []u8 {
 // source with %XX escapes decoded, in arena. '+' stays literal. A malformed
 // escape fails with InvalidInput at its offset, with nothing pushed.
 pub fn percent_decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8 {
+  if status == nil { return percent_decode(arena, &fail.Status{}, source) }
   empty: []u8
   if status.failed { return empty }
   mark := mem.arena_mark(arena)

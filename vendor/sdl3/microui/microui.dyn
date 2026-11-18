@@ -11,6 +11,10 @@ pub fn event(context: ui.Context, renderer: sdl3.Renderer, value: *const sdl3.Ev
   return native_event(context, renderer, #cast(rawptr, value))
 }
 pub fn render(status: *fail.Status, context: ui.Context, renderer: sdl3.Renderer) {
+  if status == nil {
+    render(&fail.Status{}, context, renderer)
+    return
+  }
   if status.failed { return }
   if !native_render(context, renderer) {
     sdl3.record_error(status, "render UI")

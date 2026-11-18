@@ -26,13 +26,13 @@ pub fn writer(status: *fail.Status, storage: []u8) Writer {
 }
 
 fn failed(target: *const Writer) bool {
-  return target.buffer.status == nil || target.buffer.status.failed
+  return target.buffer.broken || (target.buffer.status != nil && target.buffer.status.failed)
 }
-// Records misuse or a value JSON cannot hold.
+// Records misuse or a value JSON cannot hold, and stops the writer even when
+// its status is nil.
 fn rejected(target: *Writer, message: []const u8) {
-  if target.buffer.status != nil {
-    fail.invalid(target.buffer.status, "write JSON", "", message)
-  }
+  target.buffer.broken = true
+  fail.invalid(target.buffer.status, "write JSON", "", message)
 }
 
 // The JSON written so far, or empty when failed or a container is still open.

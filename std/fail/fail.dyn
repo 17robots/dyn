@@ -20,8 +20,9 @@
 //    failure.
 // 2. A lookup always returns a usable value: zero or empty when it is not
 //    there, with NotFound on the status. Read an optional value with a status
-//    of its own. An iterator returns its value too, and sets ended on its
-//    state when it has nothing left.
+//    of its own, or pass nil when you do not care why: the call records
+//    nothing and returns zero or empty. An iterator returns its value too,
+//    and sets ended on its state when it has nothing left.
 // 3. Check status.failed before you use what you got: before printing
 //    results, or using a computed number as a size or index.
 // In a loop that keeps going after a failure, give each item its own status.
@@ -154,9 +155,10 @@ pub fn path_text(failure: *const Failure) []const u8 {
 }
 
 // Records failure unless status already holds one; later failures are
-// consequences of the first. A failure of Kind.Ok records nothing.
+// consequences of the first. A failure of Kind.Ok records nothing, and a nil
+// status (the caller does not care why) nothing at all.
 pub fn set(status: *Status, failure: Failure) {
-  if status.failed || failure.kind == Kind.Ok { return }
+  if status == nil || status.failed || failure.kind == Kind.Ok { return }
   status.failed = true
   // Field by field: a whole-struct copy through the pointer would also check
   // for overlap, and set is inlined at every site that records a failure.
@@ -176,14 +178,14 @@ pub fn set(status: *Status, failure: Failure) {
 // Records a problem your own code found in its input, such as
 // invalid(&status, "config", path, "port out of range").
 pub fn invalid(status: *Status, operation: []const u8, path: []const u8, message: []const u8) {
-  if status.failed { return }
+  if status == nil || status.failed { return }
   set(status, make(Kind.InvalidInput, operation, path, message))
 }
 
 // Records a failure of kind at offset bytes into the input being read, such
 // as at(&status, Kind.InvalidInput, "parse config", "expected '='", 41).
 pub fn at(status: *Status, kind: Kind, operation: []const u8, message: []const u8, offset: usize) {
-  if status.failed { return }
+  if status == nil || status.failed { return }
   failure := make(kind, operation, "", message)
   failure.offset = offset
   failure.has_offset = true

@@ -28,6 +28,7 @@ fn codec_failure(status: *fail.Status, operation: []const u8, detail: isize, off
 
 // The header's description of the image, without decoding it.
 pub fn inspect(status: *fail.Status, source: []const u8) Info {
+  if status == nil { return inspect(&fail.Status{}, source) }
   if status.failed { return Info{} }
   info := inspect_info(source)
   if info.width == 0 {
@@ -337,6 +338,7 @@ fn pixel_count(width: usize, height: usize, channels: u8) usize {
 }
 
 pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image {
+  if status == nil { return decode(arena, &fail.Status{}, source) }
   if status.failed { return Image{} }
   info := inspect_info(source)
   if info.width == 0 {
@@ -352,6 +354,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
 }
 
 pub fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) []u8 {
+  if status == nil { return encode(arena, &fail.Status{}, pixels, width, height, channels, srgb) }
   empty: []u8
   if status.failed { return empty }
   if width == 0 || height == 0 || width > 0xffffffff || height > 0xffffffff || (channels != 3 && channels != 4) {

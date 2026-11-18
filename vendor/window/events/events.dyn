@@ -150,6 +150,7 @@ fn edit_failure(status: *fail.Status, buffer: *EditBuffer, kind: fail.Kind, mess
 // A ready value borrows buffer until its next Edit chunk. Other event kinds
 // are ignored unless they interrupt a partial transaction. Overflow clears it.
 pub fn collect_edit(status: *fail.Status, buffer: *EditBuffer, event: *const Event) EditResult {
+  if status == nil { return collect_edit(&fail.Status{}, buffer, event) }
   if status.failed { return EditResult{} }
   if event.kind == Kind.Overflow { return edit_failure(status, buffer, fail.Kind.Capacity, "the event queue overflowed") }
   if event.kind != Kind.Edit {

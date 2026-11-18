@@ -70,6 +70,7 @@ pub enum Wait { Signaled, TimedOut }
 // permits spurious wakeups: always recheck the protected predicate. Mutex
 // reacquisition and scheduling may finish after the timeout has elapsed.
 pub fn condition_wait_timeout(status: *fail.Status, value: *Condition, lock_value: *Mutex, timeout: i64) Wait {
+  if status == nil { return condition_wait_timeout(&fail.Status{}, value, lock_value, timeout) }
   if status.failed { return Wait.TimedOut }
   if timeout < 0 {
     fail.invalid(status, "wait", "", "negative timeout")

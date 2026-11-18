@@ -24,6 +24,7 @@ fn rejected(status: *fail.Status, destination: []u8, message: []const u8) []u8 {
 
 // Destination must not overlap any borrowed input, including in its tail.
 pub fn ed25519_public(status: *fail.Status, destination: []u8, private_key: []const u8) []u8 {
+  if status == nil { return ed25519_public(&fail.Status{}, destination, private_key) }
   if status.failed { return destination[..0] }
   if #len(destination) < 32 || #len(private_key) != 32 {
     return rejected(status, destination, "bad key or destination length")
@@ -35,6 +36,7 @@ pub fn ed25519_public(status: *fail.Status, destination: []u8, private_key: []co
   return result(status, destination[..32])
 }
 pub fn ed25519_sign(status: *fail.Status, destination: []u8, message: []const u8, private_key: []const u8) []u8 {
+  if status == nil { return ed25519_sign(&fail.Status{}, destination, message, private_key) }
   if status.failed { return destination[..0] }
   if #len(destination) < 64 || #len(private_key) != 32 {
     return rejected(status, destination, "bad key or destination length")
@@ -53,12 +55,14 @@ pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []
 // 65-byte SEC1 uncompressed points; signatures are 64-byte big-endian r || s.
 // Invalid key, length or overlap leaves the entire destination unchanged.
 pub fn p256_public(status: *fail.Status, destination: []u8, private_key: []const u8) []u8 {
+  if status == nil { return p256_public(&fail.Status{}, destination, private_key) }
   if status.failed { return destination[..0] }
   p256.public_key(status, destination, private_key)
   if status.failed { return destination[..0] }
   return destination[..65]
 }
 pub fn p256_sign(status: *fail.Status, destination: []u8, message: []const u8, private_key: []const u8) []u8 {
+  if status == nil { return p256_sign(&fail.Status{}, destination, message, private_key) }
   if status.failed { return destination[..0] }
   p256.sign(status, destination, message, private_key)
   if status.failed { return destination[..0] }

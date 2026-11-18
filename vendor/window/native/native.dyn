@@ -47,6 +47,10 @@ extern fn native_listen_events "dyn_window_listen_events"(handle: rawptr, enable
 extern fn native_next_event "dyn_window_next_event"(handle: rawptr, event: *OrderedEvent) i32
 extern fn native_wake "dyn_window_wake"(handle: rawptr) i32
 pub fn open(status: *fail.Status, window: *Window, title: []const u8, width, height: i32) {
+  if status == nil {
+    open(&fail.Status{}, window, title, width, height)
+    return
+  }
   if status.failed { return }
   if window.handle != nil {
     window_failed(status, fail.Kind.InvalidState, "open")
@@ -81,6 +85,10 @@ pub fn close(window: *Window) {
   }
 }
 pub fn poll(status: *fail.Status, window: *Window) {
+  if status == nil {
+    poll(&fail.Status{}, window)
+    return
+  }
   if status.failed { return }
   if window.handle == nil {
     window_failed(status, fail.Kind.InvalidState, "poll")
@@ -103,6 +111,10 @@ pub fn poll(status: *fail.Status, window: *Window) {
   }
 }
 pub fn make_current(status: *fail.Status, window: *Window) {
+  if status == nil {
+    make_current(&fail.Status{}, window)
+    return
+  }
   if status.failed { return }
   if window.handle == nil {
     window_failed(status, fail.Kind.InvalidState, "make current")
@@ -114,6 +126,10 @@ pub fn make_current(status: *fail.Status, window: *Window) {
   }
 }
 pub fn swap(status: *fail.Status, window: *Window) {
+  if status == nil {
+    swap(&fail.Status{}, window)
+    return
+  }
   if status.failed { return }
   if window.handle == nil {
     window_failed(status, fail.Kind.InvalidState, "swap")
@@ -199,6 +215,10 @@ pub fn next_event(window: *Window, output: *OrderedEvent) bool {
 }
 // Thread-safe; join all wake callers before close. Wakes may coalesce.
 pub fn wake(status: *fail.Status, window: *const Window) {
+  if status == nil {
+    wake(&fail.Status{}, window)
+    return
+  }
   if status.failed { return }
   if window.handle == nil {
     window_failed(status, fail.Kind.InvalidState, "wake")
@@ -250,6 +270,10 @@ pub type Surrounding = surrounding_edit.Context
 // Publish after enabling ordered listening and before enabling a newly focused
 // field. The protocol copies text synchronously. Failure preserves old context.
 pub fn set_surrounding_text(status: *fail.Status, window: *Window, context: Surrounding) {
+  if status == nil {
+    set_surrounding_text(&fail.Status{}, window, context)
+    return
+  }
   if status.failed { return }
   if window.handle == nil {
     window_failed(status, fail.Kind.InvalidState, "set surrounding text")
@@ -301,6 +325,10 @@ fn checked_status(status: *fail.Status, operation: []const u8, code: i32) {
   window_failed(status, kind, operation)
 }
 pub fn set_title(status: *fail.Status, window: *Window, title: []const u8) {
+  if status == nil {
+    set_title(&fail.Status{}, window, title)
+    return
+  }
   if status.failed { return }
   if window.handle == nil {
     window_failed(status, fail.Kind.InvalidState, "set title")
@@ -328,6 +356,10 @@ pub fn set_title(status: *fail.Status, window: *Window, title: []const u8) {
   checked_status(status, "set title", native_set_title(window.handle, pointer, #cast(u32, #len(title))))
 }
 pub fn set_size(status: *fail.Status, window: *Window, width, height: i32) {
+  if status == nil {
+    set_size(&fail.Status{}, window, width, height)
+    return
+  }
   if status.failed { return }
   if window.handle == nil {
     window_failed(status, fail.Kind.InvalidState, "set size")
@@ -341,6 +373,10 @@ pub fn set_size(status: *fail.Status, window: *Window, width, height: i32) {
   poll(status, window)
 }
 pub fn set_swap_interval(status: *fail.Status, window: *Window, interval: i32) {
+  if status == nil {
+    set_swap_interval(&fail.Status{}, window, interval)
+    return
+  }
   if status.failed { return }
   if window.handle == nil {
     window_failed(status, fail.Kind.InvalidState, "set swap interval")
@@ -354,6 +390,10 @@ pub fn set_swap_interval(status: *fail.Status, window: *Window, interval: i32) {
 }
 // Checked publication copies all text or reports failure; no truncation.
 pub fn try_set_clipboard(status: *fail.Status, window: *Window, text: []const u8) {
+  if status == nil {
+    try_set_clipboard(&fail.Status{}, window, text)
+    return
+  }
   if status.failed { return }
   if window.handle == nil {
     window_failed(status, fail.Kind.InvalidState, "try set clipboard")
@@ -380,6 +420,10 @@ pub fn paste_pending(window: *const Window) bool {
   return window.handle != nil && native_paste_pending(window.handle) != 0
 }
 pub fn paste_status(status: *fail.Status, window: *const Window) {
+  if status == nil {
+    paste_status(&fail.Status{}, window)
+    return
+  }
   if status.failed { return }
   if window.handle == nil {
     window_failed(status, fail.Kind.InvalidState, "paste status")

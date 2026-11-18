@@ -23,6 +23,7 @@ fn rejected(status: *fail.Status, destination: []u8, message: []const u8) []u8 {
 
 // Destination must not overlap either borrowed input, including in its tail.
 pub fn x25519_public(status: *fail.Status, destination: []u8, private_key: []const u8) []u8 {
+  if status == nil { return x25519_public(&fail.Status{}, destination, private_key) }
   if status.failed { return destination[..0] }
   if #len(destination) < 32 || #len(private_key) != 32 {
     return rejected(status, destination, "bad key or destination length")
@@ -34,6 +35,7 @@ pub fn x25519_public(status: *fail.Status, destination: []u8, private_key: []con
   return result(status, destination[..32])
 }
 pub fn x25519(status: *fail.Status, destination: []u8, private_key: []const u8, peer_public_key: []const u8) []u8 {
+  if status == nil { return x25519(&fail.Status{}, destination, private_key, peer_public_key) }
   if status.failed { return destination[..0] }
   if #len(destination) < 32 || #len(private_key) != 32 || #len(peer_public_key) != 32 {
     return rejected(status, destination, "bad key or destination length")

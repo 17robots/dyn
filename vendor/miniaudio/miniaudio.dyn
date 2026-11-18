@@ -26,6 +26,7 @@ fn audio_failed(status: *fail.Status, operation: []const u8, code: i32) {
 }
 // A decoder in arena; nil on failure. Undecodable bytes fail with System.
 pub fn decoder_create(arena: *mem.Arena, status: *fail.Status, bytes: []const u8) rawptr {
+  if status == nil { return decoder_create(arena, &fail.Status{}, bytes) }
   if status.failed { return nil }
   if arena == nil || #len(bytes) == 0 {
     audio_failed(status, "open decoder", -2)
@@ -43,6 +44,7 @@ pub fn decoder_create(arena: *mem.Arena, status: *fail.Status, bytes: []const u8
 }
 // output holds interleaved stereo; its length must be even.
 pub fn decoder_read(status: *fail.Status, decoder: rawptr, output: []f32) Read {
+  if status == nil { return decoder_read(&fail.Status{}, decoder, output) }
   if status.failed { return Read{} }
   if decoder == nil || #len(output) == 0 || #len(output) % 2 != 0 {
     audio_failed(status, "decode", -2)
@@ -60,6 +62,7 @@ pub extern fn decoder_close "dyn_ma_decoder_close"(decoder: rawptr)
 // device=false gives deterministic offline mixing. device=true opens the default
 // playback device; its availability/latency require hardware qualification.
 pub fn engine_create(arena: *mem.Arena, status: *fail.Status, device: bool) rawptr {
+  if status == nil { return engine_create(arena, &fail.Status{}, device) }
   if status.failed { return nil }
   if arena == nil {
     audio_failed(status, "open engine", -2)
@@ -77,6 +80,10 @@ pub fn engine_create(arena: *mem.Arena, status: *fail.Status, device: bool) rawp
 }
 // Starts playing the file at path; buffer holds the C copy of path.
 pub fn play_file(status: *fail.Status, engine: rawptr, path: []const u8, buffer: []u8) {
+  if status == nil {
+    play_file(&fail.Status{}, engine, path, buffer)
+    return
+  }
   if status.failed { return }
   if engine == nil {
     audio_failed(status, "play file", -2)
@@ -92,6 +99,7 @@ pub fn play_file(status: *fail.Status, engine: rawptr, path: []const u8, buffer:
 // Offline engine only. Outputs interleaved stereo f32 at 48 kHz; the count
 // of values written.
 pub fn mix(status: *fail.Status, engine: rawptr, output: []f32) usize {
+  if status == nil { return mix(&fail.Status{}, engine, output) }
   if status.failed { return 0 }
   if engine == nil || #len(output) == 0 || #len(output) % 2 != 0 {
     audio_failed(status, "mix", -2)
@@ -110,6 +118,7 @@ pub extern fn engine_close "dyn_ma_engine_close"(engine: rawptr)
 // Sound state lives in arena; provider synchronously decodes the file. Close
 // sounds BEFORE their engine, then rewind/release storage. Starts paused.
 pub fn sound_create(arena: *mem.Arena, status: *fail.Status, engine: rawptr, path: []const u8, buffer: []u8) rawptr {
+  if status == nil { return sound_create(arena, &fail.Status{}, engine, path, buffer) }
   if status.failed { return nil }
   if arena == nil || engine == nil {
     audio_failed(status, "open sound", -2)
@@ -130,16 +139,32 @@ pub fn sound_create(arena: *mem.Arena, status: *fail.Status, engine: rawptr, pat
 // stop preserves position; rewind explicitly seeks to the start. Query ended
 // to distinguish EOF from a stop. A closed sound fails with InvalidInput.
 pub fn sound_start(status: *fail.Status, sound: rawptr) {
+  if status == nil {
+    sound_start(&fail.Status{}, sound)
+    return
+  }
   sound_checked(status, "start sound", native_sound_start(sound))
 }
 pub fn sound_stop(status: *fail.Status, sound: rawptr) {
+  if status == nil {
+    sound_stop(&fail.Status{}, sound)
+    return
+  }
   sound_checked(status, "stop sound", native_sound_stop(sound))
 }
 pub fn sound_rewind(status: *fail.Status, sound: rawptr) {
+  if status == nil {
+    sound_rewind(&fail.Status{}, sound)
+    return
+  }
   sound_checked(status, "rewind sound", native_sound_rewind(sound))
 }
 // volume must be finite and not negative.
 pub fn sound_volume(status: *fail.Status, sound: rawptr, volume: f32) {
+  if status == nil {
+    sound_volume(&fail.Status{}, sound, volume)
+    return
+  }
   if status.failed { return }
   if !native_sound_volume(sound, volume) {
     audio_failed(status, "set volume", -2)

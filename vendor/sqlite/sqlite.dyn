@@ -64,6 +64,7 @@ fn encoded(status: *fail.Status, operation: []const u8, buffer: []u8, text: []co
 // Opens or creates the database at name; buffer holds name as a C string.
 // The connection must be closed; a failure leaves nothing to close.
 pub fn open(status: *fail.Status, name: []const u8, buffer: []u8) Database {
+  if status == nil { return open(&fail.Status{}, name, buffer) }
   if status.failed { return nil }
   path := encoded(status, "open database", buffer, name)
   if status.failed { return nil }
@@ -84,6 +85,7 @@ pub fn open(status: *fail.Status, name: []const u8, buffer: []u8) Database {
 pub struct OpenOptions { caller_serialized: bool }
 extern fn sqlite_open_flags "sqlite3_open_v2"(name: c.string, database: *rawptr, flags: i32, vfs: c.string) i32
 pub fn open_with_options(status: *fail.Status, name: []const u8, buffer: []u8, options: OpenOptions) Database {
+  if status == nil { return open_with_options(&fail.Status{}, name, buffer, options) }
   if !options.caller_serialized { return open(status, name, buffer) }
   if status.failed { return nil }
   path := encoded(status, "open database", buffer, name)
@@ -100,6 +102,10 @@ pub fn open_with_options(status: *fail.Status, name: []const u8, buffer: []u8, o
 }
 // Fails with WouldBlock while statements are still open.
 pub fn close(status: *fail.Status, database: Database) {
+  if status == nil {
+    close(&fail.Status{}, database)
+    return
+  }
   if status.failed || database == nil { return }
   checked(status, "close database", sqlite_close(database))
 }
@@ -107,6 +113,10 @@ pub fn close(status: *fail.Status, database: Database) {
 // SQL is borrowed only for the call; buffer holds it as a C string. The
 // failure's message is SQLite's own description of what went wrong.
 pub fn execute(status: *fail.Status, database: Database, sql: []const u8, buffer: []u8) {
+  if status == nil {
+    execute(&fail.Status{}, database, sql, buffer)
+    return
+  }
   if status.failed { return }
   if database == nil {
     sqlite_failed(status, "execute", InvalidArgument)

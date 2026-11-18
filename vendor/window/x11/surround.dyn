@@ -5,6 +5,10 @@
 // that only works under a synthetic test: see the source evidence in
 // docs/internals/xim-surrounding-support.md. Preedit remains independent.
 pub fn set_surrounding_text(status: *fail.Status, window: *Window, text: []const u8, cursor, anchor: usize, token: u64) {
+  if status == nil {
+    set_surrounding_text(&fail.Status{}, window, text, cursor, anchor, token)
+    return
+  }
   if status.failed { return }
   if window.display == nil || window.handle == 0 {
     window_failed(status, fail.Kind.InvalidState, "set surrounding text")

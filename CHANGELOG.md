@@ -63,6 +63,14 @@ Standard library:
   `Next.offset` becomes `state.start` (where the value began) or
   `state.offset` (archives). `array.pop` and `ring.pop` return the value,
   zero when empty. See the migration guide.
+- Pass `nil` for the status of any std or vendor call when you do not care
+  why it fails: `fs.remove(nil, path)`, `json.get(bool, nil, root,
+  "debug")`. The call does its work, records nothing, and returns zero or
+  empty on failure. Each public function checks for `nil` once on entry and
+  runs with a status of its own, so loops still end on a failure and
+  `fmt.buffer(nil, ...)` stops at the first write that does not fit (the new
+  `Buffer.broken`). `sqlite.done`, `finalize` and the statement calls accept
+  the nil statement a failed `cached` returns.
 - The remaining lookups return the value and record a miss on the status:
   `regex.find(&status, program, text)` returns a `Match` (`NotFound` when
   nothing matches; captures are `Span`s, `Span{}` for a group that took no

@@ -65,6 +65,7 @@ fn arm(slot: *Slot, code: *isize) bool {
   return true
 }
 pub fn open(status: *fail.Status, storage: []u8) Watcher {
+  if status == nil { return open(&fail.Status{}, storage) }
   if status.failed { return Watcher{} }
   if #len(storage) < 272 {
     _ = validation_failure(status, "watch", "", -28)
@@ -105,6 +106,7 @@ fn retire(slot: *Slot) isize {
 }
 // Watches path; the watch identifier, -1 after a failure.
 pub fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i32 {
+  if status == nil { return add(&fail.Status{}, state, path, mask) }
   if status.failed { return -1 }
   if state.native == nil || #len(path) == 0 { return validation_failure(status, "watch", path, -22) }
   if (mask & SupportedEvents) == 0 { return validation_failure(status, "watch", path, -95) }
@@ -150,6 +152,10 @@ pub fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i
   return slot.id
 }
 pub fn remove(status: *fail.Status, state: *Watcher, watch: i32) {
+  if status == nil {
+    remove(&fail.Status{}, state, watch)
+    return
+  }
   if status.failed { return }
   if state.native == nil || watch <= 0 {
     _ = validation_failure(status, "unwatch", "", -22)
@@ -192,6 +198,7 @@ fn idle(state: *Watcher) Event {
   return Event{}
 }
 pub fn next(status: *fail.Status, state: *Watcher) Event {
+  if status == nil { return next(&fail.Status{}, state) }
   state.ended = false
   if status.failed { return idle(state) }
   if state.failed {

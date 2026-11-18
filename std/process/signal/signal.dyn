@@ -18,6 +18,7 @@ pub struct Set { interrupt: bool, terminate: bool, hangup: bool }
 pub struct Watch { handle: isize, set: Set, active: bool }
 
 pub fn watch(status: *fail.Status, set: Set) Watch {
+  if status == nil { return watch(&fail.Status{}, set) }
   if status.failed { return Watch{} }
   if !set.interrupt && !set.terminate && !set.hangup {
     fail.invalid(status, "watch signals", "", "no signal chosen")
@@ -33,6 +34,7 @@ fn closed(status: *fail.Status) Kind {
 
 // The next pending signal without blocking; None when nothing is pending.
 pub fn poll(status: *fail.Status, state: *Watch) Kind {
+  if status == nil { return poll(&fail.Status{}, state) }
   if status.failed { return Kind.None }
   if state == nil || !state.active { return closed(status) }
   return platform_next(status, state, false)
@@ -40,6 +42,7 @@ pub fn poll(status: *fail.Status, state: *Watch) Kind {
 
 // Blocks until a watched signal arrives.
 pub fn wait(status: *fail.Status, state: *Watch) Kind {
+  if status == nil { return wait(&fail.Status{}, state) }
   if status.failed { return Kind.None }
   if state == nil || !state.active { return closed(status) }
   return platform_next(status, state, true)

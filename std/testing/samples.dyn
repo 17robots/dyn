@@ -8,6 +8,7 @@ pub struct Samples { count: usize, minimum, median, p90, maximum: i64 }
 // Median is the lower middle observation; p90 uses the nearest-rank
 // definition. Measure batches to amortize clock costs.
 pub fn summarize(status: *fail.Status, samples: []i64) Samples {
+  if status == nil { return summarize(&fail.Status{}, samples) }
   if status.failed { return Samples{} }
   if #len(samples) == 0 {
     fail.invalid(status, "summarize samples", "", "there are no samples")

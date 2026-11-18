@@ -62,6 +62,10 @@ pub extern fn gl_proc "glXGetProcAddressARB"(name: *const u8) rawptr
 // must be serialized on the GUI thread: the temporary X error handler is global.
 // Asynchronous X/GLX failures return System rather than terminating the process.
 pub fn open(status: *fail.Status, window: *Window, title: []const u8, width, height: i32) {
+  if status == nil {
+    open(&fail.Status{}, window, title, width, height)
+    return
+  }
   if status.failed { return }
   if window.display != nil {
     window_failed(status, fail.Kind.InvalidState, "open")
@@ -150,6 +154,10 @@ pub fn open(status: *fail.Status, window: *Window, title: []const u8, width, hei
   }
 }
 pub fn make_current(status: *fail.Status, window: *Window) {
+  if status == nil {
+    make_current(&fail.Status{}, window)
+    return
+  }
   if status.failed { return }
   if window.display == nil || window.context == nil || window.handle == 0 {
     window_failed(status, fail.Kind.InvalidState, "make current")
@@ -161,6 +169,10 @@ pub fn make_current(status: *fail.Status, window: *Window) {
   }
 }
 pub fn swap(status: *fail.Status, window: *Window) {
+  if status == nil {
+    swap(&fail.Status{}, window)
+    return
+  }
   if status.failed { return }
   if window.display == nil || window.context == nil {
     window_failed(status, fail.Kind.InvalidState, "swap")
@@ -169,6 +181,10 @@ pub fn swap(status: *fail.Status, window: *Window) {
   swap_buffers(window.display, window.handle)
 }
 pub fn poll(status: *fail.Status, window: *Window) {
+  if status == nil {
+    poll(&fail.Status{}, window)
+    return
+  }
   if status.failed { return }
   if window.display == nil {
     window_failed(status, fail.Kind.InvalidState, "poll")

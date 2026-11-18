@@ -8,6 +8,16 @@ use "std/mem"
 // and gives the statement back. To react to a constraint (such as a UNIQUE
 // column), give the call its own status and ask constraint(&status.failure).
 pub fn run(status: *fail.Status, statement: *Statement, values: ...any) {
+  run_list(status, statement, values)
+}
+
+fn run_list(status: *fail.Status, statement: *Statement, values: []const any) {
+  if status == nil {
+    run_list(&fail.Status{}, statement, values)
+    return
+  }
+  // After a failure, such as a cached call that returned nil, do nothing.
+  if status.failed { return }
   done(statement)
   bind_list(status, statement, values)
   for !status.failed {
@@ -19,6 +29,12 @@ pub fn run(status: *fail.Status, statement: *Statement, values: ...any) {
 // Binds values and steps to the first row: true when a row is ready for the
 // column readers below. Read it, then done(statement), or defer that.
 pub fn first(status: *fail.Status, statement: *Statement, values: ...any) bool {
+  return first_list(status, statement, values)
+}
+
+fn first_list(status: *fail.Status, statement: *Statement, values: []const any) bool {
+  if status == nil { return first_list(&fail.Status{}, statement, values) }
+  if status.failed { return false }
   done(statement)
   bind_list(status, statement, values)
   return step(status, statement) == State.Row
@@ -27,12 +43,14 @@ pub fn first(status: *fail.Status, statement: *Statement, values: ...any) bool {
 // Binds values for a query walked with next: for sqlite.next(&status, statement) { ... }.
 // Call done(statement) after the walk, or defer it.
 pub fn query(status: *fail.Status, statement: *Statement, values: ...any) {
+  if status != nil && status.failed { return }
   done(statement)
   bind_list(status, statement, values)
 }
 
 // Steps to the next row; false at the end or after a failure.
 pub fn next(status: *fail.Status, statement: *Statement) bool {
+  if status == nil { return next(&fail.Status{}, statement) }
   return step(status, statement) == State.Row
 }
 
@@ -85,6 +103,7 @@ pub fn cache(database: Database) Cache {
 // does not prepare, holds no statement (InvalidInput), or the cache is full
 // (Capacity).
 pub fn cached(status: *fail.Status, statements: *Cache, sql: []const u8) *Statement {
+  if status == nil { return cached(&fail.Status{}, statements, sql) }
   if status.failed { return nil }
   for i in 0..statements.count {
     entry := &statements.entries[i]
@@ -109,7 +128,7 @@ pub fn cached(status: *fail.Status, statements: *Cache, sql: []const u8) *Statem
 }
 
 fn readable(statement: *const Statement, index: usize) bool {
-  return statement.handle != nil && statement.state == State.Row && index < statement.columns
+  return statement != nil && statement.handle != nil && statement.state == State.Row && index < statement.columns
 }
 
 // Finalizes every cached statement. Call before closing the database.
@@ -132,6 +151,7 @@ fn equal(left: []const u8, right: []const u8) bool {
 // schema statement run (CREATE TABLE IF NOT EXISTS ..., PRAGMA ...). On
 // failure the connection is closed and nil returned.
 pub fn open_schema(status: *fail.Status, path: []const u8, schema: []const []const u8) Database {
+  if status == nil { return open_schema(&fail.Status{}, path, schema) }
   scratch: [1024]u8
   database := open_with_options(status, path, scratch[..], OpenOptions{ caller_serialized: true })
   for sql in schema {
@@ -150,6 +170,10 @@ pub fn open_schema(status: *fail.Status, path: []const u8, schema: []const []con
 // When it cannot begin or commit, the transaction is rolled back; write
 // records each row's own outcome.
 pub fn transaction(status: *fail.Status, database: Database, rows: []$R, write: fn(*$R)) {
+  if status == nil {
+    transaction(&fail.Status{}, database, rows, write)
+    return
+  }
   begin(status, database, TransactionMode.Immediate)
   if status.failed { return }
   for i in 0..#len(rows) {

@@ -34,6 +34,7 @@ const SlotRemoved: u32 = 4294967295
 const MaxBatch: usize = 512
 
 pub fn open(arena: *mem.Arena, status: *fail.Status, capacity: usize) Queue {
+  if status == nil { return open(arena, &fail.Status{}, capacity) }
   if status.failed { return Queue{} }
   if capacity == 0 || capacity > 2147483647 {
     fail.invalid(status, "open event queue", "", "capacity must be 1 to 2147483647")
@@ -128,6 +129,10 @@ fn control(status: *fail.Status, queue: *Queue, index: usize, entry: Entry) {
   queue.entries[index] = entry
 }
 pub fn add(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, token: u64) {
+  if status == nil {
+    add(&fail.Status{}, queue, descriptor, events, token)
+    return
+  }
   if !usable(status, queue, "add") { return }
   if descriptor < 0 || #cast(net.Descriptor, descriptor) != descriptor || events == 0 || (events & ~#cast(u32, 5)) != 0 {
     fail.invalid(status, "add", "", "events must be Readable and/or Writable on a valid descriptor")
@@ -151,6 +156,10 @@ pub fn add(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, 
   table_place(queue, descriptor, index)
 }
 pub fn modify(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, token: u64) {
+  if status == nil {
+    modify(&fail.Status{}, queue, descriptor, events, token)
+    return
+  }
   if !usable(status, queue, "modify") { return }
   if events == 0 || (events & ~#cast(u32, 5)) != 0 {
     fail.invalid(status, "modify", "", "events must be Readable and/or Writable")
@@ -164,6 +173,10 @@ pub fn modify(status: *fail.Status, queue: *Queue, descriptor: isize, events: u3
   control(status, queue, index, Entry{ descriptor: descriptor, token: token, events: events, active: true })
 }
 pub fn remove(status: *fail.Status, queue: *Queue, descriptor: isize) {
+  if status == nil {
+    remove(&fail.Status{}, queue, descriptor)
+    return
+  }
   if !usable(status, queue, "remove") { return }
   slot := find_slot(queue, descriptor)
   if slot == #len(queue.table) {
@@ -184,6 +197,7 @@ pub fn remove(status: *fail.Status, queue: *Queue, descriptor: isize) {
 // interrupted wait continues with the time left; at the end of it the result
 // is empty.
 pub fn wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout_milliseconds: i32) []Event {
+  if status == nil { return wait(arena, &fail.Status{}, queue, timeout_milliseconds) }
   empty: []Event
   if !usable(status, queue, "wait") { return empty }
   start := clock.Instant{}
@@ -224,6 +238,7 @@ pub fn close(queue: *Queue) {
 pub struct Waker { descriptor: isize, active: bool }
 
 pub fn waker_open(status: *fail.Status) Waker {
+  if status == nil { return waker_open(&fail.Status{}) }
   descriptor := net.socket(status, net.AddressFamilyIpv4, net.SocketDatagram, 0)
   local := net.ipv4(127, 0, 0, 1, 0)
   net.bind_ipv4(status, descriptor, &local)

@@ -146,6 +146,7 @@ fn missing(status: *fail.Status, name: []const u8) Api {
   return Api{}
 }
 pub fn load(status: *fail.Status, loader: Loader) Api {
+  if status == nil { return load(&fail.Status{}, loader) }
   if status.failed { return Api{} }
   if loader == nil { return missing(status, "loader") }
   api := Api{}

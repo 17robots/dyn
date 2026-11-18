@@ -84,6 +84,10 @@ fn spawn_with_size_untyped(arena: *mem.Arena, status: *fail.Status, stack_size: 
 // Failure: retains the handle for retry; keep arena/thread/context alive until success.
 // Allocation: none. Thread safety: one caller controls this descriptor.
 pub fn join(status: *fail.Status, thread: *Thread) {
+  if status == nil {
+    join(&fail.Status{}, thread)
+    return
+  }
   if status.failed || thread.handle == nil { return }
   value: rawptr = nil
   error := wait(thread.handle, &value)

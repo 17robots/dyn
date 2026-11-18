@@ -11,6 +11,7 @@ pub type Inflated = deflate.Inflated
 
 // One member, into arena; consumed identifies the next member or trailing data.
 pub fn decompress(arena: *mem.Arena, status: *fail.Status, source: []const u8) Inflated {
+  if status == nil { return decompress(arena, &fail.Status{}, source) }
   return deflate.gunzip(arena, status, source)
 }
 // Reads concatenated members through EOF, verifying every header/trailer.
@@ -37,6 +38,7 @@ pub fn compress_bound(size: usize) usize {
 // Capacity when destination is shorter than needed; compress_bound always
 // suffices.
 pub fn write(status: *fail.Status, destination: []u8, source: []const u8, level: u8, encoder: *Encoder) []u8 {
+  if status == nil { return write(&fail.Status{}, destination, source, level, encoder) }
   if status.failed { return destination[..0] }
   if #len(destination) < 18 {
     fail.set(status, fail.make(fail.Kind.Capacity, "compress", "", "the output does not fit destination"))

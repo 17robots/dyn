@@ -76,6 +76,7 @@ fn valid_identifiers(text: []const u8, prerelease: bool, failure: *usize) bool {
 // A version such as "1.2.3-alpha.1+build". Malformed text fails with
 // InvalidInput, a number past u32 with Overflow, at the offending byte.
 pub fn parse(status: *fail.Status, text: []const u8) Version {
+  if status == nil { return parse(&fail.Status{}, text) }
   if status.failed { return Version{} }
   at: usize = 0
   version: Version

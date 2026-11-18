@@ -18,6 +18,10 @@ extern fn native_render "dyn_ui_vk_render"(handle: rawptr, words: *const u32, co
 struct Draw { bounds: ui.Rect, tint: ui.Color, coverage: []u8, next: *Draw }
 struct Build { arena: *mem.Arena, limits: Limits, count: usize, coverage_bytes: usize, first: *Draw, last: *Draw, kind: fail.Kind }
 pub fn open(status: *fail.Status, renderer: *Renderer, limits: Limits) {
+  if status == nil {
+    open(&fail.Status{}, renderer, limits)
+    return
+  }
   if status.failed { return }
   if renderer.handle != nil {
     render_failed(status, fail.Kind.InvalidState, "open")
@@ -121,6 +125,10 @@ fn glyph(build: *Build, clip: ui.Rect, tint: ui.Color, font: software.Font, code
 // after return; do not use it to retain font-cache entries during callbacks.
 // Rendering is synchronous and externally serialized for each owning Renderer.
 pub fn render(status: *fail.Status, renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surface, commands: *const ui.Command, font: software.Font) {
+  if status == nil {
+    render(&fail.Status{}, renderer, scratch, surface, commands, font)
+    return
+  }
   if status.failed { return }
   if renderer.handle == nil {
     render_failed(status, fail.Kind.InvalidState, "render")

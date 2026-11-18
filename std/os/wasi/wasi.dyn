@@ -16,6 +16,7 @@ fn wasi_failed(status: *fail.Status, operation: []const u8, path: []const u8, er
 
 // The count written; failures carry the negative WASI errno.
 pub fn write(status: *fail.Status, fd: u32, bytes: []const u8) usize {
+  if status == nil { return write(&fail.Status{}, fd, bytes) }
   if status.failed || #len(bytes) == 0 { return 0 }
   count: usize = 0
   error := wasi_raw.write(fd, #cast(rawptr, &bytes[0]), #len(bytes), &count)
@@ -24,6 +25,7 @@ pub fn write(status: *fail.Status, fd: u32, bytes: []const u8) usize {
 }
 // The count read; 0 at the end.
 pub fn read(status: *fail.Status, fd: u32, bytes: []u8) usize {
+  if status == nil { return read(&fail.Status{}, fd, bytes) }
   if status.failed || #len(bytes) == 0 { return 0 }
   count: usize = 0
   error := wasi_raw.read(fd, &bytes[0], #len(bytes), &count)
@@ -35,6 +37,7 @@ pub fn read(status: *fail.Status, fd: u32, bytes: []u8) usize {
 }
 // Relative to a directory descriptor granted by the host. No implicit preopens.
 pub fn open_read(status: *fail.Status, directory: u32, path: []const u8) u32 {
+  if status == nil { return open_read(&fail.Status{}, directory, path) }
   if status.failed { return 0 }
   if #len(path) == 0 {
     wasi_failed(status, "open", path, 28)
@@ -51,6 +54,7 @@ pub fn random(bytes: []u8) u32 {
 }
 // Both strings and slice descriptors belong to the supplied arena. Failure rewinds.
 pub fn arguments(arena: *mem.Arena, status: *fail.Status) [][]const u8 {
+  if status == nil { return arguments(arena, &fail.Status{}) }
   empty: [][]const u8
   if status.failed { return empty }
   count: usize = 0

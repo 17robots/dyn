@@ -174,6 +174,7 @@ fn compact_metadata(state: *StreamReader, local: *Overrides) bool {
 // Malformed or truncated input fails with InvalidInput, metadata larger than
 // its storage with Capacity. A failed reader stays failed.
 pub fn next_stream(status: *fail.Status, state: *StreamReader) StreamEntry {
+  if status == nil { return next_stream(&fail.Status{}, state) }
   if status.failed {
     state.ended = true
     return StreamEntry{ offset: state.offset }
@@ -267,6 +268,7 @@ pub fn next_stream(status: *fail.Status, state: *StreamReader) StreamEntry {
 // complete (not the end of the archive). Without a current entry, fails with
 // InvalidState.
 pub fn read_stream(status: *fail.Status, state: *StreamReader, destination: []u8) usize {
+  if status == nil { return read_stream(&fail.Status{}, state, destination) }
   if status.failed { return 0 }
   if state.failed {
     fail.set(status, state.failure)

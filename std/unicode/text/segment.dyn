@@ -151,6 +151,7 @@ fn mid_num_q(class: u8) bool {
 // text is not empty. Invalid UTF-8 fails with InvalidInput at its offset and
 // allocates nothing.
 pub fn word_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []usize {
+  if status == nil { return word_breaks(arena, &fail.Status{}, text) }
   empty: []usize
   if status.failed { return empty }
   if !utf8.valid(text) {
@@ -406,6 +407,7 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
 // follow hard line breaks (BK, CR, LF, NL).
 // Invalid UTF-8 fails as for word_breaks.
 pub fn line_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []LineBreak {
+  if status == nil { return line_breaks(arena, &fail.Status{}, text) }
   empty: []LineBreak
   if status.failed { return empty }
   if !utf8.valid(text) {

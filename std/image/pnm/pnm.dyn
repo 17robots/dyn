@@ -49,6 +49,7 @@ fn decimal(cursor: *Cursor) u32 {
   return value
 }
 pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decoded {
+  if status == nil { return decode(arena, &fail.Status{}, source) }
   if status.failed { return Decoded{} }
   if #len(source) < 3 || source[0] != 'P' || (source[1] != '2' && source[1] != '3' && source[1] != '5' && source[1] != '6') || !whitespace(source[2]) {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "decode PNM", "", "malformed PNM"))
@@ -136,6 +137,7 @@ fn write_decimal(output: []u8, at: *usize, value: usize) {
 // Emit binary P5 (one channel) or P6 (three channels) with Maxval 255.
 // Input must not borrow unused output-arena storage. Failure allocates nothing.
 pub fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8) []u8 {
+  if status == nil { return encode(arena, &fail.Status{}, pixels, width, height, channels) }
   empty: []u8
   if status.failed { return empty }
   if width == 0 || height == 0 || (channels != 1 && channels != 3) {

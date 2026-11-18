@@ -20,6 +20,7 @@ pub const Overflow: i32 = -3
 // remaining SQL to process a script. Empty/comment-only input succeeds with empty=true.
 // SQL is borrowed only during this call and needs no terminating NUL or scratch.
 pub fn prepare(status: *fail.Status, database: Database, sql: []const u8) Prepared {
+  if status == nil { return prepare(&fail.Status{}, database, sql) }
   if status.failed { return Prepared{} }
   if database == nil {
     sqlite_failed(status, "prepare", InvalidArgument)
@@ -62,8 +63,9 @@ pub fn prepare(status: *fail.Status, database: Database, sql: []const u8) Prepar
 // statement Failed with its code; repeated calls after Done or a failure do
 // not re-execute SQL. reset is required before reuse.
 pub fn step(status: *fail.Status, statement: *Statement) State {
+  if status == nil { return step(&fail.Status{}, statement) }
   if status.failed { return State.Failed }
-  if statement.handle == nil {
+  if statement == nil || statement.handle == nil {
     sqlite_failed(status, "step", InvalidArgument)
     return State.Failed
   }
@@ -87,8 +89,12 @@ pub fn step(status: *fail.Status, statement: *Statement) State {
 // Always resets execution state, even when reporting the preceding execution's
 // error. Parameter values survive reset; use clear_bindings to release them.
 pub fn reset(status: *fail.Status, statement: *Statement) {
+  if status == nil {
+    reset(&fail.Status{}, statement)
+    return
+  }
   if status.failed { return }
-  if statement.handle == nil {
+  if statement == nil || statement.handle == nil {
     sqlite_failed(status, "reset", InvalidArgument)
     return
   }
@@ -102,6 +108,7 @@ pub fn reset(status: *fail.Status, statement: *Statement) {
 // again does nothing. Cleanup takes no status: an error here only repeats
 // the last step's.
 pub fn finalize(statement: *Statement) {
+  if statement == nil { return }
   handle := statement.handle
   statement.* = Statement{}
   if handle != nil {
@@ -110,11 +117,15 @@ pub fn finalize(statement: *Statement) {
 }
 
 fn can_bind(statement: *const Statement) bool {
-  return statement.handle != nil && statement.state == State.Ready
+  return statement != nil && statement.handle != nil && statement.state == State.Ready
 }
 // Binding needs a prepared statement that is Ready (fresh or reset);
 // otherwise it fails with InvalidInput.
 pub fn clear_bindings(status: *fail.Status, statement: *Statement) {
+  if status == nil {
+    clear_bindings(&fail.Status{}, statement)
+    return
+  }
   if status.failed { return }
   if !can_bind(statement) {
     sqlite_failed(status, "bind", InvalidArgument)
@@ -123,6 +134,10 @@ pub fn clear_bindings(status: *fail.Status, statement: *Statement) {
   checked(status, "bind", sqlite_clear_bindings(statement.handle))
 }
 pub fn bind_null(status: *fail.Status, statement: *Statement, index: usize) {
+  if status == nil {
+    bind_null(&fail.Status{}, statement, index)
+    return
+  }
   if status.failed { return }
   if !can_bind(statement) {
     sqlite_failed(status, "bind", InvalidArgument)
@@ -131,6 +146,10 @@ pub fn bind_null(status: *fail.Status, statement: *Statement, index: usize) {
   checked(status, "bind", sqlite_bind_null(statement.handle, native_index(index)))
 }
 pub fn bind_i64(status: *fail.Status, statement: *Statement, index: usize, value: i64) {
+  if status == nil {
+    bind_i64(&fail.Status{}, statement, index, value)
+    return
+  }
   if status.failed { return }
   if !can_bind(statement) {
     sqlite_failed(status, "bind", InvalidArgument)
@@ -139,6 +158,10 @@ pub fn bind_i64(status: *fail.Status, statement: *Statement, index: usize, value
   checked(status, "bind", sqlite_bind_integer(statement.handle, native_index(index), value))
 }
 pub fn bind_f64(status: *fail.Status, statement: *Statement, index: usize, value: f64) {
+  if status == nil {
+    bind_f64(&fail.Status{}, statement, index, value)
+    return
+  }
   if status.failed { return }
   if !can_bind(statement) {
     sqlite_failed(status, "bind", InvalidArgument)
@@ -164,6 +187,10 @@ fn bind_bytes(statement: *Statement, index: usize, value: []const u8, text: bool
 // SQLite copies bindings before return. Text must be valid UTF-8 without NUL;
 // use blobs for arbitrary bytes. Inputs may be changed immediately after binding.
 pub fn bind_text(status: *fail.Status, statement: *Statement, index: usize, value: []const u8) {
+  if status == nil {
+    bind_text(&fail.Status{}, statement, index, value)
+    return
+  }
   if status.failed { return }
   if !utf8.valid(value) {
     fail.invalid(status, "bind", "", "text is not valid UTF-8")
@@ -178,6 +205,10 @@ pub fn bind_text(status: *fail.Status, statement: *Statement, index: usize, valu
   checked(status, "bind", bind_bytes(statement, index, value, true))
 }
 pub fn bind_blob(status: *fail.Status, statement: *Statement, index: usize, value: []const u8) {
+  if status == nil {
+    bind_blob(&fail.Status{}, statement, index, value)
+    return
+  }
   if status.failed { return }
   checked(status, "bind", bind_bytes(statement, index, value, false))
 }
@@ -195,6 +226,10 @@ pub fn bind_values(status: *fail.Status, statement: *Statement, values: ...any) 
 }
 
 fn bind_list(status: *fail.Status, statement: *Statement, values: []const any) {
+  if status == nil {
+    bind_list(&fail.Status{}, statement, values)
+    return
+  }
   for i in 0..#len(values) {
     if status.failed { return }
     index := i + 1
@@ -244,9 +279,10 @@ fn bind_list(status: *fail.Status, statement: *Statement, values: []const any) {
 
 // Returns statement to Ready and drops its bindings, ready for the next
 // use: defer sqlite.done(&statement) right after taking it. Errors are not
-// reported; step already reported them.
+// reported; step already reported them. A nil statement (from a failed
+// cached) does nothing.
 pub fn done(statement: *Statement) {
-  if statement.handle == nil { return }
+  if statement == nil || statement.handle == nil { return }
   _ = sqlite_reset(statement.handle)
   statement.state = State.Ready
   statement.code = 0
@@ -254,7 +290,7 @@ pub fn done(statement: *Statement) {
 }
 
 pub fn column_count(statement: *const Statement) usize {
-  if statement.handle == nil { return 0 }
+  if statement == nil || statement.handle == nil { return 0 }
   return #cast(usize, sqlite_column_count(statement.handle))
 }
 
@@ -269,8 +305,9 @@ fn native_index(index: usize) i32 {
 // borrow SQLite storage until step/reset/finalize; clone them into an arena to retain.
 // Off a row or out of range fails with InvalidInput.
 pub fn column(status: *fail.Status, statement: *const Statement, index: usize) Column {
+  if status == nil { return column(&fail.Status{}, statement, index) }
   if status.failed { return Column{} }
-  if statement.handle == nil || statement.state != State.Row || index >= statement.columns {
+  if statement == nil || statement.handle == nil || statement.state != State.Row || index >= statement.columns {
     sqlite_failed(status, "read column", InvalidArgument)
     return Column{}
   }

@@ -44,6 +44,10 @@ alpn_http2: []const u8 = "\x02h2\x08http/1.1"
 // speaks HTTP/2 to clients that pick it. Without Config.http2 a client that
 // picks h2 gets HTTP/1.1 it cannot read, so set both or neither.
 pub fn offer_http2(status: *fail.Status, context: provider.Context) {
+  if status == nil {
+    offer_http2(&fail.Status{}, context)
+    return
+  }
   provider.server_alpn(status, context, &alpn_http2)
 }
 
@@ -100,6 +104,7 @@ alpn_h3: []const u8 = "\x02h3"
 // A QUIC server context offering "h3" through ALPN, from PEM files. Release
 // it with tls.config_release after evented.join returns.
 pub fn quic_context(arena: *mem.Arena, status: *fail.Status, certificate: []const u8, key: []const u8) provider.Context {
+  if status == nil { return quic_context(arena, &fail.Status{}, certificate, key) }
   if status.failed { return nil }
   context := openssl.quic_server_context_create(arena, status, certificate, key)
   openssl.set_server_alpn(status, context, &alpn_h3)

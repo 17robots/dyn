@@ -153,6 +153,7 @@ fn invalid(status: *fail.Status, operation: []const u8, name: []const u8, messag
 // Parses a TZif file (RFC 8536, versions 1 through 4) into arena storage. The
 // result borrows nothing from data. name is copied into the zone.
 pub fn parse_tzif(arena: *mem.Arena, status: *fail.Status, name: []const u8, data: []const u8) Zone {
+  if status == nil { return parse_tzif(arena, &fail.Status{}, name, data) }
   if status.failed { return Zone{} }
   if #len(data) < 44 || !bytes.starts_with(data, "TZif") { return invalid(status, "parse", name, "not a valid TZif file") }
   mark := mem.arena_mark(arena)
@@ -359,6 +360,7 @@ fn rule(cursor: *Cursor) Rule {
 // Parses a POSIX TZ rule such as "CET-1CEST,M3.5.0,M10.5.0/3" into a zone with
 // no transition table. POSIX offsets count west of UTC; Type offsets count east.
 pub fn parse_posix(arena: *mem.Arena, status: *fail.Status, text: []const u8) Zone {
+  if status == nil { return parse_posix(arena, &fail.Status{}, text) }
   if status.failed { return Zone{} }
   mark := mem.arena_mark(arena)
   cursor := Cursor{ text: text, ok: true }
@@ -396,6 +398,7 @@ pub fn parse_posix(arena: *mem.Arena, status: *fail.Status, text: []const u8) Zo
 // The zone named by an IANA name such as "Europe/Berlin", read from the
 // system zoneinfo database. Windows has no database and reports Unsupported.
 pub fn load(arena: *mem.Arena, status: *fail.Status, name: []const u8) Zone {
+  if status == nil { return load(arena, &fail.Status{}, name) }
   if status.failed { return Zone{} }
   if #len(name) == 0 || name[0] == '/' || bytes.find(name, "..") != #len(name) { return invalid(status, "load zone", name, "not a zone name") }
   return platform_load(arena, status, name)
@@ -405,6 +408,7 @@ pub fn load(arena: *mem.Arena, status: *fail.Status, name: []const u8) Zone {
 // over /etc/localtime; Windows uses the configured zone and its current rule.
 // When nothing is configured the result is UTC.
 pub fn system(arena: *mem.Arena, status: *fail.Status) Zone {
+  if status == nil { return system(arena, &fail.Status{}) }
   if status.failed { return Zone{} }
   return platform_system(arena, status)
 }

@@ -36,6 +36,7 @@ fn mask_valid(mask: u32, channels: u16) bool {
 // subformats. Unknown chunks are skipped with RIFF padding. Compressed formats
 // and RF64/RIFX return Unsupported. No native audio provider is used.
 pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Audio {
+  if status == nil { return decode(arena, &fail.Status{}, source) }
   if status.failed { return Audio{} }
   if #len(source) < 12 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "decode WAV", "", "malformed WAV"))
@@ -184,6 +185,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Audio
 // Integer encoding clamps to [-1,1] and rounds ties toward positive infinity.
 // Float encoding preserves f32 bits. Invalid input allocates nothing.
 pub fn encode(arena: *mem.Arena, status: *fail.Status, audio: *const Audio, encoding: Encoding) []u8 {
+  if status == nil { return encode(arena, &fail.Status{}, audio, encoding) }
   empty: []u8
   if status.failed { return empty }
   bits: u16 = 0

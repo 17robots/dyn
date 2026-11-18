@@ -2,6 +2,10 @@ use "std/time"
 pub enum TransactionMode { Deferred, Immediate, Exclusive }
 // Applies to subsequent busy waits on this connection. Zero disables waiting.
 pub fn busy_timeout(status: *fail.Status, database: Database, milliseconds: i32) {
+  if status == nil {
+    busy_timeout(&fail.Status{}, database, milliseconds)
+    return
+  }
   if status.failed { return }
   if database == nil || milliseconds < 0 {
     sqlite_failed(status, "set busy timeout", InvalidArgument)
@@ -16,6 +20,10 @@ extern fn sqlite_busy_handler "sqlite3_busy_handler"(database: rawptr, handler: 
 // busy_timeout sleeps whole milliseconds from the first retry, so threads
 // writing to one database wait far longer than the writes take.
 pub fn busy_wait(status: *fail.Status, database: Database) {
+  if status == nil {
+    busy_wait(&fail.Status{}, database)
+    return
+  }
   if status.failed { return }
   if database == nil {
     sqlite_failed(status, "set busy handler", InvalidArgument)
@@ -56,6 +64,10 @@ fn transaction_command(status: *fail.Status, operation: []const u8, database: Da
   checked(status, operation, sqlite_exec(database, command, nil, nil, nil))
 }
 pub fn begin(status: *fail.Status, database: Database, mode: TransactionMode) {
+  if status == nil {
+    begin(&fail.Status{}, database, mode)
+    return
+  }
   command := "BEGIN DEFERRED\0"
   if mode == TransactionMode.Immediate {
     command = "BEGIN IMMEDIATE\0"
@@ -65,10 +77,18 @@ pub fn begin(status: *fail.Status, database: Database, mode: TransactionMode) {
   transaction_command(status, "begin", database, &command[0])
 }
 pub fn commit(status: *fail.Status, database: Database) {
+  if status == nil {
+    commit(&fail.Status{}, database)
+    return
+  }
   command := "COMMIT\0"
   transaction_command(status, "commit", database, &command[0])
 }
 pub fn rollback(status: *fail.Status, database: Database) {
+  if status == nil {
+    rollback(&fail.Status{}, database)
+    return
+  }
   command := "ROLLBACK\0"
   transaction_command(status, "roll back", database, &command[0])
 }

@@ -65,6 +65,7 @@ fn tree_append(arena: *tree_memory.Arena, parent: *Node, kind: NodeKind, event: 
 // invalid UTF-8/XML characters point to the first invalid source byte; missing
 // root/unclosed elements point to EOF. Success offset is source length.
 pub fn parse(arena: *tree_memory.Arena, status: *fail.Status, source: []const u8) *const Node {
+  if status == nil { return parse(arena, &fail.Status{}, source) }
   if status.failed { return &nil_node }
   mark := tree_memory.arena_mark(arena)
   position: usize = 0

@@ -19,6 +19,7 @@ fn control(property: u32) bool {
 // Extended grapheme clusters, UAX #29 Unicode 17 default rules. Invalid UTF-8 is
 // InvalidInput at its offset. Failure leaves offset unchanged.
 pub fn next_grapheme(status: *fail.Status, state: *Graphemes) []const u8 {
+  if status == nil { return next_grapheme(&fail.Status{}, state) }
   if status.failed || state.offset == #len(state.source) {
     state.ended = true
     return ""

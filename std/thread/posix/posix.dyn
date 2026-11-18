@@ -47,6 +47,7 @@ fn trampoline(context: rawptr) rawptr {
 // panics; a native failure restores the arena mark.
 // Starts entry(context) on a POSIX thread; context stays alive until join.
 pub fn spawn(arena: *mem.Arena, status: *fail.Status, stack_size: usize, entry: fn(*$C) isize, context: *$C) *Thread {
+  if status == nil { return spawn(arena, &fail.Status{}, stack_size, entry, context) }
   if status.failed { return nil }
   return spawn_untyped(arena, status, stack_size, #cast(fn(rawptr) isize, entry), context)
 }
@@ -85,6 +86,10 @@ fn spawn_untyped(arena: *mem.Arena, status: *fail.Status, stack_size: usize, ent
 
 // Waits for the thread. A joined Thread joins again as a no-op.
 pub fn join(status: *fail.Status, thread: *Thread) {
+  if status == nil {
+    join(&fail.Status{}, thread)
+    return
+  }
   if status.failed || thread.joined { return }
   value: rawptr = nil
   error := wait(thread.handle, &value)

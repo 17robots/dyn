@@ -1568,6 +1568,7 @@ fn abandon(workers: []Worker, started: usize) usize {
 // started before it, which are stopped again.
 pub fn start(arena: *mem.Arena, status: *fail.Status, workers: []Worker, listener: *network.Listener, config: Config,
   handler: http.Handler, context: rawptr) usize {
+  if status == nil { return start(arena, &fail.Status{}, workers, listener, config, handler, context) }
   if !valid_start(status, workers, config, handler) { return 0 }
   if listener == nil || !listener.active {
     fail.invalid(status, "start server", "", "the listener is not open")
@@ -1590,6 +1591,7 @@ pub fn start(arena: *mem.Arena, status: *fail.Status, workers: []Worker, listene
 // Unsupported; use start there, or serve, which does.
 pub fn start_shared(arena: *mem.Arena, status: *fail.Status, workers: []Worker, address: network.Ipv4Address, backlog: usize,
   config: Config, handler: http.Handler, context: rawptr) usize {
+  if status == nil { return start_shared(arena, &fail.Status{}, workers, address, backlog, config, handler, context) }
   if !valid_start(status, workers, config, handler) { return 0 }
   for i in 0..#len(workers) {
     workers[i] = Worker{ handler: handler, context: context, config: config, id: #cast(u32, i), group: workers }
@@ -1639,6 +1641,10 @@ pub fn stop(workers: []Worker) {
 // The first failure, from joining or from a worker's loop, goes in status;
 // every worker is joined either way.
 pub fn join(status: *fail.Status, workers: []Worker) {
+  if status == nil {
+    join(&fail.Status{}, workers)
+    return
+  }
   for *worker in workers {
     if worker.thread == nil && worker.native == nil { continue }
     if worker.native != nil {
@@ -1713,6 +1719,10 @@ fn peer_invalid(status: *fail.Status) {
 // worker. A closed peer drops it. Fails with Capacity when the inbox is full,
 // InvalidInput for a malformed peer.
 pub fn send(status: *fail.Status, workers: []Worker, peer: Peer, payload: []const u8, binary: bool) {
+  if status == nil {
+    send(&fail.Status{}, workers, peer, payload, binary)
+    return
+  }
   if !live_peer(workers, peer) {
     peer_invalid(status)
     return
@@ -1724,6 +1734,10 @@ pub fn send(status: *fail.Status, workers: []Worker, peer: Peer, payload: []cons
 // Queues payload for every stream and WebSocket opened with topic, on every
 // worker. Stops at the first worker whose inbox is full.
 pub fn publish(status: *fail.Status, workers: []Worker, topic: u64, payload: []const u8, binary: bool) {
+  if status == nil {
+    publish(&fail.Status{}, workers, topic, payload, binary)
+    return
+  }
   for *worker in workers {
     post(status, worker, Post{ kind: PostKind.Publish, binary: binary, topic: topic }, payload)
   }
@@ -1731,6 +1745,10 @@ pub fn publish(status: *fail.Status, workers: []Worker, topic: u64, payload: []c
 
 // Ends a stream (final chunk) or WebSocket (close frame 1000), then closes it.
 pub fn close_peer(status: *fail.Status, workers: []Worker, peer: Peer) {
+  if status == nil {
+    close_peer(&fail.Status{}, workers, peer)
+    return
+  }
   if !live_peer(workers, peer) {
     peer_invalid(status)
     return
@@ -1914,6 +1932,10 @@ pub fn client_ip(response: *http.Response) network.Ip {
 // when compress_level is zero or response is not an evented response.
 pub fn respond_compressed(status: *fail.Status, response: *http.Response, request: *const http.Request, body: []const u8,
   options: http.ResponseOptions) {
+  if status == nil {
+    respond_compressed(&fail.Status{}, response, request, body, options)
+    return
+  }
   connection := connection_of(response)
   if connection == nil {
     http.respond_compressed(status, response, request, body, options, 0, nil)
@@ -1950,6 +1972,10 @@ pub fn worker_index(response: *http.Response) usize {
 // arena must hold storage_size(config, #len(workers)).
 pub fn serve(arena: *mem.Arena, status: *fail.Status, workers: []Worker, address: network.Ipv4Address, config: Config, handler: http.Handler,
   context: rawptr) {
+  if status == nil {
+    serve(arena, &fail.Status{}, workers, address, config, handler, context)
+    return
+  }
   signals := signal.watch(status, signal.Set{ interrupt: true, terminate: true })
   if status.failed { return }
   defer signal.close(&signals)
@@ -2018,6 +2044,10 @@ fn job_failure(status: *fail.Status, kind: fail.Kind, message: []const u8) {
 }
 
 pub fn run(status: *fail.Status, response: *http.Response, data: *$J, work: fn(*$J), finish: fn(*fail.Status, *http.Response, *const http.Request, *$J)) {
+  if status == nil {
+    run(&fail.Status{}, response, data, work, finish)
+    return
+  }
   if status.failed { return }
   connection := connection_of(response)
   if connection != nil && connection.h2 != nil && !response.started && !response.finished {
@@ -2071,6 +2101,10 @@ pub fn run(status: *fail.Status, response: *http.Response, data: *$J, work: fn(*
 // must outlive finish (see job). InvalidState on HTTP/2 and HTTP/3 streams,
 // outside a handler, or with a job already running.
 pub fn later(status: *fail.Status, response: *http.Response, data: *$J, finish: fn(*fail.Status, *http.Response, *const http.Request, *$J)) {
+  if status == nil {
+    later(&fail.Status{}, response, data, finish)
+    return
+  }
   if status.failed { return }
   connection := connection_of(response)
   if connection == nil || connection.h2 != nil || connection.mode != Mode.Http || connection.job_running || response.started ||
@@ -2179,6 +2213,10 @@ fn job_done(worker: *Worker, index: usize) {
 // 100 Continue now if it asked for it. InvalidState outside on_large_body.
 pub fn receive_body(status: *fail.Status, response: *http.Response, data: *$J, chunk: fn(*$J, []const u8) bool,
   finish: fn(*fail.Status, *http.Response, *const http.Request, *$J, BodyEnd)) {
+  if status == nil {
+    receive_body(&fail.Status{}, response, data, chunk, finish)
+    return
+  }
   if status.failed { return }
   connection := connection_of(response)
   if data == nil || chunk == nil || finish == nil {
@@ -2372,6 +2410,7 @@ fn peer_failure(status: *fail.Status, kind: fail.Kind, message: []const u8) Peer
 }
 
 pub fn open_stream(status: *fail.Status, response: *http.Response, options: http.ResponseOptions, topic: u64) Peer {
+  if status == nil { return open_stream(&fail.Status{}, response, options, topic) }
   if status.failed { return Peer{} }
   connection := connection_of(response)
   if connection != nil && connection.h2 != nil {
@@ -2395,6 +2434,7 @@ pub fn open_stream(status: *fail.Status, response: *http.Response, options: http
 // Pings are answered; a client close is echoed. InvalidInput when request is
 // not a valid upgrade; the handler should then answer 400.
 pub fn upgrade(status: *fail.Status, response: *http.Response, request: *const http.Request, topic: u64) Peer {
+  if status == nil { return upgrade(&fail.Status{}, response, request, topic) }
   if status.failed { return Peer{} }
   connection := connection_of(response)
   if connection != nil && connection.h2 != nil { return connection.worker.config.http2.upgrade(status, connection, response, topic) }

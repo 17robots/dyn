@@ -291,6 +291,7 @@ pub fn clean(arena: *mem.Arena, path: []const u8) []u8 {
 // root joined with a relative child that cannot climb out of root, in arena.
 // A child that is absolute or escapes root fails with InvalidInput.
 pub fn safe_join(arena: *mem.Arena, status: *fail.Status, root: []const u8, child: []const u8) []u8 {
+  if status == nil { return safe_join(arena, &fail.Status{}, root, child) }
   empty: []u8
   if status.failed { return empty }
   mark := mem.arena_mark(arena)
@@ -305,6 +306,7 @@ pub fn safe_join(arena: *mem.Arena, status: *fail.Status, root: []const u8, chil
 // The path from base to target, in arena. Both must be absolute or both
 // relative, and at most 4096 bytes; anything else fails with InvalidInput.
 pub fn relative(arena: *mem.Arena, status: *fail.Status, base: []const u8, target: []const u8) []u8 {
+  if status == nil { return relative(arena, &fail.Status{}, base, target) }
   empty: []u8
   if status.failed { return empty }
   mark := mem.arena_mark(arena)

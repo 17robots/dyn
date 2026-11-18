@@ -95,10 +95,12 @@ fn question_matches(packet: []const u8, name: []const u8) bool {
 // An A query for name, in arena. A name that is not a valid DNS name, or that
 // lies in the arena's free space, fails with InvalidInput.
 pub fn query_ipv4(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16) []u8 {
+  if status == nil { return query_ipv4(arena, &fail.Status{}, name, identifier) }
   return query_arena(arena, status, name, identifier, 1)
 }
 // An AAAA query for name, in arena, by the rules of query_ipv4.
 pub fn query_ipv6(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16) []u8 {
+  if status == nil { return query_ipv6(arena, &fail.Status{}, name, identifier) }
   return query_arena(arena, status, name, identifier, 28)
 }
 fn query_arena(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16, kind: u16) []u8 {
@@ -159,6 +161,7 @@ fn query(destination: []u8, name: []const u8, identifier: u16, kind: u16) []u8 {
 // header or question field); a DNS error code with NotFound (NXDOMAIN) or
 // System, the negative code in native.
 pub fn parse_ipv4(arena: *mem.Arena, status: *fail.Status, packet: []const u8, identifier: u16, name: []const u8) []Ipv4 {
+  if status == nil { return parse_ipv4(arena, &fail.Status{}, packet, identifier, name) }
   empty4: []Ipv4
   empty6: []Ipv6
   if status.failed { return empty4 }
@@ -173,6 +176,7 @@ pub fn parse_ipv4(arena: *mem.Arena, status: *fail.Status, packet: []const u8, i
   return output
 }
 pub fn parse_ipv6(arena: *mem.Arena, status: *fail.Status, packet: []const u8, identifier: u16, name: []const u8) []Ipv6 {
+  if status == nil { return parse_ipv6(arena, &fail.Status{}, packet, identifier, name) }
   empty4: []Ipv4
   empty6: []Ipv6
   if status.failed { return empty6 }
@@ -341,6 +345,7 @@ fn parse(status: *fail.Status, packet: []const u8, identifier: u16, name: []cons
 // One deadline covers UDP, TCP connect, framing, and every partial transfer.
 pub fn resolve_ipv4(arena: *mem.Arena, status: *fail.Status, name: []const u8, server: *const network.Ipv4Address,
   timeout_milliseconds: i32) []Ipv4 {
+  if status == nil { return resolve_ipv4(arena, &fail.Status{}, name, server, timeout_milliseconds) }
   empty: []Ipv4
   if status.failed { return empty }
   if conflicts(arena, name) {
@@ -354,6 +359,7 @@ pub fn resolve_ipv4(arena: *mem.Arena, status: *fail.Status, name: []const u8, s
 }
 pub fn resolve_ipv6(arena: *mem.Arena, status: *fail.Status, name: []const u8, server: *const network.Ipv4Address,
   timeout_milliseconds: i32) []Ipv6 {
+  if status == nil { return resolve_ipv6(arena, &fail.Status{}, name, server, timeout_milliseconds) }
   empty: []Ipv6
   if status.failed { return empty }
   if conflicts(arena, name) {

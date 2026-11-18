@@ -129,6 +129,7 @@ fn discard_slot(state: *State, slot: *Slot) {
   slot.* = Slot{}
 }
 pub fn open(status: *fail.Status, storage: []u8) Watcher {
+  if status == nil { return open(&fail.Status{}, storage) }
   if status.failed { return Watcher{} }
   if #len(storage) < 272 {
     _ = failure(status, "watch", "", -28)
@@ -245,6 +246,7 @@ fn callback(_stream: rawptr, info: rawptr, count: usize, paths: rawptr, flags: *
 }
 // Watches path; the watch identifier, -1 after a failure.
 pub fn add(status: *fail.Status, watcher: *Watcher, path: []const u8, mask: u32) i32 {
+  if status == nil { return add(&fail.Status{}, watcher, path, mask) }
   if status.failed { return -1 }
   state := watcher.state
   if state == nil || #len(path) == 0 || !utf8.valid(path) { return failure(status, "watch", path, -22) }
@@ -317,6 +319,10 @@ pub fn add(status: *fail.Status, watcher: *Watcher, path: []const u8, mask: u32)
   return slot.id
 }
 pub fn remove(status: *fail.Status, watcher: *Watcher, id: i32) {
+  if status == nil {
+    remove(&fail.Status{}, watcher, id)
+    return
+  }
   if status.failed { return }
   state := watcher.state
   if state == nil {
@@ -354,6 +360,7 @@ fn idle(state: *Watcher) Event {
   return Event{}
 }
 pub fn next(status: *fail.Status, watcher: *Watcher) Event {
+  if status == nil { return next(&fail.Status{}, watcher) }
   watcher.ended = false
   if status.failed { return idle(watcher) }
   if watcher.failed {

@@ -265,6 +265,7 @@ fn invalid_utf8_offset(source: []const u8, start: usize) usize {
 
 // Locale-independent full default case folding, without normalization, into arena.
 pub fn case_fold(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8 {
+  if status == nil { return case_fold(arena, &fail.Status{}, source) }
   empty: []u8
   if status.failed { return empty }
   invalid := invalid_utf8_offset(source, 0)
@@ -303,6 +304,7 @@ pub fn case_fold(arena: *mem.Arena, status: *fail.Status, source: []const u8) []
 
 // source in normalization form, into arena.
 pub fn normalize(arena: *mem.Arena, status: *fail.Status, source: []const u8, form: Form) []u8 {
+  if status == nil { return normalize(arena, &fail.Status{}, source, form) }
   empty: []u8
   if status.failed { return empty }
   invalid := invalid_utf8_offset(source, 0)

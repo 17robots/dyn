@@ -11,6 +11,7 @@ pub struct Edit { start_byte: u32, old_end_byte: u32, new_end_byte: u32, start_p
 pub struct Node { context: [4]u32, id: rawptr, tree: Tree }
 
 pub fn parser_create_owned(status: *fail.Status) Parser {
+  if status == nil { return parser_create_owned(&fail.Status{}) }
   if status.failed { return nil }
   parser := native_parser_new()
   if parser == nil {
@@ -25,6 +26,10 @@ pub fn parser_destroy_owned(parser: Parser) {
 }
 // A grammar built for an incompatible Tree-sitter ABI fails with Unsupported.
 pub fn parser_language(status: *fail.Status, parser: Parser, language: Language) {
+  if status == nil {
+    parser_language(&fail.Status{}, parser, language)
+    return
+  }
   if status.failed { return }
   if parser == nil || language == nil {
     fail.invalid(status, "set language", "", "no parser or language")
@@ -39,6 +44,7 @@ pub fn parser_language(status: *fail.Status, parser: Parser, language: Language)
 // tree; the tree is the caller's to destroy. Without a language, or when the
 // parse is cancelled, fails with InvalidState.
 pub fn parse(status: *fail.Status, parser: Parser, old_tree: Tree, source: []const u8) Tree {
+  if status == nil { return parse(&fail.Status{}, parser, old_tree, source) }
   if status.failed { return nil }
   if parser == nil || #len(source) > 4294967295 {
     fail.invalid(status, "parse", "", "no parser, or the source is too large")
@@ -61,6 +67,7 @@ pub fn tree_destroy_owned(tree: Tree) {
   }
 }
 pub fn tree_copy_owned(status: *fail.Status, tree: Tree) Tree {
+  if status == nil { return tree_copy_owned(&fail.Status{}, tree) }
   if status.failed { return nil }
   if tree == nil {
     fail.invalid(status, "copy tree", "", "no tree")
@@ -76,6 +83,10 @@ pub fn tree_copy_owned(status: *fail.Status, tree: Tree) Tree {
 // edit must be reacquired (this wrapper does not expose ts_node_edit).
 // An edit whose start comes after its ends fails with InvalidInput.
 pub fn tree_edit(status: *fail.Status, tree: Tree, edit: *const Edit) {
+  if status == nil {
+    tree_edit(&fail.Status{}, tree, edit)
+    return
+  }
   if status.failed { return }
   if tree == nil || edit == nil || edit.start_byte > edit.old_end_byte || edit.start_byte > edit.new_end_byte ||
     !point_before(edit.start_point, edit.old_end_point) || !point_before(edit.start_point, edit.new_end_point) {

@@ -7,6 +7,7 @@ pub struct Pattern { needle: []const u8, table: []const usize }
 // A table shorter than needle fails with Capacity and is left untouched.
 // Empty needles need no storage.
 pub fn prepare(status: *fail.Status, needle: []const u8, table: []usize) Pattern {
+  if status == nil { return prepare(&fail.Status{}, needle, table) }
   if status.failed { return Pattern{} }
   if #len(table) < #len(needle) {
     fail.set(status, fail.make(fail.Kind.Capacity, "prepare search", "", "the table is shorter than the needle"))

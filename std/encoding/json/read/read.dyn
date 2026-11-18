@@ -253,6 +253,7 @@ fn read_value(state: *ReadParser, depth: usize) bool {
 // arena rewind/reset; unused tail storage of the final buffer is reclaimed.
 // offset is the parser cursor; a bad string may report its content start.
 pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *const Value {
+  if status == nil { return parse(arena, &fail.Status{}, source) }
   if status.failed { return &nil_value }
   mark := memory.arena_mark(arena)
   if #len(source) == 0 {

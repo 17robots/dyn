@@ -8,6 +8,10 @@ pub struct Response { written: usize, http_status: c.long }
 struct Sink { destination: []u8, used: usize, full: bool }
 // Call once before starting worker threads; cleanup only after all transfers end.
 pub fn init(status: *fail.Status) {
+  if status == nil {
+    init(&fail.Status{})
+    return
+  }
   if status.failed { return }
   code := native_init(#cast(c.long, 3))
   if code != 0 {
@@ -46,6 +50,7 @@ fn receive(data: *const u8, size: usize, count: usize, context: rawptr) usize {
 // curl's message, with its code in native. On failure destination holds
 // partial bytes, not a response. No borrows escape.
 pub fn get_into(status: *fail.Status, url: []const u8, url_buffer: []u8, destination: []u8, timeout_ms: i32) Response {
+  if status == nil { return get_into(&fail.Status{}, url, url_buffer, destination, timeout_ms) }
   if status.failed { return Response{} }
   if timeout_ms <= 0 {
     fail.invalid(status, "GET", url, "the timeout must be positive")

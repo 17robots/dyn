@@ -37,6 +37,7 @@ pub struct BitmapView { pixels: []const u8, width: i32, height: i32, stride: usi
 // remain caller-owned; variation changes can change these values.
 pub struct FaceMetrics { units_per_em: u16, ascent: i16, descent: i16, height: i16, glyph_count: u32, face_count: u32, face_index: u32 }
 pub fn face_metrics(status: *fail.Status, face: rawptr) FaceMetrics {
+  if status == nil { return face_metrics(&fail.Status{}, face) }
   if status.failed { return FaceMetrics{} }
   if face==nil {
     ft_failed(status, fail.Kind.InvalidInput, "face metrics", 0)
@@ -62,6 +63,7 @@ pub fn face_metrics(status: *fail.Status, face: rawptr) FaceMetrics {
 // borrowed until the next load/render on this face. Normal gray8 only; other
 // bitmap pixel modes or negative-pitch storage return Unsupported.
 pub fn bitmap(status: *fail.Status, face: rawptr) BitmapView {
+  if status == nil { return bitmap(&fail.Status{}, face) }
   if status.failed { return BitmapView{} }
   if face == nil {
     ft_failed(status, fail.Kind.InvalidInput, "bitmap", 0)
@@ -95,6 +97,10 @@ pub fn bitmap(status: *fail.Status, face: rawptr) BitmapView {
   return result
 }
 pub fn open(status: *fail.Status, font: *Font, api: Api, bytes: []const u8, index: u32, pixels: u32) {
+  if status == nil {
+    open(&fail.Status{}, font, api, bytes, index, pixels)
+    return
+  }
   if status.failed { return }
   if font.library != nil || font.face != nil {
     ft_failed(status, fail.Kind.InvalidState, "open", 0)
@@ -187,6 +193,7 @@ fn symbol(handle: dynlib.Handle, name: []const u8) rawptr {
 }
 // A missing function fails with NotFound, its name as the failure's path.
 pub fn load(status: *fail.Status, handle: dynlib.Handle) Api {
+  if status == nil { return load(&fail.Status{}, handle) }
   if status.failed { return Api{} }
   api := Api{}
   api.init = #cast(fn(*rawptr)i32, symbol(handle, "FT_Init_FreeType"))

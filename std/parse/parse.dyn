@@ -7,6 +7,7 @@ use "std/fail"
 // sign, space or underscore). InvalidInput at the first bad byte; Overflow
 // past the u64 range.
 pub fn u64_decimal(status: *fail.Status, text: []const u8) u64 {
+  if status == nil { return u64_decimal(&fail.Status{}, text) }
   if status.failed { return 0 }
   if #len(text) == 0 {
     fail.at(status, fail.Kind.InvalidInput, "parse number", "expected digits", 0)
@@ -31,6 +32,7 @@ pub fn u64_decimal(status: *fail.Status, text: []const u8) u64 {
 
 // Whole text as a decimal i64 with an optional leading '-'.
 pub fn i64_decimal(status: *fail.Status, text: []const u8) i64 {
+  if status == nil { return i64_decimal(&fail.Status{}, text) }
   if status.failed { return 0 }
   negative := #len(text) > 0 && text[0] == '-'
   start: usize = 0

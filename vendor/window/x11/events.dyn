@@ -115,6 +115,10 @@ pub fn next_event(window: *Window, output: *OrderedEvent) bool {
 }
 // Thread-safe wake only. Stop/join wake callers before closing the owner.
 pub fn wake(status: *fail.Status, window: *const Window) {
+  if status == nil {
+    wake(&fail.Status{}, window)
+    return
+  }
   if status.failed { return }
   if window.display == nil || !window.wake_active {
     window_failed(status, fail.Kind.InvalidState, "wake")

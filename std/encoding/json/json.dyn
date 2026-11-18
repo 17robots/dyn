@@ -547,6 +547,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
 // this call's allocations; the root is then the missing value. A full fixed
 // arena panics.
 pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *const Value {
+  if status == nil { return parse(arena, &fail.Status{}, source) }
   if status.failed { return &nil_value }
   mark := memory.arena_mark(arena)
   cursor := Cursor{ source: source, at: 0 }
@@ -637,11 +638,13 @@ pub fn object_get(object: *const Value, key: []const u8) *const Value {
 // T, is InvalidInput. The message names key: "\"port\" is missing". Read an
 // optional member with a status of its own. Another T panics.
 pub fn get(T: type, status: *fail.Status, object: *const Value, key: []const u8) T {
+  if status == nil { return get(T, &fail.Status{}, object, key) }
   return read(T, status, object_get(object, key), key)
 }
 
 // Reads value itself as T, by the same rules as get.
 pub fn as(T: type, status: *fail.Status, value: *const Value) T {
+  if status == nil { return as(T, &fail.Status{}, value) }
   return read(T, status, value, "")
 }
 
@@ -982,6 +985,10 @@ fn stream_value(status: *fail.Status, destination: stream.Writer, value: *const 
 
 // Writes value as compact JSON.
 pub fn write(status: *fail.Status, destination: stream.Writer, value: *const Value) {
+  if status == nil {
+    write(&fail.Status{}, destination, value)
+    return
+  }
   stream_value(status, destination, value, 0)
 }
 

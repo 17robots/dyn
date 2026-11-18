@@ -30,6 +30,10 @@ fn quarter(state: []u32, a, b, c, d: usize) {
 // One 64-byte keystream block. Key is 32 bytes, nonce 12; anything else, or
 // less than 64 bytes of destination, fails with InvalidInput.
 pub fn block(status: *fail.Status, destination: []u8, key: []const u8, nonce: []const u8, counter: u32) {
+  if status == nil {
+    block(&fail.Status{}, destination, key, nonce, counter)
+    return
+  }
   if status.failed { return }
   if #len(destination) < 64 || #len(key) != 32 || #len(nonce) != 12 {
     fail.invalid(status, "ChaCha20 block", "", "needs a 32-byte key, 12-byte nonce and 64 bytes of output")
@@ -77,6 +81,10 @@ fn keystream(destination: []u8, key: []const u8, nonce: []const u8, counter: u32
 // little destination, or input past the counter's end fails with InvalidInput
 // before writing.
 pub fn xor(status: *fail.Status, destination: []u8, input: []const u8, key: []const u8, nonce: []const u8, counter: u32) {
+  if status == nil {
+    xor(&fail.Status{}, destination, input, key, nonce, counter)
+    return
+  }
   if status.failed { return }
   if #len(destination) < #len(input) || #len(key) != 32 || #len(nonce) != 12 {
     fail.invalid(status, "ChaCha20", "", "needs a 32-byte key, 12-byte nonce and room for the input")

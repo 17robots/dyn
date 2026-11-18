@@ -22,6 +22,10 @@ fn name(level: Level) []const u8 {
 // Writes one line, "level: message name=value ...", when level is at least
 // the logger's minimum.
 pub fn write(status: *fail.Status, target: *Logger, level: Level, message: []const u8, fields: []const Field) {
+  if status == nil {
+    write(&fail.Status{}, target, level, message, fields)
+    return
+  }
   if status.failed || !enabled(level, target.minimum) { return }
   // A line that fits goes out in one write, so lines from several threads
   // do not interleave; a longer one is written in pieces.

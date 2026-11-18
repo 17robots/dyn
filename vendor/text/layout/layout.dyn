@@ -705,6 +705,7 @@ fn selection_walk(layout: *const Layout, start, end: usize, destination: []Selec
 // layouts are rejected before allocation. Empty ranges allocate nothing.
 // A range or layout that breaks these rules fails with InvalidInput.
 pub fn selection(arena: *mem.Arena, status: *fail.Status, layout: *const Layout, start, end: usize) []SelectionRect {
+  if status == nil { return selection(arena, &fail.Status{}, layout, start, end) }
   empty: []SelectionRect
   if status.failed { return empty }
   if arena==nil || layout==nil || start>end || end>#len(layout.text) || !utf8.valid(layout.text) || !selection_boundary(layout.text, start) || !selection_boundary(layout.text, end) {

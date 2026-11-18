@@ -31,6 +31,7 @@ fn element(status: *fail.Status, cursor: *der.Cursor, base: usize, tag: u8) der.
 // Malformed DER fails with InvalidInput (Overflow for an impossible length)
 // at the offending byte.
 pub fn parse(status: *fail.Status, encoded: []const u8) Certificate {
+  if status == nil { return parse(&fail.Status{}, encoded) }
   if status.failed { return Certificate{} }
   outer_cursor := der.cursor(encoded)
   outer := element(status, &outer_cursor, 0, 48)

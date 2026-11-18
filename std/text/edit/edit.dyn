@@ -29,6 +29,10 @@ pub fn boundary(text: []const u8, offset: usize) bool {
 // Validates the shared bounded context. Native window protocols additionally
 // require text without embedded NUL; generic UTF-8 buffers may contain it.
 pub fn validate(status: *fail.Status, context: *const Context) {
+  if status == nil {
+    validate(&fail.Status{}, context)
+    return
+  }
   if status.failed { return }
   if #len(context.text) > context_limit {
     edit_failed(status, fail.Kind.Capacity, "validate", "context is longer than context_limit")
@@ -47,6 +51,7 @@ fn edit_failed(status: *fail.Status, kind: fail.Kind, operation: []const u8, mes
 // The returned view borrows tracker until its next changed snapshot. Equal
 // text/selection/owner reuses the token; changing focus or bytes advances it.
 pub fn snapshot(status: *fail.Status, tracker: *Tracker, owner: u64, text: []const u8, cursor, anchor: usize, cause: Cause) Context {
+  if status == nil { return snapshot(&fail.Status{}, tracker, owner, text, cursor, anchor, cause) }
   if status.failed { return Context{} }
   if #len(text) > context_limit {
     invalidate(tracker)
@@ -101,6 +106,10 @@ fn overlaps(left, right: []const u8) bool {
 // All validation precedes writes. Scratch is rewound on success and failure;
 // the replacement may alias storage. Buffer metadata is unchanged on error.
 pub fn apply(scratch: *mem.Arena, status: *fail.Status, buffer: *Buffer, replacement: *const Replacement) {
+  if status == nil {
+    apply(scratch, &fail.Status{}, buffer, replacement)
+    return
+  }
   if status.failed { return }
   if buffer.token == 0 || replacement.token != buffer.token {
     edit_failed(status, fail.Kind.InvalidState, "apply", "replacement token does not match the buffer")

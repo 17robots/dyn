@@ -4,6 +4,7 @@ use "std/fail"
 // No standard libraries are opened automatically. This is not a sandbox.
 pub type State = rawptr
 pub fn create_owned(status: *fail.Status) State {
+  if status == nil { return create_owned(&fail.Status{}) }
   if status.failed { return nil }
   state := native_new()
   if state == nil {
@@ -23,6 +24,10 @@ pub fn stack_size(state: State) usize {
 // Only remove values; never grow the stack through this API. Popping more
 // than the stack holds fails with InvalidInput and changes nothing.
 pub fn pop(status: *fail.Status, state: State, count: usize) {
+  if status == nil {
+    pop(&fail.Status{}, state, count)
+    return
+  }
   if status.failed { return }
   if state == nil || count > #cast(usize, native_top(state)) {
     fail.invalid(status, "pop Lua stack", "", "no state, or more values than the stack holds")
@@ -37,6 +42,10 @@ pub fn pop(status: *fail.Status, state: State, count: usize) {
 // out of memory with Capacity; the message is Lua's and native its code. With
 // no state, or no stack room, the stack is unchanged.
 pub fn execute(status: *fail.Status, state: State, source: []const u8) {
+  if status == nil {
+    execute(&fail.Status{}, state, source)
+    return
+  }
   if status.failed { return }
   if state == nil {
     fail.invalid(status, "run Lua", "", "no state")
@@ -84,6 +93,7 @@ fn valid_index(state: State, index: i32) bool {
 }
 // A missing slot or a value that is not an integer fails with InvalidInput.
 pub fn integer(status: *fail.Status, state: State, index: i32) i64 {
+  if status == nil { return integer(&fail.Status{}, state, index) }
   if status.failed { return 0 }
   if !valid_index(state, index) {
     fail.invalid(status, "read Lua value", "", "no such stack slot")
@@ -101,6 +111,7 @@ pub fn integer(status: *fail.Status, state: State, index: i32) i64 {
 // No numeric conversion: that could allocate outside a protected Lua call.
 // A missing slot or a value that is not a string fails with InvalidInput.
 pub fn bytes(status: *fail.Status, state: State, index: i32) []const u8 {
+  if status == nil { return bytes(&fail.Status{}, state, index) }
   if status.failed { return "" }
   if !valid_index(state, index) || native_type(state, index) != 4 {
     fail.invalid(status, "read Lua value", "", "not a string")

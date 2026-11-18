@@ -46,6 +46,7 @@ fn record(status: *fail.Status, state: *Scanner, line: usize, offset: usize) Ent
 }
 
 pub fn next(status: *fail.Status, state: *Scanner) Entry {
+  if status == nil { return next(&fail.Status{}, state) }
   if status.failed { return ended(state) }
   if state.failed { return record(status, state, state.error_line, state.error_offset) }
   for state.offset < #len(state.source) {
@@ -106,6 +107,7 @@ pub fn next(status: *fail.Status, state: *Scanner) Entry {
 // to the key InvalidInput at its offset, as next reports it. Read an optional
 // key with a status of its own.
 pub fn find(status: *fail.Status, source: []const u8, section: []const u8, key: []const u8) []const u8 {
+  if status == nil { return find(&fail.Status{}, source, section, key) }
   if status.failed { return source[..0] }
   state := scanner(source)
   for {
@@ -140,6 +142,7 @@ pub fn find(status: *fail.Status, source: []const u8, section: []const u8, key: 
 // Allocation: two scans, one exact-size table allocation; no hidden scratch.
 // Failure: stops at the first syntax error before allocating; a full fixed arena panics.
 pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) []Entry {
+  if status == nil { return parse(arena, &fail.Status{}, source) }
   empty: []Entry
   if status.failed { return empty }
   state := scanner(source)

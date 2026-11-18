@@ -10,6 +10,7 @@ pub struct Position { x: f32, y: f32 }
 // Bad numbers (not finite, sizes not positive) or a stale ID fail with
 // InvalidInput. Destroying a stale ID does nothing.
 pub fn create_owned(status: *fail.Status, gravity_x: f32, gravity_y: f32) World {
+  if status == nil { return create_owned(&fail.Status{}, gravity_x, gravity_y) }
   if status.failed { return 0 }
   world := native_world_create(gravity_x, gravity_y)
   if world == 0 {
@@ -22,12 +23,17 @@ pub fn destroy_owned(world: World) {
 }
 // dt must be finite, >0 and <=1 second; substeps 1..64.
 pub fn step(status: *fail.Status, world: World, dt: f32, substeps: i32) {
+  if status == nil {
+    step(&fail.Status{}, world, dt, substeps)
+    return
+  }
   if status.failed { return }
   if !native_step(world, dt, substeps) {
     fail.invalid(status, "step world", "", "invalid world, dt or substeps")
   }
 }
 pub fn body_create(status: *fail.Status, world: World, x: f32, y: f32, dynamic: bool) Body {
+  if status == nil { return body_create(&fail.Status{}, world, x, y, dynamic) }
   if status.failed { return 0 }
   body := native_body(world, x, y, dynamic)
   if body == 0 {
@@ -40,6 +46,7 @@ pub fn body_destroy(body: Body) {
 }
 // Positive finite half-extents and nonnegative finite density. Body owns shape.
 pub fn box_create(status: *fail.Status, body: Body, half_width: f32, half_height: f32, density: f32) Shape {
+  if status == nil { return box_create(&fail.Status{}, body, half_width, half_height, density) }
   if status.failed { return 0 }
   shape := native_box(body, half_width, half_height, density)
   if shape == 0 {
@@ -55,6 +62,7 @@ extern fn native_body_destroy "dyn_b2_body_destroy"(body: Body) bool
 extern fn native_box "dyn_b2_box"(body: Body, half_width: f32, half_height: f32, density: f32) Shape
 // A destroyed or invalid body fails with InvalidInput.
 pub fn position(status: *fail.Status, body: Body) Position {
+  if status == nil { return position(&fail.Status{}, body) }
   if status.failed { return Position{} }
   result := Position{}
   if !native_position(body, &result.x, &result.y) {
@@ -67,6 +75,7 @@ extern fn native_position "dyn_b2_position"(body: Body, x: *f32, y: *f32) bool
 
 pub type Joint = u64
 pub fn circle_create(status: *fail.Status, body: Body, radius: f32, density: f32) Shape {
+  if status == nil { return circle_create(&fail.Status{}, body, radius, density) }
   if status.failed { return 0 }
   shape := native_circle(body, radius, density)
   if shape == 0 {
@@ -76,6 +85,7 @@ pub fn circle_create(status: *fail.Status, body: Body, radius: f32, density: f32
 }
 // Rigid distance joint anchored at body origins; bodies must share a world.
 pub fn distance_joint(status: *fail.Status, first: Body, second: Body, length: f32) Joint {
+  if status == nil { return distance_joint(&fail.Status{}, first, second, length) }
   if status.failed { return 0 }
   joint := native_distance(first, second, length)
   if joint == 0 {
@@ -87,6 +97,10 @@ pub fn joint_destroy(joint: Joint) {
   _ = native_joint_destroy(joint)
 }
 pub fn contact_events(status: *fail.Status, shape: Shape, enabled: bool) {
+  if status == nil {
+    contact_events(&fail.Status{}, shape, enabled)
+    return
+  }
   if status.failed { return }
   if !native_events(shape, enabled) {
     fail.invalid(status, "contact events", "", "invalid shape")
@@ -94,6 +108,7 @@ pub fn contact_events(status: *fail.Status, shape: Shape, enabled: bool) {
 }
 // Read after step and before modifying the world.
 pub fn contact_count(status: *fail.Status, world: World, begin: bool) usize {
+  if status == nil { return contact_count(&fail.Status{}, world, begin) }
   if status.failed { return 0 }
   count := native_contact_count(world, begin)
   if count < 0 {
@@ -111,6 +126,7 @@ pub struct Contact { first: Shape, second: Shape }
 // Contact event index of this step. NotFound for an index past contact_count
 // or an invalid world.
 pub fn contact(status: *fail.Status, world: World, begin: bool, index: usize) Contact {
+  if status == nil { return contact(&fail.Status{}, world, begin, index) }
   if status.failed { return Contact{} }
   result := Contact{}
   if index > 2147483647 || !native_contact(world, begin, #cast(i32, index), &result.first, &result.second) {
@@ -124,6 +140,7 @@ pub struct Query { total: usize, written: usize }
 // unspecified. total may exceed capacity; written reports the copied prefix.
 // An invalid world or box fails with InvalidInput.
 pub fn query(status: *fail.Status, world: World, x0: f32, y0: f32, x1: f32, y1: f32, output: []Shape) Query {
+  if status == nil { return query(&fail.Status{}, world, x0, y0, x1, y1, output) }
   if status.failed { return Query{} }
   data: *Shape = nil
   if #len(output) != 0 {

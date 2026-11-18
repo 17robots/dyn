@@ -16,6 +16,7 @@ pub struct Rectangle { x: i32, y: i32, width: i32, height: i32 }
 // window) fail with InvalidState; text over 4096 bytes or a full command list
 // with InvalidInput.
 pub fn create(arena: *mem.Arena, status: *fail.Status) Context {
+  if status == nil { return create(arena, &fail.Status{}) }
   if status.failed { return nil }
   if arena == nil {
     fail.invalid(status, "create UI", "", "no arena")
@@ -38,13 +39,22 @@ fn native_storage(arena: *mem.Arena, size: usize, alignment: usize) rawptr {
   return &storage[skip]
 }
 pub fn begin(status: *fail.Status, context: Context) {
+  if status == nil {
+    begin(&fail.Status{}, context)
+    return
+  }
   ui_checked(status, "begin frame", native_begin(context))
 }
 pub fn end(status: *fail.Status, context: Context) {
+  if status == nil {
+    end(&fail.Status{}, context)
+    return
+  }
   ui_checked(status, "end frame", native_end(context))
 }
 // Whether the window is open; widgets go inside an open window.
 pub fn window(status: *fail.Status, context: Context, title: []const u8, buffer: []u8, bounds: Rectangle) bool {
+  if status == nil { return window(&fail.Status{}, context, title, buffer, bounds) }
   encoded := ui_text(status, "window", title, buffer)
   if status.failed { return false }
   if bounds.width <= 0 || bounds.height <= 0 {
@@ -54,15 +64,24 @@ pub fn window(status: *fail.Status, context: Context, title: []const u8, buffer:
   return native_window(context, encoded, bounds.x, bounds.y, bounds.width, bounds.height)
 }
 pub fn window_end(status: *fail.Status, context: Context) {
+  if status == nil {
+    window_end(&fail.Status{}, context)
+    return
+  }
   ui_checked(status, "end window", native_window_end(context))
 }
 pub fn label(status: *fail.Status, context: Context, text: []const u8, buffer: []u8) {
+  if status == nil {
+    label(&fail.Status{}, context, text, buffer)
+    return
+  }
   encoded := ui_text(status, "label", text, buffer)
   if status.failed { return }
   ui_checked(status, "label", native_label(context, encoded))
 }
 // Whether the button was clicked this frame. Inputs must arrive before begin().
 pub fn button(status: *fail.Status, context: Context, text: []const u8, buffer: []u8) bool {
+  if status == nil { return button(&fail.Status{}, context, text, buffer) }
   encoded := ui_text(status, "button", text, buffer)
   if status.failed { return false }
   clicked := native_button(context, encoded)

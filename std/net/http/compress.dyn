@@ -21,6 +21,10 @@ pub const CompressHeaders: usize = 30
 // headers, send body as respond would.
 pub fn respond_compressed(status: *fail.Status, response: *Response, request: *const Request, body: []const u8, options: ResponseOptions,
   level: u8, encoder: *gzip.Encoder) {
+  if status == nil {
+    respond_compressed(&fail.Status{}, response, request, body, options, level, encoder)
+    return
+  }
   if !compressible(options.content_type) || #len(body) < CompressMinimum || #len(options.headers) > CompressHeaders ||
     has_coding(options.headers) {
     respond(status, response, body, options)

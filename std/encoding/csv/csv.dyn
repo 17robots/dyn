@@ -57,6 +57,7 @@ fn stream_end(state: *StreamScanner) Field {
 
 // Reads one field from an arbitrarily chunked input stream.
 pub fn next_stream(status: *fail.Status, state: *StreamScanner, destination: []u8) Field {
+  if status == nil { return next_stream(&fail.Status{}, state, destination) }
   if status.failed || state.finished { return stream_end(state) }
   first := stream_byte(status, state)
   if !first.ok { return stream_end(state) }
@@ -140,6 +141,10 @@ fn write_all(status: *fail.Status, state: *Writer, bytes: []const u8) bool {
 
 // Writes one field. `end_record` emits CRLF; otherwise the next field is comma-separated.
 pub fn write_field(status: *fail.Status, state: *Writer, value: []const u8, end_record: bool) {
+  if status == nil {
+    write_field(&fail.Status{}, state, value, end_record)
+    return
+  }
   if status.failed { return }
   if state.fields > 0 && !write_all(status, state, ",") { return }
   quoted := false
@@ -179,6 +184,7 @@ fn fail_at(status: *fail.Status, state: *Scanner, destination: []u8, kind: fail.
 }
 
 pub fn next(status: *fail.Status, state: *Scanner, destination: []u8) Field {
+  if status == nil { return next(&fail.Status{}, state, destination) }
   if status.failed || state.finished {
     state.ended = true
     return Field{ text: destination[..0] }

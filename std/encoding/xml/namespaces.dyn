@@ -40,6 +40,7 @@ fn qualified(status: *fail.Status, name: []const u8) ExpandedName {
 // The expanded name of an element or attribute name in the current scope.
 // Malformed or unbound names fail with InvalidInput.
 pub fn namespace_resolve(status: *fail.Status, state: *const Namespaces, name: []const u8, attribute: bool) ExpandedName {
+  if status == nil { return namespace_resolve(&fail.Status{}, state, name, attribute) }
   if status.failed { return ExpandedName{} }
   result := qualified(status, name)
   if status.failed { return result }
@@ -199,6 +200,7 @@ fn namespace_enter_impl(status: *fail.Status, state: *Namespaces, event: Event) 
 // attributes. Failed enter restores scope counters; unused storage may change.
 // Expanded element slices last until scope exit.
 pub fn namespace_enter(status: *fail.Status, state: *Namespaces, event: Event) ExpandedName {
+  if status == nil { return namespace_enter(&fail.Status{}, state, event) }
   if status.failed { return ExpandedName{} }
   if bytes.overlaps(state.storage, event.name) || bytes.overlaps(state.storage, event.attributes) {
     return name_failure(status, fail.Kind.InvalidInput, "the event lies in the namespace storage")
@@ -217,6 +219,10 @@ pub fn namespace_enter(status: *fail.Status, state: *Namespaces, event: Event) E
 // Leaves element name; an end tag that does not match the open element fails
 // with InvalidInput.
 pub fn namespace_leave(status: *fail.Status, state: *Namespaces, name: []const u8) {
+  if status == nil {
+    namespace_leave(&fail.Status{}, state, name)
+    return
+  }
   if status.failed { return }
   if state.depth == 0 || !bytes.equal(state.frames[state.depth - 1].name, name) {
     fail.invalid(status, "leave XML element", name, "the end tag does not match the open element")

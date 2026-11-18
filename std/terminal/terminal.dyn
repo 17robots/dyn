@@ -17,6 +17,7 @@ pub fn is_attached(descriptor: isize) bool {
 // keys, and on Windows virtual-terminal input or output. Returns the previous
 // settings, to pass to restore. Fails when descriptor is not a terminal.
 pub fn raw(status: *fail.Status, descriptor: isize) State {
+  if status == nil { return raw(&fail.Status{}, descriptor) }
   saved := read_state(status, descriptor)
   if status.failed { return saved }
   changed := saved

@@ -38,6 +38,7 @@ pub fn string_length(value: string, maximum: usize) usize {
 // The bytes of a NUL-terminated string, borrowed. InvalidInput for nil;
 // Capacity when no NUL comes within maximum bytes.
 pub fn bytes_from_string(status: *fail.Status, value: string, maximum: usize) []const u8 {
+  if status == nil { return bytes_from_string(&fail.Status{}, value, maximum) }
   empty: []const u8 = ""
   if status.failed { return empty }
   if value == nil {
@@ -66,6 +67,7 @@ pub fn succeeded(value: isize) bool {
 // terminate (Overflow). Allocates nothing; use
 // string_from_bytes for arena-owned strings.
 pub fn string_into(status: *fail.Status, destination: []u8, source: []const u8) string {
+  if status == nil { return string_into(&fail.Status{}, destination, source) }
   if status.failed { return nil }
   if #len(source) == #cast(usize, -1) {
     fail.set(status, fail.make(fail.Kind.Overflow, "make C string", "", "the text is too long"))
@@ -89,6 +91,7 @@ pub fn string_into(status: *fail.Status, destination: []u8, source: []const u8) 
 // source with a NUL appended, in arena. An embedded NUL is InvalidInput;
 // failure pushes nothing and returns nil.
 pub fn string_from_bytes(arena: *memory.Arena, status: *fail.Status, source: []const u8) string {
+  if status == nil { return string_from_bytes(arena, &fail.Status{}, source) }
   if status.failed { return nil }
   if #len(source) == #cast(usize, -1) {
     fail.set(status, fail.make(fail.Kind.Overflow, "make C string", "", "the text is too long"))

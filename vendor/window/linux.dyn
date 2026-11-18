@@ -8,18 +8,34 @@ use "std/ui/box" box
 // Wayland is a separate backend; availability never silently selects SDL.
 pub type Window = x11.Window
 pub fn open(status: *fail.Status, window: *Window, title: []const u8, width, height: i32) {
+  if status == nil {
+    open(&fail.Status{}, window, title, width, height)
+    return
+  }
   x11.open(status, window, title, width, height)
 }
 pub fn close(window: *Window) {
   x11.close(window)
 }
 pub fn poll(status: *fail.Status, window: *Window) {
+  if status == nil {
+    poll(&fail.Status{}, window)
+    return
+  }
   x11.poll(status, window)
 }
 pub fn make_current(status: *fail.Status, window: *Window) {
+  if status == nil {
+    make_current(&fail.Status{}, window)
+    return
+  }
   x11.make_current(status, window)
 }
 pub fn swap(status: *fail.Status, window: *Window) {
+  if status == nil {
+    swap(&fail.Status{}, window)
+    return
+  }
   x11.swap(status, window)
 }
 pub fn gl_proc(name: *const u8) rawptr {
@@ -53,6 +69,10 @@ pub fn next_event(window: *Window, output: *Event) bool {
 }
 // The owner must outlive all worker wake calls; stop/join them before close.
 pub fn wake(status: *fail.Status, window: *const Window) {
+  if status == nil {
+    wake(&fail.Status{}, window)
+    return
+  }
   x11.wake(status, window)
 }
 
@@ -74,6 +94,10 @@ pub fn clipboard(window: *const Window) []const u8 {
 
 pub type Surrounding = surrounding_edit.Context
 pub fn set_surrounding_text(status: *fail.Status, window: *Window, context: Surrounding) {
+  if status == nil {
+    set_surrounding_text(&fail.Status{}, window, context)
+    return
+  }
   if status.failed { return }
   if context.cause != surrounding_edit.Cause.Other && context.cause != surrounding_edit.Cause.InputMethod {
     window_failed(status, fail.Kind.InvalidInput, "set surrounding text")
@@ -83,19 +107,35 @@ pub fn set_surrounding_text(status: *fail.Status, window: *Window, context: Surr
 }
 
 pub fn set_title(status: *fail.Status, window:*Window, title:[]const u8) {
+  if status == nil {
+    set_title(&fail.Status{}, window, title)
+    return
+  }
   x11.set_title(status, window, title)
 }
 pub fn set_size(status: *fail.Status, window:*Window, width, height:i32) {
+  if status == nil {
+    set_size(&fail.Status{}, window, width, height)
+    return
+  }
   x11.set_size(status, window, width, height)
 }
 
 pub fn try_set_clipboard(status: *fail.Status, window:*Window, text:[]const u8) {
+  if status == nil {
+    try_set_clipboard(&fail.Status{}, window, text)
+    return
+  }
   x11.try_set_clipboard(status, window, text)
 }
 pub fn paste_pending(window:*const Window) bool {
   return x11.paste_pending(window)
 }
 pub fn paste_status(status: *fail.Status, window:*const Window) {
+  if status == nil {
+    paste_status(&fail.Status{}, window)
+    return
+  }
   x11.paste_status(status, window)
 }
 
@@ -104,6 +144,10 @@ pub fn request_paste_snapshot(window:*Window) {
 }
 
 pub fn set_swap_interval(status: *fail.Status, window:*Window, interval:i32) {
+  if status == nil {
+    set_swap_interval(&fail.Status{}, window, interval)
+    return
+  }
   x11.set_swap_interval(status, window, interval)
 }
 

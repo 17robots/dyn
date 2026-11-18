@@ -40,6 +40,7 @@ pub const EndOfText: u32 = 2
 // Copies font bytes into HarfBuzz-owned storage. The returned font owns native
 // references and is destroyed with api.font_destroy. Scale uses caller units.
 pub fn font_owned(status: *fail.Status, api: *const Api, bytes: []const u8, face_index: u32) rawptr {
+  if status == nil { return font_owned(&fail.Status{}, api, bytes, face_index) }
   if status.failed { return nil }
   if #len(bytes) == 0 || #cast(u64, #len(bytes)) > 0xffffffff {
     hb_failed(status, fail.Kind.InvalidInput, "font owned", 0)
@@ -83,6 +84,7 @@ pub fn font_owned(status: *fail.Status, api: *const Api, bytes: []const u8, face
 // Clusters are byte offsets into UTF-8 input. Invalid sequences use HB recovery.
 // Feature ranges are input cluster offsets; feature tags are big-endian ASCII.
 pub fn shape(arena: *mem.Arena, status: *fail.Status, api: *const Api, font: rawptr, text: []const u8, direction: u32, features: []const Feature) []Glyph {
+  if status == nil { return shape(arena, &fail.Status{}, api, font, text, direction, features) }
   empty: []Glyph
   if status.failed { return empty }
   return shape_run(arena, status, api, font, text, Options{direction:direction}, features)
@@ -90,6 +92,7 @@ pub fn shape(arena: *mem.Arena, status: *fail.Status, api: *const Api, font: raw
 // Shapes a single run. Text recovery follows HarfBuzz as in shape; layout
 // clients that preserve editor offsets must validate UTF-8 before calling.
 pub fn shape_run(arena: *mem.Arena, status: *fail.Status, api: *const Api, font: rawptr, text: []const u8, options: Options, features: []const Feature) []Glyph {
+  if status == nil { return shape_run(arena, &fail.Status{}, api, font, text, options, features) }
   empty: []Glyph
   if status.failed { return empty }
   direction:=options.direction
@@ -189,6 +192,7 @@ fn symbol(handle: dynlib.Handle, name: []const u8) rawptr {
 }
 // A missing function fails with NotFound, its name as the failure's path.
 pub fn load(status: *fail.Status, handle: dynlib.Handle) Api {
+  if status == nil { return load(&fail.Status{}, handle) }
   if status.failed { return Api{} }
   api := Api{}
   api.blob_create = #cast(fn(*const u8, u32, u32, rawptr, fn(rawptr))rawptr, symbol(handle, "hb_blob_create_or_fail"))

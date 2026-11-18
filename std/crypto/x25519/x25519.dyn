@@ -6,6 +6,10 @@ use "std/crypto/curve25519" field
 // The shared secret of private_key and peer. Bad sizes, or a peer key that
 // gives an all-zero secret (a low-order point), fail with InvalidInput.
 pub fn shared(status: *fail.Status, destination: []u8, private_key: []const u8, peer: []const u8) {
+  if status == nil {
+    shared(&fail.Status{}, destination, private_key, peer)
+    return
+  }
   if status.failed { return }
   if #len(destination)<32 || #len(private_key)!=32 || #len(peer)!=32 {
     fail.invalid(status, "X25519", "", "keys and output must be 32 bytes")
@@ -60,6 +64,10 @@ pub fn shared(status: *fail.Status, destination: []u8, private_key: []const u8, 
   }
 }
 pub fn public_key(status: *fail.Status, destination: []u8, private_key: []const u8) {
+  if status == nil {
+    public_key(&fail.Status{}, destination, private_key)
+    return
+  }
   if status.failed { return }
   base: [32]u8
   base[0]=9

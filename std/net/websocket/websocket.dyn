@@ -547,6 +547,7 @@ pub fn accept(destination: []u8, key: []const u8) []u8 {
 // Checks the RFC 6455 upgrade fields of a request head; the client's key,
 // borrowing request. Fails with InvalidInput.
 pub fn validate_upgrade_request(status: *fail.Status, request: []const u8) []const u8 {
+  if status == nil { return validate_upgrade_request(&fail.Status{}, request) }
   return websocket_validate_upgrade_request(status, request)
 }
 
@@ -561,6 +562,10 @@ pub fn write_upgrade_response(arena: *mem.Arena, key: []const u8) []u8 {
 
 // Checks a server's 101 response for key. Fails with InvalidInput.
 pub fn validate_upgrade_response(status: *fail.Status, response: []const u8, key: []const u8) {
+  if status == nil {
+    validate_upgrade_response(&fail.Status{}, response, key)
+    return
+  }
   if status.failed { return }
   if !websocket_validate_upgrade_response(status, response, key) && !status.failed {
     fail.invalid(status, "upgrade to WebSocket", "", "the response does not accept the upgrade")
@@ -580,6 +585,7 @@ pub fn write_frame(arena: *mem.Arena, opcode: u8, payload: []const u8, final: bo
 // complete is false when input holds only part of it. A malformed frame
 // fails with InvalidInput at its offset.
 pub fn parse_frame(status: *fail.Status, input: []const u8) WebSocketFrame {
+  if status == nil { return parse_frame(&fail.Status{}, input) }
   if status.failed { return WebSocketFrame{} }
   scanned := websocket_parse(input)
   if scanned.invalid {
@@ -601,6 +607,7 @@ pub fn message_state(expect_masked: bool) WebSocketMessageState {
 // Adds a complete frame to the message under way. Protocol violations fail
 // with InvalidInput, storage that is too small with Capacity.
 pub fn receive(status: *fail.Status, state: *WebSocketMessageState, message: []u8, control: []u8, frame: WebSocketFrame) WebSocketEvent {
+  if status == nil { return receive(&fail.Status{}, state, message, control, frame) }
   return websocket_receive(status, state, message, control, frame)
 }
 
@@ -646,6 +653,10 @@ fn connection_usable(status: *fail.Status, state: *WebSocketConnection) bool {
 }
 
 pub fn connection_send(status: *fail.Status, state: *WebSocketConnection, opcode: u8, payload: []const u8, final: bool, mask: u32) {
+  if status == nil {
+    connection_send(&fail.Status{}, state, opcode, payload, final, mask)
+    return
+  }
   if !connection_usable(status, state) { return }
   if state.close_sent || (state.state.closed && opcode != WsU8Eight) {
     fail.set(status, fail.make(fail.Kind.InvalidState, "WebSocket send", "", "the connection is closing"))
@@ -684,14 +695,26 @@ pub fn connection_send(status: *fail.Status, state: *WebSocketConnection, opcode
 }
 
 pub fn connection_ping(status: *fail.Status, state: *WebSocketConnection, payload: []const u8, mask: u32) {
+  if status == nil {
+    connection_ping(&fail.Status{}, state, payload, mask)
+    return
+  }
   connection_send(status, state, 9, payload, true, mask)
 }
 
 pub fn connection_pong(status: *fail.Status, state: *WebSocketConnection, payload: []const u8, mask: u32) {
+  if status == nil {
+    connection_pong(&fail.Status{}, state, payload, mask)
+    return
+  }
   connection_send(status, state, 10, payload, true, mask)
 }
 
 pub fn connection_close(status: *fail.Status, state: *WebSocketConnection, payload: []const u8, mask: u32) {
+  if status == nil {
+    connection_close(&fail.Status{}, state, payload, mask)
+    return
+  }
   if status.failed { return }
   // Closing twice, or closing a zero connection, does nothing; a failed one
   // reports why.
@@ -702,6 +725,7 @@ pub fn connection_close(status: *fail.Status, state: *WebSocketConnection, paylo
 // The next message or control frame. Event payload borrows message/control
 // until the next receive call.
 pub fn connection_receive(status: *fail.Status, state: *WebSocketConnection) WebSocketEvent {
+  if status == nil { return connection_receive(&fail.Status{}, state) }
   if !connection_usable(status, state) { return WebSocketEvent{} }
   if state.state.closed { return WebSocketEvent{ detail: WebSocketEventKind.Close, opcode: 8 } }
   if state.input.read == nil {

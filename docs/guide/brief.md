@@ -97,7 +97,9 @@ fn main() i32 {
    there, with `NotFound` on the status, or `InvalidInput` when it is there
    but wrong (a string where a number goes):
    `port := json.get(i64, &status, root, "port")`. Read an optional value
-   with a status of its own, so a missing one stops nothing else.
+   with a status of its own, so a missing one stops nothing else, or pass
+   `nil` when you do not care why: `json.get(bool, nil, root, "debug")` is
+   false when missing, and nothing is recorded.
    Iterators return their value too, and set `ended` on their state at the
    end: `line := bufio.read_line(&status, &reader)`, then
    `if reader.ended { break }`.
