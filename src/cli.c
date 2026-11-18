@@ -8,10 +8,12 @@ void dyn_cli_help(const char *command) {
   (void)command;
   printf(
       "Dyn compiler\n\nUsage: dyn <command> [options] <directory>\n\n"
-      "Commands:\n  check    parse and validate module\n  vet      check module and report suspicious code\n  build    build "
+      "Commands:\n  check    parse and validate module\n  fix      apply the fixes check reports, then check\n"
+      "  vet      check module and report suspicious code\n  build    build "
       "executable module\n  run      build and run executable module\n"
       "  fmt      canonicalize source layout\n"
       "  docs     print public declarations (Markdown or --json)\n"
+      "  guide    print the guide: --brief for one page, or a topic\n"
       "  query    export semantic program index as JSON\n"
       "  lsp      run stdio language server\n"
       "  cache    inspect or clean shared compilation cache\n"
@@ -128,6 +130,8 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
       o->docs_json = true;
     else if (strcmp(a, "--check") == 0)
       o->format_check = true;
+    else if (strcmp(a, "--brief") == 0 && !strcmp(o->command, "guide"))
+      o->guide_brief = true;
     else if (strcmp(a, "--runtime-support") == 0)
       o->runtime_support = true;
     else if (strcmp(a, "--emit-ir") == 0) {

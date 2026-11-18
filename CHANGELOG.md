@@ -16,6 +16,10 @@ servers so they pick up the new `dyn`.
 
 Language (2026-11-16 cleanup; see `docs/guide/rules.md`):
 
+- A `for` with no condition and no `break` leaves only by `return` or a
+  panic, so a non-void function may end with one; the `return` or `#panic`
+  people wrote after it is no longer needed (and still allowed).
+
 - Loops have no labels: `name: for`, `break: name` and `continue: name` are
   errors. Set a flag and break again, or move the inner loop into a function.
 - `for *const value` is gone: `for *value` over a const slice already binds a
@@ -299,6 +303,33 @@ Compiler:
 
 Tools:
 
+- Errors can carry a fix. Text output prints it under the snippet
+  (`fix: replace 'push_bytes_uninit' with 'push_bytes'`), and
+  `--diagnostics json` adds `"fix": {replacement, path, certain, offset,
+  length, range}`. A certain fix keeps the program's meaning; a
+  `suggestion:` (the closest name to a misspelled one) does not promise to.
+- `dyn lsp` offers the same fixes as quick fixes (`data.fix` on each
+  diagnostic); certain ones are preferred.
+- `dyn fix DIR` applies every certain fix to the module's own files, repeats
+  until none is left, and then checks. It is the migration tool between
+  releases: removed std and vendor functions name their replacement, and
+  same-argument renames are fixed.
+- Errors for habits from other languages say what to write instead and fix
+  what is mechanical: `let x = 1`/`var`/`let mut` to `x := 1`, `while` to
+  `for`, `x++` to `x += 1`, `for *const` to `for *`, an array passed where a
+  slice goes to `values[..]`, string `+`, `? :`. A wrong argument count shows
+  the signature: `strings.clone takes 2 arguments (arena: *Arena, source:
+  []const u8), got 1`. Names other languages use for std functions
+  (`fs.list_dir`, `fs.create_dir_all`, `fs.exists`, `strings.equal`, ...)
+  say what Dyn calls them, and a member with no close spelling lists related
+  ones (`related: fs.list`).
+- `dyn guide` prints the guide built into the compiler: `--brief` for one
+  page of what to write (and what not to bring from Go, Rust, Zig or C), or a
+  topic: `rules`, `idioms`, `language`, `memory`, `collections`, `std`,
+  `style`, `agent`.
+- `tools/agent-eval` measures how well an agent writes Dyn: seven specified
+  tools with graders, and a harness that counts first-try checks and repair
+  rounds for any agent command.
 - `dyn check` and `dyn vet` check std and vendor function bodies only when
   the program can reach them; `dyn check` on a library module still checks
   all of it. Checking the compile-budget fixture makes 16% fewer

@@ -1,0 +1,17 @@
+use "std/io"
+
+fn main() {
+  values: [3]u32 = [1, 2, 3]
+  view: []const u32 = values[..]
+  total: u32 = 0
+  for *const value in view {
+    total += value.*
+  }
+  count := 0
+  while count < 3 {
+    count++
+  }
+  left := 5
+  left--
+  io.println("{} {} {}", total, count, left)
+}

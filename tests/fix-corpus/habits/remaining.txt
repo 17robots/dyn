@@ -1,0 +1,2 @@
+Dyn has no string +: use strings.format(arena, "{}{}", a, b), or std/bytes/builder
+strings.clone takes 2 arguments (arena: *Arena, source: []const u8), got 1

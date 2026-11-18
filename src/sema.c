@@ -24,6 +24,8 @@ typedef struct {
   DynType current_return_type;
   DynAstStmt **active_loops;
   size_t active_loop_count, active_loop_capacity;
+  /* Set by an endless for (no condition, no break) as its statement ends. */
+  bool last_endless;
   /* Per function: 0 unknown, 1 not a std/mem function, 2 + i is mem_names[i]. */
   /* On a lifetime-check worker: where its vet findings count (SemaLate). */
   unsigned *late_vet;
@@ -141,6 +143,39 @@ static void error_types(DynAstProgram *a, DynSpan span, const DynSource *s,
   error_span(span, s, e, detail);
 }
 
+/* A wrong argument count, with the signature that was wanted:
+   "add takes 2 arguments (a: i32, b: i32), got 1". */
+static void error_argument_count(DynAstProgram *a, DynSpan call, const DynSource *s, unsigned *e,
+                                 const DynAstFn *callee, uint32_t given) {
+  char message[1024], type[256];
+  /* The name as the call wrote it, such as strings.clone: an imported
+     function's own name is internal. */
+  const char *path, *original;
+  size_t original_length, at;
+  dyn_source_position(s, call.start_byte, &path, &original, &original_length, &at);
+  size_t name_end = at;
+  while (name_end < original_length && name_end - at < 64 && original[name_end] != '(' && original[name_end] != '\n')
+    ++name_end;
+  int name = (int)(name_end - at);
+  size_t used = (size_t)snprintf(message, sizeof(message), "%.*s takes %u argument%s%s (", name,
+                                 original + at, callee->param_count,
+                                 callee->param_count == 1 ? "" : "s", callee->variadic ? " or more" : "");
+  for (uint32_t i = 0; i < callee->param_count && used < sizeof(message); ++i) {
+    const DynAstParam *param = &a->params[callee->param_start + i];
+    display_type_name(a, param->type, s, type, sizeof(type));
+    int length = (int)(param->name.end_byte - param->name.start_byte);
+    used += (size_t)snprintf(message + used, sizeof(message) - used, "%s%.*s: %s", i ? ", " : "",
+                             length > 64 ? 64 : length, s->text + param->name.start_byte, type);
+  }
+  if (used < sizeof(message)) snprintf(message + used, sizeof(message) - used, "), got %u", given);
+  error_span(call, s, e, message);
+}
+
+/* An array passed where a slice of its elements goes: name the slice, and
+   offer [..] when the argument is storage that can be sliced. */
+static bool error_array_argument(DynAstProgram *a, DynExprId argument, const DynSource *s, unsigned *e,
+                                 DynType expected, DynType found);
+
 static DynType underlying_type(DynAstProgram *a, DynType t) {
   size_t guard = 0;
   while (a && dyn_type_is_distinct(t) && guard++ <= a->alias_count) {
@@ -150,6 +185,28 @@ static DynType underlying_type(DynAstProgram *a, DynType t) {
     t = a->aliases[id].target;
   }
   return t;
+}
+static bool error_array_argument(DynAstProgram *a, DynExprId argument, const DynSource *s, unsigned *e,
+                                 DynType expected, DynType found) {
+  if (!dyn_type_is_slice(expected) || !dyn_type_is_array(found)) return false;
+  if (expected - DYN_TYPE_SLICE_BASE >= a->slice_count || found - DYN_TYPE_ARRAY_BASE >= a->array_count) return false;
+  if (a->slices[expected - DYN_TYPE_SLICE_BASE].element != a->arrays[found - DYN_TYPE_ARRAY_BASE].element)
+    return false;
+  const DynAstExpr *x = &a->expressions[argument];
+  char message[1024], want[384], got[384];
+  display_type_name(a, expected, s, want, sizeof(want));
+  display_type_name(a, found, s, got, sizeof(got));
+  int length = (int)(x->span.end_byte - x->span.start_byte);
+  bool storage = x->kind == DYN_EXPR_NAME || x->kind == DYN_EXPR_FIELD || x->kind == DYN_EXPR_INDEX;
+  if (storage && length <= 64) {
+    snprintf(message, sizeof(message), "function argument type mismatch (expected %s, found %s): pass a slice, %.*s[..]",
+             want, got, length, s->text + x->span.start_byte);
+    dyn_diagnostic_fix(s, x->span.start_byte, x->span.end_byte, x->span.end_byte, "[..]", true);
+  } else
+    snprintf(message, sizeof(message), "function argument type mismatch (expected %s, found %s): pass a slice of the array with [..]",
+             want, got);
+  error_span(x->span, s, e, message);
+  return true;
 }
 static bool integer(Sema *sema, DynType t) {
   t = underlying_type(sema->program, t);
@@ -229,6 +286,12 @@ static bool suggest_name(DynAstProgram *a, DynSpan unknown, const DynSource *s,
   snprintf(message, capacity, "unknown %s '%.*s'; did you mean '%.*s'?",
            functions ? "function" : "name", length > 64 ? 64 : length, s->text + unknown.start_byte,
            (int)n, s->text + best.start_byte);
+  char replacement[128];
+  if (n < sizeof(replacement)) {
+    memcpy(replacement, s->text + best.start_byte, n);
+    replacement[n] = 0;
+    dyn_diagnostic_fix(s, unknown.start_byte, unknown.start_byte, unknown.end_byte, replacement, false);
+  }
   return true;
 }
 static bool push_loop(Sema *sema, DynAstStmt *st, const DynSource *s,
@@ -259,6 +322,8 @@ static bool resolve_loop_control(Sema *sema, DynAstStmt *st, const DynSource *s,
     return false;
   }
   st->target_loop_id = sema->active_loops[sema->active_loop_count - 1]->loop_id;
+  if (st->kind == DYN_STMT_BREAK)
+    sema->active_loops[sema->active_loop_count - 1]->for_broken = true;
   return true;
 }
 static bool reserve_local(DynAstProgram *a) {
@@ -2006,8 +2071,9 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
       if (can_convert(sema, a, values[i], target))
         arg = convert_expr(a, arg, target);
       else
-        error_types(a, a->expressions[arg].span, s, errors,
-                    "function argument type mismatch", target, values[i]);
+        if (!error_array_argument(a, arg, s, errors, target, values[i]))
+          error_types(a, a->expressions[arg].span, s, errors,
+                      "function argument type mismatch", target, values[i]);
     }
     a->items[item_start + kept++] = (DynAstItem){.expression = arg, .field_index = UINT32_MAX};
   }
@@ -2606,7 +2672,7 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
                    "type has no supported C ABI; use C-compatible storage or a pointer adapter");
       if ((!callee->variadic && a->expressions[id].item_count != callee->param_count) ||
           (callee->variadic && a->expressions[id].item_count < callee->param_count))
-        error_span(a->expressions[id].span, s, errors, "function argument count mismatch");
+        error_argument_count(a, a->expressions[id].span, s, errors, callee, a->expressions[id].item_count);
       uint32_t count = a->expressions[id].item_count < callee->param_count
                            ? a->expressions[id].item_count
                            : callee->param_count;
@@ -2621,7 +2687,7 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
             target != DYN_TYPE_ERROR) {
           if (can_convert(sema, a, value, target))
             a->items[arg_index].expression = convert_expr(a, a->items[arg_index].expression, target);
-          else
+          else if (!error_array_argument(a, a->items[arg_index].expression, s, errors, target, value))
             error_types(a, a->expressions[a->items[arg_index].expression].span, s, errors,
                         "function argument type mismatch", target, value);
         }
@@ -3515,8 +3581,15 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
                  "bitwise operators require integer or bool");
     return a->expressions[id].type = left;
   }
-  if (!numeric(sema, left))
-    error_span(a->expressions[id].span, s, errors, "arithmetic requires numeric operands");
+  if (!numeric(sema, left)) {
+    DynType text = underlying_type(a, left);
+    if (a->expressions[id].op == DYN_OP_ADD && dyn_type_is_slice(text) && text - DYN_TYPE_SLICE_BASE < a->slice_count &&
+        a->slices[text - DYN_TYPE_SLICE_BASE].element == DYN_TYPE_U8)
+      error_span(a->expressions[id].span, s, errors,
+                 "Dyn has no string +: use strings.format(arena, \"{}{}\", a, b), or std/bytes/builder");
+    else
+      error_span(a->expressions[id].span, s, errors, "arithmetic requires numeric operands");
+  }
   if (integer(sema, left)) {
     ConstantUInt rhs = constant_uint(a, a->expressions[id].right);
     if ((a->expressions[id].op == DYN_OP_DIV || a->expressions[id].op == DYN_OP_REM) && rhs.valid &&
@@ -4757,13 +4830,17 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
             : check_expr(sema, a, st->expression, s, errors, DYN_TYPE_BOOL);
     if (condition != DYN_TYPE_BOOL && condition != DYN_TYPE_ERROR)
       error_span(st->span, s, errors, "control-flow condition requires bool");
+    if (st->kind == DYN_STMT_FOR) st->for_broken = false;
     bool pushed = st->kind == DYN_STMT_FOR && push_loop(sema, st, s, errors);
     bool body =
         sema_block(sema, a, st->body_start, st->body_count, s, errors, true);
     if (pushed)
       pop_loop(sema);
-    if (st->kind == DYN_STMT_FOR)
+    if (st->kind == DYN_STMT_FOR) {
+      /* for { } with no break leaves only through return or a panic. */
+      sema->last_endless = st->expression == DYN_NO_EXPR && !st->for_broken;
       return false;
+    }
     if (st->bare_block)
       return body;
     bool other = st->else_count && sema_block(sema, a, st->else_start,
@@ -4937,7 +5014,7 @@ static bool sema_block(Sema *sema, DynAstProgram *a, uint32_t start,
                        uint32_t count, const DynSource *s, unsigned *errors,
                        bool scoped) {
   size_t base = a->local_count;
-  bool terminated = false;
+  bool terminated = false, endless = false;
   if (scoped) ++sema->block_depth;
   for (uint32_t i = 0; i < count; ++i) {
     DynAstStmt *st = &a->statements[a->children[start + i]];
@@ -4945,14 +5022,18 @@ static bool sema_block(Sema *sema, DynAstProgram *a, uint32_t start,
       error_span(st->span, s, errors, "unreachable statement");
       continue;
     }
+    sema->last_endless = false;
     terminated = sema_stmt(sema, a, st, s, errors);
+    /* Code after an endless loop is allowed, such as a defensive return,
+       but the block no longer needs one. */
+    if (st->kind == DYN_STMT_FOR && sema->last_endless) endless = true;
   }
   if (scoped) {
     --sema->block_depth;
     for (size_t i = base; i < a->local_count; ++i)
       a->locals[i].active = false;
   }
-  return terminated;
+  return terminated || endless;
 }
 static bool foreign_symbol_valid(DynSpan name, const DynSource *s) {
   if (name.end_byte <= name.start_byte)

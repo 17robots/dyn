@@ -120,6 +120,9 @@ typedef struct {
   DynBackend backend;
   bool native_backend; /* Resolved for this command; part of the build cache key. */
   bool format_check, docs_json, json_diagnostics;
+  /* `dyn fix`: a pass that reports nothing and hands fixes to the sink. */
+  bool fix_pass;
+  bool guide_brief;
   unsigned jobs;
   uint64_t max_work;
   uint64_t compiler_hash; /* Command-scoped cache identity, inherited by workers. */
@@ -297,6 +300,37 @@ bool dyn_module_cache_restore(const DynSources *, size_t first, size_t count, un
 void dyn_module_cache_store(const DynSources *, size_t first, size_t count, unsigned chunk, unsigned chunks, uint64_t interface_hash, const DynOptions *, const char *compiler_path, const char *cache_root, const char *object);
 void dyn_diagnostic(const DynContext *, const char *, const char *, unsigned, unsigned, unsigned, unsigned, const char *);
 void dyn_diagnostic_source(const char *severity, const DynSource *source, size_t start, size_t end, const char *message);
+/* A fix for the next diagnostic reported for source at byte at: replace bytes
+   start..end with replacement. Text output shows it under the snippet, JSON
+   output carries it as "fix", and `dyn fix` applies it when certain: the
+   replacement keeps the program's meaning, as a renamed std function does.
+   A guess, such as the closest name to a misspelled one, is not certain.
+   A diagnostic reported anywhere else drops the fix, so a producer that ends
+   up reporting nothing leaves no stale fix behind. */
+void dyn_diagnostic_fix(const DynSource *source, size_t at, size_t start, size_t end, const char *replacement,
+                        bool certain);
+/* While set on a thread, every fix reported there also goes to sink, just
+   before its diagnostic: its file, byte offset and length in that file, the
+   same span as one-based lines and byte columns, and replacement. `dyn fix`
+   and the language server collect them this way. */
+typedef struct DynFixReport {
+  const char *path, *replacement;
+  size_t offset, length;
+  unsigned line, column, end_line, end_column;
+  bool certain;
+} DynFixReport;
+typedef void (*DynFixSink)(const DynFixReport *fix, void *data);
+void dyn_diagnostic_fix_sink(DynFixSink sink, void *data);
+/* A syntax error's hint: dyn_syntax_hint rewrites the message for syntax
+   from other languages and sets the fix when it is mechanical. Every fix it
+   gives is certain. */
+typedef struct DynSyntaxFix {
+  size_t start, end;
+  char replacement[96];
+  bool set;
+} DynSyntaxFix;
+void dyn_syntax_hint(const char *text, size_t length, size_t start, const char *error, char *message,
+                     size_t capacity, DynSyntaxFix *fix);
 /* While a thread's capture is set, dyn_diagnostic_source keeps its
    diagnostics instead of reporting them; dyn_diagnostic_replay reports them
    later, in order, and empties the capture. Work done on worker threads
@@ -305,6 +339,10 @@ typedef struct DynDiagnosticRecord {
   const DynSource *source;
   size_t start, end;
   char *severity, *message;
+  /* The fix, when replacement is set. */
+  size_t fix_start, fix_end;
+  char *replacement;
+  bool certain;
 } DynDiagnosticRecord;
 typedef struct DynDiagnosticCapture {
   DynDiagnosticRecord *items;
@@ -317,6 +355,8 @@ bool dyn_format_source(const DynSource *, char **, size_t *);
 bool dyn_format_syntax_ok(const DynSource *, bool);
 int dyn_format_directory(const char *, bool);
 int dyn_docs_directory(const char *, bool);
+/* `dyn guide [--brief | TOPIC]`. */
+int dyn_guide(const char *topic, bool brief);
 int dyn_query_sources(const DynSources *, const char *);
 int dyn_lsp(const DynTarget *target);
 

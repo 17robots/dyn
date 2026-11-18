@@ -318,6 +318,60 @@ static bool lsp_action_diagnostic(const char *body, const char *key,
   return false;
 }
 
+/* Quick fixes from the fixes published in each diagnostic's data: the
+   preferred action when the fix is certain, a plain suggestion otherwise.
+   Sends the response and returns true when there is at least one. */
+static bool lsp_fix_actions(long id, const LspDocument *document, const char *uri, const char *body_text) {
+  const char *params = lsp_json_member(body_text, "\"params\"");
+  const char *context = params ? lsp_json_member(params, "\"context\"") : NULL;
+  const char *items = context ? lsp_json_member(context, "\"diagnostics\"") : NULL;
+  if (!items || *items != '[') return false;
+  size_t capacity = 64 * 1024, at = 0, found = 0;
+  char *response = malloc(capacity);
+  if (!response) return false;
+  at += (size_t)lsp_bounded_printf(response, capacity, "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":[", id);
+  for (const char *item = lsp_json_space(items + 1); *item && *item != ']' && found < 16;) {
+    const char *end = lsp_json_end(item, 0);
+    if (!end) break;
+    const char *data = lsp_json_member(item, "\"data\"");
+    const char *fix = data ? lsp_json_member(data, "\"fix\"") : NULL;
+    const char *fix_end = fix ? lsp_json_end(fix, 0) : NULL;
+    size_t line = 0, character = 0, end_line = 0, end_character = 0;
+    char *text = fix ? json_string_after(fix, "\"newText\"", 4096) : NULL;
+    if (fix_end && text && json_range_positions(fix, &line, &character, &end_line, &end_character)) {
+      const char *certain_value = lsp_json_member(fix, "\"certain\"");
+      bool certain = certain_value && certain_value < fix_end && !strncmp(certain_value, "true", 4);
+      /* Clients send UTF-16 columns; lsp_send converts byte columns back. */
+      character = lsp_wire_column(document->text, line, character, true);
+      end_character = lsp_wire_column(document->text, end_line, end_character, true);
+      char *escaped = json_escape(text, strlen(text));
+      char title[160];
+      if (!text[0]) snprintf(title, sizeof(title), "%s: delete", certain ? "Fix" : "Suggestion");
+      else snprintf(title, sizeof(title), "%s: write '%.100s'", certain ? "Fix" : "Suggestion", text);
+      char *escaped_title = json_escape(title, strlen(title));
+      if (escaped && escaped_title)
+        at += (size_t)lsp_bounded_printf(response + at, capacity - at,
+            "%s{\"title\":\"%s\",\"kind\":\"quickfix\",\"isPreferred\":%s,"
+            "\"edit\":{\"changes\":{\"%s\":[{\"range\":{\"start\":{\"line\":%zu,\"character\":%zu},"
+            "\"end\":{\"line\":%zu,\"character\":%zu}},\"newText\":\"%s\"}]}}}",
+            found ? "," : "", escaped_title, certain ? "true" : "false", uri,
+            line, character, end_line, end_character, escaped);
+      if (escaped && escaped_title) ++found;
+      free(escaped);
+      free(escaped_title);
+    }
+    free(text);
+    item = lsp_json_space(end);
+    if (*item == ',') item = lsp_json_space(item + 1);
+  }
+  if (found && at + 4 < capacity) {
+    lsp_bounded_printf(response + at, capacity - at, "]}");
+    lsp_send(response);
+  }
+  free(response);
+  return found && at + 4 < capacity;
+}
+
 void lsp_code_actions(long id, LspDocument *documents, size_t count,
                       LspDocument *document, const char *body_text) {
   size_t line = 0, character = 0, end_line = 0, end_character = 0;
@@ -338,6 +392,10 @@ void lsp_code_actions(long id, LspDocument *documents, size_t count,
       break;
     }
   char *uri = json_escape(document->uri, strlen(document->uri));
+  if (uri && lsp_fix_actions(id, document, uri, body_text)) {
+    free(uri);
+    return;
+  }
   char response[8192];
   const char *word = NULL;
   size_t word_length = 0;

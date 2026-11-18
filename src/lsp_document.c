@@ -765,7 +765,7 @@ bool lsp_publish_syntax(LspDocument *document) {
   /* Every recovered error, with the parser's message for its token. */
   const ExpSnapshotTree *syntax = exp_snapshot_tree(tree);
   uint32_t errors = syntax->error_count < DYN_SYNTAX_ERROR_LIMIT ? syntax->error_count : DYN_SYNTAX_ERROR_LIMIT;
-  size_t capacity = strlen(uri) + 256 + (size_t)errors * 512;
+  size_t capacity = strlen(uri) + 256 + (size_t)errors * 1024;
   char *body = malloc(capacity);
   if (body) {
     size_t at = (size_t)lsp_bounded_printf(body, capacity,
@@ -777,6 +777,12 @@ bool lsp_publish_syntax(LspDocument *document) {
       uint32_t end;
       dyn_syntax_error_message(document->text, length, error->offset, error->message,
                                error->expected, message, sizeof(message), &end);
+      DynSyntaxFix fix;
+      dyn_syntax_hint(document->text, length, error->offset, error->message, message, sizeof(message), &fix);
+      char data[512];
+      DynPoint fix_start = lsp_point(document, (uint32_t)fix.start), fix_end = lsp_point(document, (uint32_t)fix.end);
+      lsp_fix_data(data, sizeof(data), fix.set, true, fix_start.row + 1, fix_start.column + 1, fix_end.row + 1,
+                   fix_end.column + 1, fix.replacement);
       char *escaped = json_escape(message, strlen(message));
       DynPoint a = lsp_point(document, error->offset), b = lsp_point(document, end);
       if (a.row == b.row && a.column == b.column)
@@ -784,8 +790,8 @@ bool lsp_publish_syntax(LspDocument *document) {
       at += (size_t)lsp_bounded_printf(body + at, capacity - at,
           "%s{\"range\":{\"start\":{\"line\":%u,\"character\":%u},\"end\":{"
           "\"line\":%u,\"character\":%u}},\"severity\":1,\"source\":\"dyn\","
-          "\"code\":\"syntax\",\"message\":\"%s\"}",
-          i ? "," : "", a.row, a.column, b.row, b.column, escaped ? escaped : "syntax error");
+          "\"code\":\"syntax\",\"message\":\"%s\"%s}",
+          i ? "," : "", a.row, a.column, b.row, b.column, escaped ? escaped : "syntax error", data);
       free(escaped);
     }
     lsp_bounded_printf(body + at, capacity - at, "]}}");

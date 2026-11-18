@@ -129,7 +129,7 @@ pub fn splitter(value: []const u8, separator: []const u8) Splitter {
 
 pub struct Piece { value: []const u8, found: bool }
 
-// The next piece, or ok false after the last one. A value without the
+// The next piece, or found false after the last one. A value without the
 // separator is one piece; a trailing separator gives a final empty piece.
 pub fn split_next(state: *Splitter) Piece {
   if state.done { return Piece{} }

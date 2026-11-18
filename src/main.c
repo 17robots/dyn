@@ -276,12 +276,158 @@ static bool single_file_module(DynOptions *options) {
   options->input = single_file_directory;
   return true;
 }
+static void silent_diagnostic(const char *severity, const char *path, unsigned line, unsigned column,
+                              unsigned end_line, unsigned end_column, const char *message, void *data) {
+  (void)severity; (void)path; (void)line; (void)column; (void)end_line; (void)end_column; (void)message; (void)data;
+}
+static int execute_command(DynOptions *options, const char *compiler);
+
+/* `dyn fix`: the certain fixes `dyn check` reports, collected and applied. */
+typedef struct FixEdit {
+  char *path, *replacement;
+  size_t offset, length;
+} FixEdit;
+typedef struct FixEdits {
+  FixEdit *items;
+  size_t count, capacity;
+  const char *root; /* Only files under this real directory change. */
+  bool failed;
+} FixEdits;
+static void fix_collect(const DynFixReport *fix, void *data) {
+  FixEdits *edits = data;
+  const char *path = fix->path, *replacement = fix->replacement;
+  size_t offset = fix->offset, length = fix->length;
+  if (!fix->certain || !path || edits->failed) return;
+  char *real = realpath(path, NULL);
+  size_t root = strlen(edits->root);
+  if (!real || strncmp(real, edits->root, root) || (real[root] != '/' && real[root] != '\\' && real[root])) {
+    free(real);
+    return;
+  }
+  for (size_t i = 0; i < edits->count; ++i)
+    if (!strcmp(edits->items[i].path, real) && edits->items[i].offset == offset) {
+      free(real);
+      return;
+    }
+  if (edits->count == edits->capacity) {
+    size_t capacity = edits->capacity ? 2 * edits->capacity : 32;
+    FixEdit *grown = realloc(edits->items, capacity * sizeof(*grown));
+    if (!grown) { free(real); edits->failed = true; return; }
+    edits->items = grown;
+    edits->capacity = capacity;
+  }
+  char *text = strdup(replacement);
+  if (!text) { free(real); edits->failed = true; return; }
+  edits->items[edits->count++] = (FixEdit){real, text, offset, length};
+}
+static int fix_order(const void *left, const void *right) {
+  const FixEdit *a = left, *b = right;
+  int path = strcmp(a->path, b->path);
+  if (path) return path;
+  return a->offset < b->offset ? 1 : a->offset > b->offset ? -1 : 0;
+}
+/* Applies the edits of one file, last first so earlier offsets hold. An
+   edit that overlaps one already applied waits for the next pass. */
+static size_t fix_file(const FixEdit *edits, size_t count) {
+  FILE *in = fopen(edits[0].path, "rb");
+  if (!in) return 0;
+  char *text = NULL;
+  size_t length = 0, capacity = 0;
+  for (;;) {
+    if (length == capacity) {
+      capacity = capacity ? 2 * capacity : 65536;
+      char *grown = realloc(text, capacity);
+      if (!grown) { free(text); fclose(in); return 0; }
+      text = grown;
+    }
+    size_t got = fread(text + length, 1, capacity - length, in);
+    length += got;
+    if (!got) break;
+  }
+  fclose(in);
+  size_t applied = 0, limit = length;
+  for (size_t i = 0; i < count; ++i) {
+    const FixEdit *e = &edits[i];
+    if (e->offset > length || e->length > length - e->offset || e->offset + e->length > limit) continue;
+    size_t extra = strlen(e->replacement);
+    char *next = malloc(length - e->length + extra + 1);
+    if (!next) break;
+    memcpy(next, text, e->offset);
+    memcpy(next + e->offset, e->replacement, extra);
+    memcpy(next + e->offset + extra, text + e->offset + e->length, length - e->offset - e->length);
+    length = length - e->length + extra;
+    free(text);
+    text = next;
+    limit = e->offset;
+    ++applied;
+  }
+  if (applied) {
+    size_t path_length = strlen(edits[0].path);
+    char *temporary = malloc(path_length + 16);
+    FILE *out = temporary ? (snprintf(temporary, path_length + 16, "%s.dyn-fix", edits[0].path), fopen(temporary, "wb")) : NULL;
+    bool written = out && fwrite(text, 1, length, out) == length;
+    if (out && fclose(out)) written = false;
+#ifdef _WIN32
+    /* rename does not replace an existing file on Windows. */
+    if (written) remove(edits[0].path);
+#endif
+    if (!written || rename(temporary, edits[0].path)) {
+      if (temporary) remove(temporary);
+      fprintf(stderr, "error: cannot write %s\n", edits[0].path);
+      applied = 0;
+    }
+    free(temporary);
+  }
+  free(text);
+  return applied;
+}
+static int fix_command(DynOptions *options, const char *compiler) {
+  if (!options->input || !dyn_path_is_directory(options->input)) {
+    fprintf(stderr, "error: fix requires a module directory\n");
+    return 2;
+  }
+  char *root = realpath(options->input, NULL);
+  if (!root) { fprintf(stderr, "error: cannot resolve %s\n", options->input); return 2; }
+  size_t total = 0;
+  for (unsigned pass = 0; pass < 16; ++pass) {
+    FixEdits edits = {.root = root};
+    DynOptions check = *options;
+    check.command = "check";
+    check.fix_pass = true;
+    check.no_cache = true;
+    dyn_diagnostic_fix_sink(fix_collect, &edits);
+    (void)execute_command(&check, compiler);
+    dyn_diagnostic_fix_sink(NULL, NULL);
+    size_t applied = 0;
+    if (!edits.failed && edits.count) {
+      qsort(edits.items, edits.count, sizeof(*edits.items), fix_order);
+      for (size_t first = 0; first < edits.count;) {
+        size_t last = first + 1;
+        while (last < edits.count && !strcmp(edits.items[last].path, edits.items[first].path)) ++last;
+        size_t done = fix_file(edits.items + first, last - first);
+        if (done && !options->quiet) printf("fixed %zu in %s\n", done, edits.items[first].path);
+        applied += done;
+        first = last;
+      }
+    }
+    for (size_t i = 0; i < edits.count; ++i) { free(edits.items[i].path); free(edits.items[i].replacement); }
+    free(edits.items);
+    total += applied;
+    if (!applied) break;
+  }
+  free(root);
+  if (!options->quiet) printf("%zu fixes applied\n", total);
+  /* What is left needs a person: report it as check would. */
+  DynOptions check = *options;
+  check.command = "check";
+  return execute_command(&check, compiler);
+}
 static int execute_command(DynOptions *options, const char *compiler) {
   DynWork work = {.remaining = options->max_work};
   unsigned vet_findings = 0;
   bool vet = is_command(options, "vet");
   DynVetCasts vet_casts = {0};
-  DynContext context = {.work = options->max_work ? &work : NULL, .target = dyn_target_find(options->target), .optimization = &options->optimization, .runtime_support = options->runtime_support, .json_diagnostics = options->json_diagnostics, .vet = vet, .vet_unsafe = options->vet_unsafe, .vet_findings = &vet_findings, .vet_casts = vet ? &vet_casts : NULL, .timings = options->timings, .strict_syntax = true};
+  DynContext context = {.diagnostic = options->fix_pass ? silent_diagnostic : NULL, .work = options->max_work ? &work : NULL, .target = dyn_target_find(options->target), .optimization = &options->optimization, .runtime_support = options->runtime_support, .json_diagnostics = options->json_diagnostics, .vet = vet, .vet_unsafe = options->vet_unsafe, .vet_findings = &vet_findings, .vet_casts = vet ? &vet_casts : NULL, .timings = options->timings, .strict_syntax = true};
   if (is_command(options, "help")) {
     dyn_cli_help(options->input);
     return 0;
@@ -295,6 +441,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
     return dyn_lsp(context.target);
   }
   if (is_command(options, "cache")) return dyn_cache_command(options->input);
+  if (is_command(options, "guide")) return dyn_guide(options->input, options->guide_brief);
   if (is_command(options, "fmt") || is_command(options, "docs")) {
     char *sdk_path = NULL;
     bool available = options->input && (dyn_path_is_directory(options->input) || single_file_module(options));
@@ -465,7 +612,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
   }
   if (options->timings && !build) fprintf(stderr, "timing check %.3f ms\n", elapsed_ms(phase));
   if (!build) {
-    if (!options->quiet) puts("ok");
+    if (!options->quiet && !options->fix_pass) puts("ok");
     /* The process exits next; freeing every syntax tree first costs about a tenth of a large check. Sanitizer builds still free for leak checks. */
 #if DYN_SANITIZED
     dyn_sources_free(&sources);
@@ -678,7 +825,7 @@ int main(int argc, char **argv) {
     executable[executable_length] = 0;
     compiler = executable;
   }
-  int result = execute_command(&o, compiler);
+  int result = is_command(&o, "fix") ? fix_command(&o, compiler) : execute_command(&o, compiler);
   {
     free(o.optimization.cpu);
     free(o.optimization.features);

@@ -5,11 +5,13 @@
 | Command | Does |
 | --- | --- |
 | `dyn check DIR` | Parse and type-check a module; libraries need no `main` |
+| `dyn fix DIR` | Apply every certain fix `check` reports to the module's own files, repeat until none is left, then check |
 | `dyn vet DIR` | Check, then report suspicious but valid code; exits 1 on findings |
 | `dyn build DIR` | Build an executable (`--debug` default, or `--release`) |
 | `dyn run DIR` | Build and run; `dyn run DIR -- a b` passes `a b` to the program and returns its exit code |
 | `dyn fmt DIR` | Format every file in the module: one statement per line, `} else {` on one line, two-space indentation, a space after commas, and a guard (`if` whose block is one return, break or continue, no else) on one line when it fits in 100 columns; `--check` only reports |
 | `dyn docs DIR` | Print public declarations and their contracts; `--json` for tools |
+| `dyn guide` | Print the guide built into this compiler: `--brief` for one page, or a topic such as `rules` |
 | `dyn query DIR` | Export a semantic program index as JSON |
 | `dyn lsp` | Run the language server on stdio |
 
@@ -21,6 +23,37 @@ writes `./hello`.
 `dyn help` lists every option. Useful ones: `--target` to cross-compile,
 `--diagnostics json` for machine-readable errors, `--timings`, `--no-cache`
 and `--link PATH` to add a native object or library.
+
+## Fixes
+
+Some errors come with a fix. In text output it follows the snippet:
+
+```text
+main.dyn:5:12: error: 'mem.push_bytes_uninit' was removed: use mem.push_bytes(arena, count)
+ 5 |   bytes := mem.push_bytes_uninit(arena, 4)
+   |            ^~~~~~~~~~~~~~~~~~~~~
+ fix: replace 'push_bytes_uninit' with 'push_bytes'
+```
+
+A `fix:` keeps the program's meaning: a renamed std function, `for *const`
+written as `for *`, or syntax from another language spelled the Dyn way
+(`let x = 1` to `x := 1`, `while` to `for`, `x++` to `x += 1`, an array
+passed where a slice goes to `values[..]`). `dyn fix` applies these. A
+`suggestion:` is a guess, such as the closest name to a misspelled one, and
+only a person or agent should apply it.
+
+With `--diagnostics json`, each diagnostic that has one carries
+`"fix": {"replacement", "path", "certain", "offset", "length", "range"}`:
+replace `length` bytes at byte `offset` of `path` with `replacement`. `range`
+gives the same span as lines and columns. A removed std or vendor function
+names its replacement in the message even when no fix is possible.
+
+`dyn fix` is also the migration tool between releases: run it on a project
+after upgrading, then work through what `check` still reports.
+
+In an editor, `dyn lsp` publishes each fix in the diagnostic's `data.fix`
+(`range`, `newText`, `certain`) and offers it as a quick fix; a certain fix
+is the preferred action.
 
 The compiler generates machine code directly for every target, in debug and
 release builds. There is no LLVM backend; `--backend llvm` reports an error.

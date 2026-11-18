@@ -1,0 +1,9 @@
+fn total(count: i32) i32 {
+  sum: i32 = 0
+  index: i32 = 0
+  for index < count {
+    sum += index
+    index += 1
+  }
+  return sum
+}

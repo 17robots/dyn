@@ -813,5 +813,34 @@ class Contracts(unittest.TestCase):
         self.assertEqual(diagnostics(messages, path), [])
 
 
+    def test_diagnostic_fixes_become_quick_fixes(self):
+        # A removed std function (semantic) and let (syntax): each diagnostic
+        # carries its fix, and code actions turn it into an edit.
+        cases = (
+            ('use "std/mem"\nfn main() {\n  a := mem.arena_alloc(0)\n  _ = mem.push_bytes_uninit(a, 1)\n}\n',
+             'was removed', 'push_bytes', {'start': {'line': 3, 'character': 10}, 'end': {'line': 3, 'character': 27}},
+             True),
+            ('fn main() {\n  let x = 1\n  _ = x\n}\n', 'no let or var', 'x :=',
+             {'start': {'line': 1, 'character': 2}, 'end': {'line': 1, 'character': 9}}, True),
+            ('use "std/mem"\nfn main() {\n  a := mem.arena_alloc(0)\n  _ = mem.push_aray(u8, a, 1)\n}\n',
+             'did you mean', 'push_array', {'start': {'line': 3, 'character': 10}, 'end': {'line': 3, 'character': 19}},
+             False),
+        )
+        for index, (text, message, replacement, fix_range, certain) in enumerate(cases):
+            path = self.file(f'case{index}/main.dyn', text)
+            responses, stderr = run_lsp([opened(path, text)])
+            found = [item for item in diagnostics(responses, path) if message in item['message']]
+            self.assertEqual(len(found), 1, (diagnostics(responses, path), stderr))
+            fix = found[0]['data']['fix']
+            self.assertEqual((fix['newText'], fix['range'], fix['certain']), (replacement, fix_range, certain))
+            responses, stderr = run_lsp([opened(path, text), request('textDocument/codeAction', {
+                'textDocument': {'uri': path.as_uri()}, 'range': found[0]['range'],
+                'context': {'diagnostics': found}}, 2)])
+            actions = next(r for r in responses if r.get('id') == 2)['result']
+            self.assertEqual(len(actions), 1, actions)
+            edit = actions[0]['edit']['changes'][path.as_uri()][0]
+            self.assertEqual((edit['newText'], edit['range'], actions[0]['isPreferred']), (replacement, fix_range, certain))
+
+
 if __name__ == '__main__':
     unittest.main()
