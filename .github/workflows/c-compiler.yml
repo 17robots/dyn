@@ -1,7 +1,7 @@
 name: C compiler
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
   workflow_call:
@@ -11,6 +11,10 @@ on:
         default: 0.1.0-dev
 permissions:
   contents: read
+# A newer push to a pull request replaces its running checks.
+concurrency:
+  group: c-compiler-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   DYN_VERSION: ${{ inputs.release_version || '0.1.0-dev' }}
 jobs:
@@ -33,6 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-compiler
+        timeout-minutes: 15
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -45,8 +50,6 @@ jobs:
         env:
           CC: clang-19 -fsanitize=address,undefined -fno-sanitize-recover=all
         run: python3 tests/macho-relocations.py
-      - name: Native backend differential tests
-        run: just test-backend
       - name: Native debug compiler integration
         run: just test-native-debug
       - name: Qualify native vendor wrappers and generated bindings
@@ -63,6 +66,31 @@ jobs:
           python3 tests/lsp-navigation.py
       - name: SDK without system LLVM
         run: bash tests/package-container.sh "build/dist/dyn-$DYN_VERSION-linux-x86_64.tar.gz" "$DYN_VERSION"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-readiness
+          path: |
+            build/release-check/
+            build/readiness/
+            build/dist/
+  # Runs beside quality: the sanitizer builds and the backend differential
+  # tests need no release package.
+  sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CLANG: clang-19
+      DYN: ./build/dyn-release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-compiler
+        timeout-minutes: 15
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Native backend differential tests
+        run: just test-backend
       - name: Compiler contracts under sanitizers
         env:
           DYN: ./build/dyn-sanitize
@@ -82,11 +110,3 @@ jobs:
           done
           BUILD=build/backend-sanitize CFLAGS='-O1 -fsanitize=address,undefined -fno-omit-frame-pointer' python3 tools/backend/build.py
           BUILD=build/backend-sanitize DYN=./build/dyn-release python3 tools/backend/test.py
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: release-readiness
-          path: |
-            build/release-check/
-            build/readiness/
-            build/dist/

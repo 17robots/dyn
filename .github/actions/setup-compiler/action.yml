@@ -3,6 +3,20 @@ description: Install C tools, optional format-validation tools, and vendor-test 
 runs:
   using: composite
   steps:
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/dyn-ci-tools
+        key: dyn-ci-tools-${{ runner.os }}-zig-0.16.0-just-1.58.0
+    # Downloaded packages, renewed weekly as Ubuntu publishes updates: with
+    # them, a slow mirror only has to serve the package index.
+    - id: week
+      shell: bash
+      run: echo "value=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/dyn-ci-apt
+        key: dyn-ci-apt-${{ runner.os }}-${{ hashFiles('.github/actions/setup-compiler/action.yml') }}-${{ steps.week.outputs.value }}
+        restore-keys: dyn-ci-apt-${{ runner.os }}-
     - shell: bash
       run: |
         set -euo pipefail
@@ -13,20 +27,57 @@ runs:
         if test -f /etc/apt/apt-mirrors.txt; then
           apt_sources+=(/etc/apt/apt-mirrors.txt)
         fi
-        sudo sed -i -e 's/^Types: deb$/Types: deb deb-src/' \
-          -e 's#http://azure.archive.ubuntu.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' \
-          "${apt_sources[@]}"
-        apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
-        sudo apt-get "${apt_options[@]}" update
-        sudo apt-get "${apt_options[@]}" install -y build-essential python3 clang-19 llvm-19 lld-19 patchelf
+        sudo sed -i -e 's#http://azure.archive.ubuntu.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "${apt_sources[@]}"
+        apt_options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
+          -o APT::Keep-Downloaded-Packages=true)
+        packages="$HOME/.cache/dyn-ci-apt"
+        mkdir -p "$packages"
+        if compgen -G "$packages/*.deb" > /dev/null; then
+          sudo cp "$packages"/*.deb /var/cache/apt/archives/
+        fi
+        # Without recommends, naming what they used to bring that tests need
+        # (sanitizer runtimes, LLVM tools): that leaves out llvm-19-dev
+        # (47 MB), which nothing here uses. A mirror that crawls gets three
+        # short tries (a healthy install takes under a minute) instead of the
+        # whole job's time; callers also cap the step.
+        for attempt in 1 2 3; do
+          if timeout 120 sudo apt-get "${apt_options[@]}" update &&
+            timeout 240 sudo apt-get "${apt_options[@]}" install -y --no-install-recommends \
+              build-essential python3 clang-19 llvm-19 lld-19 patchelf pkg-config \
+              libclang-rt-19-dev llvm-19-tools llvm-19-runtime; then
+            break
+          fi
+          if test "$attempt" = 3; then
+            echo "::error::apt-get failed three times"
+            exit 1
+          fi
+          echo "::warning::apt-get attempt $attempt failed or stalled; retrying from another mirror"
+          # The runner's mirror can crawl for hours: try kernel.org's.
+          sudo sed -i -E 's#https?://[a-z0-9.-]*archive\.ubuntu\.com/ubuntu#http://mirrors.edge.kernel.org/ubuntu#g' \
+            "${apt_sources[@]}"
+        done
+        cp /var/cache/apt/archives/*.deb "$packages"/ 2> /dev/null || true
         echo /usr/lib/llvm-19/bin >> "$GITHUB_PATH"
         tool_root=$(mktemp -d)
         git clone --depth 1 --branch v0.25.8 https://github.com/tree-sitter/tree-sitter "$tool_root/tree-sitter"
         test "$(git -C "$tool_root/tree-sitter" rev-parse HEAD)" = f2f197b6b27ce75c280c20f131d4f71e906b86f7
         sudo make -C "$tool_root/tree-sitter" install PREFIX=/usr/local
         sudo ldconfig
-        curl -fsSL https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o "$tool_root/zig.tar.xz"
-        echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  $tool_root/zig.tar.xz" | sha256sum -c -
-        tar -xf "$tool_root/zig.tar.xz" -C "$tool_root"
-        echo "$tool_root/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
-        cargo install just --version 1.58.0 --locked
+        # Zig and just come from pinned, checksummed release archives, kept in
+        # the tool cache between runs.
+        cache="$HOME/.cache/dyn-ci-tools"
+        mkdir -p "$cache"
+        if ! test -x "$cache/zig-x86_64-linux-0.16.0/zig"; then
+          curl -fsSL --retry 3 https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o "$tool_root/zig.tar.xz"
+          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  $tool_root/zig.tar.xz" | sha256sum -c -
+          tar -xf "$tool_root/zig.tar.xz" -C "$cache"
+        fi
+        echo "$cache/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
+        if ! test -x "$cache/just-1.58.0/just"; then
+          curl -fsSL --retry 3 https://github.com/casey/just/releases/download/1.58.0/just-1.58.0-x86_64-unknown-linux-musl.tar.gz \
+            -o "$tool_root/just.tar.gz"
+          echo "4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d  $tool_root/just.tar.gz" | sha256sum -c -
+          mkdir -p "$cache/just-1.58.0"
+          tar -xzf "$tool_root/just.tar.gz" -C "$cache/just-1.58.0" just
+        fi
+        echo "$cache/just-1.58.0" >> "$GITHUB_PATH"

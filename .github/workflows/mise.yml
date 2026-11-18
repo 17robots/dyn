@@ -1,17 +1,21 @@
 name: Mise installation
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: mise-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   install-preview:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2022]
+        # macOS runners are scarce: pull requests check Linux and Windows.
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04","windows-2022"]' || '["ubuntu-24.04","macos-15","windows-2022"]') }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:

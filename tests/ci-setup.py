@@ -34,7 +34,8 @@ for indirect in (False, True):
         for _ in range(2):
             subprocess.run(['bash', '-c', staged], check=True, timeout=10)
         result = sources.read_text()
-        assert result.count('Types: deb deb-src') == 2
+        # Binary packages only: nothing reads source packages.
+        assert result.count('Types: deb\n') == 2 and 'deb-src' not in result
         assert result.count('Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg') == 2
         assert 'URIs: http://security.ubuntu.com/ubuntu' in result
         assert 'Suites: noble noble-updates' in result and 'Suites: noble-security' in result
