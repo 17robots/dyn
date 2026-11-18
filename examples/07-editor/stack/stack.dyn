@@ -12,13 +12,6 @@ pub struct Stack(T) {
   arena: *mem.Arena,
 }
 
-// What pop returns: found is false when the stack was empty, and value is
-// then T's zero value, which is always safe to read.
-pub struct Popped(T) {
-  value: T,
-  found: bool,
-}
-
 // $T at a parameter means "infer T from this argument".
 pub fn init(s: *Stack($T), arena: *mem.Arena) {
   s.arena = arena
@@ -42,12 +35,17 @@ pub fn push(s: *Stack($T), value: $T) {
   s.items = s.storage[..used + 1]
 }
 
-pub fn pop(s: *Stack($T)) Popped(T) {
+// The top item, removed. An empty stack gives T's zero value, which is
+// always safe to read: check count first when that matters.
+pub fn pop(s: *Stack($T)) T {
   used := #len(s.items)
-  if used == 0 { return Popped(T){} }
+  if used == 0 {
+    empty: T
+    return empty
+  }
   value := s.items[used - 1]
   s.items = s.storage[..used - 1]
-  return Popped(T){ value: value, found: true }
+  return value
 }
 
 pub fn clear(s: *Stack($T)) {

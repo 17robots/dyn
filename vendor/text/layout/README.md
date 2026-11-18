@@ -35,11 +35,11 @@ those into extended graphemes so wrapping and hit queries never split a mark.
 Common/inherited scripts inherit a neighboring strong script. This itemizer does
 not implement the full Unicode ScriptExtensions/paired-punctuation policy.
 
-`cluster_at(layout, byte_offset)` returns a logical source cluster rectangle.
+`cluster_at(&status, layout, byte_offset)` returns a logical source cluster rectangle.
 EOF and separator positions return zero-width logical carets; their visual edge
 follows the ending run direction, including mixed-direction lines. `at_point`
 returns a visual cluster or a boundary caret outside the first/last cluster.
-Both return `Hit.ok=false` for invalid queries. They expose one caret affinity;
+Both record `InvalidInput` on the status for invalid queries. They expose one caret affinity;
 applications needing distinct upstream/downstream carets at a bidi transition
 must retain that additional selection policy themselves.
 

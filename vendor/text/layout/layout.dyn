@@ -15,8 +15,8 @@ pub struct Options { width: i32, no_wrap: bool, tab_columns: usize, base: u32 }
 pub struct Glyph { id: u32, font: rawptr, start: usize, end: usize, x: f64, y: f64, x_offset: f64, y_offset: f64, advance: f64, rtl: bool, hidden: bool }
 pub struct Line { start: usize, end: usize, glyph_start: usize, glyph_count: usize, width: f64, y: f64, rtl: bool }
 pub struct Layout { text: []const u8, glyphs: []Glyph, lines: []Line, width: f64, height: f64, line_height: i32 }
-// found is false without a layout or for an offset or point outside it.
-pub struct Hit { start: usize, end: usize, line: usize, x: f64, y: f64, width: f64, height: f64, rtl: bool, found: bool }
+// A cluster or caret rectangle from cluster_at or at_point.
+pub struct Hit { start: usize, end: usize, line: usize, x: f64, y: f64, width: f64, height: f64, rtl: bool }
 struct Cluster { start: usize, end: usize, scalar: usize, level: i8, script: u32, face: Face, tab: bool }
 struct Unit { start: usize, end: usize, advance: f64, tab: bool, break_after: bool }
 struct Run { start: usize, end: usize, first: usize, last: usize, level: i8, script: u32, face: Face, glyphs: []hb.Glyph, advance: f64, tab: bool }
@@ -541,11 +541,20 @@ fn hit(layout:*const Layout, line_index, offset:usize) Hit {
       x=left
     }
   }
-  return Hit{ found:true, start:offset, end:offset, line:line_index, x:x, y:line.y, height:layout.line_height, rtl:rtl }
+  return Hit{ start:offset, end:offset, line:line_index, x:x, y:line.y, height:layout.line_height, rtl:rtl }
 }
 
-pub fn cluster_at(layout:*const Layout, offset:usize) Hit {
-  if layout==nil || offset>#len(layout.text) || #len(layout.lines)==0 { return Hit{} }
+// The logical source cluster at byte offset. InvalidInput without a layout or
+// for an offset past the text.
+pub fn cluster_at(status:*fail.Status, layout:*const Layout, offset:usize) Hit {
+  if status.failed { return Hit{} }
+  if layout==nil || offset>#len(layout.text) || #len(layout.lines)==0 {
+    fail.invalid(status, "find cluster", "", "no layout, or the offset is past the text")
+    return Hit{}
+  }
+  return cluster_in(layout, offset)
+}
+fn cluster_in(layout:*const Layout, offset:usize) Hit {
   line_index:usize=0
   for i in 1..#len(layout.lines) {
     if offset>=layout.lines[i].start {
@@ -565,18 +574,25 @@ pub fn cluster_at(layout:*const Layout, offset:usize) Hit {
           right=math.max(right, other.x+other.advance)
         }
       }
-      return Hit{ found:true, start:glyph.start, end:glyph.end, line:line_index, x:left, y:line.y, width:right-left, height:layout.line_height, rtl:glyph.rtl }
+      return Hit{ start:glyph.start, end:glyph.end, line:line_index, x:left, y:line.y, width:right-left, height:layout.line_height, rtl:glyph.rtl }
     }
   }
   return hit(layout, line_index, offset)
 }
-pub fn at_point(layout:*const Layout, x, y:f64) Hit {
-  if layout==nil || #len(layout.lines)==0 || !finite(x) || !finite(y) { return Hit{} }
+// The visual cluster at a point, or a boundary caret outside the first or
+// last cluster. InvalidInput without a layout or for a point that is not
+// finite.
+pub fn at_point(status:*fail.Status, layout:*const Layout, x, y:f64) Hit {
+  if status.failed { return Hit{} }
+  if layout==nil || #len(layout.lines)==0 || !finite(x) || !finite(y) {
+    fail.invalid(status, "find point", "", "no layout, or the point is not finite")
+    return Hit{}
+  }
   line_index:usize=0
   if y>0.0 {
     line_index=#cast(usize, math.floor64(y/layout.line_height))
   }
-  if line_index>=#len(layout.lines) { return cluster_at(layout, #len(layout.text)) }
+  if line_index>=#len(layout.lines) { return cluster_in(layout, #len(layout.text)) }
   line:=layout.lines[line_index]
   if line.glyph_count==0 { return hit(layout, line_index, line.start) }
   first:=layout.glyphs[line.glyph_start]
@@ -585,7 +601,7 @@ pub fn at_point(layout:*const Layout, x, y:f64) Hit {
     if first.rtl {
       offset=first.end
     }
-    return Hit{ found:true, start:offset, end:offset, line:line_index, x:first.x, y:line.y, height:layout.line_height, rtl:first.rtl }
+    return Hit{ start:offset, end:offset, line:line_index, x:first.x, y:line.y, height:layout.line_height, rtl:first.rtl }
   }
   i:=line.glyph_start
   for i<line.glyph_start+line.glyph_count {
@@ -600,7 +616,7 @@ pub fn at_point(layout:*const Layout, x, y:f64) Hit {
       next+=1
     }
     if x<right {
-      return Hit{ found:true, start:glyph.start, end:glyph.end, line:line_index, x:left, y:line.y, width:right-left, height:layout.line_height, rtl:glyph.rtl }
+      return Hit{ start:glyph.start, end:glyph.end, line:line_index, x:left, y:line.y, width:right-left, height:layout.line_height, rtl:glyph.rtl }
     }
     i=next
   }
@@ -609,7 +625,7 @@ pub fn at_point(layout:*const Layout, x, y:f64) Hit {
   if last.rtl {
     offset=last.start
   }
-  return Hit{ found:true, start:offset, end:offset, line:line_index, x:line.width, y:line.y, height:layout.line_height, rtl:last.rtl }
+  return Hit{ start:offset, end:offset, line:line_index, x:line.width, y:line.y, height:layout.line_height, rtl:last.rtl }
 }
 
 // Visual cells touched by a logical source selection. start/end are the source

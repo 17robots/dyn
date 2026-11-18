@@ -118,15 +118,16 @@ fn main() {
  CASES
  empty:=layout_build(arena,"",font,&h.api,&b.api,layout.Options{})
  check(!failed(empty.failure) && #len(empty.value.lines)==1 && #len(empty.value.glyphs)==0 && empty.value.height==40.0)
- eof:=layout.cluster_at(&empty.value,0)
- check(eof.found && eof.start==0 && eof.end==0)
+ hits: fail.Status
+ eof:=layout.cluster_at(&hits,&empty.value,0)
+ check(!hits.failed && eof.start==0 && eof.end==0)
  multiline:=layout_build(arena,"a\r\n\nאבג\xe2\x80\xa8z",font,&h.api,&b.api,layout.Options{})
  check(!failed(multiline.failure) && #len(multiline.value.lines)==4 && multiline.value.lines[1].start==3 && multiline.value.lines[2].start==4)
  rtl:=layout_build(arena,"אבג",font,&h.api,&b.api,layout.Options{})
  check(!failed(rtl.failure) && rtl.value.glyphs[0].start>rtl.value.glyphs[#len(rtl.value.glyphs)-1].start)
- left:=layout.at_point(&rtl.value,-10.0,0.0)
- right:=layout.at_point(&rtl.value,10000.0,0.0)
- check(left.found && right.found && right.start==0 && right.end==0)
+ _=layout.at_point(&hits,&rtl.value,-10.0,0.0)
+ right:=layout.at_point(&hits,&rtl.value,10000.0,0.0)
+ check(!hits.failed && right.start==0 && right.end==0)
  mark:=mem.arena_mark(arena)
  check(layout_build(arena,"\xff",font,&h.api,&b.api,layout.Options{}).kind==fail.Kind.InvalidInput && mem.arena_mark(arena)==mark)
  check(layout_build(arena,"x",layout.Font{select:reject,line_height:40,space_advance:10.0},&h.api,&b.api,layout.Options{}).kind==fail.Kind.NotFound && mem.arena_mark(arena)==mark)
@@ -139,10 +140,12 @@ fn main() {
   }
  }
  for g in wrapped.value.glyphs {check(g.start<g.end && g.end<=#len(wrapped.value.text))
-  hit:=layout.cluster_at(&wrapped.value,g.start)
-  check(hit.found && hit.start==g.start && hit.end==g.end)
+  hit:=layout.cluster_at(&hits,&wrapped.value,g.start)
+  check(!hits.failed && hit.start==g.start && hit.end==g.end)
  }
- check(!layout.cluster_at(&wrapped.value,#len(wrapped.value.text)+1).found)
+ past: fail.Status
+ _=layout.cluster_at(&past,&wrapped.value,#len(wrapped.value.text)+1)
+ check(past.failure.kind==fail.Kind.InvalidInput)
  alias:=layout_build(arena,wrapped.value.text,font,&h.api,&b.api,layout.Options{})
  check(!failed(alias.failure) && bytes.equal(alias.value.text,wrapped.value.text))
  // A long unwrapped editor line must not perform a source scan per glyph.
@@ -150,8 +153,8 @@ fn main() {
  for i in 0..#len(long_text) {long_text[i]=120}
  long_line:=layout_build(arena,long_text,font,&h.api,&b.api,layout.Options{})
  check(!failed(long_line.failure) && #len(long_line.value.glyphs)==20000 && #len(long_line.value.lines)==1)
- long_hit:=layout.at_point(&long_line.value,long_line.value.width-1.0,0.0)
- check(long_hit.found && long_hit.start==19999)
+ long_hit:=layout.at_point(&hits,&long_line.value,long_line.value.width-1.0,0.0)
+ check(!hits.failed && long_hit.start==19999)
  missing:=layout_build(arena,"कर्म",font,&h.api,&b.api,layout.Options{width:5})
  check(!failed(missing.failure))
  for g in missing.value.glyphs {check(g.start<g.end && g.end<=12)}
@@ -163,8 +166,8 @@ fn main() {
  check(soft_glyph.id==dash.value.glyphs[0].id && soft_glyph.start==2 && soft_glyph.end==4)
  mixed:=layout_build(arena,"abc אבג",font,&h.api,&b.api,layout.Options{})
  check(!failed(mixed.failure))
- mixed_eof:=layout.cluster_at(&mixed.value,#len(mixed.value.text))
- check(mixed_eof.found && mixed_eof.rtl && mixed_eof.x<mixed.value.width)
+ mixed_eof:=layout.cluster_at(&hits,&mixed.value,#len(mixed.value.text))
+ check(!hits.failed && mixed_eof.rtl && mixed_eof.x<mixed.value.width)
 
 }
 

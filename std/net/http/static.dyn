@@ -291,13 +291,8 @@ pub fn etag_matches(request: *const Request, etag: []const u8) bool {
   return false
 }
 
-// A single byte range of a representation length bytes long, from a Range
-// header (RFC 9110 14.1.2): bytes=first-last, bytes=first- or bytes=-suffix.
-// found is false without a usable single bytes range (absent, another
-// unit, several ranges, or bad syntax), and the whole representation is
-// sent. satisfiable is false when the range starts past the end (416).
-// start and end are a half-open interval.
-pub struct ByteRange { start: usize, end: usize, found: bool, satisfiable: bool }
+// A single byte range of a representation, as a half-open interval.
+pub struct ByteRange { start: usize, end: usize }
 
 fn decimal_value(text: []const u8) Decimal {
   if #len(text) == 0 || #len(text) > 19 { return Decimal{} }
@@ -309,40 +304,56 @@ fn decimal_value(text: []const u8) Decimal {
   return Decimal{ value: value, ok: true }
 }
 
-pub fn byte_range(request: *const Request, length: usize) ByteRange {
+// The byte range a Range header asks for in a representation length bytes
+// long (RFC 9110 14.1.2): bytes=first-last, bytes=first- or bytes=-suffix.
+// NotFound without a usable single bytes range (absent, another unit,
+// several ranges, or bad syntax): send the whole representation.
+// InvalidInput when the range starts past the end: answer 416.
+pub fn byte_range(status: *fail.Status, request: *const Request, length: usize) ByteRange {
+  if status.failed { return ByteRange{} }
   header := find_header(request, "Range")
-  if !header.found { return ByteRange{} }
+  if !header.found { return no_range(status, "no Range header") }
   value := trim_ows(header.value)
   if #len(value) < 7 || !ascii_equal(value[..6], "bytes=") || bytes.find_byte(value, ',') != #len(value) {
-    return ByteRange{}
+    return no_range(status, "not a single bytes range")
   }
   spec := trim_ows(value[6..])
   dash := bytes.find_byte(spec, '-')
-  if dash == #len(spec) { return ByteRange{} }
+  if dash == #len(spec) { return no_range(status, "bad range syntax") }
   first_text := trim_ows(spec[..dash])
   last_text := trim_ows(spec[dash + 1..])
   if #len(first_text) == 0 {
     suffix := decimal_value(last_text)
-    if !suffix.ok { return ByteRange{} }
-    if suffix.value == 0 || length == 0 { return ByteRange{ found: true } }
+    if !suffix.ok { return no_range(status, "bad range syntax") }
+    if suffix.value == 0 || length == 0 { return past_end(status) }
     take := suffix.value
     if take > length {
       take = length
     }
-    return ByteRange{ start: length - take, end: length, found: true, satisfiable: true }
+    return ByteRange{ start: length - take, end: length }
   }
   first := decimal_value(first_text)
-  if !first.ok { return ByteRange{} }
+  if !first.ok { return no_range(status, "bad range syntax") }
   end := length
   if #len(last_text) > 0 {
     last := decimal_value(last_text)
-    if !last.ok || last.value < first.value { return ByteRange{} }
+    if !last.ok || last.value < first.value { return no_range(status, "bad range syntax") }
     if last.value < length {
       end = last.value + 1
     }
   }
-  if first.value >= length { return ByteRange{ found: true } }
-  return ByteRange{ start: first.value, end: end, found: true, satisfiable: true }
+  if first.value >= length { return past_end(status) }
+  return ByteRange{ start: first.value, end: end }
+}
+
+fn no_range(status: *fail.Status, message: []const u8) ByteRange {
+  fail.set(status, fail.make(fail.Kind.NotFound, "read byte range", "", message))
+  return ByteRange{}
+}
+
+fn past_end(status: *fail.Status) ByteRange {
+  fail.invalid(status, "read byte range", "", "the range starts past the end")
+  return ByteRange{}
 }
 
 // If-Range (RFC 9110 13.1.5): the range applies only while the validator
@@ -403,14 +414,17 @@ pub fn serve_asset(status: *fail.Status, response: *Response, request: *const Re
   }
   headers[count] = Header{ name: "Accept-Ranges", value: "bytes" }
   count += 1
+  ranged: fail.Status
   wanted := ByteRange{}
   if bytes.equal(request.method, "GET") || bytes.equal(request.method, "HEAD") {
-    wanted = byte_range(request, #len(asset.body))
+    wanted = byte_range(&ranged, request, #len(asset.body))
+  } else {
+    _ = no_range(&ranged, "not GET or HEAD")
   }
-  if wanted.found && range_current(request, asset) {
+  if ranged.failure.kind != fail.Kind.NotFound && range_current(request, asset) {
     range_storage: [64]u8
     at := append_bytes(range_storage[..], 0, "bytes ")
-    if !wanted.satisfiable {
+    if ranged.failed {
       at = append_bytes(range_storage[..], at, "*/")
       at = put_decimal(range_storage[..], at, #len(asset.body))
       headers[count] = Header{ name: "Content-Range", value: range_storage[..at] }

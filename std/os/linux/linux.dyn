@@ -334,27 +334,26 @@ pub fn exit_process(status: u8) {
   #panic("exit syscall returned")
 }
 
-pub struct Variable { value: []u8, found: bool }
 // Reads the process's initial environment. Values are copied into caller
-// storage. A missing variable is no failure: found is false. Capacity when
-// the value does not fit destination.
-pub fn environment_get(status: *fail.Status, name: []const u8, destination: []u8) Variable {
-  if status.failed { return Variable{ value: destination[..0] } }
+// storage. NotFound when the variable is unset; Capacity when the value does
+// not fit destination.
+pub fn environment_get(status: *fail.Status, name: []const u8, destination: []u8) []u8 {
+  if status.failed { return destination[..0] }
   if #len(name) == 0 {
     fail.invalid(status, "read environment", name, "empty variable name")
-    return Variable{ value: destination[..0] }
+    return destination[..0]
   }
   for name_byte in name {
     if name_byte == 0 || name_byte == '=' {
       fail.invalid(status, "read environment", name, "variable names cannot hold '=' or NUL")
-      return Variable{ value: destination[..0] }
+      return destination[..0]
     }
   }
   path := "/proc/self/environ\0"
   descriptor := #syscall(sys.Openat, -100, &path[0], 0, 0)
   if descriptor < 0 {
     fail.set(status, io.from_linux("read environment", "/proc/self/environ", descriptor))
-    return Variable{ value: destination[..0] }
+    return destination[..0]
   }
   defer _ = #syscall(sys.Close, descriptor)
   scratch: [4096]u8
@@ -368,17 +367,19 @@ pub fn environment_get(status: *fail.Status, name: []const u8, destination: []u8
     if count == -4 { continue }
     if count < 0 {
       fail.set(status, io.from_linux("read environment", "/proc/self/environ", count))
-      return Variable{ value: destination[..0] }
+      return destination[..0]
     }
     if count == 0 {
       if selected {
         fail.set(status, fail.make(fail.Kind.System, "read environment", "/proc/self/environ", "the last entry has no end"))
+      } else {
+        fail.set(status, fail.make(fail.Kind.NotFound, "read environment", name, "not set"))
       }
-      return Variable{ value: destination[..0] }
+      return destination[..0]
     }
     for byte in scratch[..#cast(usize, count)] {
       if byte == 0 {
-        if selected { return Variable{ value: destination[..used], found: true } }
+        if selected { return destination[..used] }
         position = 0
         used = 0
         matching = true
@@ -399,14 +400,14 @@ pub fn environment_get(status: *fail.Status, name: []const u8, destination: []u8
           failure := fail.make(fail.Kind.Capacity, "read environment", name, "the value does not fit the storage")
           failure.native = -28
           fail.set(status, failure)
-          return Variable{ value: destination[..0] }
+          return destination[..0]
         }
         destination[used] = byte
         used += 1
       }
     }
   }
-  return Variable{ value: destination[..0] }
+  return destination[..0]
 }
 
 // The working directory, in destination.

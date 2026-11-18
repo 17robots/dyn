@@ -23,14 +23,15 @@ checks = []
 for index, (pattern, text) in enumerate(cases):
     match = re.search(pattern, text)
     expected = 'false' if match is None else 'true'
-    span = '' if match is None else f' && r.value.start == {match.start()} && r.value.end == {match.end()}'
+    span = '' if match is None else f' && r.start == {match.start()} && r.end == {match.end()}'
     checks.append(f'''if true {{
     p := compile(arena, {json.dumps(pattern)})
     require(p.failure.kind == fail.Kind.Ok, "compile {index}")
     before := mem.arena_used(arena)
     for repeat in 0..3 {{
-      r := regex.find(p.value, {json.dumps(text)})
-      require(r.value.found == {expected}{span}, "case {index}")
+      status: fail.Status
+      r := regex.find(&status, p.value, {json.dumps(text)})
+      require(!status.failed == {expected}{span}, "case {index}")
       require(mem.arena_used(arena) == before, "match allocated")
     }}
   }}''')
@@ -38,6 +39,18 @@ source = '''use "std/text/regex" regex
 use "std/fail"
 use "std/mem" mem
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
+fn find(program: regex.Program, text: []const u8) regex.Match {
+  status: fail.Status
+  result := regex.find(&status, program, text)
+  require(!status.failed, "no match")
+  return result
+}
+fn misses(program: regex.Program, text: []const u8) fail.Kind {
+  status: fail.Status
+  result := regex.find(&status, program, text)
+  require(result.start == 0 && result.end == 0 && #len(result.captures) == 0, "miss gives zero")
+  return status.failure.kind
+}
 struct Compiled { value: regex.Program, offset: usize, failure: fail.Failure }
 fn compile(arena: *mem.Arena, pattern: []const u8) Compiled {
   status: fail.Status
@@ -53,8 +66,7 @@ fn main() {
   pattern[0] = 'z'
   require(first.failure.kind == fail.Kind.Ok && second.failure.kind == fail.Kind.Ok && regex.matches(first.value, "aaab") && regex.matches(second.value, "bbb"), "independent owned patterns")
   invalid_program: regex.Program
-  invalid_match := regex.find(invalid_program, "a")
-  require(!invalid_match.value.found, "zero program matches nothing")
+  require(misses(invalid_program, "a") == fail.Kind.InvalidState && !regex.matches(invalid_program, "a"), "zero program matches nothing")
   mark := mem.arena_used(arena)
 ''' + '\n'.join(
     f'  bad{n} := compile(arena, {json.dumps(pattern)} )\n'
@@ -63,29 +75,34 @@ fn main() {
 ) + '''
   require(mem.arena_used(arena) == mark, "invalid allocated")
   captured := compile(arena, "(a)b|(a)c")
-  one := regex.find(captured.value, "ac")
-  require(!one.captures[0].found && one.captures[1].found && one.captures[1].end == 1, "captures")
-  two := regex.find(captured.value, "zz")
-  require(!two.value.found && !two.captures[0].found && !two.captures[1].found, "capture clear")
+  one := find(captured.value, "ac")
+  require(one.captures[0].start == 0 && one.captures[0].end == 0 && one.captures[1].end == 1, "captures")
+  require(misses(captured.value, "zz") == fail.Kind.NotFound, "miss")
+  require(captured.value.captures[1].end == 0, "capture clear")
   backing: [32768]u8
   for i in 0..#len(backing) { backing[i] = 255 }
   fixed := mem.arena_from_buffer(backing[..])
   fixed_program := compile(fixed, "(a)*")
-  require(fixed_program.failure.kind == fail.Kind.Ok && regex.find(fixed_program.value, "aaa").captures[0].start == 2, "dirty backing zero initialization")
+  require(fixed_program.failure.kind == fail.Kind.Ok && find(fixed_program.value, "aaa").captures[0].start == 2, "dirty backing zero initialization")
   long_program := compile(arena, "^(a)*$")
   long_text := mem.push_array(u8, arena, 100000)
   for i in 0..#len(long_text) { long_text[i] = 'a' }
-  long_result := regex.find(long_program.value, long_text)
-  require(long_result.value.found && long_result.value.end == 100000 && long_result.captures[0].start == 99999, "long Thompson repetition")
+  long_result := find(long_program.value, long_text)
+  require(long_result.end == 100000 && long_result.captures[0].start == 99999, "long Thompson repetition")
   iter_program := compile(arena, "(a+)")
   iter := regex.iterator(iter_program.value, "aa baa")
   x := regex.next(&iter)
-  require(x.value.start == 0 && x.value.end == 2, "iterator first")
+  require(x.start == 0 && x.end == 2 && !iter.ended, "iterator first")
   y := regex.next(&iter)
-  require(y.value.start == 4 && y.captures[0].start == 4, "iterator capture offset")
+  require(y.start == 4 && y.captures[0].start == 4 && !iter.ended, "iterator capture offset")
+  _ = regex.next(&iter)
+  require(iter.ended, "iterator ended")
   anchored := compile(arena, "^a")
   anchored_iter := regex.iterator(anchored.value, "aa")
-  require(regex.next(&anchored_iter).value.found && !regex.next(&anchored_iter).value.found, "iterator absolute anchors")
+  first_anchored := regex.next(&anchored_iter)
+  require(first_anchored.end == 1 && !anchored_iter.ended, "iterator anchor first")
+  _ = regex.next(&anchored_iter)
+  require(anchored_iter.ended, "iterator absolute anchors")
 ''' + '\n'.join(checks) + '\n}\n'
 with tempfile.TemporaryDirectory(prefix='dyn-regex-arena-') as temporary:
     work = Path(temporary)

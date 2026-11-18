@@ -40,7 +40,7 @@ fn main() {
   values := parsed.value.values
   check(#len(values) == 5 && values[0].occurrences == 2 && values[1].occurrences == 2, "occurrences")
   check(bytes.equal(values[1].text, "7") && bytes.equal(values[2].text, "1.25e2"), "typed/last wins")
-  check(!values[3].found && bytes.equal(values[3].text, "slow"), "default")
+  check(values[3].occurrences == 0 && bytes.equal(values[3].text, "slow"), "default")
   check(#len(parsed.value.positionals) == 3 && bytes.equal(parsed.value.positionals[0], "first") && bytes.equal(parsed.value.positionals[2], "-v"), "positional order/terminator")
   start := #cast(usize, &backing[0])
   check(#cast(usize, &values[0]) >= start && #cast(usize, &values[4]) < start + #len(backing), "values owned by fixed arena")
@@ -55,7 +55,7 @@ fn main() {
   check(#len(failure.value.values) == 0 && #len(failure.value.positionals) == 0 && mem.arena_mark(arena) == mark && prefix[0] == 91, "failure rollback")
   choice_args: [2][]const u8 = ["-m", "fast"]
   choice_result := parse(arena, options[..], choice_args[..])
-  check(choice_result.failure.kind == fail.Kind.Ok && choice_result.value.values[3].found && bytes.equal(choice_result.value.values[3].text, "fast"), "explicit choice")
+  check(choice_result.failure.kind == fail.Kind.Ok && choice_result.value.values[3].occurrences == 1 && bytes.equal(choice_result.value.values[3].text, "fast"), "explicit choice")
   mem.arena_rewind(arena, mark)
   bad[0] = "-n"
   missing := parse(arena, options[..], bad[..])

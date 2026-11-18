@@ -1,15 +1,18 @@
 use "std/mem" mem
 use "std/fail"
-pub struct Match { start: usize, end: usize, found: bool }
+// Where a group matched, as a half-open interval. A group that took no part in
+// the match is Span{}.
+pub struct Span { start: usize, end: usize }
+// A match: where the whole pattern matched, and where each parenthesized group
+// did (captures[0] is the first). captures is borrowed until the next
+// operation on the program.
+pub struct Match { start: usize, end: usize, captures: []Span }
 struct Instruction { op: u8, byte: u8, x: usize, y: usize, z: usize }
 // All slices belong to the compile arena, including the retained pattern bytes.
 // Copies share mutable workspace: serialize find/next calls on a program and its
 // copies. Compile separately for concurrent use. Reset/release invalidates all.
-pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Match, error: fail.Kind, valid: bool }
-// value.found distinguishes a match from a miss. Capture slices are borrowed
-// until the next operation on this program. A program from a failed compile
-// matches nothing.
-pub struct Found { value: Match, captures: []Match }
+// A program from a failed compile matches nothing.
+pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Span, error: fail.Kind, valid: bool }
 
 const Char: u8 = 1
 const Any: u8 = 2
@@ -466,7 +469,7 @@ pub fn compile(arena: *mem.Arena, status: *fail.Status, pattern: []const u8) Pro
     #panic("regex match size overflow")
   }
   program.workspace = mem.push_array(usize, arena, required)
-  program.captures = mem.push_array(Match, arena, program.groups)
+  program.captures = mem.push_array(Span, arena, program.groups)
   return program
 }
 
@@ -548,12 +551,13 @@ fn workspace_size(program: Program, capture_count: usize) usize {
 // Ordered Thompson execution in arena-reserved workspace. Captures are cleared
 // on failure. Each attempt deduplicates PCs. Unanchored search restarts per byte
 // and therefore retains the existing worst-case quadratic search behavior.
-fn execute(program: Program, text: []const u8, captures: []Match, workspace: []usize, from: usize) Match {
+// Returns whether it matched, with the whole match in whole.
+fn execute(program: Program, text: []const u8, captures: []Span, workspace: []usize, from: usize, whole: *Span) bool {
   for i in 0..#len(captures) {
-    captures[i] = Match{}
+    captures[i] = Span{}
   }
   required := workspace_size(program, #len(captures))
-  if !program.valid { return Match{} }
+  if !program.valid { return false }
   if required == 0 || #len(workspace) < required {
     #panic("regex workspace invariant")
   }
@@ -579,7 +583,7 @@ fn execute(program: Program, text: []const u8, captures: []Match, workspace: []u
     count: usize = 0
     expand(program, text, start, pending[..stride], current, &count, pending, seen, stride)
     at := start
-    found := Match{}
+    matched := false
     for count > 0 {
       for i in 0..n {
         seen[i] = 0
@@ -589,11 +593,12 @@ fn execute(program: Program, text: []const u8, captures: []Match, workspace: []u
         row := current[i * stride..(i + 1) * stride]
         instruction := program.code[row[0]]
         if instruction.op == Accept {
-          found = Match{ start: start, end: at, found: true }
+          matched = true
+          whole.* = Span{ start: start, end: at }
           for group in 0..groups {
-            captures[group] = Match{}
+            captures[group] = Span{}
             if row[group * 2 + 2] != NoPatch {
-              captures[group] = Match{ start: row[group * 2 + 1], end: row[group * 2 + 2], found: true }
+              captures[group] = Span{ start: row[group * 2 + 1], end: row[group * 2 + 2] }
             }
           }
           break
@@ -617,24 +622,35 @@ fn execute(program: Program, text: []const u8, captures: []Match, workspace: []u
       count = next_count
       at += 1
     }
-    if found.found { return found }
+    if matched { return true }
     start += 1
   }
-  return Match{}
+  return false
 }
 
-// Reuses arena-reserved workspace. Matching itself allocates nothing.
-// Capture 0 corresponds to the first parenthesized group.
-pub fn find(program: Program, text: []const u8) Found {
-  return find_from(program, text, 0)
+// The first match in text. NotFound when there is none; InvalidState for a
+// program from a failed compile. Reuses arena-reserved workspace: matching
+// itself allocates nothing.
+pub fn find(status: *fail.Status, program: Program, text: []const u8) Match {
+  if status.failed { return Match{} }
+  return find_from(status, program, text, 0)
 }
-fn find_from(program: Program, text: []const u8, from: usize) Found {
-  if !program.valid { return Found{} }
-  value := execute(program, text, program.captures, program.workspace, from)
-  return Found{ value: value, captures: program.captures }
+fn find_from(status: *fail.Status, program: Program, text: []const u8, from: usize) Match {
+  if !program.valid {
+    fail.set(status, fail.make(fail.Kind.InvalidState, "find match", program.pattern, "the pattern did not compile"))
+    return Match{}
+  }
+  whole := Span{}
+  if !execute(program, text, program.captures, program.workspace, from, &whole) {
+    fail.set(status, fail.make(fail.Kind.NotFound, "find match", program.pattern, "no match"))
+    return Match{}
+  }
+  return Match{ start: whole.start, end: whole.end, captures: program.captures }
 }
+// Whether pattern matches anywhere in text.
 pub fn matches(program: Program, text: []const u8) bool {
-  return find(program, text).value.found
+  whole := Span{}
+  return execute(program, text, program.captures, program.workspace, 0, &whole)
 }
 
 fn atom(pattern: []const u8, at: usize, byte: u8) bool {
@@ -728,24 +744,28 @@ fn counted(pattern: []const u8, at: usize, minimum: *usize, maximum: *usize, unb
 }
 
 // Iterator shares its program's workspace and capture lifetime contract.
-pub struct Iterator { program: Program, text: []const u8, offset: usize, done: bool }
+// ended is set by the next call that finds no further match.
+pub struct Iterator { program: Program, text: []const u8, offset: usize, ended: bool }
 pub fn iterator(program: Program, text: []const u8) Iterator {
   return Iterator{ program: program, text: text }
 }
-pub fn next(state: *Iterator) Found {
-  if !state.program.valid || state.done || state.offset > #len(state.text) { return Found{} }
-  result := find_from(state.program, state.text, state.offset)
-  if !result.value.found {
-    state.done = true
-    return result
+// The next match, or Match{} once there are no more (then state.ended is set).
+// After an empty match the search moves on one byte.
+pub fn next(state: *Iterator) Match {
+  if state.ended { return Match{} }
+  if !state.program.valid || state.offset > #len(state.text) {
+    state.ended = true
+    return Match{}
   }
-  if result.value.end == result.value.start {
-    state.offset = result.value.end + 1
-  } else {
-    state.offset = result.value.end
+  missing: fail.Status
+  result := find_from(&missing, state.program, state.text, state.offset)
+  if missing.failed {
+    state.ended = true
+    return Match{}
   }
-  if result.value.end == #len(state.text) {
-    state.done = true
+  state.offset = result.end
+  if result.end == result.start || result.end == #len(state.text) {
+    state.offset = result.end + 1
   }
   return result
 }

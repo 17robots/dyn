@@ -935,7 +935,7 @@ Layer: heap
 
 - `enum Kind { Bool, String, Integer, Float, Choice }`: Command-line parser.
 - `struct Option { name: []const u8, short: u8, kind: Kind, required: bool, default_value: []const u8, choices: [][]const u8 }`
-- `struct Value { text: []const u8, found: bool, occurrences: usize }`
+- `struct Value { text: []const u8, occurrences: usize }`: occurrences counts the times the option was given;
 - `struct Parsed { values: []Value, positionals: [][]const u8 }`
 - `fn bool_option(name: []const u8, short: u8) Option`
 - `fn string_option(name: []const u8, short: u8) Option`
@@ -1734,7 +1734,6 @@ Layer: std
 - `fn respond_compressed(status: *fail.Status, response: *Response, request: *const Request, body: []const u8, options: ResponseOptions, level: u8, encoder: *gzip.Encoder)`: Like respond, with body gzipped at level (1-9) when that helps: the content type compresses (text, JSON, XML, SVG, JavaScript ...
 - `enum Framing { None, Length, Chunked, Close }`
 - `struct HttpHead { framing: Framing, code: u16, header_length: usize, content_length: usize, keep_alive: bool, chunked: bool }`: Parser offsets are byte positions in the supplied input;
-- `struct HttpHeader { name: []const u8, value: []const u8, found: bool }`
 - `struct Url { scheme: []const u8, host: []const u8, port: u16, target: []const u8, secure: bool }`
 - `fn parse_response(status: *fail.Status, input: []const u8) HttpHead`: Parses a complete response or request head.
 - `fn parse_request(status: *fail.Status, input: []const u8) HttpHead`
@@ -1860,8 +1859,8 @@ Layer: std
 - `fn load_directory(arena: *memory.Arena, status: *fail.Status, root: []const u8, storage: []Asset, maximum: usize) Assets`: Every regular file below root, recursively, read into arena as assets in storage, sorted.
 - `fn accepts_encoding(request: *const Request, coding: []const u8) bool`: Whether the request's Accept-Encoding allows coding (RFC 9110 12.5.3): it is listed, or "*" is, with a q-value above zero.
 - `fn etag_matches(request: *const Request, etag: []const u8) bool`: If-None-Match against etag: "*" or a listed tag, comparing weakly (W/ prefixes ignored), as RFC 9110 13.1.2 requires for GET and HEAD.
-- `struct ByteRange { start: usize, end: usize, found: bool, satisfiable: bool }`: A single byte range of a representation length bytes long, from a Range header (RFC 9110 14.1.2): bytes=first-last, bytes=first- or ...
-- `fn byte_range(request: *const Request, length: usize) ByteRange`
+- `struct ByteRange { start: usize, end: usize }`: A single byte range of a representation, as a half-open interval.
+- `fn byte_range(status: *fail.Status, request: *const Request, length: usize) ByteRange`: The byte range a Range header asks for in a representation length bytes long (RFC 9110 14.1.2): bytes=first-last, bytes=first- or ...
 - `fn serve_asset(status: *fail.Status, response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8)`: Answers request with asset: 304 when If-None-Match matches (or, without If-None-Match, when If-Modified-Since is not older than modified);
 
 ## std/net/http/evented
@@ -1960,13 +1959,13 @@ Layer: std
 - `const CsrfLength: usize = 32`
 - `const Slots: usize = 256`
 - `const DataSize: usize = 64`
-- `struct Session { found: bool, user: i64, csrf: []const u8, data: []const u8 }`: A session as handlers see it.
+- `struct Session { user: i64, csrf: []const u8, data: []const u8 }`: A session as handlers see it.
 - `struct Cache { slots: [Slots]Slot, copy: versions.Copy }`: One per worker;
 - `struct Shared { sessions: versions.Shared }`: Shared by the workers: forget marks every cache stale, and each empties itself when it notices.
 - `struct New { token: []const u8, csrf: []const u8, cookie: http.Cookie }`: A new session to store: token, csrf, and the Set-Cookie value.
 - `fn token(request: *const http.Request) []const u8`: The request's session token, or empty when it has none of the right form.
-- `fn cached(cache: *Cache, shared: *Shared, token: []const u8, now: i64) Session`: The session for token from the cache, if a store answer for it is cached, unexpired at now and not forgotten since.
-- `fn remember(cache: *Cache, token: []const u8, user: i64, csrf: []const u8, data: []const u8, expires: i64) Session`: Caches what the store returned for token and returns it as a Session.
+- `fn cached(status: *fail.Status, cache: *Cache, shared: *Shared, token: []const u8, now: i64) Session`: The session for token from the cache: a store answer for it that is unexpired at now and not forgotten since.
+- `fn remember(status: *fail.Status, cache: *Cache, token: []const u8, user: i64, csrf: []const u8, data: []const u8, expires: i64) Session`: Caches what the store returned for token and returns it as a Session.
 - `fn start(arena: *mem.Arena, status: *fail.Status, seconds: i64) New`: A fresh token and CSRF secret in arena, and the cookie that carries the token for a session of seconds (HttpOnly, SameSite=Lax, Path=/) ...
 - `fn forget(shared: *Shared) http.Cookie`: After the app deleted a session from its store: every worker's cache forgets what it holds.
 - `fn csrf_ok(session: *const Session, presented: []const u8) bool`: Whether presented (a form field or header) is the session's CSRF secret, compared in constant time.
@@ -2081,8 +2080,7 @@ Layer: std
 - `fn signaled(status: i32) bool`
 - `fn termination_signal(status: i32) u8`
 - `fn exit_process(status: u8)`: Ends the whole process: exit_group, so other threads end with it.
-- `struct Variable { value: []u8, found: bool }`
-- `fn environment_get(status: *fail.Status, name: []const u8, destination: []u8) Variable`: Reads the process's initial environment.
+- `fn environment_get(status: *fail.Status, name: []const u8, destination: []u8) []u8`: Reads the process's initial environment.
 - `fn current_directory(status: *fail.Status, destination: []u8) []u8`: The working directory, in destination.
 - `fn signal_ignore(status: *fail.Status, signal: usize)`
 - `fn signal_default(status: *fail.Status, signal: usize)`
@@ -2497,9 +2495,8 @@ Layer: core
 
 Layer: heap
 
-- `struct SearchResult { index: usize, found: bool }`
 - `fn sort(values: []$T)`: Sorts in place without allocating.
-- `fn search(values: []const $T, target: $T) SearchResult`: Binary search in sorted values.
+- `fn search(values: []const $T, target: $T) usize`: Binary search in sorted values: the index of target, or len(values) when it is missing (never an insertion point), as bytes.find does.
 - `fn sort_by(values: []$T, less: fn($T, $T) bool)`: Sorts in place by less without allocating, as sort does.
 - `fn stable_by(arena: *mem.Arena, values: []$T, less: fn($T, $T) bool)`: Sorts in place by less, keeping equal elements in their original order.
 
@@ -2672,15 +2669,15 @@ Layer: heap
 
 Layer: heap
 
-- `struct Match { start: usize, end: usize, found: bool }`
-- `struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Match, error: fail.Kind, valid: bool }`: All slices belong to the compile arena, including the retained pattern bytes.
-- `struct Found { value: Match, captures: []Match }`: value.found distinguishes a match from a miss.
+- `struct Span { start: usize, end: usize }`: Where a group matched, as a half-open interval.
+- `struct Match { start: usize, end: usize, captures: []Span }`: A match: where the whole pattern matched, and where each parenthesized group did (captures[0] is the first).
+- `struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Span, error: fail.Kind, valid: bool }`: All slices belong to the compile arena, including the retained pattern bytes.
 - `fn compile(arena: *mem.Arena, status: *fail.Status, pattern: []const u8) Program`: Arena exhaustion/size overflow panics, like other arena producers.
-- `fn find(program: Program, text: []const u8) Found`: Reuses arena-reserved workspace.
-- `fn matches(program: Program, text: []const u8) bool`
-- `struct Iterator { program: Program, text: []const u8, offset: usize, done: bool }`: Iterator shares its program's workspace and capture lifetime contract.
+- `fn find(status: *fail.Status, program: Program, text: []const u8) Match`: The first match in text.
+- `fn matches(program: Program, text: []const u8) bool`: Whether pattern matches anywhere in text.
+- `struct Iterator { program: Program, text: []const u8, offset: usize, ended: bool }`: Iterator shares its program's workspace and capture lifetime contract.
 - `fn iterator(program: Program, text: []const u8) Iterator`
-- `fn next(state: *Iterator) Found`
+- `fn next(state: *Iterator) Match`: The next match, or Match{} once there are no more (then state.ended is set).
 
 ## std/text/scanner
 

@@ -93,8 +93,8 @@ fn main() {
   if !regex.match(&status, pattern, data, subject, 0) {
     #panic("match")
   }
-  span := regex.capture(data, 1)
-  if !span.found || !bytes.equal(subject[span.start..span.end], "ada") {
+  span := regex.capture(&status, data, 1)
+  if !bytes.equal(subject[span.start..span.end], "ada") {
     #panic("capture")
   }
   if regex.match(&status, pattern, data, "123", 0) {
@@ -120,7 +120,12 @@ fn main() {
   if !fails(unicode, unicode_data, bad_utf[..], 0) {
     #panic("invalid UTF accepted")
   }
-  if !regex.match(&status, unicode, unicode_data, "", 0) || regex.capture(unicode_data, 1).found {
+  if !regex.match(&status, unicode, unicode_data, "", 0) {
+    #panic("empty match")
+  }
+  unset: fail.Status
+  _ = regex.capture(&unset, unicode_data, 1)
+  if unset.failure.kind != fail.Kind.NotFound {
     #panic("unset capture")
   }
   io.println("PCRE2: captured ada; no-match and invalid pattern handled")

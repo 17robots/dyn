@@ -92,17 +92,18 @@ calling thread: for a single-threaded or embedded server, or a test.
 such as a SQLite table:
 
 ```dyn
-use "std/mem"
+use "std/fail"
 use "std/net/http"
 use "std/net/http/session" sessions
 
 // cache is this worker's; shared is one for the whole server.
 fn current(cache: *sessions.Cache, shared: *sessions.Shared, request: *const http.Request, now: i64) sessions.Session {
   token := sessions.token(request)
-  session := sessions.cached(cache, shared, token, now)
-  if session.found || #len(token) == 0 { return session }
+  missing: fail.Status
+  session := sessions.cached(&missing, cache, shared, token, now)
+  if !missing.failed || #len(token) == 0 { return session }
   // Look token up in the store; on a hit, keep the answer:
-  // return sessions.remember(cache, token, user, csrf, name, expires)
+  // return sessions.remember(&status, cache, token, user, csrf, name, expires)
   return session
 }
 ```

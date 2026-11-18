@@ -97,11 +97,9 @@ SOURCE += '''fn main() {
   test_f64()
   search_values: [5]i32 = [-9, -2, 0, 4, 4]
   for missing in [-10, -8, 1, 5] {
-    result := sort.search(search_values[..], missing)
-    if result.found || result.index != 5 { #panic("search miss") }
+    if sort.search(search_values[..], missing) != 5 { #panic("search miss") }
   }
-  result := sort.search(search_values[..], 4)
-  if !result.found || result.index != 3 { #panic("search first duplicate") }
+  if sort.search(search_values[..], 4) != 3 { #panic("search first duplicate") }
 }
 '''
 
