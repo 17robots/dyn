@@ -105,23 +105,21 @@ fn encoded_summary(arena: *mem.Arena, summary: *const Summary) []u8 {
   return json.encode(arena, root)
 }
 fn print_json(value: []const u8) {
-  if !io.complete(io.write_all(io.stdout(), value)) || !io.complete(io.write_all(io.stdout(), "\n")) {
+  if !io.complete(io.write_transfer(io.stdout(), value)) || !io.complete(io.write_transfer(io.stdout(), "\n")) {
     #panic("stdout")
   }
 }
 fn report(file: []const u8) {
   input := mem.arena_alloc(mem.GiB)
   defer mem.arena_release(input)
-  read := fs_read_file(input, file, 1024 * mem.MiB)
-  if io.failed(read.failure) {
-    #panic("read report")
-  }
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  read := fs.read_all(input, &status, file, 1024 * mem.MiB)
   scratch := mem.arena_alloc(0)
   defer mem.arena_release(scratch)
   summary: Summary
   at: usize
-  for at < #len(read.value) {
-    rest := read.value[at..]
+  for at < #len(read) {
+    rest := read[at..]
     length := bytes.find_byte(rest, '\n')
     if length != 0 {
       parsed := json.parse(scratch, rest[..length])
@@ -131,30 +129,21 @@ fn report(file: []const u8) {
       mem.arena_reset(scratch)
     }
     at += length
-    if at < #len(read.value) {
+    if at < #len(read) {
       at += 1
     }
   }
   print_json(encoded_summary(scratch, &summary))
 }
-fn search_walk(directory: []const u8, result: *Search) {
+fn search_walk(status: *fail.Status, directory: []const u8, result: *Search) {
   buffer: [32768]u8
-  opened := fs.open_directory(directory, buffer[..])
-  if io.failed(opened.failure) {
-    #panic("open directory")
-  }
-  state := opened.value
+  state := fs.open_directory(status, directory, buffer[..])
   defer fs.close_directory(&state)
   scratch := mem.arena_alloc(0)
   defer mem.arena_release(scratch)
   for {
-    entry := fs.directory_next(&state)
-    if !entry.found {
-      if io.failed(entry.failure) {
-        #panic("read directory")
-      }
-      break
-    }
+    entry := fs.directory_next(status, &state)
+    if !entry.found { break }
     // Linux directory entry types: DT_DIR=4, DT_REG=8
     // Symlinks are skipped.
     if entry.kind == 0 {
@@ -168,18 +157,15 @@ fn search_walk(directory: []const u8, result: *Search) {
       #panic("path join")
     }
     if entry.kind == 4 {
-      search_walk(joined.value, result)
+      search_walk(status, joined.value, result)
     } else if bytes.ends_with(entry.name, ".txt") {
-      read := fs_read_file(scratch, joined.value, 1024 * mem.MiB)
-      if io.failed(read.failure) {
-        #panic("read search")
-      }
+      read := fs.read_all(scratch, status, joined.value, 1024 * mem.MiB)
       result.files += 1
-      result.bytes += #cast(u64, #len(read.value))
+      result.bytes += #cast(u64, #len(read))
       at: usize
       matching: bool
-      for at < #len(read.value) {
-        rest := read.value[at..]
+      for at < #len(read) {
+        rest := read[at..]
         length := bytes.find_byte(rest, '\n')
         result.lines += 1
         if bytes.contains(rest[..length], "ERROR") {
@@ -187,7 +173,7 @@ fn search_walk(directory: []const u8, result: *Search) {
           matching = true
         }
         at += length
-        if at < #len(read.value) {
+        if at < #len(read) {
           at += 1
         }
       }
@@ -200,7 +186,9 @@ fn search_walk(directory: []const u8, result: *Search) {
 }
 fn search(directory: []const u8) {
   result: Search
-  search_walk(directory, &result)
+  // A benchmark: any failure ends it with its description.
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  search_walk(&status, directory, &result)
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   root := json.push_object(arena)
@@ -257,9 +245,9 @@ fn serve() {
   if io.failed(started.failure) {
     #panic("workers")
   }
-  _ = io.write_all(io.stdout(), "port ")
-  _ = io.write_all(io.stdout(), fmt.u64_decimal(arena, #cast(u64, evented.local_port(workers))))
-  _ = io.write_all(io.stdout(), "\n")
+  _ = io.write_transfer(io.stdout(), "port ")
+  _ = io.write_transfer(io.stdout(), fmt.u64_decimal(arena, #cast(u64, evented.local_port(workers))))
+  _ = io.write_transfer(io.stdout(), "\n")
   for sync.load_u32(&state.quit) == 0 {
     _ = time.sleep(time.Millisecond)
   }
@@ -292,8 +280,3 @@ fn main() {
   }
 }
 
-// The whole file at path; empty when it cannot be read.
-fn fs_read_file(arena: *mem.Arena, path: []const u8, maximum: usize) []u8 {
-  status: fail.Status
-  return fs.read_all(arena, &status, path, maximum)
-}

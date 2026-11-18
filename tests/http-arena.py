@@ -11,18 +11,22 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / 'dyn-release')).resolve()
 ENV = dict(os.environ, DYN_SDK=str(ROOT))
 SOURCE = r'''
+use "std/fail"
 use "std/io" io
 use "std/net/http" http
 use "std/bytes" bytes
 use "std/mem" mem
 use "std/io" errors
 struct Oracle { expected: []const u8, at: usize }
-fn oracle_write(raw: rawptr, data: []const u8) io.Transfer {
+fn oracle_write_transfer(raw: rawptr, data: []const u8) io.Transfer {
   oracle := #cast(*Oracle, raw)
   if #len(data) > #len(oracle.expected) - oracle.at { #panic("extra request bytes") }
   if !bytes.equal(data, oracle.expected[oracle.at..oracle.at + #len(data)]) { #panic("request wire") }
   oracle.at += #len(data)
   return io.Transfer{ transferred: #len(data), status: io.Status.Complete }
+}
+fn oracle_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, oracle_write_transfer(data, source), "write", "")
 }
 fn request_check(body: []const u8, expected: []const u8) {
   arena := mem.arena_alloc(0)
@@ -32,15 +36,21 @@ fn request_check(body: []const u8, expected: []const u8) {
   if errors.failed(got.failure) || oracle.at != #len(expected) { #panic("large request") }
   mem.arena_release(arena)
 }
-fn error_read(raw: rawptr, data: []u8) io.Transfer {
+fn error_read_transfer(raw: rawptr, data: []u8) io.Transfer {
   _ = raw
   _ = data
   return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: 0 } }
 }
-fn error_write(raw: rawptr, data: []const u8) io.Transfer {
+fn error_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return io.from_transfer(status, error_read_transfer(data, destination), "read", "")
+}
+fn error_write_transfer(raw: rawptr, data: []const u8) io.Transfer {
   _ = raw
   _ = data
   return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: 0 } }
+}
+fn error_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, error_write_transfer(data, source), "write", "")
 }
 fn io_check(write_failure: bool) {
   arena := mem.arena_alloc(0)
@@ -53,7 +63,7 @@ fn io_check(write_failure: bool) {
   mem.arena_release(arena)
 }
 struct Feed { data: []const u8, at: usize, cut: usize, step: usize }
-fn read_feed(raw: rawptr, destination: []u8) io.Transfer {
+fn read_feed_transfer(raw: rawptr, destination: []u8) io.Transfer {
   feed := #cast(*Feed, raw)
   count := #len(feed.data) - feed.at
   if feed.at < feed.cut && count > feed.cut - feed.at { count = feed.cut - feed.at }
@@ -64,9 +74,15 @@ fn read_feed(raw: rawptr, destination: []u8) io.Transfer {
   if feed.at == #len(feed.data) { return io.Transfer{ transferred: count, status: io.Status.End } }
   return io.Transfer{ transferred: count, status: io.Status.Complete }
 }
-fn sink(raw: rawptr, data: []const u8) io.Transfer {
+fn read_feed(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return io.from_transfer(status, read_feed_transfer(data, destination), "read", "")
+}
+fn sink_transfer(raw: rawptr, data: []const u8) io.Transfer {
   _ = raw
   return io.Transfer{ transferred: #len(data), status: io.Status.Complete }
+}
+fn sink(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, sink_transfer(data, source), "write", "")
 }
 fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8, capacity: usize) {
   splits := #len(wire) + 1

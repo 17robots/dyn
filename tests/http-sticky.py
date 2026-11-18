@@ -7,11 +7,12 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve()
 SOURCE = r'''
+use "std/fail"
 use "std/io" io
 use "std/io" errors
 use "std/net/http" http
 struct Sink { calls: usize, fail: usize, code: isize, partial: bool }
-fn write(raw: rawptr, source: []const u8) io.Transfer {
+fn write_transfer(raw: rawptr, source: []const u8) io.Transfer {
   s := #cast(*Sink, raw)
   s.calls += 1
   if s.calls == s.fail { return io.Transfer{ transferred: 1, failure: io.Failure{ kind: errors.Kind.InvalidInput, native: s.code } } }
@@ -19,15 +20,24 @@ fn write(raw: rawptr, source: []const u8) io.Transfer {
   if s.partial && count > 1 { count = 1 }
   return io.Transfer{ transferred: count }
 }
-struct Feed { calls: usize, wire: []const u8, code: isize, fail: bool }
-fn read(raw: rawptr, dest: []u8) io.Transfer {
+fn write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, write_transfer(data, source), "write", "")
+}
+struct Feed { calls: usize, wire: []const u8, code: isize, fail: bool, delivered: bool }
+// The wire once, then the end: a stream ends with a read that returns 0.
+fn read_transfer(raw: rawptr, dest: []u8) io.Transfer {
   f := #cast(*Feed, raw)
   f.calls += 1
   if f.fail { return io.Transfer{ failure: io.Failure{ kind: io.Kind.System, native: f.code } } }
+  if f.delivered { return io.Transfer{ status: io.Status.End } }
+  f.delivered = true
   count := #len(f.wire)
   if count > #len(dest) { count = #len(dest) }
   for i in 0..count { dest[i] = f.wire[i] }
   return io.Transfer{ transferred: count, status: io.Status.End }
+}
+fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return io.from_transfer(status, read_transfer(data, destination), "read", "")
 }
 fn same(r: http.Result, code: isize) {
   if !io.failed(r.failure) || r.detail != http.ErrorKind.Io || r.failure.native != code { #panic("first HTTP error") }
@@ -55,7 +65,9 @@ fn main() {
       same(opened.result, code)
       calls := sink.calls
       writer := http.body_writer(&opened.body)
-      replay := writer.write(writer.data, "")
+      replay_status_1: fail.Status
+      _ = writer.write(writer.data, &replay_status_1, "")
+      replay := io.Transfer{ failure: io.Failure{ kind: replay_status_1.failure.kind, native: replay_status_1.failure.native } }
       if !io.failed(replay.failure) || replay.failure.native != code || replay.failure.kind != errors.Kind.InvalidInput { #panic("header stream metadata") }
       same(http.body_finish(&opened.body), code)
       if sink.calls != calls { #panic("header retry") }
@@ -70,20 +82,26 @@ fn main() {
       sink.fail = sink.calls + #cast(usize, segment)
       sink.code = code
       writer := http.body_writer(&opened.body)
-      first := writer.write(writer.data, "abc")
+      first_status_2: fail.Status
+      _ = writer.write(writer.data, &first_status_2, "abc")
+      first := io.Transfer{ failure: io.Failure{ kind: first_status_2.failure.kind, native: first_status_2.failure.native } }
       if segment == 2 {
         if io.failed(first.failure) { #panic("early failure") }
         same(http.body_finish(&opened.body), code)
       } else if segment == 3 {
         // Partial writes in a later body chunk.
         sink.partial = true
-        first = writer.write(writer.data, "later")
+        first_status_3: fail.Status
+        _ = writer.write(writer.data, &first_status_3, "later")
+        first = io.Transfer{ failure: io.Failure{ kind: first_status_3.failure.kind, native: first_status_3.failure.native } }
       }
       if segment != 2 && (!io.failed(first.failure) || first.failure.native != code || first.failure.kind != errors.Kind.InvalidInput) { #panic("stream error metadata") }
       calls := sink.calls
-      replay := writer.write(writer.data, "")
+      replay_status_4: fail.Status
+      _ = writer.write(writer.data, &replay_status_4, "")
+      replay := io.Transfer{ failure: io.Failure{ kind: replay_status_4.failure.kind, native: replay_status_4.failure.native } }
       if !io.failed(replay.failure) || replay.failure.native != code { #panic("empty callback replay") }
-      replay = io.write(writer, "x")
+      replay = io.write_transfer(writer, "x")
       if !io.failed(replay.failure) || replay.failure.native != code || replay.failure.kind != errors.Kind.InvalidInput || replay.transferred != 0 { #panic("short replay") }
       same(http.body_finish(&opened.body), code)
       same(http.body_abort(&opened.body), code)
@@ -122,13 +140,17 @@ fn main() {
   if http.respond(&response, "", http.ResponseOptions{}).detail != http.ErrorKind.Invalid { #panic("zero response") }
   body := http.Body{}
   writer := http.body_writer(&body)
-  if !io.failed(writer.write(writer.data, "").failure) || !io.failed(http.body_abort(&body).failure) || !io.failed(http.body_finish(&body).failure) { #panic("zero body") }
+  zero_write: fail.Status
+  _ = writer.write(writer.data, &zero_write, "")
+  if !zero_write.failed || !io.failed(http.body_abort(&body).failure) || !io.failed(http.body_finish(&body).failure) { #panic("zero body") }
   // Successful partial writes and empty callbacks remain usable.
   sink := Sink{ partial: true }
   response = http.Response{ output: io.Writer{ data: &sink, write: write } }
   opened := http.respond_stream(&response, http.ResponseOptions{})
   writer = http.body_writer(&opened.body)
-  if io.failed(writer.write(writer.data, "").failure) || io.write_all(writer, "abc").transferred != 3 { #panic("partial success") }
+  empty_write: fail.Status
+  _ = writer.write(writer.data, &empty_write, "")
+  if empty_write.failed || io.write_transfer(writer, "abc").transferred != 3 { #panic("partial success") }
   if io.failed(http.body_finish(&opened.body).failure) { #panic("finish success") }
 }
 '''

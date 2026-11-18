@@ -15,25 +15,34 @@ DYN = Path(os.environ.get("DYN", ROOT / "build/dyn-release")).resolve()
 SOURCE = r'''use "std/parse" parse
 use "std/encoding/csv" csv
 use "std/encoding/xml" xml
+use "std/fail"
 use "std/io" io
 use "std/io" errors
 use "std/bytes" bytes
 struct Probe { calls: usize, code: isize, mode: usize }
 fn check(ok: bool) { if !ok { #panic("CSV/XML diagnostic contract") } }
-fn read(data: rawptr, destination: []u8) io.Transfer {
+fn read_transfer(data: rawptr, destination: []u8) io.Transfer {
   p := #cast(*Probe, data)
   p.calls += 1
-  check(p.calls == 1)
-  if p.mode == 2 { return io.Transfer{} }
+  // A stream ends with a read that returns 0, so mode 1 (one byte, then the
+  // end) is read twice; every other mode is read once.
+  check(p.calls == 1 || (p.mode == 1 && p.calls == 2))
+  if p.mode == 2 || p.calls == 2 { return io.Transfer{ status: io.Status.End } }
   if p.mode == 1 { destination[0] = 'x'
-  return io.Transfer{ transferred: 1, status: io.Status.End } }
+  return io.Transfer{ transferred: 1 } }
   return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: p.code } }
 }
-fn write(data: rawptr, source: []const u8) io.Transfer {
+fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return io.from_transfer(status, read_transfer(data, destination), "read", "")
+}
+fn write_transfer(data: rawptr, source: []const u8) io.Transfer {
   p := #cast(*Probe, data)
   p.calls += 1
   check(p.calls == 1)
   return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: p.code } }
+}
+fn write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, write_transfer(data, source), "write", "")
 }
 fn callback_contracts() {
   scratch: [32]u8
@@ -74,12 +83,12 @@ fn callback_contracts() {
   c := csv.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: read })
   f := csv.next_stream(&c, scratch[..])
   check(f.found && #len(f.text) == 1 && f.end_input && f.failure.kind == parse.StreamKind.Ok)
-  check(!csv.next_stream(&c, scratch[..]).found && eof.calls == 1)
+  check(!csv.next_stream(&c, scratch[..]).found && eof.calls == 2)
   eof.calls = 0
   x := xml.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: read }, scratch[..])
   xe := xml.next_stream(&x)
   check(xe.found && xe.failure.kind == parse.StreamKind.Ok && bytes.equal(xe.value.text, "x"))
-  check(!xml.next_stream(&x).found && eof.calls == 1)
+  check(!xml.next_stream(&x).found && eof.calls == 2)
   bad := csv.scanner("a,b\"c")
   check(csv.next(&bad, scratch[..]).found)
   cf := csv.next(&bad, scratch[..])
@@ -160,16 +169,16 @@ fn additional_contracts() {
   // Zero writers reject real output, then also reject empty output.
   zwc: csv.Writer
   zwx: xml.Writer
-  check(!csv.write_field(&zwc, "x", false) && zwc.failure.kind == parse.StreamKind.Io && zwc.failure.io.kind == errors.Kind.InvalidInput && zwc.failure.io.native == -22)
-  check(!csv.write_field(&zwc, "", false) && zwc.failure.io.native == -22 && zwc.failure.io.kind == errors.Kind.InvalidInput)
-  check(!xml.write_text(&zwx, "x") && zwx.failure.kind == parse.StreamKind.Io && zwx.failure.io.kind == errors.Kind.InvalidInput && zwx.failure.io.native == -22)
-  check(!xml.write_text(&zwx, "") && !xml.write_start(&zwx, "") && zwx.failure.io.native == -22)
+  check(!csv.write_field(&zwc, "x", false) && zwc.failure.kind == parse.StreamKind.Io && zwc.failure.io.kind == errors.Kind.InvalidState && zwc.failure.io.native == 0)
+  check(!csv.write_field(&zwc, "", false) && zwc.failure.io.native == 0 && zwc.failure.io.kind == errors.Kind.InvalidState)
+  check(!xml.write_text(&zwx, "x") && zwx.failure.kind == parse.StreamKind.Io && zwx.failure.io.kind == errors.Kind.InvalidState && zwx.failure.io.native == 0)
+  check(!xml.write_text(&zwx, "") && !xml.write_start(&zwx, "") && zwx.failure.io.native == 0)
   stack: [4][]const u8
   check(xml.valid("<a/>", stack[..]) && !xml.valid("<a x=bad/>", stack[..]) && !xml.valid("<a>&unknown;</a>", stack[..]))
 }
 
 struct Chunk { calls: usize, source: []const u8, at: usize, split: usize, limit: usize }
-fn read_chunk(data: rawptr, destination: []u8) io.Transfer {
+fn read_chunk_transfer(data: rawptr, destination: []u8) io.Transfer {
   state := #cast(*Chunk, data)
   state.calls += 1
   if state.at == #len(state.source) {
@@ -190,6 +199,9 @@ fn read_chunk(data: rawptr, destination: []u8) io.Transfer {
   }
   state.at += take
   return io.Transfer{ transferred: take }
+}
+fn read_chunk(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return io.from_transfer(status, read_chunk_transfer(data, destination), "read", "")
 }
 fn input(state: *Chunk) io.Reader {
   return io.Reader{ data: #cast(rawptr, state), read: read_chunk }

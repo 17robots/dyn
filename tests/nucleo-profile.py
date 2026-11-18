@@ -141,7 +141,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-nucleo-') as directory:
     result = subprocess.run([DYN, 'build', str(overflow), '--target', TARGET, '--no-cache', '--quiet',
                              '--output', str(root / 'overflow.elf')], capture_output=True, text=True, timeout=120)
     assert result.returncode != 0 and 'exceeds RAM region' in result.stderr, result.stderr
-    (overflow / 'main.dyn').write_text('use "std/io"\nfn main() { _ = io.write_all(io.stdout(), "' + 'x' * 2200000 + '") }\n')
+    (overflow / 'main.dyn').write_text('use "std/io"\nfn main() { _ = io.write_transfer(io.stdout(), "' + 'x' * 2200000 + '") }\n')
     result = subprocess.run([DYN, 'build', str(overflow), '--target', TARGET, '--no-cache', '--quiet',
                              '--output', str(root / 'overflow.elf')], capture_output=True, text=True, timeout=120)
     assert result.returncode != 0 and 'exceeds ROM region' in result.stderr, result.stderr

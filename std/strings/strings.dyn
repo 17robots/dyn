@@ -1,5 +1,6 @@
 use "std/mem" memory
 use "std/bytes" byte_ops
+use "std/fail"
 use "std/io" io
 
 // UTF-8 strings are immutable byte slices. Operations work on bytes unless named otherwise.
@@ -621,10 +622,10 @@ pub fn glob_match(pattern: []const u8, text: []const u8) bool {
   return p == #len(pattern)
 }
 
-fn count_write(data: rawptr, source: []const u8) io.Transfer {
+fn count_write(data: rawptr, _status: *fail.Status, source: []const u8) usize {
   total := #cast(*usize, data)
   total.* += #len(source)
-  return io.Transfer{ transferred: #len(source), status: io.Status.Complete }
+  return #len(source)
 }
 
 // Formats into arena using the io.print template language: {} inserts a value,
@@ -634,10 +635,12 @@ pub fn format_arguments(arena: *memory.Arena, template: []const u8, arguments: [
   size: usize = 0
   // A template that does not match its arguments formats with markers; see
   // io.print_arguments.
-  _ = io.print_arguments(io.Writer{ data: &size, write: count_write }, template, arguments)
+  counting: fail.Status
+  io.print_arguments(&counting, io.Writer{ data: &size, write: count_write }, template, arguments)
   output := memory.push_bytes_uninit(arena, size)
   buffer := io.buffer_writer(output)
-  _ = io.print_arguments(io.buffer_writer_adapter(&buffer), template, arguments)
+  writing: fail.Status
+  io.print_arguments(&writing, io.buffer_writer_adapter(&buffer), template, arguments)
   return output
 }
 

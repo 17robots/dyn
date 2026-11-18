@@ -20,7 +20,7 @@ use "std/fs" fs
 use "std/mem" memory
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 struct Source { bytes: []const u8, at: usize, chunk: usize }
-fn source_read(data: rawptr, destination: []u8) io.Transfer {
+fn source_read_transfer(data: rawptr, destination: []u8) io.Transfer {
   source := #cast(*Source, data)
   amount := #len(source.bytes) - source.at
   if amount > #len(destination) { amount = #len(destination) }
@@ -31,6 +31,9 @@ fn source_read(data: rawptr, destination: []u8) io.Transfer {
   if source.at == #len(source.bytes) { status = io.Status.End }
   return io.Transfer{ transferred: amount, status: status }
 }
+fn source_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return io.from_transfer(status, source_read_transfer(data, destination), "read", "")
+}
 fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool, chunk: usize, source_chunk: usize, history_size: usize) {
   source := Source{ bytes: encoded, chunk: source_chunk }
   reader := io.Reader{ data: #cast(rawptr, &source), read: source_read }
@@ -40,11 +43,11 @@ fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool
   state := deflate.decoder(reader, compressed[..], history[..history_size])
   if wrapped { state = gzip.decoder(reader, compressed[..], history[..history_size]) }
   decoder := deflate.decoder_reader(&state)
-  empty := io.read(decoder, output[..0])
+  empty := io.read_transfer(decoder, output[..0])
   require(empty.transferred == 0 && source.at == 0, "zero destination")
   total: usize = 0
   for {
-    result := io.read(decoder, output[..chunk])
+    result := io.read_transfer(decoder, output[..chunk])
     if io.failed(result.failure) {
       require(corrupt && result.failure.native != 0, "unexpected decode error")
       return

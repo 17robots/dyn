@@ -1,3 +1,4 @@
+use "std/fail"
 use "std/mem"
 use "std/io" io
 use "std/encoding/csv" csv
@@ -6,8 +7,8 @@ use "std/text/scanner" text
 use "std/net"
 
 
-fn read_nothing(data: rawptr, destination: []u8) io.Transfer {
-  return io.Transfer{ status: io.Status.End }
+fn read_nothing(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return 0
 }
 
 // Explicit default arenas initialize zeroed payload; replacement follows release.

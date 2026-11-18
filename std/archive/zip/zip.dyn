@@ -53,7 +53,7 @@ fn archive_failure(state: *ArchiveReader, kind: parse.Kind) EntryResult {
   return EntryResult{ offset: state.offset, failure: state.failure }
 }
 fn stream_read(state: *StreamReader, destination: []u8) stream.Transfer {
-  result := stream.read_exact(state.source_reader, destination)
+  result := stream.read_exact_transfer(state.source_reader, destination)
   if result.transferred > #max(usize) - state.offset {
     state.failed = true
     state.failure = parse.parse_failure(parse.Kind.Overflow, state.offset, "")

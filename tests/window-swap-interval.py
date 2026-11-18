@@ -179,10 +179,10 @@ fn main(){
  restored:=window.set_swap_interval(&host,0)
  check(restored.kind==errors.Kind.Ok || restored.kind==errors.Kind.Unsupported)
  for frame in 0..8 {check(window.swap(&host).kind == errors.Kind.Ok)}
- if immediate.kind==errors.Kind.Ok {_=io.write_all(io.stdout(),"PASS native GLX immediate interval available\n")}
- else {_=io.write_all(io.stdout(),"PASS native GLX reports immediate interval unsupported\n")}
- if synced.kind==errors.Kind.Ok {_=io.write_all(io.stdout(),"PASS native GLX one-refresh interval available\n")}
- else {_=io.write_all(io.stdout(),"PASS native GLX reports one-refresh interval unsupported\n")}
+ if immediate.kind==errors.Kind.Ok {_=io.write_transfer(io.stdout(),"PASS native GLX immediate interval available\n")}
+ else {_=io.write_transfer(io.stdout(),"PASS native GLX reports immediate interval unsupported\n")}
+ if synced.kind==errors.Kind.Ok {_=io.write_transfer(io.stdout(),"PASS native GLX one-refresh interval available\n")}
+ else {_=io.write_transfer(io.stdout(),"PASS native GLX reports one-refresh interval unsupported\n")}
 }
 '''
 if not __import__('sys').platform.startswith('linux'):

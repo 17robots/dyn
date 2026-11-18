@@ -33,12 +33,12 @@ fn pick(values: []const u8, index: usize) u8 {
 fn main() {
   defer cleanup()
   values: [3]u8 = [1, 2, 3]
-  _ = io.write_all(io.stdout(), "before\\n")
+  _ = io.write_transfer(io.stdout(), "before\\n")
   _ = pick(values[..], 5)
 }
 
 fn cleanup() {
-  _ = io.write_all(io.stdout(), "cleanup ran\\n")
+  _ = io.write_transfer(io.stdout(), "cleanup ran\\n")
 }
 '''
 

@@ -140,9 +140,9 @@ fn main() i32 {
   }
   digits: [20 + mem.ArenaBufferOverhead]u8
   scratch := mem.arena_from_buffer(digits[..])
-  _ = io.write_all(io.stdout(), "port ")
-  _ = io.write_all(io.stdout(), fmt.u64_decimal(scratch, #cast(u64, evented.local_port(workers))))
-  _ = io.write_all(io.stdout(), "\n")
+  _ = io.write_transfer(io.stdout(), "port ")
+  _ = io.write_transfer(io.stdout(), fmt.u64_decimal(scratch, #cast(u64, evented.local_port(workers))))
+  _ = io.write_transfer(io.stdout(), "\n")
   for sync.load_u32(&app.quit) == 0 {
     _ = time.sleep(10 * time.Millisecond)
   }

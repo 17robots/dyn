@@ -1,4 +1,5 @@
 #target(kernel: wasi)
+use "std/fail"
 use "std/os/wasi/raw" wasi_raw
 
 fn stdin_read(_data: rawptr, destination: []u8) Transfer {
@@ -30,13 +31,13 @@ fn stderr_write(_data: rawptr, source: []const u8) Transfer {
 
 // Borrow the process standard descriptors; callers do not own or close them.
 pub fn stdin() Reader {
-  return Reader{ read: stdin_read }
+  return Reader{ read: stdin_stream }
 }
 pub fn stdout() Writer {
-  return Writer{ write: stdout_write }
+  return Writer{ write: stdout_stream }
 }
 pub fn stderr() Writer {
-  return Writer{ write: stderr_write }
+  return Writer{ write: stderr_stream }
 }
 
 // Terminal output. These ignore write failures, such as a closed pipe, so a
@@ -44,3 +45,14 @@ pub fn stderr() Writer {
 
 
 
+
+// The standard streams as Reader and Writer functions.
+fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return from_transfer(status, stdin_read(nil, destination), "read", "standard input")
+}
+fn stdout_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return from_transfer(status, stdout_write(nil, source), "write", "standard output")
+}
+fn stderr_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return from_transfer(status, stderr_write(nil, source), "write", "standard error")
+}

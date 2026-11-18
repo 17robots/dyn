@@ -1,3 +1,4 @@
+use "std/fail"
 use "std/parse" parse
 use "std/encoding/csv" csv
 use "std/encoding/xml" xml
@@ -8,7 +9,7 @@ use "std/encoding/json" json
 use "std/mem" mem
 use "std/unicode/utf8" utf8
 struct Chunk { source: []const u8, at: usize, split: usize, limit: usize }
-fn read_chunk(data: rawptr, destination: []u8) io.Transfer {
+fn read_chunk_transfer(data: rawptr, destination: []u8) io.Transfer {
   state := #cast(*Chunk, data)
   if state.at == #len(state.source) {
     return io.Transfer{ status: io.Status.End }
@@ -28,6 +29,9 @@ fn read_chunk(data: rawptr, destination: []u8) io.Transfer {
   }
   state.at += take
   return io.Transfer{ transferred: take }
+}
+fn read_chunk(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return io.from_transfer(status, read_chunk_transfer(data, destination), "read", "")
 }
 fn input(state: *Chunk) io.Reader {
   return io.Reader{ data: #cast(rawptr, state), read: read_chunk }
@@ -115,14 +119,15 @@ fn json_document(source: []const u8, expected: bool) {
 fn json_stream_check(value: *const json.Value, document: []const u8, expected: bool, prefix: []const u8) {
   storage: [128]u8
   output := io.buffer_writer(storage[..])
-  result := json.write(io.buffer_writer_adapter(&output), value)
+  status: fail.Status
+  json.write(&status, io.buffer_writer_adapter(&output), value)
   written := io.buffer_writer_bytes(&output)
   if expected {
-    if (result.status != io.Status.Complete || io.failed(result.failure)) || result.transferred != #len(document) || !bytes.equal(written, document) {
+    if status.failed || !bytes.equal(written, document) {
       #panic("JSON streaming UTF8 roundtrip")
     }
   } else {
-    if !io.failed(result.failure) || result.failure.native != -22 || result.transferred != #len(prefix) || !bytes.equal(written, prefix) {
+    if !status.failed || status.failure.kind != fail.Kind.InvalidInput || !bytes.equal(written, prefix) {
       #panic("JSON streaming invalid UTF8")
     }
   }

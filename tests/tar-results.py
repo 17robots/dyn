@@ -28,13 +28,14 @@ def literal(data):
 
 
 SOURCE = r'''use "std/archive/tar" tar
+use "std/fail"
 use "std/io" errors
 use "std/parse" parse
 use "std/io" io
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("tar fixture") } }
 struct Input { source: []const u8, offset: usize, fail: usize, calls: usize, native: isize }
-fn read(data: rawptr, destination: []u8) io.Transfer {
+fn read_transfer(data: rawptr, destination: []u8) io.Transfer {
  s := #cast(*Input,data)
  s.calls += 1
  take := #len(destination)
@@ -45,6 +46,9 @@ fn read(data: rawptr, destination: []u8) io.Transfer {
  if s.offset == s.fail { return io.Transfer{ transferred: take, failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: s.native } } }
  if s.offset == #len(s.source) { return io.Transfer{ transferred: take, status: io.Status.End } }
  return io.Transfer{ transferred: take }
+}
+fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return io.from_transfer(status, read_transfer(data, destination), "read", "")
 }
 fn replay(state: *tar.StreamReader, input: *Input, native: isize, offset: usize) {
  calls := input.calls

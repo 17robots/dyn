@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
 SOURCE = r'''use "std/text/template" text
 use "std/html/template" html
+use "std/fail"
 use "std/io" io
 use "std/parse" parse
 use "std/mem" mem
@@ -16,10 +17,13 @@ use "std/io" errors
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("template results") } }
 struct Sink { calls: usize, code: isize }
-fn fail(data: rawptr, source: []const u8) io.Transfer {
+fn fail_transfer(data: rawptr, source: []const u8) io.Transfer {
   state := #cast(*Sink, data)
   state.calls += 1
   return io.Transfer{ transferred: 1, failure: io.Failure{ kind: errors.Kind.Capacity, native: state.code } }
+}
+fn fail(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, fail_transfer(data, source), "write", "")
 }
 fn custom(destination: io.Writer, value: []const u8) text.RenderResult {
   return text.RenderResult{ offset: 97, failure: parse.io_failure(errors.Kind.Unsupported, -73) }

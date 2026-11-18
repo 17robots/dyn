@@ -27,7 +27,8 @@ def run(*args, **kwargs):
 with tempfile.TemporaryDirectory(prefix='dyn-standard-streams-') as temporary:
     root = Path(temporary)
     project = root/'streams'; project.mkdir()
-    (project/'main.dyn').write_text('''use "std/io"
+    (project/'main.dyn').write_text('''use "std/fail"
+use "std/io"
 use "std/bufio"
 use "std/time"
 fn main() {
@@ -36,16 +37,17 @@ fn main() {
   scratch: [8]u8
   input := bufio.reader(io.stdin(), scratch[..])
   line: [64]u8
+  status: fail.Status
   for {
-    result := bufio.read_line(&input, line[..])
-    if io.failed(result.failure) { #panic("input failed") }
+    result := bufio.read_line(&status, &input, line[..])
+    if status.failed { #panic("input failed") }
     if result.transferred > 0 || result.status != bufio.ReadStatus.End {
-      written := io.println_to(io.stdout(), "[{}]", line[..result.transferred])
-      if io.failed(written.failure) { #panic("output failed") }
+      io.println_to(&status, io.stdout(), "[{}]", line[..result.transferred])
+      if status.failed { #panic("output failed") }
     }
     if result.status == bufio.ReadStatus.End { break }
   }
-  finished := io.write_all(io.stderr(), "done\\n")
+  finished := io.write_transfer(io.stderr(), "done\\n")
   if io.failed(finished.failure) { #panic("stderr failed") }
 }
 ''')
@@ -67,13 +69,13 @@ fn main() {
     (errors/'main.dyn').write_text('''use "std/io"
 fn main() {
   bytes: [1]u8
-  input := io.read(io.stdin(), bytes[..])
+  input := io.read_transfer(io.stdin(), bytes[..])
   if !io.failed(input.failure) || input.failure.native == 0 || input.transferred != 0 { #panic("missing read error") }
-  output := io.write_all(io.stdout(), "x")
+  output := io.write_transfer(io.stdout(), "x")
   if !io.failed(output.failure) || output.failure.native == 0 || output.transferred != 0 { #panic("missing write error") }
-  empty := io.read(io.stdin(), bytes[..0])
+  empty := io.read_transfer(io.stdin(), bytes[..0])
   if (empty.status != io.Status.Complete || io.failed(empty.failure)) || empty.transferred != 0 { #panic("empty read") }
-  _ = io.write_all(io.stderr(), "errors handled\\n")
+  _ = io.write_transfer(io.stderr(), "errors handled\\n")
 }
 ''')
     failure_program = root/('errors.exe' if os.name == 'nt' else 'errors-program')
@@ -122,7 +124,7 @@ fn main() {
   if !parsed.valid || !time.valid(&date) { #panic("date failed") }
   cursor := io.cursor("ok")
   bytes: [2]u8
-  result := io.read_exact(io.cursor_reader(&cursor), bytes[..])
+  result := io.read_exact_transfer(io.cursor_reader(&cursor), bytes[..])
   if (result.status != io.Status.Complete || io.failed(result.failure)) { #panic("read failed") }
 }
 ''')

@@ -122,7 +122,7 @@ def fixtures():
     extern fn opaque() u32
     extern fn touch(p:rawptr)
     extern fn callback(p:fn())
-    fn mark(s:[]const u8) { _=io.write_all(io.stdout(),s) }
+    fn mark(s:[]const u8) { _=io.write_transfer(io.stdout(),s) }
     pub fn boom() { #panic("BOOM") }
     pub fn inner() { defer mark("I\n")
     boom() }
@@ -218,7 +218,7 @@ def fixtures():
     source=r'''use "std/io"
     extern fn opaque() u32
     extern fn cpacr() u32
-    fn mark(s:[]const u8) { _=io.write_all(io.stdout(),s) }
+    fn mark(s:[]const u8) { _=io.write_transfer(io.stdout(),s) }
     pub fn adjacent() { defer mark("FIRST\n")
     defer mark("SECOND\n") }
     pub fn nested() { defer mark("A\n")
@@ -292,7 +292,7 @@ def fixtures():
     source = original
     source=r'''use "std/io"
     extern fn cpacr() u32
-    fn mark(s:[]const u8) { _=io.write_all(io.stdout(),s) }
+    fn mark(s:[]const u8) { _=io.write_transfer(io.stdout(),s) }
     fn checkany(x:any) { case x { u64 n => { if n!=0x1122334455667788 { #panic("any") }
     mark("ANY\n") } _ => { #panic("type") } } }
     fn mutable(x:[]u8) { if #len(x)!=3 || x[2]!=67 { #panic("slice") }

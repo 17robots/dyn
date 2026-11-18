@@ -51,34 +51,25 @@ fn count_chunk(counts: *Counts, chunk: []const u8) {
   }
 }
 
-// Counts one file, a chunk at a time. Every fs call takes the status: after a
-// failure fs.read returns 0, so the loop ends by itself and nothing here
-// needs to check.
-fn count_file(status: *fail.Status, name: []const u8, counts: *Counts) {
-  file := fs.open(status, name)
-  // defer runs when this function returns, however it returns.
-  defer fs.close(&file)
+// io.Reader is the seam every input shares: a file, standard input, a
+// socket or bytes in memory. Each read takes the status; after a failure,
+// or at the end of the input, io.read returns 0, so the loop ends by itself
+// and nothing here needs to check.
+fn count_reader(status: *fail.Status, reader: io.Reader, counts: *Counts) {
   chunk: [64 * 1024]u8
   for {
-    count := fs.read(status, &file, chunk[..])
+    count := io.read(status, reader, chunk[..])
     if count == 0 { break }
     count_chunk(counts, chunk[..count])
   }
 }
 
-// Standard input is an io.Reader, which reports how each read went.
-fn count_reader(reader: io.Reader, counts: *Counts) io.Failure {
-  chunk: [64 * 1024]u8
-  failure: io.Failure    // zero: no failure yet
-  ended := false
-  for !ended && !io.failed(failure) {
-    t := io.read(reader, chunk[..])
-    // Bytes may arrive together with a failure or the end, so count first.
-    count_chunk(counts, chunk[..t.transferred])
-    failure = t.failure
-    ended = t.status == io.Status.End
-  }
-  return failure
+// Counts one file through the same reader code.
+fn count_file(status: *fail.Status, name: []const u8, counts: *Counts) {
+  file := fs.open(status, name)
+  // defer runs when this function returns, however it returns.
+  defer fs.close(&file)
+  count_reader(status, fs.reader(&file), counts)
 }
 
 fn add(total: *Counts, part: Counts) {
@@ -108,12 +99,11 @@ fn show(counts: Counts, name: []const u8) {
   io.println("{}", fmt.bytes(&row))
 }
 
-fn describe(kind: io.Kind) []const u8 {
-  case kind {
-    io.Kind.NotFound => { return "no such file" }
-    io.Kind.PermissionDenied => { return "permission denied" }
-    _ => { return "cannot read" }
-  }
+// Prints what failed, such as "wordcount: open missing.txt: no such file or
+// directory".
+fn report(status: fail.Status) {
+  storage: [512]u8
+  io.eprintln("wordcount: {}", fail.describe(storage[..], status.failure))
 }
 
 // main may return an i32: the process exit code.
@@ -124,10 +114,11 @@ fn main() i32 {
   files := program.args[1..]
 
   if #len(files) == 0 {
+    status: fail.Status
     counts: Counts
-    failure := count_reader(io.stdin(), &counts)
-    if io.failed(failure) {
-      io.eprintln("wordcount: standard input: {}", describe(failure.kind))
+    count_reader(&status, io.stdin(), &counts)
+    if status.failed {
+      report(status)
       return 1
     }
     show(counts, "")
@@ -143,8 +134,7 @@ fn main() i32 {
     counts: Counts
     count_file(&status, name, &counts)
     if status.failed {
-      storage: [512]u8
-      io.eprintln("wordcount: {}", fail.describe(storage[..], status.failure))
+      report(status)
       exit_code = 1
       continue
     }

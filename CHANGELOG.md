@@ -72,6 +72,19 @@ Standard library:
   `fs.close` and `fs.atomic_abort` take no status, so cleanup works after a
   failure. Failures carry the system's own reason: "open app.json: no such
   file or directory", "read /tmp: is a directory".
+- `std/io` streams move to it. `io.Reader` and `io.Writer` functions take the
+  status: `read: fn(rawptr, *fail.Status, []u8) usize` returns the count, 0
+  at the end of the stream. `io.read(&status, reader, buffer)` returns the
+  count; `io.write(&status, writer, bytes)` writes everything (`write_all` is
+  gone); `io.read_exact` fills its buffer or returns 0 at a clean end, and a
+  stream that ends partway fails; `io.copy`, `io.copy_n`, `io.print_to`,
+  `io.println_to`, `io.print_arguments` and `io.println_arguments` take the
+  status. `bufio` follows (`bufio.read_line(&status, &reader, line)`,
+  `bufio.writer_flush(&status, &writer)`; `ReadResult` loses `failure`), as
+  do `json.write(&status, writer, value)` and `log.write(&status, &logger,
+  ...)`. `io.Transfer` remains only for modules not moved yet, with
+  `io.read_transfer`, `io.write_transfer`, `io.read_exact_transfer` and
+  `io.from_transfer` to bridge them.
 - New in `std/fs`: `fs.list(arena, &status, path)` (a directory's entries,
   copied), `fs.is_directory`, `fs.is_file`, and
   `fs.make_directory_exclusive`. `fs.make_directory` now succeeds when the

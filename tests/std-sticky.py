@@ -6,7 +6,66 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE='use "std/parse" parse\nuse "std/io"\nuse "std/bufio"\nuse "std/io" errors\nuse "std/encoding/ini"\nstruct Sink { calls: usize }\nfn fail(data: rawptr, source: []const u8) io.Transfer {\n  state := #cast(*Sink, data)\n  state.calls += 1\n  return io.Transfer{ transferred: 1, failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: -13 } }\n}\nfn fail_read(data: rawptr, destination: []u8) io.Transfer {\n  state := #cast(*Sink, data)\n  state.calls += 1\n  destination[0] = \'x\'\n  return io.Transfer{ transferred: 1, failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: -13 } }\n}\nfn two_read(data: rawptr, destination: []u8) io.Transfer {\n  state := #cast(*Sink, data)\n  state.calls += 1\n  destination[0] = \'a\'\n  destination[1] = \'b\'\n  return io.Transfer{ transferred: 2, failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: -13 } }\n}\nfn main() {\n  sink: Sink\n  storage: [8]u8\n  writer := bufio.writer(io.Writer{ data: &sink, write: fail }, storage[..0])\n  first := io.write(bufio.writer_adapter(&writer), "abc")\n  second := io.write(bufio.writer_adapter(&writer), "abc")\n  flushed := bufio.writer_flush(&writer)\n  io.println("writer calls={} first={} second={} flush={}", sink.calls, first.transferred, second.transferred, flushed.failure.native)\n  writer.used = 9\n  kept := bufio.writer_flush(&writer)\n  if kept.failure.native != -13 || writer.used != 9 { #panic("first error replaced") }\n  adapter := bufio.writer_adapter(&writer)\n  empty_write := adapter.write(adapter.data, "")\n  if empty_write.failure.native != -13 || sink.calls != 1 { #panic("empty writer") }\n  for capacity in [0, 8] {\n    reads: Sink\n    reader := bufio.reader(io.Reader{ data: &reads, read: fail_read }, storage[..#cast(usize, capacity)])\n    output: [4]u8\n    first_read := io.read(bufio.reader_adapter(&reader), output[..])\n    read_adapter := bufio.reader_adapter(&reader)\n    later_read := read_adapter.read(read_adapter.data, output[..0])\n    line := bufio.read_line(&reader, output[..0])\n    until := bufio.read_until(&reader, output[..], 10)\n    if first_read.transferred != 1 || first_read.failure.native != -13 || later_read.failure.native != -13 || line.failure.native != -13 || until.failure.native != -13 || reads.calls != 1 { #panic("reader sticky failure") }\n  }\n  reads: Sink\n  buffered := bufio.reader(io.Reader{ data: &reads, read: two_read }, storage[..])\n  output: [1]u8\n  partial := io.read(bufio.reader_adapter(&buffered), output[..])\n  position := buffered.start\n  stopped := io.read(bufio.reader_adapter(&buffered), output[..])\n  if partial.transferred != 1 || output[0] != \'a\' || stopped.transferred != 0 || stopped.failure.native != -13 || buffered.start != position || reads.calls != 1 { #panic("buffered reader consumed after error") }\n  for capacity in [2, 8] {\n    writes: Sink\n    staged := bufio.writer(io.Writer{ data: &writes, write: fail }, storage[..#cast(usize, capacity)])\n    first_write := io.write(bufio.writer_adapter(&staged), "abcdef")\n    flushed_stage := bufio.writer_flush(&staged)\n    if capacity == 8 && (first_write.transferred != 6 || flushed_stage.transferred != 1 || staged.used != 5) { #panic("flush partial count") }\n    if capacity == 2 && (first_write.transferred != 1 || first_write.failure.native != -13) { #panic("direct partial count") }\n    pending := staged.used\n    again := io.write(bufio.writer_adapter(&staged), "x")\n    if again.failure.native != -13 || again.transferred != 0 || staged.used != pending || writes.calls != 1 { #panic("buffered writer sticky failure") }\n  }\n  scan := ini.scanner("bad\\nx=1")\n  item := ini.next(&scan)\n  offset := scan.offset\n  later := ini.next(&scan)\n  io.println("ini first={} later={} line={} errors={} stable={}", item.found, later.found, scan.error_line, scan.errors, offset == scan.offset)\n  if sink.calls != 1 || first.transferred != 1 || first.failure.native != -13 || second.transferred != 0 || second.failure.native != -13 || flushed.failure.native != -13 { #panic("writer sticky failure") }\n  if item.found || later.found || scan.failure.kind != parse.Kind.Syntax || scan.error_line != 1 || scan.errors != 1 || scan.offset != offset { #panic("ini sticky failure") }\n}\n'
+SOURCE = r'''use "std/parse" parse
+use "std/fail"
+use "std/io"
+use "std/bufio"
+use "std/encoding/ini"
+struct Sink { calls: usize }
+// A destination that takes one byte, then fails.
+fn fail_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  state := #cast(*Sink, data)
+  state.calls += 1
+  failure := fail.make(fail.Kind.PermissionDenied, "write", "sink", "")
+  failure.native = -13
+  fail.set(status, failure)
+  return 1
+}
+fn fail_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  state := #cast(*Sink, data)
+  state.calls += 1
+  destination[0] = 'x'
+  failure := fail.make(fail.Kind.PermissionDenied, "read", "source", "")
+  failure.native = -13
+  fail.set(status, failure)
+  return 1
+}
+fn main() {
+  // A failed status makes every later buffered call do nothing.
+  sink: Sink
+  storage: [8]u8
+  status: fail.Status
+  writer := bufio.writer(io.Writer{ data: &sink, write: fail_write }, storage[..0])
+  io.write(&status, bufio.writer_adapter(&writer), "abc")
+  io.write(&status, bufio.writer_adapter(&writer), "abc")
+  bufio.writer_flush(&status, &writer)
+  if !status.failed || status.failure.native != -13 || sink.calls != 1 { #panic("writer failure") }
+  // Buffered bytes stay buffered after a failed flush, for a fresh status to retry.
+  writes: Sink
+  staged := bufio.writer(io.Writer{ data: &writes, write: fail_write }, storage[..])
+  staging: fail.Status
+  io.write(&staging, bufio.writer_adapter(&staged), "abcdef")
+  if staging.failed || staged.used != 6 || writes.calls != 0 { #panic("staged write") }
+  bufio.writer_flush(&staging, &staged)
+  if !staging.failed || staged.used != 6 || writes.calls != 1 { #panic("failed flush keeps bytes") }
+  for capacity in [0, 8] {
+    reads: Sink
+    reading: fail.Status
+    reader := bufio.reader(io.Reader{ data: &reads, read: fail_read }, storage[..#cast(usize, capacity)])
+    output: [4]u8
+    _ = io.read(&reading, bufio.reader_adapter(&reader), output[..])
+    line := bufio.read_line(&reading, &reader, output[..])
+    until := bufio.read_until(&reading, &reader, output[..], 10)
+    if !reading.failed || reading.failure.native != -13 || reads.calls != 1 { #panic("reader failure") }
+    if line.status != bufio.ReadStatus.End || until.status != bufio.ReadStatus.End { #panic("records end after a failure") }
+  }
+  scan := ini.scanner("bad\nx=1")
+  item := ini.next(&scan)
+  offset := scan.offset
+  later := ini.next(&scan)
+  if item.found || later.found || scan.failure.kind != parse.Kind.Syntax || scan.error_line != 1 || scan.errors != 1 || scan.offset != offset { #panic("ini sticky failure") }
+}
+'''
 with tempfile.TemporaryDirectory(prefix='dyn-std-sticky-') as directory:
     work=Path(directory)
     (work/'main.dyn').write_text(SOURCE)

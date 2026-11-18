@@ -29,12 +29,12 @@ fn main() {
   data: [16]u8
   result := wasi.read(file.fd, data[..])
   if (result.status != io.Status.Complete || io.failed(result.failure)) || result.transferred != 5 { #panic("read") }
-  _ = io.write_all(io.stdout(), data[..result.transferred])
+  _ = io.write_transfer(io.stdout(), data[..result.transferred])
   if wasi.read(file.fd, data[..]).status != io.Status.End { #panic("EOF") }
   if !io.failed(wasi.read(999999, data[..]).failure) { #panic("bad fd") }
-  result = io.read_exact(io.stdin(), data[..3])
+  result = io.read_exact_transfer(io.stdin(), data[..3])
   if result.transferred != 3 { #panic("stdin") }
-  _ = io.write_all(io.stdout(), data[..3])
+  _ = io.write_transfer(io.stdout(), data[..3])
   if wasi.random(data[..]) != 0 { #panic("random") }
   now: u64 = 0
   if wasi.clock_time(1, 0, &now) != 0 || now == 0 { #panic("clock") }

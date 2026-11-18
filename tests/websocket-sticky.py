@@ -13,10 +13,11 @@ if sys.platform not in ('linux', 'darwin', 'win32'):
     raise SystemExit(0)
 
 SOURCE = r'''use "std/net/websocket" ws
+use "std/fail"
 use "std/io" io
 use "std/io" errors
 struct Trace { reads: usize, writes: usize, mode: usize, bytes: usize }
-fn read(data: rawptr, destination: []u8) io.Transfer {
+fn read_transfer(data: rawptr, destination: []u8) io.Transfer {
   trace := #cast(*Trace, data)
   trace.reads += 1
   if trace.mode == 0 { return io.Transfer{ failure: io.Failure{ kind: errors.Kind.System, native: -71 } } }
@@ -48,7 +49,10 @@ fn read(data: rawptr, destination: []u8) io.Transfer {
   if trace.mode == 7 { return io.Transfer{} }
   return io.Transfer{ transferred: 2 }
 }
-fn write(data: rawptr, source: []const u8) io.Transfer {
+fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return io.from_transfer(status, read_transfer(data, destination), "read", "")
+}
+fn write_transfer(data: rawptr, source: []const u8) io.Transfer {
   trace := #cast(*Trace, data)
   trace.writes += 1
   if trace.mode == 10 { return io.Transfer{ failure: io.Failure{ kind: io.Kind.System, native: -73 } } }
@@ -62,6 +66,9 @@ fn write(data: rawptr, source: []const u8) io.Transfer {
   }
   trace.bytes += #len(source)
   return io.Transfer{ transferred: #len(source) }
+}
+fn write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, write_transfer(data, source), "write", "")
 }
 fn failure(result: ws.Result, kind: errors.Kind, native: isize, offset: usize) {
   if !io.failed(result.failure) || result.failure.kind != kind || result.failure.native != native || result.offset != offset { #panic("structured failure metadata") }
@@ -85,7 +92,7 @@ fn sticky(connection: *ws.WebSocketConnection, trace: *Trace, kind: errors.Kind,
   if trace.reads != reads || trace.writes != writes || trace.bytes != bytes { #panic("I/O after failure") }
 }
 struct Wire { data: []const u8, at: usize, step: usize, calls: usize }
-fn wire_read(raw: rawptr, destination: []u8) io.Transfer {
+fn wire_read_transfer(raw: rawptr, destination: []u8) io.Transfer {
   wire := #cast(*Wire, raw)
   wire.calls += 1
   count := #len(wire.data) - wire.at
@@ -96,13 +103,16 @@ fn wire_read(raw: rawptr, destination: []u8) io.Transfer {
   if count == 0 { return io.Transfer{ status: io.Status.End } }
   return io.Transfer{ transferred: count }
 }
+fn wire_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return io.from_transfer(status, wire_read_transfer(data, destination), "read", "")
+}
 fn coalesced() {
   isolated := Wire{data: "\x81\x01a", step: 32}
   single_sent := Trace{mode: 99}
   available: [32]u8
   single_message: [32]u8
   controls: [125]u8
-  reusable := ws.connection(io.Reader{data: &isolated, read: wire_read}, io.Writer{data: &single_sent, write: write}, available[..], single_message[..], controls[..], true)
+  reusable := ws.connection(io.Reader{ data: &isolated, read: wire_read }, io.Writer{ data: &single_sent, write: write }, available[..], single_message[..], controls[..], true)
   if io.failed(ws.connection_receive(&reusable).failure) { #panic("single frame") }
   if io.failed(ws.connection_send(&reusable, 1, "abcdefghijklmnopqrstuvwxyz", true, 1).failure) || single_sent.bytes != 32 { #panic("fully consumed capacity") }
   for step in [1, 2, 3, 4, 32] {
@@ -111,7 +121,7 @@ fn coalesced() {
     message: [32]u8
     control: [125]u8
     sent := Trace{mode: 99}
-    state := ws.connection(io.Reader{data: &wire, read: wire_read}, io.Writer{data: &sent, write: write}, frames[..], message[..], control[..], true)
+    state := ws.connection(io.Reader{ data: &wire, read: wire_read }, io.Writer{ data: &sent, write: write }, frames[..], message[..], control[..], true)
     a := ws.connection_receive(&state)
     if io.failed(a.failure) || a.event.detail != ws.WebSocketEventKind.Ready || #len(a.event.payload) != 1 || a.event.payload[0] != 'a' { #panic("coalesced first") }
     if io.failed(ws.connection_pong(&state, "p", 1).failure) || sent.writes != 1 || a.event.payload[0] != 'a' { #panic("send with pending frames") }
@@ -121,7 +131,7 @@ fn coalesced() {
     if io.failed(closed.failure) || closed.event.detail != ws.WebSocketEventKind.Close { #panic("coalesced close") }
     if step == 32 && wire.calls != 1 { #panic("coalesced extra read") }
     wire = Wire{data: "\x01\x01a\x89\x01p\x80\x01b", step: #cast(usize, step)}
-    state = ws.connection(io.Reader{data: &wire, read: wire_read}, io.Writer{data: &sent, write: write}, frames[..], message[..], control[..], true)
+    state = ws.connection(io.Reader{ data: &wire, read: wire_read }, io.Writer{ data: &sent, write: write }, frames[..], message[..], control[..], true)
     ping := ws.connection_receive(&state)
     if io.failed(ping.failure) || ping.event.detail != ws.WebSocketEventKind.Ping || #len(ping.event.payload) != 1 || ping.event.payload[0] != 'p' { #panic("fragmented ping") }
     if io.failed(ws.connection_pong(&state, ping.event.payload, 1).failure) || sent.writes != 2 || ping.event.payload[0] != 'p' { #panic("send with pending continuation") }

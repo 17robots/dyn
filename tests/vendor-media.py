@@ -253,7 +253,7 @@ fn main() {
       if read.end {
         break
       }
-      _ = io.write(io.stdout(), buffer[..read.count])
+      _ = io.write_transfer(io.stdout(), buffer[..read.count])
     }
   }
 }
@@ -281,15 +281,15 @@ fn main() {
     #panic("HTTP transfer failed or buffer full")
   }
   io.println("HTTP {}", result.http_status)
-  _ = io.write(io.stdout(), response[..result.written])
+  _ = io.write_transfer(io.stdout(), response[..result.written])
 }
 ''',
     'sdl3-image-example': r'''use "vendor/sdl3"
 use "vendor/sdl3/image" image
 use "std/mem"
-use "std/fail"
 use "std/fs"
 use "std/os/linux"
+use "std/fail"
 use "std/io"
 fn main() {
   storage := mem.arena_alloc(16 * 1024 * 1024)

@@ -113,8 +113,8 @@ fn main() {{
         if storage[i] != 165 {{ #panic("past destination") }}
       }}
       io.println("{{}} {{}} {{}} {{}}", index, capacity, buffer.length, buffer.failed)
-      _ = io.write_all(io.stdout(), fmt.bytes(&buffer))
-      _ = io.write_all(io.stdout(), "\\n")
+      _ = io.write_transfer(io.stdout(), fmt.bytes(&buffer))
+      _ = io.write_transfer(io.stdout(), "\\n")
       if buffer.failed {{
         old_length := buffer.length
         html.write_escaped(&buffer, "x<&")

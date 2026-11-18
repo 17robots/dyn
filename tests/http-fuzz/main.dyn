@@ -5,6 +5,7 @@
 use "std/bytes"
 use "std/fmt"
 use "std/html"
+use "std/fail"
 use "std/io"
 use "std/net/http"
 use "std/parse"
@@ -96,7 +97,7 @@ fn path_match(context: rawptr, input: []const u8) bool {
 
 struct Capture { bytes: [4096]u8, length: usize }
 
-fn capture_write(data: rawptr, source: []const u8) io.Transfer {
+fn capture_write_transfer(data: rawptr, source: []const u8) io.Transfer {
   capture := #cast(*Capture, data)
   room := #len(capture.bytes) - capture.length
   count := #len(source)
@@ -106,6 +107,9 @@ fn capture_write(data: rawptr, source: []const u8) io.Transfer {
   _ = mem.copy(capture.bytes[capture.length..capture.length + count], source[..count])
   capture.length += count
   return io.Transfer{ transferred: #len(source) }
+}
+fn capture_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, capture_write_transfer(data, source), "write", "")
 }
 
 // Input becomes a header name and value. Either respond refuses it before

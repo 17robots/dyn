@@ -1,4 +1,5 @@
 use "vendor/zstd" provider
+use "std/fail"
 use "std/io" stream
 use "std/mem" memory
 use "std/parse" parse
@@ -125,7 +126,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
       state.failure = parse.parse_failure(parse.Kind.Syntax, state.offset, "")
       break
     }
-    input_result := stream.read(state.source_reader, state.compressed_storage)
+    input_result := stream.read_transfer(state.source_reader, state.compressed_storage)
     state.offset = 0
     state.used = input_result.transferred
     if stream.failed(input_result.failure) {
@@ -144,5 +145,9 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
   return parse.stream_result(state.failure, 0)
 }
 pub fn decoder_reader(state: *Decoder) stream.Reader {
-  return stream.Reader{ data: state, read: decoder_read }
+  return stream.Reader{ data: state, read: decoder_read_stream }
+}
+
+fn decoder_read_stream(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return stream.from_transfer(status, decoder_read(data, destination), "read", "")
 }

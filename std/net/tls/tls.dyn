@@ -1,5 +1,6 @@
 use "vendor/openssl/tls" provider
 use "std/mem" memory
+use "std/fail"
 use "std/io" io
 pub type Context = provider.Context
 pub type Connection = provider.Connection
@@ -161,9 +162,17 @@ fn writer_write(data: rawptr, source: []const u8) io.Transfer {
 // Blocking I/O adapters borrow the Connection slot and its live handle.
 // Use read/write directly for nonblocking WantRead/WantWrite handling.
 pub fn reader(connection: *Connection) io.Reader {
-  return io.Reader{ data: connection, read: reader_read }
+  return io.Reader{ data: connection, read: reader_read_stream }
 }
 
 pub fn writer(connection: *Connection) io.Writer {
-  return io.Writer{ data: connection, write: writer_write }
+  return io.Writer{ data: connection, write: writer_write_stream }
+}
+
+fn reader_read_stream(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return io.from_transfer(status, reader_read(data, destination), "read", "")
+}
+
+fn writer_write_stream(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, writer_write(data, source), "write", "")
 }

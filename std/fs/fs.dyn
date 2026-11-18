@@ -146,37 +146,20 @@ fn write_count(status: *fail.Status, file: *File, source: []const u8) usize {
   return written
 }
 
-// Streams over a File, for code that takes io.Reader or io.Writer. A failure
-// comes back in the io.Transfer. The adapter borrows the File itself: keep it
-// alive and unmoved until I/O completes.
-fn adapter_read(data: rawptr, destination: []u8) io.Transfer {
-  file := #cast(*File, data)
-  status: fail.Status
-  count := read(&status, file, destination)
-  if status.failed { return io.Transfer{ transferred: count, failure: stream_failure(&status, "read", file) } }
-  stream_status := io.Status.Complete
-  if count == 0 && #len(destination) != 0 {
-    stream_status = io.Status.End
-  }
-  return io.Transfer{ transferred: count, status: stream_status }
+// Streams over a File, for code that takes io.Reader or io.Writer. The
+// adapter borrows the File itself: keep it alive and unmoved until I/O
+// completes.
+fn stream_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return read(status, #cast(*File, data), destination)
 }
-fn adapter_write(data: rawptr, source: []const u8) io.Transfer {
-  file := #cast(*File, data)
-  status: fail.Status
-  count := write_count(&status, file, source)
-  if status.failed { return io.Transfer{ transferred: count, failure: stream_failure(&status, "write", file) } }
-  return io.Transfer{ transferred: count }
-}
-// An io.Failure borrows its text, so it names the file's own path, which
-// outlives the call, not the status's copy.
-fn stream_failure(status: *const fail.Status, operation: []const u8, file: *const File) io.Failure {
-  return io.Failure{ kind: status.failure.kind, native: status.failure.native, operation: operation, path: file.path }
+fn stream_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return write_count(status, #cast(*File, data), source)
 }
 pub fn reader(file: *File) io.Reader {
-  return io.Reader{ data: file, read: adapter_read }
+  return io.Reader{ data: file, read: stream_read }
 }
 pub fn writer(file: *File) io.Writer {
-  return io.Writer{ data: file, write: adapter_write }
+  return io.Writer{ data: file, write: stream_write }
 }
 
 // Moves the file position and returns it; origin: 0 start, 1 current,

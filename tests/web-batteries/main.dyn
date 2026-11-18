@@ -1,3 +1,4 @@
+use "std/fail"
 // std pieces that keep web apps short: json.object_of/array_of, html.print,
 // std/net/http/session, http.assets_of, process.environment_or and one-write
 // log lines.
@@ -61,5 +62,9 @@ fn main() {
   io.println("env {} {}", process.environment_or(arena, "WEB_BATTERIES_SET", "unset"), process.environment_or(arena, "WEB_BATTERIES_NONE", "fallback"))
   logger := log.logger(io.stdout(), log.Level.Info)
   fields: [2]log.Field = [log.Field{ name: "a", value: "1" }, log.Field{ name: "b", value: "two" }]
-  _ = log.write(&logger, log.Level.Info, "hello", fields[..])
+  status: fail.Status
+  log.write(&status, &logger, log.Level.Info, "hello", fields[..])
+  if status.failed {
+    #panic("log write")
+  }
 }

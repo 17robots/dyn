@@ -1,4 +1,5 @@
 use "std/parse" parse
+use "std/fail"
 use "std/io" io
 use "std/mem" memory
 use "std/net" network
@@ -1290,7 +1291,7 @@ pub fn receive(state: *Server) ReceiveResult {
       return failure
     }
     if state.used == #len(state.storage) { return receive_failure(state, ErrorKind.Capacity, 0) }
-    input := io.read(state.input, state.storage[state.used..])
+    input := io.read_transfer(state.input, state.storage[state.used..])
     if input.transferred > #len(state.storage) - state.used {
       return receive_failure(state, ErrorKind.Io, 0)
     }
@@ -1479,7 +1480,7 @@ fn decimal(destination: []u8, value: usize) []const u8 {
 }
 
 fn write_output(destination: io.Writer, data: []const u8) Result {
-  written := io.write_all(destination, data)
+  written := io.write_transfer(destination, data)
   if io.failed(written.failure) {
     return Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: written.failure.kind, native: written.failure.native } }
   }
@@ -1499,7 +1500,7 @@ fn response_failure(response: *Response, result: Result) Result {
 
 fn response_output(response: *Response, source: []const u8) Result {
   if response.failed { return response.first }
-  written := io.write_all(response.output, source)
+  written := io.write_transfer(response.output, source)
   if io.failed(written.failure) {
     response.first_stream = io.Transfer{ failure: io.Failure{ kind: written.failure.kind, native: written.failure.native } }
     return response_failure(response, Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: written.failure.kind, native: written.failure.native } })
@@ -1994,7 +1995,7 @@ fn body_invalid(body: *Body) Result {
 fn body_output(body: *Body, source: []const u8) io.Transfer {
   if body.failed { return body.first_stream }
   if body.discard { return io.Transfer{ transferred: #len(source), status: io.Status.Complete } }
-  result := io.write_all(body.output, source)
+  result := io.write_transfer(body.output, source)
   if io.failed(result.failure) {
     _ = body_failure(body, Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: result.failure.kind, native: result.failure.native } }, result)
   }
@@ -2036,7 +2037,7 @@ fn body_write(data: rawptr, source: []const u8) io.Transfer {
 
 // Borrows a stable Body slot: do not move or destroy it during the writer's lifetime.
 pub fn body_writer(body: *Body) io.Writer {
-  return io.Writer{ data: body, write: body_write }
+  return io.Writer{ data: body, write: body_write_stream }
 }
 
 pub fn body_finish(body: *Body) Result {
@@ -2100,7 +2101,7 @@ pub fn client_do(arena: *memory.Arena, input: io.Reader, output: io.Writer,
   validate_borrow(arena, body)
   mark := memory.arena_mark(arena)
   request_bytes := write_request(arena, method, target, host, body)
-  sent := io.write_all(output, request_bytes)
+  sent := io.write_transfer(output, request_bytes)
   memory.arena_rewind(arena, mark)
   if io.failed(sent.failure) {
     return ClientResponse{ detail: ErrorKind.Io, failure: io.Failure{ kind: sent.failure.kind, native: sent.failure.native } }
@@ -2181,7 +2182,7 @@ fn client_receive(arena: *memory.Arena, input: io.Reader, method: []const u8) Cl
       return ClientResponse{ offset: used, detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
     }
     scratch: [4096]u8
-    part := io.read(input, scratch[..])
+    part := io.read_transfer(input, scratch[..])
     if part.transferred > #len(scratch) {
       return ClientResponse{ detail: ErrorKind.Io, failure: io.Failure{ kind: io.Kind.System } }
     }
@@ -2241,4 +2242,8 @@ pub fn write_response(arena: *memory.Arena, code: u16, reason: []const u8, conte
   output := response_into(space, code, reason, content_type, body)
   memory.arena_rewind(arena, mark + #len(output))
   return output
+}
+
+fn body_write_stream(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, body_write(data, source), "write", "")
 }
