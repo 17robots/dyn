@@ -1,7 +1,5 @@
 use "std/mem"
 
-pub struct SearchResult { index: usize, found: bool }
-
 fn sift(values: []$T, root_value, length: usize) {
   root := root_value
   for root < length / 2 {
@@ -149,17 +147,17 @@ pub fn sort(values: []$T) {
   introsort(values, depth)
 }
 
-// Binary search in sorted values. A miss returns len(values), never an
-// insertion point, so index is always a valid slice boundary.
-pub fn search(values: []const $T, target: $T) SearchResult {
+// Binary search in sorted values: the index of target, or len(values) when it
+// is missing (never an insertion point), as bytes.find does.
+pub fn search(values: []const $T, target: $T) usize {
   low: usize = 0
   high := #len(values)
   for low < high {
     middle := low + (high - low) / 2
     if values[middle] < target { low = middle + 1 } else { high = middle }
   }
-  if low < #len(values) && values[low] == target { return SearchResult{ index: low, found: true } }
-  return SearchResult{ index: #len(values) }
+  if low < #len(values) && values[low] == target { return low }
+  return #len(values)
 }
 
 // Comparator versions. less(a, b) says a goes before b; it must be a strict

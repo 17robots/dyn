@@ -107,12 +107,16 @@ extern fn native_distance "dyn_b2_distance"(first: Body, second: Body, length: f
 extern fn native_joint_destroy "dyn_b2_joint_destroy"(joint: Joint) bool
 extern fn native_events "dyn_b2_events"(shape: Shape, enabled: bool) bool
 extern fn native_contact_count "dyn_b2_contact_count"(world: World, begin: bool) i32
-// found is false for an index past contact_count or an invalid world.
-pub struct Contact { first: Shape, second: Shape, found: bool }
-pub fn contact(world: World, begin: bool, index: usize) Contact {
+pub struct Contact { first: Shape, second: Shape }
+// Contact event index of this step. NotFound for an index past contact_count
+// or an invalid world.
+pub fn contact(status: *fail.Status, world: World, begin: bool, index: usize) Contact {
+  if status.failed { return Contact{} }
   result := Contact{}
-  result.found = index <= 2147483647 && native_contact(world, begin, #cast(i32, index), &result.first, &result.second)
-  if !result.found { return Contact{} }
+  if index > 2147483647 || !native_contact(world, begin, #cast(i32, index), &result.first, &result.second) {
+    fail.set(status, fail.make(fail.Kind.NotFound, "read contact", "", "no contact at that index"))
+    return Contact{}
+  }
   return result
 }
 pub struct Query { total: usize, written: usize }

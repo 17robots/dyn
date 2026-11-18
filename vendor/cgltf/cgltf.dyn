@@ -115,29 +115,36 @@ pub const Triangles: i32 = 5
 pub extern fn mesh_count "dyn_cgltf_meshes"(model: Model) usize
 pub extern fn material_count "dyn_cgltf_materials"(model: Model) usize
 pub extern fn primitive_count "dyn_cgltf_primitives"(model: Model, mesh: usize) usize
-// An optional index: found is false when the model has none there.
-pub struct Index { value: usize, found: bool }
-fn optional(value: i64) Index {
-  if value < 0 { return Index{} }
-  return Index{ value: #cast(usize, value), found: true }
+// An index the model may not have: NotFound when it has none there.
+fn optional(status: *fail.Status, value: i64, operation: []const u8) usize {
+  if status.failed { return 0 }
+  if value < 0 {
+    fail.set(status, fail.make(fail.Kind.NotFound, operation, "", "the model has none"))
+    return 0
+  }
+  return #cast(usize, value)
 }
-// The accessor of an attribute; set is usually 0.
-pub fn attribute(model: Model, mesh: usize, primitive: usize, kind: i32, set: i32) Index {
-  return optional(native_attribute(model, mesh, primitive, kind, set))
+// The accessor of an attribute; set is usually 0. NotFound when the primitive
+// has no such attribute.
+pub fn attribute(status: *fail.Status, model: Model, mesh: usize, primitive: usize, kind: i32, set: i32) usize {
+  return optional(status, native_attribute(model, mesh, primitive, kind, set), "read attribute")
 }
-pub fn indices(model: Model, mesh: usize, primitive: usize) Index {
-  return optional(native_indices(model, mesh, primitive))
+// The accessor of the primitive's indices. NotFound when it has none.
+pub fn indices(status: *fail.Status, model: Model, mesh: usize, primitive: usize) usize {
+  return optional(status, native_indices(model, mesh, primitive), "read indices")
 }
-pub fn material(model: Model, mesh: usize, primitive: usize) Index {
-  return optional(native_material(model, mesh, primitive))
+// The primitive's material. NotFound when it has none.
+pub fn material(status: *fail.Status, model: Model, mesh: usize, primitive: usize) usize {
+  return optional(status, native_material(model, mesh, primitive), "read material")
 }
 extern fn native_attribute "dyn_cgltf_attribute"(model: Model, mesh: usize, primitive: usize, kind: i32, set: i32) i64
 extern fn native_indices "dyn_cgltf_indices"(model: Model, mesh: usize, primitive: usize) i64
 extern fn native_material "dyn_cgltf_material"(model: Model, mesh: usize, primitive: usize) i64
 pub extern fn topology "dyn_cgltf_topology"(model: Model, mesh: usize, primitive: usize) i32
 pub extern fn element_count "dyn_cgltf_elements"(model: Model, accessor: usize) usize
-pub fn node_mesh(model: Model, node: usize) Index {
-  return optional(native_node_mesh(model, node))
+// The node's mesh. NotFound when it has none.
+pub fn node_mesh(status: *fail.Status, model: Model, node: usize) usize {
+  return optional(status, native_node_mesh(model, node), "read node mesh")
 }
 extern fn native_node_mesh "dyn_cgltf_node_mesh"(model: Model, node: usize) i64
 // An accessor or element out of range fails with InvalidInput.

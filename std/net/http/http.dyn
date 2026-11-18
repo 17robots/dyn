@@ -12,7 +12,7 @@ pub enum Framing { None, Length, Chunked, Close }
 // Parser offsets are byte positions in the supplied input; zero also denotes an
 // unavailable position for semantic URL/upgrade validation without a source cursor.
 pub struct HttpHead { framing: Framing, code: u16, header_length: usize, content_length: usize, keep_alive: bool, chunked: bool }
-pub struct HttpHeader { name: []const u8, value: []const u8, found: bool }
+struct HttpHeader { name: []const u8, value: []const u8, found: bool }
 pub struct Url { scheme: []const u8, host: []const u8, port: u16, target: []const u8, secure: bool }
 
 // A head as parsed, before anyone is told: failed with the offset where the

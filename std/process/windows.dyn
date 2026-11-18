@@ -298,11 +298,12 @@ fn milliseconds_native() u64 {
 fn sleep_native() {
   win_sleep(1)
 }
-fn environment_failed(status: *fail.Status, kind: fail.Kind, name: []const u8, message: []const u8) Variable {
+fn environment_failed(status: *fail.Status, kind: fail.Kind, name: []const u8, message: []const u8) []u8 {
   fail.set(status, fail.make(kind, "read environment", name, message))
-  return Variable{}
+  empty: []u8
+  return empty
 }
-fn environment_native(status: *fail.Status, name: []const u8, destination: []u8) Variable {
+fn environment_native(status: *fail.Status, name: []const u8, destination: []u8) []u8 {
   key: [32768]u16
   value: [32768]u16
   if encode_wide(key[..], name) == 0 { return environment_failed(status, fail.Kind.InvalidInput, name, "the name is too long") }
@@ -310,10 +311,10 @@ fn environment_native(status: *fail.Status, name: []const u8, destination: []u8)
   length := win_environment(&key[0], &value[0], 32768)
   if length == 0 {
     error := win_error()
-    if error == 203 { return Variable{ value: destination[..0] } }
+    if error == 203 { return environment_failed(status, fail.Kind.NotFound, name, "not set") }
     if error != 0 {
       fail.set(status, io.from_windows("read environment", name, 0 - #cast(isize, error)))
-      return Variable{}
+      return destination[..0]
     }
   }
   if length >= 32768 { return environment_failed(status, fail.Kind.Capacity, name, "the value is too long") }
@@ -327,7 +328,7 @@ fn environment_native(status: *fail.Status, name: []const u8, destination: []u8)
     used += width
     at += decoded.width
   }
-  return Variable{ value: destination[..used], found: true }
+  return destination[..used]
 }
 
 fn duplicate_native(status: *fail.Status, value: isize) isize {

@@ -43,23 +43,23 @@ fn perform(editor: *Editor, e: Edit) {
 }
 
 fn step_back(editor: *Editor) {
-  popped := stack.pop(&editor.undo)
-  if !popped.found {
+  if stack.count(&editor.undo) == 0 {
     io.println("nothing to undo")
     return
   }
-  apply(&editor.lines, inverse(popped.value))
-  stack.push(&editor.redo, popped.value)
+  popped := stack.pop(&editor.undo)
+  apply(&editor.lines, inverse(popped))
+  stack.push(&editor.redo, popped)
 }
 
 fn step_forward(editor: *Editor) {
-  popped := stack.pop(&editor.redo)
-  if !popped.found {
+  if stack.count(&editor.redo) == 0 {
     io.println("nothing to redo")
     return
   }
-  apply(&editor.lines, popped.value)
-  stack.push(&editor.undo, popped.value)
+  popped := stack.pop(&editor.redo)
+  apply(&editor.lines, popped)
+  stack.push(&editor.undo, popped)
 }
 
 // "insert 2 some text" as its parts.

@@ -23,11 +23,18 @@ fn compile_kind(arena:*memory.Arena,pattern:[]const u8) fail.Kind {
   _=regex.compile(arena,&status,pattern)
   return status.failure.kind
 }
+fn find(program:regex.Program,text:[]const u8) regex.Match {
+  status:fail.Status
+  result:=regex.find(&status,program,text)
+  require(!status.failed,"no match")
+  return result
+}
 fn check(pattern:[]const u8,text:[]const u8,expected:usize,matched:bool){
   arena := memory.arena_alloc(0)
   program:=compile(arena,pattern)
-  result:=regex.find(program,text)
-  require(result.value.found==matched && (!matched || result.value.end==expected),pattern)
+  status:fail.Status
+  result:=regex.find(&status,program,text)
+  require(!status.failed==matched && (!matched || result.end==expected),pattern)
 }
 fn main(){
   check("^a{1,}$","aaaaaaaaaaaaaaaa",16,true)
@@ -49,23 +56,23 @@ fn main(){
   program:=compile(arena,"(a)*")
   input:=memory.push_array(u8,arena,100000)
   for i in 0..#len(input){input[i]='a'}
-  result:=regex.find(program,input)
-  require(result.value.found && result.value.end==100000,"long repetition")
-  require(result.captures[0].found && result.captures[0].start==99999 && result.captures[0].end==100000,"last capture")
+  result:=find(program,input)
+  require(result.end==100000,"long repetition")
+  require(result.captures[0].start==99999 && result.captures[0].end==100000,"last capture")
   program=compile(arena,"(a*)a")
-  result=regex.find(program,"aaaa")
-  require(result.value.found && result.value.end==4 && result.captures[0].end==3,"greedy backtracking capture")
+  result=find(program,"aaaa")
+  require(result.end==4 && result.captures[0].end==3,"greedy backtracking capture")
   program=compile(arena,"(a)b|(a)c")
-  result=regex.find(program,"ac")
-  require(result.value.found && !result.captures[0].found && result.captures[1].found && result.captures[1].end==1,"failed branch capture rollback")
+  result=find(program,"ac")
+  require(result.end==2 && result.captures[0].end==0 && result.captures[1].end==1,"failed branch capture rollback")
   program=compile(arena,"(a){200}")
   long_input:[200]u8
   for i in 0..200 {long_input[i]='a'}
-  result=regex.find(program,long_input[..])
-  require(result.value.found && result.value.end==200 && result.captures[0].start==199,"arena workspace")
+  result=find(program,long_input[..])
+  require(result.end==200 && result.captures[0].start==199,"arena workspace")
   program=compile(arena,"(a)*")
-  result=regex.find(program,"aaa")
-  require(result.value.end==3 && result.captures[0].start==2,"reused workspace")
+  result=find(program,"aaa")
+  require(result.end==3 && result.captures[0].start==2,"reused workspace")
   io.println("regex passed")
 }
 '''

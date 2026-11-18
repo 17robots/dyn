@@ -63,9 +63,8 @@ fn milliseconds_native() u64 {
 fn sleep_native() {
   time.sleep(time.Millisecond)
 }
-fn environment_native(status: *fail.Status, name: []const u8, destination: []u8) Variable {
-  result := os.environment_get(status, name, destination)
-  return Variable{ value: result.value, found: result.found }
+fn environment_native(status: *fail.Status, name: []const u8, destination: []u8) []u8 {
+  return os.environment_get(status, name, destination)
 }
 
 fn duplicate_native(status: *fail.Status, value: isize) isize {

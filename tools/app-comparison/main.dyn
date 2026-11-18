@@ -128,7 +128,7 @@ fn search_walk(status: *fail.Status, directory: []const u8, result: *Search) {
   defer mem.arena_release(scratch)
   for {
     entry := fs.directory_next(status, &state)
-    if !entry.found { break }
+    if state.ended { break }
     // Linux directory entry types: DT_DIR=4, DT_REG=8
     // Symlinks are skipped.
     if entry.kind == 0 {

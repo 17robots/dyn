@@ -99,8 +99,8 @@ fn main() {
   if !regex.match(&status, compiled, data, subject, 0) {
     #panic("match")
   }
-  span := regex.capture(data, 1)
-  if !span.found || !bytes.equal(subject[span.start..span.end], "ada") {
+  span := regex.capture(&status, data, 1)
+  if !bytes.equal(subject[span.start..span.end], "ada") {
     #panic("capture")
   }
   if regex.match(&status, compiled, data, "123", 0) {
@@ -126,7 +126,12 @@ fn main() {
   if !rejected(unicode, unicode_data, bad_utf[..], 0) {
     #panic("invalid UTF accepted")
   }
-  if !regex.match(&status, unicode, unicode_data, "", 0) || regex.capture(unicode_data, 1).found {
+  if !regex.match(&status, unicode, unicode_data, "", 0) {
+    #panic("empty match")
+  }
+  unset: fail.Status
+  _ = regex.capture(&unset, unicode_data, 1)
+  if unset.failure.kind != fail.Kind.NotFound {
     #panic("unset capture")
   }
   io.println("PCRE2: captured ada; no-match and invalid pattern handled")
@@ -203,17 +208,17 @@ fn main() {
   loaded := fs.read_all(storage, &status, args[1], 8 * 1024 * 1024)
   reader := archive.open_memory_owned(&status, loaded)
   defer {
-    archive.destroy_owned(reader)
+    archive.destroy_owned(&reader)
   }
   buffer: [4096]u8
   for true {
-    header := archive.next(&status, reader)
-    if !header.found {
+    entry := archive.next(&status, &reader)
+    if reader.ended {
       break
     }
-    io.println("{}", archive.entry_name(&status, header.entry, 4096))
+    io.println("{}", archive.entry_name(&status, entry, 4096))
     for true {
-      count := archive.read(&status, reader, buffer[..])
+      count := archive.read(&status, &reader, buffer[..])
       if count == 0 {
         break
       }

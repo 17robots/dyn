@@ -63,6 +63,19 @@ Standard library:
   `Next.offset` becomes `state.start` (where the value began) or
   `state.offset` (archives). `array.pop` and `ring.pop` return the value,
   zero when empty. See the migration guide.
+- The remaining lookups return the value and record a miss on the status:
+  `regex.find(&status, program, text)` returns a `Match` (`NotFound` when
+  nothing matches; captures are `Span`s, `Span{}` for a group that took no
+  part) and `regex.next` sets `iterator.ended`; `sessions.cached` and
+  `sessions.remember` take the status; `http.byte_range(&status, request,
+  length)` records `NotFound` when there is no usable range and
+  `InvalidInput` when it starts past the end (416); `linux.environment_get`
+  returns the value. `sort.search` returns the index, `len(values)` on a
+  miss, as `bytes.find` does. `flags.Value` drops `found`: `occurrences > 0`
+  says the option was given. In vendor, `pcre2.capture`, `cgltf.attribute`,
+  `indices`, `material` and `node_mesh`, `box2d.contact` and the text
+  layout's `cluster_at` and `at_point` take the status, and
+  `archive.Reader` is a struct whose `ended` marks the last entry.
 - `fs.make_directory(&status, path)` takes no mode and makes the directory
   0o755. `fs.make_directory_mode(&status, path, mode)` takes the bits, such
   as 0o700 for a private directory.

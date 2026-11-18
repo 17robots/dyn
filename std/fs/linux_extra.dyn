@@ -257,23 +257,13 @@ pub fn write_atomic(status: *fail.Status, destination: []const u8, temporary: []
   atomic_abort(&transaction)
 }
 
-fn environment_get(status: *fail.Status, name: []const u8, destination: []u8) []u8 {
-  result := platform.environment_get(status, name, destination)
-  if status.failed { return destination[..0] }
-  if !result.found {
-    fail_kind(status, "read environment", name, fail.Kind.NotFound, "not set")
-    return destination[..0]
-  }
-  return result.value
-}
-
 fn app_directory_into(status: *fail.Status, kind: AppDirectory, destination: []u8) []u8 {
   if kind == AppDirectory.Home || kind == AppDirectory.Runtime {
     variable: []const u8 = "HOME"
     if kind == AppDirectory.Runtime {
       variable = "XDG_RUNTIME_DIR"
     }
-    value := environment_get(status, variable, destination)
+    value := platform.environment_get(status, variable, destination)
     if !status.failed && #len(value) == 0 {
       fail_kind(status, "read environment", variable, fail.Kind.NotFound, "empty")
     }
@@ -289,9 +279,9 @@ fn app_directory_into(status: *fail.Status, kind: AppDirectory, destination: []u
     suffix = "/.local/share"
   }
   configured_status: fail.Status
-  configured := environment_get(&configured_status, variable, destination)
+  configured := platform.environment_get(&configured_status, variable, destination)
   if !configured_status.failed && #len(configured) > 0 { return configured }
-  home := environment_get(status, "HOME", destination)
+  home := platform.environment_get(status, "HOME", destination)
   if status.failed { return destination[..0] }
   if #len(home) + #len(suffix) > #len(destination) {
     fail_kind(status, "read environment", "HOME", fail.Kind.Capacity, "path too long")

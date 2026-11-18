@@ -125,8 +125,8 @@ fn main() {
   sort.sort(big[..])
   small: [5]f32 = [3.0, 1.0, 2.0, 5.0, 4.0]
   sort.sort(small[..])
-  io.println_to(&printed, out, "{} {} {} {} {}", big[0], big[39], small[4], sort.search(big[..], 7).index,
-    sort.search(big[..], 7).found)
+  io.println_to(&printed, out, "{} {} {} {} {}", big[0], big[39], small[4], sort.search(big[..], 7),
+    sort.search(big[..], 7) < #len(big))
 }
 '''
 STD_EXPECTED = '0 7 0 0 5\n3 1 false 0\n3 4 10 4 200\n-20 19 5 27 true'

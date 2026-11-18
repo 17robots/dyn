@@ -25,8 +25,6 @@ pub struct Child { handle: isize, active: bool }
 // still running. A child killed by a signal has signal set and code 0.
 pub struct Exit { code: u32, signal: u32, finished: bool }
 pub struct Pipe { input: isize, output: isize }
-// What the platform reads: the value, and whether the variable is set.
-struct Variable { value: []u8, found: bool }
 struct Read { count: usize, ended: bool }
 pub struct Captured { output: []u8, errors: []u8, exit: Exit, timed_out: bool, limit_reached: bool }
 
@@ -120,32 +118,25 @@ pub fn close_pipe(handle: isize) {
 // The variable's value in arena, or fallback when it is unset or unreadable.
 pub fn environment_or(arena: *mem.Arena, name: []const u8, fallback: []const u8) []const u8 {
   status: fail.Status
-  found := find_environment(arena, &status, name)
-  if status.failed || !found.found { return fallback }
-  return found.value
+  value := environment(arena, &status, name)
+  if status.failed { return fallback }
+  return value
 }
 
 // The value of environment variable name, in arena; empty when it cannot be
 // read, and then the status says why: NotFound when it is unset. Read an
 // optional variable with a status of its own, or use environment_or.
 pub fn environment(arena: *mem.Arena, status: *fail.Status, name: []const u8) []u8 {
-  found := find_environment(arena, status, name)
-  if !status.failed && !found.found {
-    fail.set(status, fail.make(fail.Kind.NotFound, "read environment", name, "not set"))
-  }
-  return found.value
-}
-
-fn find_environment(arena: *mem.Arena, status: *fail.Status, name: []const u8) Variable {
-  if status.failed { return Variable{} }
+  empty: []u8
+  if status.failed { return empty }
   if #len(name) == 0 {
     invalid(status, "read environment", name, "empty variable name")
-    return Variable{}
+    return empty
   }
   for byte in name {
     if byte == 0 || byte == '=' {
       invalid(status, "read environment", name, "variable names cannot hold '=' or NUL")
-      return Variable{}
+      return empty
     }
   }
   room := mem.arena_room(arena)
@@ -157,15 +148,15 @@ fn find_environment(arena: *mem.Arena, status: *fail.Status, name: []const u8) V
     mark := mem.arena_mark(arena)
     // Too small a buffer is retried bigger, so it gets a status of its own.
     attempt: fail.Status
-    result := environment_native(&attempt, name, mem.push_bytes(arena, capacity))
+    value := environment_native(&attempt, name, mem.push_bytes(arena, capacity))
     if !attempt.failed {
-      mem.arena_rewind(arena, mark + #len(result.value))
-      return result
+      mem.arena_rewind(arena, mark + #len(value))
+      return value
     }
     mem.arena_rewind(arena, mark)
     if attempt.failure.kind != fail.Kind.Capacity {
       fail.set(status, attempt.failure)
-      return Variable{}
+      return empty
     }
     if capacity == room {
       #panic("arena exhausted: the output does not fit")

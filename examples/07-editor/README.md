@@ -27,8 +27,9 @@ Commands: `add TEXT`, `insert N TEXT`, `delete N`, `change N TEXT`, `undo`,
   needs to be reversed: a deletion keeps the text it removed. `inverse`
   turns an edit into the edit that undoes it, so undo and redo are each a
   pop, an apply and a push.
-- **Missing values.** `stack.pop` returns `Popped(T){ value, found }`; when
-  the stack is empty, `value` is T's zero value, safe to read.
+- **Missing values.** `stack.pop` returns a `T`; when the stack is empty it
+  is T's zero value, safe to read. Check `stack.count` first when the
+  difference matters, as `undo` does.
 - **Reverse loops.** `for i in #reverse(a..b)` walks a range backwards, to
   open a gap in the line array without overwriting anything.
 

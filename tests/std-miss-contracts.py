@@ -15,14 +15,14 @@ fn main() {
   values:[5]i32=[2,4,4,8,10]
   for input: isize in -2..14 {
     target:=#cast(i32,input)
-    result:=sort.search(values[..],target)
+    index:=sort.search(values[..],target)
     expected:usize=5
     for i in 0..5 { if values[i]==target && expected==5 { expected=i } }
-    if result.index!=expected || result.found!=(expected!=5) { #panic("search miss position") }
-    _=values[..result.index]
+    if index!=expected { #panic("search miss position") }
+    _=values[..index]
   }
   empty:[0]i32
-  if sort.search(empty[..],0).index!=0 || sort.search(empty[..],0).found { #panic("empty search") }
+  if sort.search(empty[..],0)!=0 { #panic("empty search") }
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   prefix:=mem.push(u8,arena)

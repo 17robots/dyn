@@ -208,18 +208,22 @@ fn sleep_native() {
   delay := Timespec{ nanoseconds: 1000000 }
   _ = native_sleep(&delay, nil)
 }
-fn environment_too_long(status: *fail.Status, name: []const u8) Variable {
+fn environment_too_long(status: *fail.Status, name: []const u8) []u8 {
   failure := fail.make(fail.Kind.Capacity, "read environment", name, "the value does not fit the storage")
   failure.native = -28
   fail.set(status, failure)
-  return Variable{}
+  empty: []u8
+  return empty
 }
-fn environment_native(status: *fail.Status, name: []const u8, destination: []u8) Variable {
+fn environment_native(status: *fail.Status, name: []const u8, destination: []u8) []u8 {
   buffer: [4096]u8
   key := c.string_into(status, buffer[..], name)
-  if status.failed { return Variable{} }
+  if status.failed { return destination[..0] }
   value := native_environment(key)
-  if value == nil { return Variable{ value: destination[..0] } }
+  if value == nil {
+    fail.set(status, fail.make(fail.Kind.NotFound, "read environment", name, "not set"))
+    return destination[..0]
+  }
   limited: fail.Status
   parsed := c.bytes_from_string(&limited, value, #len(destination)+1)
   if limited.failed || #len(parsed) > #len(destination) { return environment_too_long(status, name) }
@@ -228,7 +232,7 @@ fn environment_native(status: *fail.Status, name: []const u8, destination: []u8)
     destination[i] = parsed[i]
     i += 1
   }
-  return Variable{ value: destination[..i], found: true }
+  return destination[..i]
 }
 
 fn duplicate_native(status: *fail.Status, value: isize) isize {

@@ -350,16 +350,18 @@ fn main() {
   }
   cgltf.load_embedded(&status, mesh)
   cgltf.validate(&status, mesh)
-  position := cgltf.attribute(mesh, 0, 0, cgltf.Position, 0)
-  indices := cgltf.indices(mesh, 0, 0)
-  material := cgltf.material(mesh, 0, 0)
-  node_mesh := cgltf.node_mesh(mesh, 0)
-  if cgltf.mesh_count(mesh) != 1 || cgltf.primitive_count(mesh, 0) != 1 || cgltf.material_count(mesh) != 1 || !position.found || position.value != 0 || !indices.found || indices.value != 1 || !material.found || material.value != 0 || cgltf.topology(mesh, 0, 0) != cgltf.Triangles || !node_mesh.found || node_mesh.value != 0 || cgltf.element_count(mesh, 0) != 3 {
+  position := cgltf.attribute(&status, mesh, 0, 0, cgltf.Position, 0)
+  indices := cgltf.indices(&status, mesh, 0, 0)
+  material := cgltf.material(&status, mesh, 0, 0)
+  node_mesh := cgltf.node_mesh(&status, mesh, 0)
+  if cgltf.mesh_count(mesh) != 1 || cgltf.primitive_count(mesh, 0) != 1 || cgltf.material_count(mesh) != 1 || position != 0 || indices != 1 || material != 0 || cgltf.topology(mesh, 0, 0) != cgltf.Triangles || node_mesh != 0 || cgltf.element_count(mesh, 0) != 3 {
     #panic("mesh traversal")
   }
   past: fail.Status
   _ = cgltf.read_index(&past, mesh, 1, 3)
-  if cgltf.read_index(&status, mesh, 1, 2) != 2 || !past.failed || cgltf.attribute(mesh, 0, 0, cgltf.Normal, 0).found {
+  normal: fail.Status
+  _ = cgltf.attribute(&normal, mesh, 0, 0, cgltf.Normal, 0)
+  if cgltf.read_index(&status, mesh, 1, 2) != 2 || !past.failed || normal.failure.kind != fail.Kind.NotFound {
     #panic("mesh indices")
   }
   transform := cgltf.world_transform(&status, mesh, 0)
@@ -432,10 +434,7 @@ fn main() {
     physics.step(&status, world, 1.0 / 60.0, 4)
     count := physics.contact_count(&status, world, true)
     for event_index in 0..count {
-      event := physics.contact(world, true, event_index)
-      if !event.found {
-        #panic("contact event")
-      }
+      event := physics.contact(&status, world, true, event_index)
       if event.first == circle || event.second == circle {
         contacts = true
       }
@@ -450,7 +449,9 @@ fn main() {
   candidates := physics.query(&status, world, -2.0, -2.0, 5.0, 5.0, hits[..])
   inverted: fail.Status
   _ = physics.query(&inverted, world, 2.0, 2.0, -2.0, -2.0, hits[..])
-  if candidates.total < 3 || candidates.written != 1 || !inverted.failed || physics.contact(world, true, 999).found {
+  past: fail.Status
+  _ = physics.contact(&past, world, true, 999)
+  if candidates.total < 3 || candidates.written != 1 || !inverted.failed || past.failure.kind != fail.Kind.NotFound {
     #panic("physics query")
   }
   physics.joint_destroy(joint)

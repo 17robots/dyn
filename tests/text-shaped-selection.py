@@ -169,7 +169,8 @@ fn main() {
  check(!failed(parity_selection.failure) && #len(parity_selection.value)==2)
  check(parity_selection.value[0].x+parity_selection.value[0].width<parity_selection.value[1].x)
  check(parity_selection.value[0].start==10 && parity_selection.value[0].end==13 && parity_selection.value[1].start==13 && parity_selection.value[1].end==16)
- check(!layout.cluster_at(&parity.value,10).rtl && !layout.cluster_at(&parity.value,13).rtl)
+ clusters: fail.Status
+ check(!layout.cluster_at(&clusters,&parity.value,10).rtl && !layout.cluster_at(&clusters,&parity.value,13).rtl && !clusters.failed)
  mem.arena_reset(scratch)
  // Long lines must remain linear in glyph count, including selection queries.
  long_bytes:=mem.push_bytes(owner,20000)

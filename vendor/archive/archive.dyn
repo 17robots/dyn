@@ -1,16 +1,15 @@
 use "std/c"
 use "std/fail"
 #link("archive")
-pub type Reader = rawptr
+// An archive being read. next sets ended once no entry is left, or when it
+// fails.
+pub struct Reader { handle: rawptr, ended: bool }
 pub type Entry = rawptr
 pub const Ok: i32 = 0
 pub const End: i32 = 1
 pub const Warn: i32 = -20
-// An entry header, found false at the end of the archive.
-pub struct Header { entry: Entry, found: bool }
-
 // Records libarchive's failure: its message for reader, native keeps code.
-fn provider_failed(status: *fail.Status, reader: Reader, operation: []const u8, code: isize) {
+fn provider_failed(status: *fail.Status, reader: *const Reader, operation: []const u8, code: isize) {
   message := error_message(reader, 160)
   if #len(message) == 0 {
     message = "libarchive failed"
@@ -23,50 +22,61 @@ fn provider_failed(status: *fail.Status, reader: Reader, operation: []const u8, 
 // advances the reader. No filesystem extraction or path interpretation is done.
 // An unreadable archive fails with InvalidInput and libarchive's message.
 pub fn open_memory_owned(status: *fail.Status, source: []const u8) Reader {
-  if status.failed { return nil }
+  if status.failed { return Reader{ ended: true } }
   if #len(source) == 0 {
     fail.invalid(status, "open archive", "", "empty archive")
-    return nil
+    return Reader{ ended: true }
   }
-  reader := native_new()
-  if reader == nil {
+  reader := Reader{ handle: native_new() }
+  if reader.handle == nil {
     fail.set(status, fail.make(fail.Kind.Capacity, "open archive", "", "no memory for a reader"))
-    return nil
+    return Reader{ ended: true }
   }
-  code := native_filters(reader)
+  code := native_filters(reader.handle)
   if code >= Warn {
-    code = native_formats(reader)
+    code = native_formats(reader.handle)
   }
   if code >= Warn {
-    code = native_open(reader, #cast(rawptr, &source[0]), #len(source))
+    code = native_open(reader.handle, #cast(rawptr, &source[0]), #len(source))
   }
   if code != Ok {
-    provider_failed(status, reader, "open archive", code)
-    _ = native_free(reader)
-    return nil
+    provider_failed(status, &reader, "open archive", code)
+    _ = native_free(reader.handle)
+    return Reader{ ended: true }
   }
   return reader
 }
-pub fn destroy_owned(reader: Reader) {
-  if reader != nil {
-    _ = native_free(reader)
+pub fn destroy_owned(reader: *Reader) {
+  if reader.handle != nil {
+    _ = native_free(reader.handle)
   }
+  reader.* = Reader{ ended: true }
 }
-// Entry and its strings expire at next header/read mutation or reader destruction.
-pub fn next(status: *fail.Status, reader: Reader) Header {
-  if status.failed { return Header{} }
-  if reader == nil {
+// The next entry header, or nil with reader.ended set once none is left.
+// Entry and its strings expire at next header/read mutation or reader
+// destruction.
+pub fn next(status: *fail.Status, reader: *Reader) Entry {
+  if status.failed || reader.ended {
+    reader.ended = true
+    return nil
+  }
+  if reader.handle == nil {
+    reader.ended = true
     fail.invalid(status, "read archive", "", "no reader")
-    return Header{}
+    return nil
   }
   entry: Entry = nil
-  code := native_next(reader, &entry)
-  if code == End { return Header{} }
-  if code != Ok {
-    provider_failed(status, reader, "read archive", code)
-    return Header{}
+  code := native_next(reader.handle, &entry)
+  if code == End {
+    reader.ended = true
+    return nil
   }
-  return Header{ entry: entry, found: true }
+  if code != Ok {
+    reader.ended = true
+    provider_failed(status, reader, "read archive", code)
+    return nil
+  }
+  return entry
 }
 pub fn entry_name(status: *fail.Status, entry: Entry, maximum: usize) []const u8 {
   if status.failed { return "" }
@@ -81,31 +91,31 @@ pub fn entry_size(entry: Entry) i64 {
   return native_size(entry)
 }
 // Reads the current entry's data; zero at its end.
-pub fn read(status: *fail.Status, reader: Reader, destination: []u8) usize {
+pub fn read(status: *fail.Status, reader: *const Reader, destination: []u8) usize {
   if status.failed || #len(destination) == 0 { return 0 }
-  if reader == nil {
+  if reader.handle == nil {
     fail.invalid(status, "read archive", "", "no reader")
     return 0
   }
-  count := native_read(reader, #cast(rawptr, &destination[0]), #len(destination))
+  count := native_read(reader.handle, #cast(rawptr, &destination[0]), #len(destination))
   if count < 0 {
     provider_failed(status, reader, "read archive", count)
     return 0
   }
   return #cast(usize, count)
 }
-pub fn error_message(reader: Reader, maximum: usize) []const u8 {
-  if reader == nil { return "" }
+pub fn error_message(reader: *const Reader, maximum: usize) []const u8 {
+  if reader.handle == nil { return "" }
   reading: fail.Status
-  return c.bytes_from_string(&reading, native_error(reader), maximum)
+  return c.bytes_from_string(&reading, native_error(reader.handle), maximum)
 }
-extern fn native_new "archive_read_new"() Reader
-extern fn native_filters "archive_read_support_filter_all"(reader: Reader) i32
-extern fn native_formats "archive_read_support_format_all"(reader: Reader) i32
-extern fn native_open "archive_read_open_memory"(reader: Reader, source: rawptr, size: usize) i32
-extern fn native_free "archive_read_free"(reader: Reader) i32
-extern fn native_next "archive_read_next_header"(reader: Reader, entry: *Entry) i32
+extern fn native_new "archive_read_new"() rawptr
+extern fn native_filters "archive_read_support_filter_all"(reader: rawptr) i32
+extern fn native_formats "archive_read_support_format_all"(reader: rawptr) i32
+extern fn native_open "archive_read_open_memory"(reader: rawptr, source: rawptr, size: usize) i32
+extern fn native_free "archive_read_free"(reader: rawptr) i32
+extern fn native_next "archive_read_next_header"(reader: rawptr, entry: *Entry) i32
 extern fn native_name "archive_entry_pathname"(entry: Entry) c.string
 extern fn native_size "archive_entry_size"(entry: Entry) i64
-extern fn native_read "archive_read_data"(reader: Reader, destination: rawptr, capacity: usize) isize
-extern fn native_error "archive_error_string"(reader: Reader) c.string
+extern fn native_read "archive_read_data"(reader: rawptr, destination: rawptr, capacity: usize) isize
+extern fn native_error "archive_error_string"(reader: rawptr) c.string
