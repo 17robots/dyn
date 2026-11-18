@@ -37,7 +37,10 @@ pub struct New { token: []const u8, csrf: []const u8, cookie: http.Cookie }
 
 // The request's session token, or empty when it has none of the right form.
 pub fn token(request: *const http.Request) []const u8 {
-  value := http.cookie(request, CookieName).value
+  // No session cookie is the usual case for a new visitor.
+  optional: fail.Status
+  value := http.cookie(&optional, request, CookieName)
+  _ = optional
   if #len(value) != TokenLength { return "" }
   return value
 }

@@ -692,7 +692,7 @@ Layer: heap
 - `struct Next { value: Entry, found: bool }`: found is false at the end of the input.
 - `fn scanner(source: []const u8) Scanner`
 - `fn next(status: *fail.Status, state: *Scanner) Next`
-- `fn find(source: []const u8, section: []const u8, key: []const u8) []const u8`: The value of key in section, or empty when absent or the text is malformed.
+- `fn find(status: *fail.Status, source: []const u8, section: []const u8, key: []const u8) []const u8`: The value of key in section, borrowing source;
 - `fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) []Entry`: A materialized entry table.
 
 ## std/encoding/json
@@ -724,8 +724,8 @@ Layer: heap
 - `fn add(parent: *Value, child: *Value) bool`
 - `fn add_member(parent: *Value, key: []const u8, child: *Value) bool`
 - `fn object_get(object: *const Value, key: []const u8) *const Value`: The member named key, or &nil_value.
-- `fn get(T: type, object: *const Value, key: []const u8) T`: Reads member key of object as T: an integer type, f32, f64, bool, []const u8 (string text), or *const Value (the member itself).
-- `fn as(T: type, value: *const Value) T`: Reads value itself as T, by the same rules as get.
+- `fn get(T: type, status: *fail.Status, object: *const Value, key: []const u8) T`: Reads member key of object as T: an integer type, f32, f64, bool, []const u8 (string text), or *const Value (the member itself).
+- `fn as(T: type, status: *fail.Status, value: *const Value) T`: Reads value itself as T, by the same rules as get.
 - `fn array_length(array: *const Value) usize`
 - `fn array_get(array: *const Value, index: usize) *const Value`: Element number index, or &nil_value.
 - `fn is_missing(value: *const Value) bool`
@@ -1729,8 +1729,8 @@ Layer: std
 
 - `struct Ipv4 { a: u8, b: u8, c: u8, d: u8 }`
 - `struct Ipv6 { bytes: [16]u8 }`
-- `fn query_ipv4(arena: *mem.Arena, name: []const u8, identifier: u16) []u8`: An A query for name, in arena.
-- `fn query_ipv6(arena: *mem.Arena, name: []const u8, identifier: u16) []u8`: An AAAA query for name, in arena.
+- `fn query_ipv4(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16) []u8`: An A query for name, in arena.
+- `fn query_ipv6(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16) []u8`: An AAAA query for name, in arena, by the rules of query_ipv4.
 - `fn parse_ipv4(arena: *mem.Arena, status: *fail.Status, packet: []const u8, identifier: u16, name: []const u8) []Ipv4`: Complete arena-owned answers, invalidated by rewind/reset/release.
 - `fn parse_ipv6(arena: *mem.Arena, status: *fail.Status, packet: []const u8, identifier: u16, name: []const u8) []Ipv6`
 - `fn resolve_ipv4(arena: *mem.Arena, status: *fail.Status, name: []const u8, server: *const network.Ipv4Address, timeout_milliseconds: i32) []Ipv4`: The server transport address is IPv4;
@@ -1749,7 +1749,7 @@ Layer: std
 - `struct Url { scheme: []const u8, host: []const u8, port: u16, target: []const u8, secure: bool }`
 - `fn parse_response(status: *fail.Status, input: []const u8) HttpHead`: Parses a complete response or request head.
 - `fn parse_request(status: *fail.Status, input: []const u8) HttpHead`
-- `fn header(status: *fail.Status, input: []const u8, name: []const u8) HttpHeader`: The first header field called name, matched without case, in a complete head.
+- `fn header(status: *fail.Status, input: []const u8, name: []const u8) []const u8`: The value of the first header field called name, matched without case, in a complete head;
 - `struct ChunkReader { phase: ChunkPhase, size: usize, // Decoded bytes so far. total: usize, // A trailer field name being read: its length and whether it can still be // Content-Length or Transfer-Encoding, which trailers must not carry. name_length: usize, maybe_length: bool, maybe_encoding: bool, }`: Incremental chunked body decoding (RFC 9112 7.1) for bodies read in pieces, such as uploads larger than any buffer.
 - `struct ChunkStep { consumed: usize, data: []const u8, done: bool }`: consumed bytes of input were used;
 - `fn chunk_reader() ChunkReader`
@@ -1808,7 +1808,7 @@ Layer: std
 - `fn serve_routes(status: *fail.Status, router: *Routes($T), response: *Response, request: *const Request)`: Runs the matching route.
 - `fn bind_routes(router: *Routes($T)) Binding`: Binds a router for a server start, like bind.
 - `fn match_path(pattern: []const u8, path: []const u8, request: *Request) bool`: Matches path against pattern segment by segment, capturing :name segments into request.params.
-- `fn param(request: *const Request, name: []const u8) HttpHeader`: Path parameter captured by a Routes pattern, still percent-encoded.
+- `fn param(status: *fail.Status, request: *const Request, name: []const u8) []const u8`: Path parameter captured by a Routes pattern, still percent-encoded;
 - `fn server(input: io.Reader, output: io.Writer, storage: []u8) Server`
 - `enum FrameStatus { Incomplete, Ready, Invalid, Capacity }`
 - `struct FrameResult { status: FrameStatus, request: Request, consumed: usize, offset: usize, total: usize, expect_continue: bool, // frame_request_head: the declared Content-Length, or chunked. body_length: usize, chunked: bool, }`: On Incomplete with a complete head, total is the request's full length and expect_continue says the client waits for 100 Continue before ...
@@ -1821,20 +1821,19 @@ Layer: std
 - `const DateLength: usize = 29`
 - `fn format_date(destination: []u8, unix_seconds: i64) []u8`: IMF-fixdate (RFC 9110 5.6.7) for unix_seconds, such as "Sun, 06 Nov 1994 08:49:37 GMT", into the first DateLength bytes of destination.
 - `fn parse_date(status: *fail.Status, text: []const u8) i64`: Unix seconds from an IMF-fixdate, as in If-Modified-Since.
-- `fn request_header(request: *const Request, name: []const u8) HttpHeader`: First request header named name (ASCII case-insensitive).
-- `fn cookie(request: *const Request, name: []const u8) HttpHeader`: Value of cookie name from the request's Cookie headers (RFC 6265 5.4).
-- `fn cookie_in(header_value: []const u8, name: []const u8) HttpHeader`: The cookie named name in one Cookie header value, such as "a=1;
+- `fn request_header(status: *fail.Status, request: *const Request, name: []const u8) []const u8`: The value of the first request header named name (ASCII case-insensitive), borrowing request.raw;
+- `fn cookie(status: *fail.Status, request: *const Request, name: []const u8) []const u8`: Value of cookie name from the request's Cookie headers (RFC 6265 5.4).
+- `fn cookie_in(status: *fail.Status, header_value: []const u8, name: []const u8) []const u8`: The cookie named name in one Cookie header value, such as "a=1;
 - `enum SameSite { Default, Lax, Strict, None }`
 - `const CookieLength: usize = 1024`: A Set-Cookie value.
 - `struct Cookie { name: []const u8, value: []const u8, path: []const u8, domain: []const u8, max_age: i64, expires: i64, secure: bool, http_only: bool, same_site: SameSite, partitioned: bool, }`
 - `fn set_cookie(status: *fail.Status, destination: []u8, item: Cookie) []u8`: Writes the Set-Cookie header value for cookie into destination.
 - `fn sse_event(status: *fail.Status, destination: []u8, event: []const u8, id: []const u8, data: []const u8) []u8`: One Server-Sent Events message: optional event and id fields, a data line for each line of data (CR, LF or CRLF), then a blank line.
-- `struct FieldValue { value: []u8, found: bool }`
 - `fn form_decode(status: *fail.Status, destination: []u8, source: []const u8) []u8`: application/x-www-form-urlencoded value into destination: '+' becomes a space and %XX a byte.
-- `fn form_field(form: []const u8, name: []const u8) HttpHeader`: Raw, still-encoded value of the first field named name in an urlencoded form or query string.
+- `fn form_field(status: *fail.Status, form: []const u8, name: []const u8) []const u8`: Raw, still-encoded value of the first field named name in an urlencoded form or query string;
 - `fn query_has(request: *const Request, name: []const u8) bool`: Whether the query has a parameter called name, with or without a value ("?debug" and "?debug=1" both have debug).
-- `fn query_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) FieldValue`: Decoded query parameter name into destination.
-- `fn form_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) FieldValue`: Decoded urlencoded body field name into destination.
+- `fn query_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) []u8`: Decoded query parameter name into destination;
+- `fn form_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) []u8`: Decoded urlencoded body field name into destination, by the rules of query_value.
 - `fn body_buffer(response: *Response, capacity: usize) []u8`: Returns exclusive transport-owned body storage, or empty when unavailable.
 - `fn respond_buffered(status: *fail.Status, response: *Response, length: usize, options: ResponseOptions)`: Commit the initialized prefix of body_buffer without copying its body.
 - `fn respond(status: *fail.Status, response: *Response, body: []const u8, options: ResponseOptions)`: Writes the whole response: head and body.
@@ -2301,7 +2300,6 @@ Layer: std
 - `struct Child { handle: isize, active: bool }`: A running child process, in the arena spawn was given;
 - `struct Exit { code: u32, signal: u32, finished: bool }`: How a child ended.
 - `struct Pipe { input: isize, output: isize }`
-- `struct Variable { value: []u8, found: bool }`
 - `struct Captured { output: []u8, errors: []u8, exit: Exit, timed_out: bool, limit_reached: bool }`
 - `fn spawn(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, configuration: Options) *Child`: Starts path with arguments (argv[0] first).
 - `fn wait(status: *fail.Status, child: *Child, nonblocking: bool) Exit`: Waits for child to end;
@@ -2309,7 +2307,7 @@ Layer: std
 - `fn pipe(status: *fail.Status) Pipe`: A pipe: write to output, read from input.
 - `fn close_pipe(handle: isize)`
 - `fn environment_or(arena: *mem.Arena, name: []const u8, fallback: []const u8) []const u8`: The variable's value in arena, or fallback when it is unset or unreadable.
-- `fn environment(arena: *mem.Arena, status: *fail.Status, name: []const u8) Variable`: The value of environment variable name, in arena.
+- `fn environment(arena: *mem.Arena, status: *fail.Status, name: []const u8) []u8`: The value of environment variable name, in arena;
 - `struct CaptureOptions { timeout_milliseconds: i64, no_wait: bool, output_limit: usize, error_limit: usize }`: Zero limits are unlimited.
 - `fn capture(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, configuration: Options, policy: CaptureOptions) Captured`: Drains both streams fairly into growing arena slices, valid until caller rewind/reset/release.
 - `struct Program { arena: *mem.Arena, args: [][]const u8 }`: What process.start() returns: an arena that lives for the whole program and the arguments, argv[0] first, stored in it.

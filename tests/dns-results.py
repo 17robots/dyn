@@ -113,8 +113,9 @@ source += f'''fn aliases() {{
   overlapping: fail.Status
   result = dns.parse_ipv4(arena, &overlapping, data[..], 7, payload[..#len(text)])
   require(overlapping.failed && mem.arena_mark(arena) == mem.ArenaHeader)
-  query := dns.query_ipv4(arena, payload[..#len(text)], 7)
-  require(#len(query) == 0 && mem.arena_mark(arena) == mem.ArenaHeader)
+  inside: fail.Status
+  query := dns.query_ipv4(arena, &inside, payload[..#len(text)], 7)
+  require(#len(query) == 0 && inside.failure.kind == fail.Kind.InvalidInput && mem.arena_mark(arena) == mem.ArenaHeader)
   for i in 0..#len(text) {{ require(payload[i] == text[i]) }}
   server := net.ipv4(127,0,0,1,53)
   rejected4: fail.Status
@@ -132,13 +133,15 @@ source += f'''fn aliases() {{
   borrowed: fail.Status
   result = dns.parse_ipv4(arena, &borrowed, data[..], 7, payload[..#len(text)])
   require(!borrowed.failed && #len(result) == 2)
-  query4 := dns.query_ipv4(arena, "example.test", 7)
-  query6 := dns.query_ipv6(arena, "example.test", 7)
-  require(#len(query4) == 30 && #len(query6) == 30)
+  building: fail.Status
+  query4 := dns.query_ipv4(arena, &building, "example.test", 7)
+  query6 := dns.query_ipv6(arena, &building, "example.test", 7)
+  require(!building.failed && #len(query4) == 30 && #len(query6) == 30)
   require(query4[27] == 1 && query6[27] == 28)
   mark := mem.arena_mark(arena)
-  invalid := dns.query_ipv4(arena, "bad..name", 7)
-  require(#len(invalid) == 0 && mem.arena_mark(arena) == mark)
+  bad: fail.Status
+  invalid := dns.query_ipv4(arena, &bad, "bad..name", 7)
+  require(#len(invalid) == 0 && bad.failure.kind == fail.Kind.InvalidInput && mem.arena_mark(arena) == mark)
 }}
 fn main() {{
 '''

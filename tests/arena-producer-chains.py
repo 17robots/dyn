@@ -55,7 +55,7 @@ fn main() {
  check(bytes.equal(b32.decode(f.arena,&status,"NBSWY3DP"),"hello"))
  check(bytes.equal(hex.decode(f.arena,&status,"68656c6c6f"),"hello"))
  root:=json.parse(f.arena,&status,"{\"answer\":42,\"text\":\"hello\"}")
- check(!status.failed && json.get(i64,root,"answer")==42)
+ check(!status.failed && json.get(i64,&status,root,"answer")==42)
  chunked:=http.decode_chunked(f.arena,&status,"5\r\nhello\r\n0\r\n\r\n")
  check(!status.failed && bytes.equal(chunked.value,"hello"))
  packet:[46]u8=[18,52,129,128,0,1,0,1,0,0,0,0,7,101,120,97,109,112,108,101,4,116,101,115,116,0,0,1,0,1,192,12,0,1,0,1,0,0,0,1,0,4,1,2,3,4]

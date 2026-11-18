@@ -214,20 +214,21 @@ fn websocket_validate_upgrade_request(status: *fail.Status, request: []const u8)
     fail.invalid(status, "upgrade to WebSocket", "", "not a GET request")
     return request[..0]
   }
-  upgrade := http.header(status, request, "Upgrade")
-  connection_header := http.header(status, request, "Connection")
-  version := http.header(status, request, "Sec-WebSocket-Version")
-  key := http.header(status, request, "Sec-WebSocket-Key")
+  // A missing field is a bad handshake, reported as one failure below.
+  fields: fail.Status
+  upgrade := http.header(&fields, request, "Upgrade")
+  connection_header := http.header(&fields, request, "Connection")
+  version := http.header(&fields, request, "Sec-WebSocket-Version")
+  key := http.header(&fields, request, "Sec-WebSocket-Key")
   scratch: [18 + mem.ArenaBufferOverhead]u8
   scratch_arena := mem.arena_from_buffer(scratch[..])
   decoding: fail.Status
-  if !upgrade.found || !connection_header.found || !version.found || !key.found || !ws_equal_case(upgrade.value, "websocket") ||
-    !ws_equal_case(connection_header.value, "Upgrade") || !ws_equal(version.value, "13") ||
-    #len(base64.decode(scratch_arena, &decoding, key.value)) != 16 {
+  if fields.failed || !ws_equal_case(upgrade, "websocket") || !ws_equal_case(connection_header, "Upgrade") || !ws_equal(version, "13") ||
+    #len(base64.decode(scratch_arena, &decoding, key)) != 16 {
     fail.invalid(status, "upgrade to WebSocket", "", "missing or invalid upgrade fields")
     return request[..0]
   }
-  return key.value
+  return key
 }
 
 // Writes the server's complete 101 response. Empty means invalid key/capacity.
@@ -245,12 +246,13 @@ fn websocket_write_upgrade_response(destination: []u8, key: []const u8) []u8 {
 fn websocket_validate_upgrade_response(status: *fail.Status, response: []const u8, key: []const u8) bool {
   head := http.parse_response(status, response)
   if status.failed || head.code != 101 { return false }
-  upgrade := http.header(status, response, "Upgrade")
-  connection_header := http.header(status, response, "Connection")
-  accept_header := http.header(status, response, "Sec-WebSocket-Accept")
+  fields: fail.Status
+  upgrade := http.header(&fields, response, "Upgrade")
+  connection_header := http.header(&fields, response, "Connection")
+  accept_header := http.header(&fields, response, "Sec-WebSocket-Accept")
   expected: [28]u8
   expected_accept := websocket_accept(expected[..], key)
-  return upgrade.found && connection_header.found && accept_header.found && ws_equal_case(upgrade.value, "websocket") && ws_equal_case(connection_header.value, "Upgrade") && ws_equal(accept_header.value, expected_accept)
+  return !fields.failed && ws_equal_case(upgrade, "websocket") && ws_equal_case(connection_header, "Upgrade") && ws_equal(accept_header, expected_accept)
 }
 
 fn ws_put64(output: []u8, at: usize, value: usize) {

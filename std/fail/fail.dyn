@@ -18,7 +18,9 @@
 // The rules, for every std and vendor call:
 // 1. If it can fail, it takes the status, and returns zero or empty after a
 //    failure.
-// 2. If it can come up empty, the result has found; that is not a failure.
+// 2. A lookup always returns a usable value: zero or empty when it is not
+//    there, with NotFound on the status. Read an optional value with a status
+//    of its own. Iterators report the end of their input with found.
 // 3. Check status.failed before you use what you got: before printing
 //    results, or using a computed number as a size or index.
 // In a loop that keeps going after a failure, give each item its own status.

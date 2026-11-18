@@ -70,7 +70,12 @@ fn main() {
   _ = http.set_cookie(&insecure, storage[..], http.Cookie{ name: "x", value: "1", same_site: http.SameSite.None })
   io.println("{}", insecure.failure.kind)
   with_cookies := request("GET / HTTP/1.1\r\nHost: x\r\nCookie: a=1; theme=\"dark\"\r\nCookie: sid=s3\r\n\r\n")
-  io.println("{} {} {}", http.cookie(&with_cookies, "theme").value, http.cookie(&with_cookies, "sid").value, http.cookie(&with_cookies, "nope").found)
+  cookie_reads: fail.Status
+  theme := http.cookie(&cookie_reads, &with_cookies, "theme")
+  sid := http.cookie(&cookie_reads, &with_cookies, "sid")
+  absent: fail.Status
+  _ = http.cookie(&absent, &with_cookies, "nope")
+  io.println("{} {} {}", theme, sid, absent.failure.kind == fail.Kind.NotFound && !cookie_reads.failed)
   events: fail.Status
   event := http.sse_event(&events, storage[..], "update", "42", "one\r\ntwo\nthree")
   io.print("{}", event)

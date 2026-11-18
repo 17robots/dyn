@@ -21,14 +21,7 @@ fn report(name: []const u8, failure: fail.Failure) {
 fn port(arena: *mem.Arena, status: *fail.Status, file: []const u8) i64 {
   text := fs.read_all(arena, status, file, mem.MiB)
   root := json.parse(arena, status, text)
-  if status.failed { return 0 }
-  value := json.get(*const json.Value, root, "port")
-  number := json.get(f64, root, "port")
-  if !json.is_number(value) || number != #cast(f64, #cast(i64, number)) {
-    fail.invalid(status, "read", file, "\"port\" is not a whole number")
-    return 0
-  }
-  return #cast(i64, number)
+  return json.get(i64, status, root, "port")
 }
 
 fn main() i32 {

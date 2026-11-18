@@ -58,9 +58,9 @@ fn user_post(status: *fail.Status, response: *http.Response, request: *const htt
   storage: [128]u8
   page := html.writer(status, storage[..])
   html.markup(&page, html.trusted("user="))
-  html.text(&page, http.param(request, "id").value)
+  html.text(&page, http.param(status, request, "id"))
   html.markup(&page, html.trusted(" post="))
-  html.text(&page, http.param(request, "post").value)
+  html.text(&page, http.param(status, request, "post"))
   text(status, response, http.StatusOk, html.output(&page).bytes)
 }
 
@@ -132,19 +132,21 @@ fn handle(status: *fail.Status, response: *http.Response, request: *const http.R
     storage: [256]u8
     query: fail.Status
     q := http.query_value(&query, request, "q", storage[..])
-    if query.failed {
+    // No q is an empty search; bad percent-encoding is a bad request.
+    if query.failed && query.failure.kind != fail.Kind.NotFound {
       text(status, response, http.StatusBadRequest, "bad query\n")
       return
     }
     page_storage: [1024]u8
     page := fmt.buffer(status, page_storage[..])
     fmt.write(&page, "<p>")
-    html.write_escaped(&page, q.value)
+    html.write_escaped(&page, q)
     fmt.write(&page, "</p>")
-    tag := http.request_header(request, "x-tag")
-    trigger: []const u8 = q.value
-    if tag.found {
-      trigger = tag.value
+    tagged: fail.Status
+    tag := http.request_header(&tagged, request, "x-tag")
+    trigger: []const u8 = q
+    if !tagged.failed {
+      trigger = tag
     }
     headers: [1]http.Header = [http.Header{ name: "HX-Trigger", value: trigger }]
     // An invalid header is rejected before anything is written: answer 400.
@@ -161,7 +163,7 @@ fn handle(status: *fail.Status, response: *http.Response, request: *const http.R
     storage: [64]u8
     form: fail.Status
     name := http.form_value(&form, request, "name", storage[..])
-    if !name.found && !form.failed {
+    if form.failed && form.failure.kind == fail.Kind.NotFound {
       text(status, response, http.StatusBadRequest, "missing\n")
       return
     }
@@ -169,7 +171,7 @@ fn handle(status: *fail.Status, response: *http.Response, request: *const http.R
       text(status, response, http.StatusBadRequest, "bad form\n")
       return
     }
-    text(status, response, http.StatusOk, name.value)
+    text(status, response, http.StatusOk, name)
     return
   }
   if bytes.equal(request.path, "/fail") {

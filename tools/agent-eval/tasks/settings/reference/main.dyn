@@ -23,17 +23,13 @@ fn report(path: []const u8, failure: fail.Failure) {
 fn load(arena: *mem.Arena, status: *fail.Status, path: []const u8) Settings {
   text := fs.read_all(arena, status, path, mem.MiB)
   root := json.parse(arena, status, text)
-  if status.failed { return Settings{} }
-  name := json.get(*const json.Value, root, "name")
-  port := json.get(*const json.Value, root, "port")
-  number := json.get(f64, root, "port")
-  if !json.is_string(name) {
-    fail.invalid(status, "read", path, "\"name\" is not a string")
-  } else if !json.is_number(port) || number != #cast(f64, #cast(i64, number)) || number < 1 || number > 65535 {
+  name := json.get([]const u8, status, root, "name")
+  port := json.get(i64, status, root, "port")
+  if !status.failed && (port < 1 || port > 65535) {
     fail.invalid(status, "read", path, "\"port\" is not a whole number from 1 to 65535")
   }
   if status.failed { return Settings{} }
-  return Settings{ name: json.get([]const u8, root, "name"), port: #cast(i64, number) }
+  return Settings{ name: name, port: port }
 }
 
 fn main() i32 {

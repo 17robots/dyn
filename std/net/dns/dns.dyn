@@ -92,21 +92,28 @@ fn question_matches(packet: []const u8, name: []const u8) bool {
   return parsed.ok && expected.ok && same_name(storage[..parsed.length], canonical[..expected.length])
 }
 
-// An A query for name, in arena. Empty when name is not a valid DNS name.
-pub fn query_ipv4(arena: *mem.Arena, name: []const u8, identifier: u16) []u8 {
-  return query_arena(arena, name, identifier, 1)
+// An A query for name, in arena. A name that is not a valid DNS name, or that
+// lies in the arena's free space, fails with InvalidInput.
+pub fn query_ipv4(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16) []u8 {
+  return query_arena(arena, status, name, identifier, 1)
 }
-// An AAAA query for name, in arena. Empty when name is not a valid DNS name.
-pub fn query_ipv6(arena: *mem.Arena, name: []const u8, identifier: u16) []u8 {
-  return query_arena(arena, name, identifier, 28)
+// An AAAA query for name, in arena, by the rules of query_ipv4.
+pub fn query_ipv6(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16) []u8 {
+  return query_arena(arena, status, name, identifier, 28)
 }
-fn query_arena(arena: *mem.Arena, name: []const u8, identifier: u16, kind: u16) []u8 {
+fn query_arena(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16, kind: u16) []u8 {
+  empty: []u8
+  if status.failed { return empty }
   if conflicts(arena, name) {
-    empty: []u8
+    fail.invalid(status, "build DNS query", name, "the name lies in the arena's free space")
     return empty
   }
   storage: [272]u8
   encoded := query(storage[..], name, identifier, kind)
+  if #len(encoded) == 0 {
+    fail.invalid(status, "build DNS query", name, "not a valid DNS name")
+    return empty
+  }
   output := mem.push_bytes(arena, #len(encoded))
   _ = mem.copy(output, encoded)
   return output

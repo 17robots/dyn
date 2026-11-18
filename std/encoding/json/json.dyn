@@ -630,99 +630,106 @@ pub fn object_get(object: *const Value, key: []const u8) *const Value {
 }
 
 // Reads member key of object as T: an integer type, f32, f64, bool,
-// []const u8 (string text), or *const Value (the member itself). A missing
-// member or a member of another kind gives zero, "" or &nil_value. Another T
-// panics.
-pub fn get(T: type, object: *const Value, key: []const u8) T {
-  result: T
-  read_into(object_get(object, key), &result)
-  return result
+// []const u8 (string text), or *const Value (the member itself). The result is
+// always usable: zero, "" or &nil_value when the member cannot be read, and
+// then the status says why. A missing or null member is NotFound; a member of
+// another kind, or a number that does not fit T or is not whole for an integer
+// T, is InvalidInput. The message names key: "\"port\" is missing". Read an
+// optional member with a status of its own. Another T panics.
+pub fn get(T: type, status: *fail.Status, object: *const Value, key: []const u8) T {
+  return read(T, status, object_get(object, key), key)
 }
 
 // Reads value itself as T, by the same rules as get.
-pub fn as(T: type, value: *const Value) T {
+pub fn as(T: type, status: *fail.Status, value: *const Value) T {
+  return read(T, status, value, "")
+}
+
+fn read(T: type, status: *fail.Status, value: *const Value, key: []const u8) T {
   result: T
-  read_into(value, &result)
+  if status.failed {
+    // A *const Value is then &nil_value, so lookups can chain on it.
+    _ = read_into(&nil_value, &result)
+    return result
+  }
+  if value == nil || value.kind == KindMissing || value.kind == KindNull {
+    _ = read_into(&nil_value, &result)
+    read_failed(status, fail.Kind.NotFound, key, "is missing")
+    return result
+  }
+  problem := read_into(value, &result)
+  if #len(problem) != 0 {
+    empty: T
+    _ = read_into(&nil_value, &empty)
+    read_failed(status, fail.Kind.InvalidInput, key, problem)
+    return empty
+  }
   return result
 }
 
-fn read_into(value: *const Value, target: any) {
+// Records kind with key in the message, leaving the path for the caller's
+// file: read JSON member: "port" is missing.
+fn read_failed(status: *fail.Status, kind: fail.Kind, key: []const u8, problem: []const u8) {
+  message: [160]u8
+  used: usize = 0
+  if #len(key) != 0 {
+    used = put_text(message[..], used, "\"")
+    used = put_text(message[..], used, key)
+    used = put_text(message[..], used, "\" ")
+  }
+  used = put_text(message[..], used, problem)
+  fail.set(status, fail.make(kind, "read JSON member", "", message[..used]))
+}
+
+// Copies text into storage at used, as much as fits; the new used.
+fn put_text(storage: []u8, used: usize, text: []const u8) usize {
+  at := used
+  for byte in text {
+    if at == #len(storage) { return at }
+    storage[at] = byte
+    at += 1
+  }
+  return at
+}
+
+// Stores value into target; the problem when it is not that kind, else "".
+fn read_into(value: *const Value, target: any) []const u8 {
   case target {
     *[]const u8 p => {
-      if value.kind == KindString {
-        p.* = value.text
-      }
+      if value.kind != KindString { return "is not a string" }
+      p.* = value.text
     }
     *bool p => {
-      p.* = value.kind == KindBool && value.boolean
+      if value.kind != KindBool { return "is not true or false" }
+      p.* = value.boolean
     }
     **const Value p => {
       p.* = value
     }
-    *f64 p => {
-      if value.kind == KindNumber {
-        p.* = strings.parse(f64, value.text)
-      }
-    }
-    *f32 p => {
-      if value.kind == KindNumber {
-        p.* = strings.parse(f32, value.text)
-      }
-    }
-    *i64 p => {
-      if value.kind == KindNumber {
-        p.* = strings.parse(i64, value.text)
-      }
-    }
-    *i32 p => {
-      if value.kind == KindNumber {
-        p.* = strings.parse(i32, value.text)
-      }
-    }
-    *i16 p => {
-      if value.kind == KindNumber {
-        p.* = strings.parse(i16, value.text)
-      }
-    }
-    *i8 p => {
-      if value.kind == KindNumber {
-        p.* = strings.parse(i8, value.text)
-      }
-    }
-    *isize p => {
-      if value.kind == KindNumber {
-        p.* = strings.parse(isize, value.text)
-      }
-    }
-    *u64 p => {
-      if value.kind == KindNumber {
-        p.* = strings.parse(u64, value.text)
-      }
-    }
-    *u32 p => {
-      if value.kind == KindNumber {
-        p.* = strings.parse(u32, value.text)
-      }
-    }
-    *u16 p => {
-      if value.kind == KindNumber {
-        p.* = strings.parse(u16, value.text)
-      }
-    }
-    *u8 p => {
-      if value.kind == KindNumber {
-        p.* = strings.parse(u8, value.text)
-      }
-    }
-    *usize p => {
-      if value.kind == KindNumber {
-        p.* = strings.parse(usize, value.text)
-      }
-    }
+    *f64 p => { return read_number(value, p) }
+    *f32 p => { return read_number(value, p) }
+    *i64 p => { return read_number(value, p) }
+    *i32 p => { return read_number(value, p) }
+    *i16 p => { return read_number(value, p) }
+    *i8 p => { return read_number(value, p) }
+    *isize p => { return read_number(value, p) }
+    *u64 p => { return read_number(value, p) }
+    *u32 p => { return read_number(value, p) }
+    *u16 p => { return read_number(value, p) }
+    *u8 p => { return read_number(value, p) }
+    *usize p => { return read_number(value, p) }
     _ => {
-      #panic("json.get: unsupported type")
+      #panic("json.get: T must be an integer, f32, f64, bool, []const u8 or *const Value")
     }
   }
+  return ""
+}
+
+fn read_number(value: *const Value, target: *$T) []const u8 {
+  if value.kind != KindNumber { return "is not a number" }
+  if !strings.valid(T, value.text) { return "does not fit the type, or is not a whole number" }
+  target.* = strings.parse(T, value.text)
+  return ""
 }
 
 pub fn array_length(array: *const Value) usize {

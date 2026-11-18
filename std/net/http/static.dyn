@@ -235,7 +235,7 @@ fn load_tree(arena: *memory.Arena, status: *fail.Status, root: []const u8, relat
 // Whether the request's Accept-Encoding allows coding (RFC 9110 12.5.3): it
 // is listed, or "*" is, with a q-value above zero.
 pub fn accepts_encoding(request: *const Request, coding: []const u8) bool {
-  header := request_header(request, "Accept-Encoding")
+  header := find_header(request, "Accept-Encoding")
   if !header.found { return false }
   rest := header.value
   wildcard := false
@@ -270,7 +270,7 @@ pub fn accepts_encoding(request: *const Request, coding: []const u8) bool {
 // If-None-Match against etag: "*" or a listed tag, comparing weakly (W/
 // prefixes ignored), as RFC 9110 13.1.2 requires for GET and HEAD.
 pub fn etag_matches(request: *const Request, etag: []const u8) bool {
-  header := request_header(request, "If-None-Match")
+  header := find_header(request, "If-None-Match")
   if !header.found { return false }
   if bytes.equal(trim_ows(header.value), "*") { return true }
   wanted := etag
@@ -310,7 +310,7 @@ fn decimal_value(text: []const u8) Decimal {
 }
 
 pub fn byte_range(request: *const Request, length: usize) ByteRange {
-  header := request_header(request, "Range")
+  header := find_header(request, "Range")
   if !header.found { return ByteRange{} }
   value := trim_ows(header.value)
   if #len(value) < 7 || !ascii_equal(value[..6], "bytes=") || bytes.find_byte(value, ',') != #len(value) {
@@ -348,7 +348,7 @@ pub fn byte_range(request: *const Request, length: usize) ByteRange {
 // If-Range (RFC 9110 13.1.5): the range applies only while the validator
 // still matches: a strong ETag, or a date equal to modified.
 fn range_current(request: *const Request, asset: *const Asset) bool {
-  header := request_header(request, "If-Range")
+  header := find_header(request, "If-Range")
   if !header.found { return true }
   value := trim_ows(header.value)
   if #len(value) > 0 && value[0] == '"' { return bytes.equal(value, asset.etag) }
@@ -387,10 +387,10 @@ pub fn serve_asset(status: *fail.Status, response: *Response, request: *const Re
     count += 1
   }
   not_modified := false
-  if request_header(request, "If-None-Match").found {
+  if find_header(request, "If-None-Match").found {
     not_modified = etag_matches(request, asset.etag)
   } else if asset.modified != 0 {
-    since := request_header(request, "If-Modified-Since")
+    since := find_header(request, "If-Modified-Since")
     if since.found {
       date: fail.Status
       parsed := parse_date(&date, since.value)

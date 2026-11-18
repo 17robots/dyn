@@ -5,9 +5,11 @@ use "std/mem" mem
 fn main() {
   arena := mem.arena_alloc(0)
   status := fail.Status{ on_failure: fail.panic_on_failure }
-  child_mode := process.environment(arena, &status, "DYN_PROCESS_CHILD")
-  if child_mode.found {
-    if #len(child_mode.value) != 3 || child_mode.value[0] != 'y' { #panic("child environment") }
+  // Unset in the parent: an optional variable gets its own status.
+  child: fail.Status
+  child_mode := process.environment(arena, &child, "DYN_PROCESS_CHILD")
+  if !child.failed {
+    if #len(child_mode) != 3 || child_mode[0] != 'y' { #panic("child environment") }
     return
   }
   allocation := mem.arena_alloc(1024*1024)
