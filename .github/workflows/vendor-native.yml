@@ -2,7 +2,7 @@ name: Native vendor qualification
 on:
   pull_request:
   push:
-    branches: ['**']
+    branches: [main]
   workflow_dispatch:
   workflow_call:
 permissions:
@@ -22,6 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-compiler
+        timeout-minutes: 15
       - name: Install native provider development packages
         run: |
           sudo apt-get install -y cmake ninja-build pkg-config libssl-dev libsqlite3-dev libzstd-dev libpcre2-dev liblua5.4-dev libarchive-dev libcurl4-openssl-dev liblz4-dev libavcodec-dev libavfilter-dev libavdevice-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libfreetype-dev libharfbuzz-dev libpng-dev libjpeg-dev fonts-dejavu-core mesa-vulkan-drivers

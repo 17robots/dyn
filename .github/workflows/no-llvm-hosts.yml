@@ -1,7 +1,7 @@
 name: LLVM-free native hosts
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -11,6 +11,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   macos:
+    # macOS runners are scarce; pull requests rely on "Compiler on macOS ARM64".
+    if: github.event_name != 'pull_request'
     runs-on: macos-15
     timeout-minutes: 15
     steps:
