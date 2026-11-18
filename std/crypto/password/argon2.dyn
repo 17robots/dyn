@@ -455,11 +455,17 @@ fn permute_column(r: []u64, base: usize) {
 fn fill_block(previous: []const u64, reference: []const u64, next: []u64, accumulate: bool, scratch: []u64) {
   r := scratch[..BlockWords]
   saved := scratch[BlockWords..2 * BlockWords]
+  // One plain operation per loop, so each becomes vector code or a copy.
   for i in 0..BlockWords {
     r[i] = previous[i] ^ reference[i]
-    saved[i] = r[i]
-    if accumulate {
-      saved[i] ^= next[i]
+  }
+  if accumulate {
+    for i in 0..BlockWords {
+      saved[i] = r[i] ^ next[i]
+    }
+  } else {
+    for i in 0..BlockWords {
+      saved[i] = r[i]
     }
   }
   for row in 0..8 {

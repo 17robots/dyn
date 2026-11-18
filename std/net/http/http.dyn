@@ -4,6 +4,7 @@ use "std/io" io
 use "std/mem" memory
 use "std/net" network
 use "std/bytes" bytes
+use "std/encoding/binary"
 use "std/fmt" format
 use "std/net/url" urls
 use "std/time" clock
@@ -146,6 +147,27 @@ fn crlf_at(input: []const u8, from: usize) usize {
   return at
 }
 
+// Where value first holds a byte a field value may not (a control byte other
+// than tab, or DEL), or #len(value): eight bytes at a time while none of
+// them is below 0x20 or DEL.
+fn value_invalid_at(value: []const u8) usize {
+  at: usize = 0
+  for #len(value) - at >= 8 {
+    word := binary.load_u64_le(value[at..at + 8])
+    below := #wrapping(word - 0x2020202020202020) & ~word & 0x8080808080808080
+    other := word ^ 0x7f7f7f7f7f7f7f7f
+    delete := #wrapping(other - 0x0101010101010101) & ~other & 0x8080808080808080
+    if (below | delete) != 0 { break }
+    at += 8
+  }
+  for at < #len(value) {
+    byte := value[at]
+    if (byte < 32 && byte != '\t') || byte == 127 { return at }
+    at += 1
+  }
+  return at
+}
+
 fn http_parse_head(input: []const u8, response: bool) Parsed {
   line_end := crlf_at(input, 0)
   if line_end + 1 >= #len(input) { return parsed_failure(#len(input)) }
@@ -220,10 +242,8 @@ fn http_parse_head(input: []const u8, response: bool) Parsed {
       value_at += 1
     }
     value := trim_ows(input[value_at..end])
-    for value_i in 0..#len(value) {
-      byte := value[value_i]
-      if (byte < 32 && byte != '\t') || byte == 127 { return parsed_failure(value_at + value_i) }
-    }
+    invalid := value_invalid_at(value)
+    if invalid < #len(value) { return parsed_failure(value_at + invalid) }
     name := input[cursor..colon]
     if ascii_equal(name, "Content-Length") {
       parsed_length := parse_decimal(value, 0, #len(value))
@@ -325,28 +345,27 @@ fn missing(status: *fail.Status, operation: []const u8, name: []const u8) {
   fail.set(status, fail.make(fail.Kind.NotFound, operation, "", message[..used]))
 }
 
-// Finds name in the fields of a head already parsed.
+// Finds name in the fields of a head already parsed: each line's end with
+// find_byte, its colon likewise.
 fn field(input: []const u8, head: HttpHead, name: []const u8) HttpHeader {
-  cursor: usize = 0
-  for cursor + 1 < head.header_length && !(input[cursor] == '\r' && input[cursor + 1] == '\n') {
-    cursor += 1
-  }
-  cursor += 2
-  for cursor + 1 < head.header_length {
-    end := cursor
-    for end + 1 < head.header_length && !(input[end] == '\r' && input[end + 1] == '\n') {
-      end += 1
-    }
-    colon := cursor
-    for colon < end && input[colon] != ':' {
-      colon += 1
-    }
-    if colon - cursor == #len(name) && starts_ascii_case(input, cursor, name) {
+  return field_in(input[..head.header_length], name)
+}
+
+// Finds name in the field lines of head, a complete head (request or status
+// line first), without validating it again.
+fn field_in(head: []const u8, name: []const u8) HttpHeader {
+  cursor := crlf_at(head, 0) + 2
+  for cursor + 1 < #len(head) {
+    end := crlf_at(head, cursor)
+    if end + 1 >= #len(head) { break }
+    line := head[cursor..end]
+    colon := bytes.find_byte(line, ':')
+    if colon == #len(name) && starts_ascii_case(line, 0, name) {
       value := colon + 1
-      for value < end && (input[value] == ' ' || input[value] == '\t') {
+      for value < #len(line) && (line[value] == ' ' || line[value] == '\t') {
         value += 1
       }
-      return HttpHeader{ name: input[cursor..colon], value: input[value..end], found: true }
+      return HttpHeader{ name: line[..colon], value: line[value..], found: true }
     }
     cursor = end + 2
   }
@@ -1133,17 +1152,11 @@ fn shift_consumed(state: *Server) {
 }
 
 fn request_parts(input: []const u8, head: HttpHead) Request {
-  line_end: usize = 0
-  for line_end + 1 < head.header_length && !(input[line_end] == '\r' && input[line_end + 1] == '\n') {
-    line_end += 1
-  }
-  first_space: usize = 0
-  for first_space < line_end && input[first_space] != ' ' {
-    first_space += 1
-  }
-  second_space := first_space + 1
-  for second_space < line_end && input[second_space] != ' ' {
-    second_space += 1
+  line_end := crlf_at(input[..head.header_length], 0)
+  first_space := bytes.find_byte(input[..line_end], ' ')
+  second_space := line_end
+  if first_space < line_end {
+    second_space = first_space + 1 + bytes.find_byte(input[first_space + 1..line_end], ' ')
   }
   if first_space == 0 || second_space <= first_space + 1 || second_space >= line_end {
     return Request{}
@@ -1740,11 +1753,10 @@ pub fn request_header(status: *fail.Status, request: *const Request, name: []con
   return present(status, find_header(request, name), "read header", name)
 }
 
+// The head was validated when the request was framed: no second parse.
 fn find_header(request: *const Request, name: []const u8) HttpHeader {
-  raw := request.raw[..request.header_length]
-  parsed := http_parse_head(raw, false)
-  if parsed.failed { return HttpHeader{} }
-  return field(raw, parsed.head, name)
+  if request.header_length > #len(request.raw) { return HttpHeader{} }
+  return field_in(request.raw[..request.header_length], name)
 }
 
 // Value of cookie name from the request's Cookie headers (RFC 6265 5.4).
