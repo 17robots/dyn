@@ -29,22 +29,23 @@
 // The portable reason. Kind.Ok is the zero value.
 pub enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }
 
-// What went wrong, where, and doing what. Text fields borrow the caller's or
-// static text.
+// What went wrong, where, and doing what. A Failure owns its text: failure
+// copies the operation, path and message in, so a failure stays readable
+// after the text it came from is gone, and copying it copies the text. Read
+// the parts with operation_text, path_text and message_text. Text longer than the storage
+// is cut short: a long path keeps its end, after "...".
 pub struct Failure {
   kind: Kind,
   // The system's own code, when the system gave one.
   native: isize,
-  // What was being done: "open", "read", "parse", "connect".
-  operation: []const u8,
-  // The file, directory, address or document involved.
-  path: []const u8,
-  // The specific reason, such as "is a directory" or "expected a digit";
-  // empty means the kind says it.
-  message: []const u8,
   // For text input: where it went wrong, in bytes from the start.
   offset: usize,
   has_offset: bool,
+  operation_length: u8,
+  path_length: u8,
+  message_length: u8,
+  // operation, then message, then path.
+  text: [228]u8,
 }
 
 pub struct Status {
@@ -52,8 +53,60 @@ pub struct Status {
   failure: Failure,
   // Optional. Called once, inside the call that failed, when the first
   // failure is recorded, with context. It cannot undo the failure.
-  on_failure: fn(rawptr, Failure),
+  on_failure: fn(rawptr, *const Failure),
   context: rawptr,
+}
+
+// A failure of kind with its text copied in. operation is what was being
+// done ("open", "parse"), path the file, address or document involved, and
+// message the specific reason; empty parts are left out of describe. Set
+// native or offset on the result when there is one.
+pub fn make(kind: Kind, operation: []const u8, path: []const u8, message: []const u8) Failure {
+  result := Failure{ kind: kind }
+  used: usize = 0
+  // Operation and message are short and say the most; the path gets the rest.
+  operation_kept := keep(result.text[used..], operation)
+  result.operation_length = #cast(u8, operation_kept)
+  used += operation_kept
+  message_kept := keep(result.text[used..], message)
+  result.message_length = #cast(u8, message_kept)
+  used += message_kept
+  room := #len(result.text) - used
+  if #len(path) <= room {
+    result.path_length = #cast(u8, keep(result.text[used..], path))
+    return result
+  }
+  if room < 4 { return result }
+  _ = keep(result.text[used..], "...")
+  tail := path[#len(path) - (room - 3)..]
+  _ = keep(result.text[used + 3..], tail)
+  result.path_length = #cast(u8, room)
+  return result
+}
+
+// Copies as much of text as fits into storage; the count copied.
+fn keep(storage: []u8, text: []const u8) usize {
+  count := #len(text)
+  if count > #len(storage) {
+    count = #len(storage)
+  }
+  for i in 0..count {
+    storage[i] = text[i]
+  }
+  return count
+}
+
+// The parts of a failure's text. Each borrows the failure.
+pub fn operation_text(failure: *const Failure) []const u8 {
+  return failure.text[..failure.operation_length]
+}
+pub fn message_text(failure: *const Failure) []const u8 {
+  start: usize = failure.operation_length
+  return failure.text[start..start + failure.message_length]
+}
+pub fn path_text(failure: *const Failure) []const u8 {
+  start: usize = failure.operation_length + failure.message_length
+  return failure.text[start..start + failure.path_length]
 }
 
 // Records failure unless status already holds one; later failures are
@@ -63,22 +116,22 @@ pub fn set(status: *Status, failure: Failure) {
   status.failed = true
   status.failure = failure
   if status.on_failure != nil {
-    status.on_failure(status.context, failure)
+    status.on_failure(status.context, &status.failure)
   }
 }
 
 // Records a problem your own code found in its input, such as
 // invalid(&status, "config", path, "port out of range").
 pub fn invalid(status: *Status, operation: []const u8, path: []const u8, message: []const u8) {
-  set(status, Failure{ kind: Kind.InvalidInput, operation: operation, path: path, message: message })
+  if status.failed { return }
+  set(status, make(Kind.InvalidInput, operation, path, message))
 }
 
 // For on_failure: ends the program at the first failure, with its description.
-pub fn panic_on_failure(context: rawptr, failure: Failure) {
+pub fn panic_on_failure(context: rawptr, failure: *const Failure) {
   storage: [512]u8
-  #panic(describe(storage[..], failure))
+  #panic(describe(storage[..], failure.*))
 }
-
 // A short description of kind: "not found", "permission denied".
 pub fn kind_text(kind: Kind) []const u8 {
   case kind {
@@ -103,12 +156,12 @@ pub fn kind_text(kind: Kind) []const u8 {
 // is the message, else the kind. Truncated to storage.
 pub fn describe(storage: []u8, failure: Failure) []u8 {
   used: usize = 0
-  used = put(storage, used, failure.operation)
-  if #len(failure.path) != 0 {
+  used = put(storage, used, operation_text(&failure))
+  if failure.path_length != 0 {
     if used != 0 {
       used = put(storage, used, " ")
     }
-    used = put(storage, used, failure.path)
+    used = put(storage, used, path_text(&failure))
   }
   if failure.has_offset {
     used = put(storage, used, " at ")
@@ -117,8 +170,8 @@ pub fn describe(storage: []u8, failure: Failure) []u8 {
   if used != 0 {
     used = put(storage, used, ": ")
   }
-  if #len(failure.message) != 0 {
-    used = put(storage, used, failure.message)
+  if failure.message_length != 0 {
+    used = put(storage, used, message_text(&failure))
   } else {
     used = put(storage, used, kind_text(failure.kind))
   }

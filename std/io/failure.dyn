@@ -110,10 +110,6 @@ pub fn darwin(code: isize) Kind {
   return linux(code)
 }
 
-// A fail.Failure as an io.Failure, for streams.
-pub fn from_fail(failure: fail.Failure) Failure {
-  return Failure{ kind: failure.kind, native: failure.native, operation: failure.operation, path: failure.path }
-}
 // A short description of kind: "not found", "permission denied".
 pub fn kind_text(kind: Kind) []const u8 {
   return fail.kind_text(kind)

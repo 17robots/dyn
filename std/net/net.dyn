@@ -288,7 +288,7 @@ pub fn multicast_loop_ipv4(descriptor: isize, enabled: bool) Result {
 
 pub fn listener_accept(listener: *Listener) ConnectionResult {
   if !listener.active {
-    return ConnectionResult{ value: Connection{}, failure: io.linux_failure(-9) }
+    return ConnectionResult{ value: Connection{}, failure: io.Failure{ kind: io.Kind.InvalidState, native: -9 } }
   }
   accepted := accept(listener.descriptor)
   if io.failed(accepted.failure) {

@@ -80,8 +80,7 @@ pub fn remove_tree(status: *fail.Status, path: []const u8, frames: []RemovalFram
       return
     }
     if depth == #len(frames) {
-      fail.set(status, fail.Failure{ kind: fail.Kind.Capacity, operation: "remove", path: path,
-        message: "tree is deeper than the frames" })
+      fail.set(status, fail.make(fail.Kind.Capacity, "remove", path, "tree is deeper than the frames"))
       return
     }
     child: Directory

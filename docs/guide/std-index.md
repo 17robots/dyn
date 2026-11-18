@@ -847,11 +847,15 @@ module's full declarations and comments.
 ## std/fail
 
 - `enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }`: The portable reason.
-- `struct Failure { kind: Kind, // The system's own code, when the system gave one. native: isize, // What was being done: "open", "read", "parse", "connect". operation: []const u8, // The file, directory, address or document involved. path: []const u8, // The specific reason, such as "is a directory" or "expected a digit"; // empty means the kind says it. message: []const u8, // For text input: where it went wrong, in bytes from the start. offset: usize, has_offset: bool, }`: What went wrong, where, and doing what.
-- `struct Status { failed: bool, failure: Failure, // Optional. Called once, inside the call that failed, when the first // failure is recorded, with context. It cannot undo the failure. on_failure: fn(rawptr, Failure), context: rawptr, }`
+- `struct Failure { kind: Kind, // The system's own code, when the system gave one. native: isize, // For text input: where it went wrong, in bytes from the start. offset: usize, has_offset: bool, operation_length: u8, path_length: u8, message_length: u8, // operation, then message, then path. text: [228]u8, }`: What went wrong, where, and doing what.
+- `struct Status { failed: bool, failure: Failure, // Optional. Called once, inside the call that failed, when the first // failure is recorded, with context. It cannot undo the failure. on_failure: fn(rawptr, *const Failure), context: rawptr, }`
+- `fn make(kind: Kind, operation: []const u8, path: []const u8, message: []const u8) Failure`: A failure of kind with its text copied in.
+- `fn operation_text(failure: *const Failure) []const u8`: The parts of a failure's text.
+- `fn message_text(failure: *const Failure) []const u8`
+- `fn path_text(failure: *const Failure) []const u8`
 - `fn set(status: *Status, failure: Failure)`: Records failure unless status already holds one;
 - `fn invalid(status: *Status, operation: []const u8, path: []const u8, message: []const u8)`: Records a problem your own code found in its input, such as invalid(&status, "config", path, "port out of range").
-- `fn panic_on_failure(context: rawptr, failure: Failure)`: For on_failure: ends the program at the first failure, with its description.
+- `fn panic_on_failure(context: rawptr, failure: *const Failure)`: For on_failure: ends the program at the first failure, with its description.
 - `fn kind_text(kind: Kind) []const u8`: A short description of kind: "not found", "permission denied".
 - `fn describe(storage: []u8, failure: Failure) []u8`: "operation path: reason" in storage, such as "open /etc/app.conf: no such file or directory" or "parse app.json at 41: expected ','".
 
@@ -1173,7 +1177,6 @@ module's full declarations and comments.
 - `fn windows(code: isize) Kind`
 - `fn wasi(code: isize) Kind`
 - `fn darwin(code: isize) Kind`
-- `fn from_fail(failure: fail.Failure) Failure`: A fail.Failure as an io.Failure, for streams.
 - `fn kind_text(kind: Kind) []const u8`: A short description of kind: "not found", "permission denied".
 - `fn describe(storage: []u8, failure: Failure) []u8`: "operation path: kind" in storage, such as "open /etc/app.conf: not found";
 - `fn linux_text(code: isize) []const u8`: The system's own reason for a native code, such as "is a directory" for Linux's -21;

@@ -181,7 +181,9 @@ pub fn load_directory(arena: *memory.Arena, root: []const u8, storage: []Asset, 
   assets := Assets{ items: storage }
   status: fail.Status
   load_tree(arena, &status, root, "", &assets, maximum, 0)
-  if status.failed { return AssetsResult{ failure: io.from_fail(status.failure) } }
+  if status.failed {
+    return AssetsResult{ failure: io.Failure{ kind: status.failure.kind, native: status.failure.native } }
+  }
   sort_assets(&assets)
   return AssetsResult{ value: assets }
 }
@@ -223,7 +225,7 @@ fn load_tree(arena: *memory.Arena, status: *fail.Status, root: []const u8, relat
     }
     if entry.kind != 8 { continue }
     if assets.count == #len(assets.items) {
-      fail.set(status, fail.Failure{ kind: fail.Kind.Capacity, operation: "load", path: root, message: "more files than asset storage" })
+      fail.set(status, fail.make(fail.Kind.Capacity, "load", root, "more files than asset storage"))
       return
     }
     contents := files.read_all(arena, status, join_path(arena, root, child), maximum)
