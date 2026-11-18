@@ -487,6 +487,9 @@ Servers:
   resident after serving, down from 9.7 MiB.
 - `evented.job` panics, naming the type and both sizes, when the job type is
   larger than `Config.job_size`. It used to return nil on every request.
+- The evented server links its job code (`run`, `later`) and its push code
+  (`open_stream`, `upgrade`) only when the program calls them. The flagship
+  server is 161 KB of code instead of 175 KB.
 
 Finding things:
 
