@@ -46,7 +46,6 @@ use "std/mem" mem
 use "std/net" network
 use "std/net/http" http
 use "std/net/websocket" websocket
-use "std/parse" parse
 use "std/process/signal" signal
 use "std/sync" sync
 use "std/thread" threading

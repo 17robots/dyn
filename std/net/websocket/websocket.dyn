@@ -166,7 +166,8 @@ fn ws_append(destination: []u8, offset: usize, source: []const u8) usize {
 fn websocket_accept(destination: []u8, key: []const u8) []u8 {
   decoded: [18 + mem.ArenaBufferOverhead]u8
   decoded_arena := mem.arena_from_buffer(decoded[..])
-  if #len(key) != 24 || #len(base64.decode(decoded_arena, key).value) != 16 || #len(destination) < 28 {
+  decoding: fail.Status
+  if #len(key) != 24 || #len(base64.decode(decoded_arena, &decoding, key)) != 16 || #len(destination) < 28 {
     return destination[..0]
   }
   guid: []const u8 = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -219,9 +220,10 @@ fn websocket_validate_upgrade_request(status: *fail.Status, request: []const u8)
   key := http.header(status, request, "Sec-WebSocket-Key")
   scratch: [18 + mem.ArenaBufferOverhead]u8
   scratch_arena := mem.arena_from_buffer(scratch[..])
+  decoding: fail.Status
   if !upgrade.found || !connection_header.found || !version.found || !key.found || !ws_equal_case(upgrade.value, "websocket") ||
     !ws_equal_case(connection_header.value, "Upgrade") || !ws_equal(version.value, "13") ||
-    #len(base64.decode(scratch_arena, key.value).value) != 16 {
+    #len(base64.decode(scratch_arena, &decoding, key.value)) != 16 {
     fail.invalid(status, "upgrade to WebSocket", "", "missing or invalid upgrade fields")
     return request[..0]
   }

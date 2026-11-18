@@ -1,10 +1,10 @@
-use "std/parse" parse
+use "std/fail"
 use "std/c"
 use "std/mem"
-use "std/io"
 #link("curl")
 
-pub struct Result { written: usize, code: i32, http_status: c.long, capacity_exceeded: bool, failure: io.Failure }
+// The response bytes written to destination and the HTTP status.
+pub struct Response { written: usize, http_status: c.long }
 struct Sink { destination: []u8, used: usize, full: bool }
 // Call once before starting worker threads; cleanup only after all transfers end.
 pub fn init() i32 {
@@ -34,20 +34,27 @@ fn receive(data: *const u8, size: usize, count: usize, context: rawptr) usize {
 }
 // Synchronous HTTP(S) GET. URL copied through caller scratch; response goes into
 // caller storage. TLS verification remains enabled. Redirects are not followed.
-// HTTP error responses still have ok=true if transport succeeds; inspect status.
-// On failure written bytes are partial, not a complete response. No borrows escape.
-pub fn get_into(url: []const u8, url_buffer: []u8, destination: []u8, timeout_ms: i32) Result {
-  if timeout_ms <= 0 { return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } } }
-  encoded := c.string_into(url_buffer, url)
-  if parse.failed(encoded.failure) {
-    return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
+// An HTTP error response is not a failure: inspect http_status. A response
+// larger than destination fails with Capacity; transport failures carry
+// curl's message, with its code in native. On failure destination holds
+// partial bytes, not a response. No borrows escape.
+pub fn get_into(status: *fail.Status, url: []const u8, url_buffer: []u8, destination: []u8, timeout_ms: i32) Response {
+  if status.failed { return Response{} }
+  if timeout_ms <= 0 {
+    fail.invalid(status, "GET", url, "the timeout must be positive")
+    return Response{}
   }
+  encoded := c.string_into(status, url_buffer, url)
+  if status.failed { return Response{} }
   easy := native_easy_init()
-  if easy == nil { return Result{ code: -2, failure: io.Failure{ kind: io.Kind.System } } }
+  if easy == nil {
+    fail.set(status, fail.make(fail.Kind.Capacity, "GET", url, "no memory for a transfer"))
+    return Response{}
+  }
   defer native_easy_cleanup(easy)
   sink := Sink{ destination: destination }
   protocols: [11]u8 = ['h', 't', 't', 'p', ',', 'h', 't', 't', 'p', 's', 0]
-  code := native_setopt(easy, 10002, encoded.value)
+  code := native_setopt(easy, 10002, encoded)
   if code == 0 {
     code = native_setopt(easy, 10318, &protocols[0])
   }
@@ -66,11 +73,27 @@ pub fn get_into(url: []const u8, url_buffer: []u8, destination: []u8, timeout_ms
   if code == 0 {
     code = native_perform(easy)
   }
-  status: c.long = 0
+  http_status: c.long = 0
   if code == 0 {
-    code = native_getinfo(easy, 2097154, &status)
+    code = native_getinfo(easy, 2097154, &http_status)
   }
-  return Result{ written: sink.used, code: code, http_status: status, capacity_exceeded: sink.full, failure: io.failure_if(code != 0) }
+  if sink.full {
+    fail.set(status, fail.make(fail.Kind.Capacity, "GET", url, "the response does not fit destination"))
+  } else if code != 0 {
+    kind := fail.Kind.System
+    if code == 28 {
+      kind = fail.Kind.Interrupted
+    } else if code == 6 {
+      kind = fail.Kind.NotFound
+    } else if code == 1 || code == 3 {
+      kind = fail.Kind.InvalidInput
+    }
+    reading: fail.Status
+    failure := fail.make(kind, "GET", url, c.bytes_from_string(&reading, native_error_text(code), 160))
+    failure.native = code
+    fail.set(status, failure)
+  }
+  return Response{ written: sink.used, http_status: http_status }
 }
 extern fn native_init "curl_global_init"(flags: c.long) i32
 extern fn native_cleanup "curl_global_cleanup"()
@@ -79,3 +102,4 @@ extern fn native_easy_cleanup "curl_easy_cleanup"(easy: rawptr)
 extern fn native_setopt "curl_easy_setopt"(easy: rawptr, option: i32, ...) i32
 extern fn native_perform "curl_easy_perform"(easy: rawptr) i32
 extern fn native_getinfo "curl_easy_getinfo"(easy: rawptr, info: i32, ...) i32
+extern fn native_error_text "curl_easy_strerror"(code: i32) c.string

@@ -1,73 +1,80 @@
 use "std/parse" parse
 use "std/enums"
 use "std/mem" mem
-use "std/io" io
+use "std/fail"
 use "std/encoding/binary" binary
 pub enum Wire { Varint, Fixed64, Bytes, StartGroup, EndGroup, Fixed32 }
 pub struct Field { number: u32, wire: Wire, value: u64, bytes: []const u8 }
-pub struct FieldResult { value: Field, offset: usize, found: bool, failure: parse.Failure }
+// A field, found false at the end of the input; offset is where it starts.
+pub struct Next { value: Field, offset: usize, found: bool }
 // Input and field bytes are borrowed. Groups are emitted as explicit start/end
-// fields; caller storage bounds their nesting to 64. End is ok=false/kind=None.
-pub struct Reader { source: []const u8, offset: usize, failed: bool, kind: parse.Kind, error_offset: usize, groups: [64]u32, depth: usize }
-pub struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }
+// fields; caller storage bounds their nesting to 64. After a failure the
+// reader stays failed: next fails the same way again.
+pub struct Reader { source: []const u8, offset: usize, failed: bool, kind: fail.Kind, error_offset: usize, groups: [64]u32, depth: usize }
 pub fn reader(source: []const u8) Reader {
   return Reader{ source: source }
 }
-fn fail(state: *Reader, offset: usize, kind: parse.Kind) FieldResult {
+fn failed(status: *fail.Status, state: *Reader, offset: usize, kind: fail.Kind) Next {
   state.failed = true
   state.kind = kind
   state.error_offset = offset
-  return FieldResult{ offset: offset, failure: parse.Failure{ kind: kind, offset: offset } }
+  parse.failed_at(status, kind, "read protobuf", message_of(kind), offset)
+  return Next{ offset: offset }
 }
-pub fn next(state: *Reader) FieldResult {
-  if state.failed {
-    return FieldResult{ offset: state.error_offset, failure: parse.Failure{ kind: state.kind, offset: state.error_offset } }
-  }
+fn message_of(kind: fail.Kind) []const u8 {
+  if kind == fail.Kind.Capacity { return "groups nested deeper than 64" }
+  if kind == fail.Kind.Overflow { return "too large" }
+  return "malformed protobuf"
+}
+// The next field. Malformed input fails with InvalidInput at its offset.
+pub fn next(status: *fail.Status, state: *Reader) Next {
+  if status.failed { return Next{} }
+  if state.failed { return failed(status, state, state.error_offset, state.kind) }
   if state.offset == #len(state.source) {
-    if state.depth != 0 { return fail(state, state.offset, parse.Kind.Syntax) }
-    return FieldResult{ offset: state.offset }
+    if state.depth != 0 { return failed(status, state, state.offset, fail.Kind.InvalidInput) }
+    return Next{ offset: state.offset }
   }
   start := state.offset
   key := binary.uleb128_decode(state.source[start..])
   if !key.valid || (key.value >> 3) == 0 || (key.value >> 3) > 536870911 || (key.value & 7) > 5 {
-    return fail(state, start, parse.Kind.Syntax)
+    return failed(status, state, start, fail.Kind.InvalidInput)
   }
   at := start + key.consumed
   wire := #cast(u8, key.value & 7)
   field := Field{ number: #cast(u32, key.value >> 3), wire: enums.from_int(Wire, #cast(u64, wire)) }
   if field.wire == Wire.Varint {
     value := binary.uleb128_decode(state.source[at..])
-    if !value.valid { return fail(state, at, parse.Kind.Syntax) }
+    if !value.valid { return failed(status, state, at, fail.Kind.InvalidInput) }
     field.value = value.value
     at += value.consumed
   } else if field.wire == Wire.Fixed64 {
-    if #len(state.source) - at < 8 { return fail(state, at, parse.Kind.Syntax) }
+    if #len(state.source) - at < 8 { return failed(status, state, at, fail.Kind.InvalidInput) }
     field.value = binary.load_u64_le(state.source[at..at+8])
     at += 8
   } else if field.wire == Wire.Fixed32 {
-    if #len(state.source) - at < 4 { return fail(state, at, parse.Kind.Syntax) }
+    if #len(state.source) - at < 4 { return failed(status, state, at, fail.Kind.InvalidInput) }
     field.value = binary.load_u32_le(state.source[at..at+4])
     at += 4
   } else if field.wire == Wire.Bytes {
     length := binary.uleb128_decode(state.source[at..])
-    if !length.valid { return fail(state, at, parse.Kind.Syntax) }
+    if !length.valid { return failed(status, state, at, fail.Kind.InvalidInput) }
     at += length.consumed
-    if length.value > (#len(state.source) - at) { return fail(state, at, parse.Kind.Syntax) }
+    if length.value > (#len(state.source) - at) { return failed(status, state, at, fail.Kind.InvalidInput) }
     count := #cast(usize, length.value)
     field.bytes = state.source[at..at+count]
     at += count
   } else if field.wire == Wire.StartGroup {
-    if state.depth == #len(state.groups) { return fail(state, start, parse.Kind.Capacity) }
+    if state.depth == #len(state.groups) { return failed(status, state, start, fail.Kind.Capacity) }
     state.groups[state.depth] = field.number
     state.depth += 1
   } else {
     if state.depth == 0 || state.groups[state.depth - 1] != field.number {
-      return fail(state, start, parse.Kind.Syntax)
+      return failed(status, state, start, fail.Kind.InvalidInput)
     }
     state.depth -= 1
   }
   state.offset = at
-  return FieldResult{ value: field, offset: start, found: true }
+  return Next{ value: field, offset: start, found: true }
 }
 pub fn zigzag(value: i64) u64 {
   return #wrapping(#cast(u64, value) << 1) ^ #cast(u64, value >> 63)
@@ -82,53 +89,47 @@ fn key(field: Field) u64 {
 // types use bitcast. bytes represent strings, packed fields or nested messages.
 // Encode error offsets are field indexes. Inputs must remain alive and must not
 // borrow unused output-arena storage. No schema, reflection or generated code.
-pub fn encode(arena: *mem.Arena, fields: []const Field) EncodeResult {
+pub fn encode(arena: *mem.Arena, status: *fail.Status, fields: []const Field) []u8 {
+  empty: []u8
+  if status.failed { return empty }
   size: usize = 0
   groups: [64]u32
   depth: usize = 0
   for i in 0..#len(fields) {
     field := fields[i]
     if field.number == 0 || field.number > 536870911 {
-      return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: i } }
+      return unencodable(status, fail.Kind.InvalidInput, i)
     }
     extra := binary.uleb128_size(key(field))
     if field.wire == Wire.Varint {
       extra += binary.uleb128_size(field.value)
     } else if field.wire == Wire.Fixed32 {
-      if field.value > 0xffffffff {
-        return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: i } }
-      }
+      if field.value > 0xffffffff { return unencodable(status, fail.Kind.InvalidInput, i) }
       extra += 4
     } else if field.wire == Wire.Fixed64 {
       extra += 8
     } else if field.wire == Wire.Bytes {
       length_size := binary.uleb128_size(#len(field.bytes))
       if #len(field.bytes) > #max(usize) - extra - length_size {
-        return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Overflow, offset: i } }
+        return unencodable(status, fail.Kind.Overflow, i)
       }
       extra += length_size + #len(field.bytes)
     } else if field.wire == Wire.StartGroup {
-      if depth == #len(groups) {
-        return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Capacity, offset: i } }
-      }
+      if depth == #len(groups) { return unencodable(status, fail.Kind.Capacity, i) }
       groups[depth] = field.number
       depth += 1
     } else if field.wire == Wire.EndGroup {
       if depth == 0 || groups[depth-1] != field.number {
-        return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: i } }
+        return unencodable(status, fail.Kind.InvalidInput, i)
       }
       depth -= 1
     } else {
-      return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: i } }
+      return unencodable(status, fail.Kind.InvalidInput, i)
     }
-    if extra > #max(usize) - size {
-      return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Overflow, offset: i } }
-    }
+    if extra > #max(usize) - size { return unencodable(status, fail.Kind.Overflow, i) }
     size += extra
   }
-  if depth != 0 {
-    return EncodeResult{ offset: #len(fields), failure: parse.Failure{ kind: parse.Kind.Syntax, offset: #len(fields) } }
-  }
+  if depth != 0 { return unencodable(status, fail.Kind.InvalidInput, #len(fields)) }
   output := mem.push_array(u8, arena, size)
   at: usize = 0
   for field in fields {
@@ -147,5 +148,11 @@ pub fn encode(arena: *mem.Arena, fields: []const Field) EncodeResult {
       at += #len(field.bytes)
     }
   }
-  return EncodeResult{ value: output }
+  return output
+}
+
+fn unencodable(status: *fail.Status, kind: fail.Kind, index: usize) []u8 {
+  parse.failed_at(status, kind, "encode protobuf", message_of(kind), index)
+  empty: []u8
+  return empty
 }

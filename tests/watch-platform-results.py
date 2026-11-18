@@ -31,32 +31,48 @@ mock_resets: i32 = 0
 mock_reads: i32 = 0
 fn require(ok: bool) { if !ok { #panic("windows mock") } }
 fn main() {
- require(failure(-5).failure.kind == io.Kind.PermissionDenied)
- require(validation_failure(-95).failure.kind == io.Kind.Unsupported)
+ probe: fail.Status
+ _ = failure(&probe, "probe", "", -5)
+ require(probe.failure.kind == fail.Kind.PermissionDenied)
+ validation: fail.Status
+ _ = validation_failure(&validation, "probe", "", -95)
+ require(validation.failure.kind == fail.Kind.Unsupported)
  closed := Watcher{}
- require(next(&closed).failure.kind == io.Kind.InvalidState)
+ require(next_failure(&closed).kind == fail.Kind.InvalidState)
  backing: [272]u8
- opened := open(backing[..])
- state := opened.value
- added := add(&state, "test", Create)
- require(added.failure.kind != io.Kind.Ok && added.failure.native == 0 && added.failure.kind == io.Kind.System)
+ status: fail.Status
+ state := open(&status, backing[..])
+ added := add_failure(&state, "test", Create)
+ require(added.native == 0 && added.kind == fail.Kind.System)
  require(mock_resets == 1 && mock_reads == 0)
  mock_reset = 1
- added = add(&state, "test", Create)
- require(added.failure.kind != io.Kind.Ok && added.failure.native == 0 && added.failure.kind == io.Kind.System)
+ added = add_failure(&state, "test", Create)
+ require(added.native == 0 && added.kind == fail.Kind.System)
  require(mock_reads == 1)
  slot := &state.native.slots[0]
  slot.id = 1
  slot.handle = #cast(rawptr, 1)
  slot.event = #cast(rawptr, 2)
- first := next(&state)
- require(io.failed(first.failure) && first.failure.native == 0 && first.failure.kind == io.Kind.System)
+ first := next_failure(&state)
+ require(first.native == 0 && first.kind == fail.Kind.System)
  reads := mock_reads
  mock_code = 5
- repeated := next(&state)
- require(repeated.failure.native == 0 && repeated.failure.kind == io.Kind.System && mock_reads == reads)
+ repeated := next_failure(&state)
+ require(repeated.native == 0 && repeated.kind == fail.Kind.System && mock_reads == reads)
  close(&state)
- require(next(&state).failure.native == 0)
+ require(next_failure(&state).native == 0)
+}
+fn next_failure(state: *Watcher) fail.Failure {
+ status: fail.Status
+ _ = next(&status, state)
+ require(status.failed)
+ return status.failure
+}
+fn add_failure(state: *Watcher, path: []const u8, mask: u32) fail.Failure {
+ status: fail.Status
+ _ = add(&status, state, path, mask)
+ require(status.failed)
+ return status.failure
 }
 '''
 run('windows',s)
@@ -92,17 +108,24 @@ fn main() {
  close(&empty)
  close(&empty)
  backing: [272]u8
- opened := open(backing[..])
- require(opened.failure.kind != io.Kind.Ok && opened.failure.native == -95 && opened.failure.kind == io.Kind.Unsupported)
+ opening: fail.Status
+ _ = open(&opening, backing[..])
+ require(opening.failed && opening.failure.native == -95 && opening.failure.kind == fail.Kind.Unsupported)
  state := State{api: API{canonical: canonical_mock}}
  watcher := Watcher{state: &state}
- unsupported := add(&watcher, "test", CloseWrite)
- require(unsupported.failure.kind != io.Kind.Ok && unsupported.failure.native == -95 && unsupported.failure.kind == io.Kind.Unsupported)
- denied := add(&watcher, "test", Create)
- require(denied.failure.kind != io.Kind.Ok && denied.failure.native == -13 && denied.failure.kind == io.Kind.PermissionDenied)
+ unsupported := add_failure(&watcher, "test", CloseWrite)
+ require(unsupported.native == -95 && unsupported.kind == fail.Kind.Unsupported)
+ denied := add_failure(&watcher, "test", Create)
+ require(denied.native == -13 && denied.kind == fail.Kind.PermissionDenied)
  mock_errno = 63
- long := add(&watcher, "test", Create)
- require(long.failure.kind != io.Kind.Ok && long.failure.native == -63 && long.failure.kind == io.Kind.InvalidInput)
+ long := add_failure(&watcher, "test", Create)
+ require(long.native == -63 && long.kind == fail.Kind.InvalidInput)
+}
+fn add_failure(watcher: *Watcher, path: []const u8, mask: u32) fail.Failure {
+ status: fail.Status
+ _ = add(&status, watcher, path, mask)
+ require(status.failed)
+ return status.failure
 }
 '''
 run('macos',s)

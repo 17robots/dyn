@@ -1,45 +1,47 @@
 use "std/crypto/p256" p256
 use "std/crypto/ed25519" native
 use "std/bytes"
-use "std/io" io
+use "std/fail"
 // Fixed-size keys and signatures use caller storage by exception. Successful
 // values borrow destination; failures return an empty value. Validation leaves
 // storage untouched. Arithmetic failures clear only the intended output prefix.
-// provider_code and failure.native remain zero for this native implementation.
-pub struct Result {
-  value: []u8,
-  provider_code: u64,
-  failure: io.Failure,
-}
+// A bad length, key or overlap fails with InvalidInput.
 
-fn result(destination: []u8, ok: bool) Result {
+fn result(status: *fail.Status, destination: []u8, ok: bool) []u8 {
   if !ok {
     for i in 0..#len(destination) {
       destination[i] = 0
     }
-    return Result{ failure: io.Failure{ kind: io.Kind.System } }
+    fail.invalid(status, "sign", "", "the key was rejected")
+    return destination[..0]
   }
-  return Result{ value: destination }
+  return destination
+}
+fn rejected(status: *fail.Status, destination: []u8, message: []const u8) []u8 {
+  fail.invalid(status, "sign", "", message)
+  return destination[..0]
 }
 
 // Destination must not overlap any borrowed input, including in its tail.
-pub fn ed25519_public(destination: []u8, private_key: []const u8) Result {
+pub fn ed25519_public(status: *fail.Status, destination: []u8, private_key: []const u8) []u8 {
+  if status.failed { return destination[..0] }
   if #len(destination) < 32 || #len(private_key) != 32 {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+    return rejected(status, destination, "bad key or destination length")
   }
   if bytes.overlaps(destination, private_key) {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+    return rejected(status, destination, "destination overlaps an input")
   }
-  return result(destination[..32], native.public_key(destination[..32], private_key))
+  return result(status, destination[..32], native.public_key(destination[..32], private_key))
 }
-pub fn ed25519_sign(destination: []u8, message: []const u8, private_key: []const u8) Result {
+pub fn ed25519_sign(status: *fail.Status, destination: []u8, message: []const u8, private_key: []const u8) []u8 {
+  if status.failed { return destination[..0] }
   if #len(destination) < 64 || #len(private_key) != 32 {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+    return rejected(status, destination, "bad key or destination length")
   }
   if bytes.overlaps(destination, private_key) || bytes.overlaps(destination, message) {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+    return rejected(status, destination, "destination overlaps an input")
   }
-  return result(destination[..64], native.sign(destination[..64], message, private_key))
+  return result(status, destination[..64], native.sign(destination[..64], message, private_key))
 }
 pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool {
   return native.verify(signature, message, public_key)
@@ -48,17 +50,19 @@ pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []
 // P-256 private keys are 32-byte big-endian scalars in 1..n-1. Public keys are
 // 65-byte SEC1 uncompressed points; signatures are 64-byte big-endian r || s.
 // Invalid key, length or overlap leaves the entire destination unchanged.
-pub fn p256_public(destination: []u8, private_key: []const u8) Result {
+pub fn p256_public(status: *fail.Status, destination: []u8, private_key: []const u8) []u8 {
+  if status.failed { return destination[..0] }
   if !p256.public_key(destination, private_key) {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+    return rejected(status, destination, "bad key, length or overlap")
   }
-  return Result{ value: destination[..65] }
+  return destination[..65]
 }
-pub fn p256_sign(destination: []u8, message: []const u8, private_key: []const u8) Result {
+pub fn p256_sign(status: *fail.Status, destination: []u8, message: []const u8, private_key: []const u8) []u8 {
+  if status.failed { return destination[..0] }
   if !p256.sign(destination, message, private_key) {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+    return rejected(status, destination, "bad key, length or overlap")
   }
-  return Result{ value: destination[..64] }
+  return destination[..64]
 }
 pub fn p256_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool {
   return p256.verify(signature, message, public_key)

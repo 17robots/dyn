@@ -12,6 +12,31 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/io" io
 use "vendor/window" window
 use "std/bytes" bytes
+use "std/fail"
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
+  status: fail.Status
+  window.open(&status, p0, p1, p2, p3)
+  return status.failure
+}
+
+fn window_poll(p0: *window.Window) fail.Failure {
+  status: fail.Status
+  window.poll(&status, p0)
+  return status.failure
+}
+
+fn window_wake(p0: *const window.Window) fail.Failure {
+  status: fail.Status
+  window.wake(&status, p0)
+  return status.failure
+}
+
+fn window_try_set_clipboard(p0:*window.Window, p1:[]const u8) fail.Failure {
+  status: fail.Status
+  window.try_set_clipboard(&status, p0, p1)
+  return status.failure
+}
+
 
 fn check(ok: bool, message: []const u8) {
   if !ok {
@@ -21,15 +46,15 @@ fn check(ok: bool, message: []const u8) {
 
 fn main() {
   host := window.Window{}
-  check(window.open(&host, "Dyn desktop input test", 96, 64).kind == io.Kind.Ok, "open")
+  check(window_open(&host, "Dyn desktop input test", 96, 64).kind == fail.Kind.Ok, "open")
   defer {
     window.close(&host)
   }
-  _ = window.poll(&host)
+  _ = window_poll(&host)
   window.listen_events(&host, true)
-  check(window.wake(&host).kind == io.Kind.Ok, "wake accepted")
+  check(window_wake(&host).kind == fail.Kind.Ok, "wake accepted")
   window.wait(&host, 100)
-  check(window.poll(&host).kind == io.Kind.Ok, "poll wake")
+  check(window_poll(&host).kind == fail.Kind.Ok, "poll wake")
   event := window.Event{}
   woke := false
   for window.next_event(&host, &event) {
@@ -44,11 +69,11 @@ fn main() {
   quiet := window.box_input(&host)
   check(#len(quiet.text) == 0 && !quiet.paste, "no input yet")
   window.listen_events(&host, true)
-  check(window.try_set_clipboard(&host, "clip ✓ text").kind == io.Kind.Ok, "clipboard publication")
+  check(window_try_set_clipboard(&host, "clip ✓ text").kind == fail.Kind.Ok, "clipboard publication")
   window.request_paste(&host)
   got := false
   for i in 0..300 {
-    _ = window.poll(&host)
+    _ = window_poll(&host)
     input := window.box_input(&host)
     if input.paste {
       check(bytes.equal(input.clipboard, "clip ✓ text"), "clipboard text")
@@ -70,7 +95,7 @@ fn main() {
   window.request_paste(&host)
   window.set_clipboard(&host, "second")
   window.request_paste(&host)
-  _ = window.poll(&host)
+  _ = window_poll(&host)
   replies: usize = 0
   for window.next_event(&host, &event) {
     if event.kind == window.EventKind.Clipboard {
@@ -81,11 +106,11 @@ fn main() {
   }
   check(replies == 2 && bytes.equal(window.clipboard(&host), "second"), "two owned replies and borrowed latest")
   window.listen_events(&host, false)
-  _ = window.poll(&host)
+  _ = window_poll(&host)
   check(!window.box_input(&host).paste, "paste is one frame")
   // No input method composes during the test: the composition stays empty.
   window.set_text_input(&host, true, 10, 12, 1, 16)
-  _ = window.poll(&host)
+  _ = window_poll(&host)
   check(#len(window.box_input(&host).composition) == 0 && window.box_input(&host).composition_cursor == -1, "no composition")
   window.set_text_input(&host, false, 0, 0, 0, 0)
   window.wait(&host, 20)
@@ -107,10 +132,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-desktop-') as directory:
         # A Wayland selection requires a real input serial. Supply input only
         # inside the private compositor, never through the user's desktop.
         source = SOURCE.replace('use "vendor/window" window', 'use "vendor/window/wayland" window')
-        source = source.replace('  _ = window.poll(&host)', '  check(window.swap(&host).kind == io.Kind.Ok, "map window")\n  _ = window.poll(&host)', 1)
+        source = source.replace('  _ = window_poll(&host)', '  mapping: fail.Status\n  window.swap(&mapping, &host)\n  check(!mapping.failed, "map window")\n  _ = window_poll(&host)', 1)
         source = source.replace(
-            '  check(window.try_set_clipboard(&host, "clip ✓ text").kind == io.Kind.Ok, "clipboard publication")',
-            '  for i in 0..300 {\n    if window.try_set_clipboard(&host, "clip ✓ text").kind == io.Kind.Ok { break }\n    _ = window.poll(&host)\n    window.wait(&host, 10)\n  }\n  check(window.try_set_clipboard(&host, "clip ✓ text").kind == io.Kind.Ok, "clipboard publication after input")')
+            '  check(window_try_set_clipboard(&host, "clip ✓ text").kind == fail.Kind.Ok, "clipboard publication")',
+            '  for i in 0..300 {\n    if window_try_set_clipboard(&host, "clip ✓ text").kind == fail.Kind.Ok { break }\n    _ = window_poll(&host)\n    window.wait(&host, 10)\n  }\n  check(window_try_set_clipboard(&host, "clip ✓ text").kind == fail.Kind.Ok, "clipboard publication after input")')
         (project / 'main.dyn').write_text(source, encoding='utf-8')
         bridge = project / 'libdyn_window.so'
         subprocess.run([sys.executable, str(ROOT / 'vendor/window/native/build.py'), '--output', str(bridge)], check=True, timeout=120)

@@ -23,9 +23,10 @@ Tasks are saved in `./todo.txt`, or the file named by `TODO_FILE`. See
   A text case always needs `_`.
 - **A growing array.** `array.Array(Task)` keeps its items in an arena;
   `array.push` adds, `array.pop` removes the last one and says whether it found one.
-- **Writing a result type.** `parse_task` returns `parse.Result(Task)`, a
-  value and a `parse.Failure` with a kind, an offset and a message.
-  `parse.u64_decimal` reports bad numbers the same way.
+- **A parser that fails.** `parse_task` takes a `*fail.Status` like anything
+  else that can fail; `parse.malformed` records what went wrong and the byte
+  offset. `load` gives each line its own status, so its message can name the
+  line. `parse.u64_decimal` reports bad numbers the same way.
 - **A status for loading and saving.** `load` and `save` take a
   `*fail.Status`; `main` checks it once after each. Inside `save`, a failed
   write makes the rename do nothing, so no check sits between them.
@@ -35,8 +36,8 @@ Tasks are saved in `./todo.txt`, or the file named by `TODO_FILE`. See
 - **Borrowing the file's text.** `fs.read_all` loads the whole file into the
   arena, and every `Task.text` is a slice of that text. Nothing is copied
   and nothing is freed one task at a time.
-- **Environment variables.** `process.environment(arena, "TODO_FILE")`
-  says whether the variable was `found`.
+- **Environment variables.** `process.environment_or(arena, "TODO_FILE", "todo.txt")`
+  gives the variable's value, or the fallback when it is unset.
 - **Saving safely.** `save` writes a temporary file, then `fs.rename` moves
   it over the old one, so a crash never leaves half a list.
 - **Absence is not failure.** A missing `todo.txt` is an empty list, and

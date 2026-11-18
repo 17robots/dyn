@@ -8,7 +8,6 @@ use "std/process"
 use "std/mem"
 use "std/fmt"
 use "std/io"
-use "std/parse"
 use "std/net"
 use "std/net/http"
 use "std/net/http/evented"
@@ -108,8 +107,8 @@ fn report(file: []const u8) {
     rest := read[at..]
     length := bytes.find_byte(rest, '\n')
     if length != 0 {
-      parsed := json.parse(scratch, rest[..length])
-      if parse.failed(parsed.failure) || !add_record(&summary, parsed.root) {
+      record := json.parse(scratch, &status, rest[..length])
+      if !add_record(&summary, record) {
         #panic("invalid record")
       }
       mem.arena_reset(scratch)
@@ -204,13 +203,14 @@ fn handle(status: *fail.Status, response: *http.Response, request: *const http.R
     http.respond(status, response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
     return
   }
-  parsed := json.parse(arena, request.body)
-  if parse.failed(parsed.failure) || parsed.root.kind != json.KindArray {
+  parsing: fail.Status
+  root := json.parse(arena, &parsing, request.body)
+  if parsing.failed || root.kind != json.KindArray {
     http.respond(status, response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
     return
   }
   summary: Summary
-  child := parsed.root.first
+  child := root.first
   for child != nil {
     if !add_record(&summary, child) {
       http.respond(status, response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })

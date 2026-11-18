@@ -28,10 +28,10 @@ Errors point at the problem:
 - **Recursive descent.** `sum` calls `product` calls `unary` calls `power`
   calls `atom`, which calls `sum` again inside parentheses. Each grammar rule
   in `syntax.dyn` is one function.
-- **Sticky failure.** The parser keeps its first failure. After that, every
-  step returns an `Invalid` node and changes nothing, so the grammar
-  functions read straight through without checking after each call, and
-  `parse_line` checks once at the end.
+- **Sticky failure.** The parser records failures in a `*fail.Status`, which
+  keeps the first one. After that, every step returns an `Invalid` node and
+  changes nothing, so the grammar functions read straight through without
+  checking after each call, and `main` checks once per line.
 - **A result type of your own.** Evaluation can fail in ways a parser
   cannot (unknown names, division by zero), so `eval.dyn` defines
   `Value { number, problem, offset }`. The zero `Problem` means success.

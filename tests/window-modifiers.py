@@ -21,20 +21,33 @@ int dyn_test_send_key(Display *d, Window w, unsigned long sym, unsigned int stat
  subprocess.run(['cc','-fno-stack-protector','-c',str(p/'send.c'),'-o',str(p/'send.o')],check=True)
  (p/'main.dyn').write_text('''use "std/io" io
 use "vendor/window" window
+use "std/fail"
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
+  status: fail.Status
+  window.open(&status, p0, p1, p2, p3)
+  return status.failure
+}
+
+fn window_poll(p0: *window.Window) fail.Failure {
+  status: fail.Status
+  window.poll(&status, p0)
+  return status.failure
+}
+
 extern fn send "dyn_test_send_key"(display: rawptr, window: usize, symbol: usize, state: u32, pressed: i32) i32
 fn check(ok: bool) { if !ok { #panic("X11 word modifier contract") } }
 fn key(host: *window.Window, symbol: usize, state: u32, pressed: i32) {
  check(send(host.display, host.handle, symbol, state, pressed) != 0)
- _ = window.poll(host)
+ _ = window_poll(host)
 }
 fn main() {
  host := window.Window{}
- check(window.open(&host, "modifier oracle", 64, 64).kind == io.Kind.Ok)
+ check(window_open(&host, "modifier oracle", 64, 64).kind == fail.Kind.Ok)
  defer { window.close(&host) }
- _ = window.poll(&host)
+ _ = window_poll(&host)
  key(&host, 0xff51, 4, 1)
  check(window.box_input(&host).left && window.box_input(&host).control)
- _ = window.poll(&host)
+ _ = window_poll(&host)
  check(!window.box_input(&host).left && window.box_input(&host).control)
  key(&host, 0xffe3, 4, 0)
  check(!window.box_input(&host).control)

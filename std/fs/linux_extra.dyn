@@ -1,4 +1,3 @@
-use "std/parse" parse
 #target(kernel: linux)
 use "std/io" io
 use "std/mem" mem
@@ -18,16 +17,15 @@ pub struct Directory {
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
   if #len(path) == 0 { return nil }
-  result := cstrings.string_into(storage, path)
-  if parse.failed(result.failure) { return nil }
-  return result.value
+  status: fail.Status
+  return cstrings.string_into(&status, storage, path)
 }
 
 fn native_open_directory(path: []const u8, storage: []u8, directory: *Directory) isize {
   if #len(storage) < 24 { return -22 }
   opened := open_flags(path, directory_flag, 0)
-  if io.failed(opened.failure) { return opened.failure.native }
-  directory.* = Directory{ file: opened.value, storage: storage }
+  if opened < 0 { return opened }
+  directory.* = Directory{ file: owned_file(opened), storage: storage }
   return 0
 }
 
@@ -87,11 +85,11 @@ pub fn copy_file(status: *fail.Status, source: []const u8, destination: []const 
   defer close(&input)
   if status.failed { return 0 }
   output_opened := open_flags(destination, 65, 420)
-  if io.failed(output_opened.failure) {
-    fail_native(status, "create", destination, output_opened.failure.native)
+  if output_opened < 0 {
+    fail_native(status, "create", destination, output_opened)
     return 0
   }
-  output := output_opened.value
+  output := owned_file(output_opened)
   output.path = destination
   defer close(&output)
   source_info := file_metadata(status, &input)
@@ -184,11 +182,11 @@ pub fn symbolic_link(status: *fail.Status, target: []const u8, link: []const u8)
 pub fn sync_directory(status: *fail.Status, path: []const u8) {
   if status.failed { return }
   opened := open_flags(path, directory_flag, 0)
-  if io.failed(opened.failure) {
-    fail_native(status, "sync", path, opened.failure.native)
+  if opened < 0 {
+    fail_native(status, "sync", path, opened)
     return
   }
-  directory := opened.value
+  directory := owned_file(opened)
   directory.path = path
   sync(status, &directory)
   close(&directory)

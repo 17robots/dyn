@@ -26,13 +26,11 @@ search for a word finds the function that does it.
   status does nothing and returns zero or empty. Callers check
   `status.failed` once, before acting on the results, and print the failure
   with `fail.describe`. See [idiomatic Dyn](idiomatic-dyn.md#errors-and-cleanup)
-  for the rules. `std/fs` uses this model; modules not moved yet return
-  `{value, failure}` with `io.Failure {kind, native}` or `parse.Failure {kind,
-  offset, message}`, where zero means success. Migration status is tracked in
-  [std standardization](../internals/std-standardization.md). Scanners and
-  writers keep their first error in their state and turn later calls into
-  no-ops. Predicates return `bool`. Missing lookups and end of input are
-  ordinary results, not errors.
+  for the rules. Every std and vendor module uses this model: decoders fail
+  with `InvalidInput` at the offending byte offset, native calls keep the
+  system's code in `native`. Scanners and readers that fail stay failed.
+  Predicates return `bool`. Missing lookups and end of input are ordinary
+  results, not errors.
 - **One place for byte search.** `std/bytes` owns `equal`, `find`,
   `find_byte`, `find_last`, `find_last_byte`, `contains`, `starts_with` and
   `ends_with`; `std/strings` holds text work (trim, split, join, format, parse)

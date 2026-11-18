@@ -11,7 +11,6 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 CLI='''use "std/image/FORMAT" codec
 use "std/io" io
-use "std/parse" parse
 use "std/mem" mem
 use "std/fail"
 use "std/fs" fs
@@ -29,14 +28,15 @@ fn main() {
   source := fs.read_all(arena, &source_file, args[2], 64000000)
   if source_file.failed { #panic("image source") }
   before := mem.arena_mark(arena)
-  result := codec.decode(arena, source)
-  if parse.failed(result.failure) {
+  decoding: fail.Status
+  result := codec.decode(arena, &decoding, source)IMAGE
+  if decoding.failed {
     if mem.arena_mark(arena) != before { #panic("image rollback") }
-    io.println("ERR {}", #cast(u32, result.failure.kind))
+    io.println("ERR {}", #cast(u32, decoding.failure.kind))
     return
   }
-  if !fs_write_file(args[3], result.value.pixels) { #panic("image output") }
-  io.println("{} {}", result.value.info.width, result.value.info.height)
+  if !fs_write_file(args[3], result.pixels) { #panic("image output") }
+  io.println("{} {}", result.info.width, result.info.height)
 }
 
 // Writes data to path; whether it worked.
@@ -50,8 +50,9 @@ ENCODER='''if bytes.starts_with(args[1], "encode") {
   channels := strings.parse(u8, args[1][6..])
   pixels: [16]u8
   for i in 0..4 { for j in 0..#cast(usize, channels) { pixels[i * #cast(usize, channels) + j] = #cast(u8, (i * 51 + j * 37)) } }
-  result := codec.encode(arena, pixels[..4 * #cast(usize, channels)], 2, 2, channels)
-  if parse.failed(result.failure) || !fs_write_file(args[2], result.value) { #panic("image encode") }
+  encoding := fail.Status{ on_failure: fail.panic_on_failure }
+  encoded := codec.encode(arena, &encoding, pixels[..4 * #cast(usize, channels)], 2, 2, channels)
+  if !fs_write_file(args[2], encoded) { #panic("image encode") }
   return
 }'''
 u16=lambda x:struct.pack('<H',x)
@@ -97,7 +98,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-image-extra-') as directory:
     work=Path(directory);programs={}
     for kind in ('bmp','tga','gif','jpeg'):
         project=work/kind;project.mkdir()
-        (project/'main.dyn').write_text(CLI.replace('FORMAT',kind).replace('ENCODER',ENCODER if kind in ('bmp','tga') else ''))
+        (project/'main.dyn').write_text(CLI.replace('FORMAT',kind).replace('ENCODER',ENCODER if kind in ('bmp','tga') else '').replace('IMAGE','.image' if kind in ('gif','pnm') else ''))
         for mode in ('debug','release'):
             output=work/(kind+'-'+mode)
             subprocess.run([DYN,'build',str(project),'--'+mode,'--quiet','--no-cache','--output',str(output)],check=True,timeout=300)
@@ -201,7 +202,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-image-extra-') as directory:
     if shutil.which('cjpeg'):fixture_data['jpeg']=data
     for kind,fixture in fixture_data.items():
         project=work/(kind+'-portable');project.mkdir()
-        source='use "std/image/'+kind+'" codec\nuse \"std/parse\" parse\nuse "std/mem" mem\nfn main() { arena := mem.arena_alloc(0); defer { mem.arena_release(arena) }; source: ['+str(len(fixture))+']u8 = ['+','.join(map(str,fixture))+']; result := codec.decode(arena,source[..]); if parse.failed(result.failure) || result.value.info.width == 0 { #panic("portable image") } }'
+        source='use "std/image/'+kind+'" codec\nuse "std/fail"\nuse "std/mem" mem\nfn main() { arena := mem.arena_alloc(0); defer { mem.arena_release(arena) }; source: ['+str(len(fixture))+']u8 = ['+','.join(map(str,fixture))+']; status: fail.Status; result := codec.decode(arena,&status,source[..])'+('.image' if kind=='gif' else '')+'; if status.failed || result.info.width == 0 { #panic("portable image") } }'
         (project/'main.dyn').write_text(source.replace('; ', '\n'))
         for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
             subprocess.run([DYN,'build',str(project),'--release','--target',target,'--quiet','--output',str(work/(kind+'-'+target))],check=True,timeout=300)

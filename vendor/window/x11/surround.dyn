@@ -4,18 +4,33 @@
 // the libX11 protocol transport currently audited. Do not register a callback
 // that only works under a synthetic test: see the source evidence in
 // docs/internals/xim-surrounding-support.md. Preedit remains independent.
-pub fn set_surrounding_text(window: *Window, text: []const u8, cursor, anchor: usize, token: u64) Result {
-  if window.display == nil || window.handle == 0 { return Result{ kind: io.Kind.InvalidState } }
-  if #len(text) > 4096 { return Result{ kind: io.Kind.Capacity } }
+pub fn set_surrounding_text(status: *fail.Status, window: *Window, text: []const u8, cursor, anchor: usize, token: u64) {
+  if status.failed { return }
+  if window.display == nil || window.handle == 0 {
+    window_failed(status, fail.Kind.InvalidState, "set surrounding text")
+    return
+  }
+  if #len(text) > 4096 {
+    window_failed(status, fail.Kind.Capacity, "set surrounding text")
+    return
+  }
   if token == 0 || cursor > #len(text) || anchor > #len(text) || !utf8.valid(text) {
-    return Result{ kind: io.Kind.InvalidInput }
+    window_failed(status, fail.Kind.InvalidInput, "set surrounding text")
+    return
   }
   if (cursor < #len(text) && (text[cursor] & 0xc0) == 0x80) || (anchor < #len(text) && (text[anchor] & 0xc0) == 0x80) {
-    return Result{ kind: io.Kind.InvalidInput }
+    window_failed(status, fail.Kind.InvalidInput, "set surrounding text")
+    return
   }
   for byte in text {
-    if byte == 0 { return Result{ kind: io.Kind.InvalidInput } }
+    if byte == 0 {
+      window_failed(status, fail.Kind.InvalidInput, "set surrounding text")
+      return
+    }
   }
-  if !window.events_enabled { return Result{ kind: io.Kind.InvalidState } }
-  return Result{ kind: io.Kind.Unsupported }
+  if !window.events_enabled {
+    window_failed(status, fail.Kind.InvalidState, "set surrounding text")
+    return
+  }
+  window_failed(status, fail.Kind.Unsupported, "set surrounding text")
 }

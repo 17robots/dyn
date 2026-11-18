@@ -8,38 +8,34 @@ module's full declarations and comments.
 
 - `struct ArchiveReader { source: []const u8, offset: usize, defaults: Overrides }`
 - `fn reader(source: []const u8) ArchiveReader`
-- `fn next(state: *ArchiveReader) Result`: Names and payload borrow source.
+- `fn next(status: *fail.Status, state: *ArchiveReader) Next`: Names and payload borrow source.
 - `struct Entry { name: []const u8, prefix: []const u8, link_name: []const u8, size: u64, kind: u8, data: []const u8, }`
-- `struct StreamReader { source_reader: stream.Reader, metadata: []u8, spare: []u8, metadata_used: usize, defaults: Overrides, header_storage: []u8, remaining: usize, padding: usize, active: bool, ended: bool, offset: usize, failed: bool, failure: parse.StreamFailure, }`
-- `struct StreamEntry { name: []const u8, prefix: []const u8, link_name: []const u8, size: u64, typeflag: u8, offset: usize, found: bool, failure: parse.StreamFailure, }`: typeflag is the TAR protocol byte.
-- `fn stream_reader(input: stream.Reader, header_storage: []u8, metadata: []u8) StreamReader`
-- `fn next_stream(state: *StreamReader) StreamEntry`: Input, header, and metadata storage must be disjoint.
-- `fn read_stream(state: *StreamReader, destination: []u8) stream.Transfer`: Reads entry payload incrementally.
-- `struct Result { entry: Entry, offset: usize, found: bool, failure: parse.Failure }`: Slices borrow archive.
+- `struct StreamReader { source_reader: stream.Reader, metadata: []u8, spare: []u8, metadata_used: usize, defaults: Overrides, header_storage: []u8, remaining: usize, padding: usize, active: bool, ended: bool, offset: usize, failed: bool, failure: fail.Failure, }`
+- `struct StreamEntry { name: []const u8, prefix: []const u8, link_name: []const u8, size: u64, typeflag: u8, offset: usize, found: bool, }`: typeflag is the TAR protocol byte;
+- `fn stream_reader(input: stream.Reader, header_storage: []u8, metadata: []u8) StreamReader`: Header and metadata storage must not overlap;
+- `fn next_stream(status: *fail.Status, state: *StreamReader) StreamEntry`: Input, header, and metadata storage must be disjoint.
+- `fn read_stream(status: *fail.Status, state: *StreamReader, destination: []u8) usize`: Reads the current entry's payload incrementally;
+- `struct Next { entry: Entry, offset: usize, found: bool }`: An entry, found false at the end of the archive.
 
 ## std/archive/zip
 
-- `struct OpenResult { value: ArchiveReader, offset: usize, failure: parse.Failure }`
-- `fn open_checked(source: []const u8) OpenResult`: Checks directory framing and every local-header/descriptor relationship up front.
+- `fn open_checked(status: *fail.Status, source: []const u8) ArchiveReader`: Checks directory framing and every local-header/descriptor relationship up front.
 - `struct Entry { name: []const u8, payload: []const u8, method: u16, flags: u16, checksum: u32, compressed_size: usize, uncompressed_size: usize, directory: bool, }`
-- `struct ArchiveReader { source: []const u8, offset: usize, indexed: bool, directory_start: usize, directory_end: usize, remaining: usize, failed: bool, failure: parse.StreamFailure }`
-- `struct EntryResult { value: Entry, offset: usize, found: bool, failure: parse.StreamFailure }`: offset is the reader cursor after an attempt;
-- `struct ExtractResult { value: []u8, offset: usize, failure: parse.Failure }`
-- `struct StreamReader { source_reader: stream.Reader, header_storage: []u8, name_storage: []u8, payload_storage: []u8, ended: bool, offset: usize, failed: bool, failure: parse.StreamFailure, }`
-- `fn stream_reader(input: stream.Reader, header_storage: []u8, name_storage: []u8, payload_storage: []u8) StreamReader`
-- `fn next_stream(state: *StreamReader) EntryResult`: Reads one local-file entry from a stream.
+- `struct ArchiveReader { source: []const u8, offset: usize, indexed: bool, directory_start: usize, directory_end: usize, remaining: usize, failed: bool, failure: fail.Failure }`: After a failure a reader stays failed: next fails the same way again.
+- `struct Next { value: Entry, offset: usize, found: bool }`: An entry, found false at the end of the archive;
+- `struct StreamReader { source_reader: stream.Reader, header_storage: []u8, name_storage: []u8, payload_storage: []u8, ended: bool, offset: usize, failed: bool, failure: fail.Failure, }`
+- `fn stream_reader(input: stream.Reader, header_storage: []u8, name_storage: []u8, payload_storage: []u8) StreamReader`: The three storages must not overlap;
+- `fn next_stream(status: *fail.Status, state: *StreamReader) Next`: Reads one local-file entry from a stream.
 - `fn open(source: []const u8) ArchiveReader`
-- `fn next(state: *ArchiveReader) EntryResult`
-- `fn extract(arena: *mem.Arena, archive_entry: Entry) ExtractResult`: The entry's bytes, decompressed and checksum-verified, in arena.
+- `fn next(status: *fail.Status, state: *ArchiveReader) Next`: Reads the next entry of an archive in memory, with the same failures as next_stream.
+- `fn extract(arena: *mem.Arena, status: *fail.Status, archive_entry: Entry) []u8`: The entry's bytes, decompressed and checksum-verified, in arena.
 
 ## std/audio/wav
 
 - `enum Encoding { Pcm8, Pcm16, Pcm24, Pcm32, Float32 }`
 - `struct Audio { samples: []f32, rate: u32, channels: u16, channel_mask: u32 }`: Interleaved normalized samples;
-- `struct DecodeResult { value: Audio, offset: usize, failure: parse.Failure }`
-- `struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }`
-- `fn decode(arena: *mem.Arena, source: []const u8) DecodeResult`: RIFF WAVE: PCM 8/16/24/32 and IEEE float 32/64, including extensible subformats.
-- `fn encode(arena: *mem.Arena, audio: *const Audio, encoding: Encoding) EncodeResult`: Integer encoding clamps to [-1,1] and rounds ties toward positive infinity.
+- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Audio`: RIFF WAVE: PCM 8/16/24/32 and IEEE float 32/64, including extensible subformats.
+- `fn encode(arena: *mem.Arena, status: *fail.Status, audio: *const Audio, encoding: Encoding) []u8`: Integer encoding clamps to [-1,1] and rounds ties toward positive infinity.
 
 ## std/bufio
 
@@ -128,14 +124,12 @@ module's full declarations and comments.
 - `type string = *const u8`
 - `type mutable_string = *u8`
 - `type pointer = rawptr`
-- `struct StringResult { required: usize, value: string, failure: parse.Failure, }`
-- `type BytesResult = parse.Result([]const u8)`
 - `fn string_length(value: string, maximum: usize) usize`: Bounded scan: never reads beyond `maximum`;
-- `fn bytes_from_string(value: string, maximum: usize) BytesResult`
+- `fn bytes_from_string(status: *fail.Status, value: string, maximum: usize) []const u8`: The bytes of a NUL-terminated string, borrowed.
 - `fn errno_from_result(value: isize) isize`
 - `fn succeeded(value: isize) bool`
-- `fn string_into(destination: []u8, source: []const u8) StringResult`: Raw C-ABI scratch conversion.
-- `fn string_from_bytes(arena: *memory.Arena, source: []const u8) StringResult`: source with a NUL appended, in arena.
+- `fn string_into(status: *fail.Status, destination: []u8, source: []const u8) string`: Raw C-ABI scratch conversion.
+- `fn string_from_bytes(arena: *memory.Arena, status: *fail.Status, source: []const u8) string`: source with a NUL appended, in arena.
 - `type char = u8`: Default C ABI;
 - `type long = i64`
 - `type unsigned_long = u64`
@@ -151,7 +145,7 @@ module's full declarations and comments.
 ## std/compress/deflate
 
 - `struct Result { written: usize, consumed: usize, done: bool }`: done is false while the codec needs more input or output space;
-- `struct Decoder { engine: InflateState, source_reader: stream.Reader, compressed_storage: []u8, output_storage: []u8, compressed_used: usize, offset: usize, source_ended: bool, finished: bool, error: isize, source_kind: stream.Kind, gzip: bool, phase: u8, flags: u8, extra: usize, header_crc: u32, checksum: u32, member_size: u32, members: usize, }`: Both buffers and this state must remain alive and disjoint while reading.
+- `struct Decoder { engine: InflateState, source_reader: stream.Reader, compressed_storage: []u8, output_storage: []u8, compressed_used: usize, offset: usize, source_ended: bool, finished: bool, error: isize, gzip: bool, phase: u8, flags: u8, extra: usize, header_crc: u32, checksum: u32, member_size: u32, members: usize, }`: Both buffers and this state must remain alive and disjoint while reading.
 - `fn decoder(input: stream.Reader, compressed_bytes: []u8, history: []u8) Decoder`
 - `fn decoder_reader(state: *Decoder) stream.Reader`
 - `fn deflate_stored_chunk(destination: []u8, input: []const u8, final: bool) Result`: Emits byte-aligned stored DEFLATE blocks.
@@ -159,43 +153,40 @@ module's full declarations and comments.
 - `fn deflate_dynamic_chunk(destination: []u8, input: []const u8, final: bool, scratch: []usize) Result`: Dynamic-Huffman block using deterministic RFC 1951 trees and the same LZ77 matcher.
 - `struct InflateState { reader: Bits, literal: Huffman, distance: Huffman, stage: u8, final: u32, stored: usize, written: usize, error: isize, output_full: bool, }`: State retains block trees and bit position.
 - `fn resume(state: *InflateState, destination: []u8, input: []const u8) Result`
-- `struct Inflated { value: []u8, consumed: usize, failure: parse.Failure }`: Output in arena and the input bytes used.
-- `fn inflate(arena: *mem.Arena, input: []const u8) Inflated`: RFC 1951 stored, fixed-Huffman, and dynamic-Huffman DEFLATE, into arena.
-- `fn gunzip(arena: *mem.Arena, input: []const u8) Inflated`: One RFC 1952 gzip member, into arena.
+- `struct Inflated { value: []u8, consumed: usize }`: Output in arena and the input bytes used.
+- `fn inflate(arena: *mem.Arena, status: *fail.Status, input: []const u8) Inflated`: RFC 1951 stored, fixed-Huffman, and dynamic-Huffman DEFLATE, into arena.
+- `fn gunzip(arena: *mem.Arena, status: *fail.Status, input: []const u8) Inflated`: One RFC 1952 gzip member, into arena.
 - `struct GzipState { engine: InflateState, stage: u8, at: usize, flags: u8, error: isize }`: A single gzip member.
 - `fn resume_gzip(state: *GzipState, destination: []u8, input: []const u8) Result`
 - `const MinLevel: u8 = 1`
 - `const MaxLevel: u8 = 9`
 - `const DefaultLevel: u8 = 6`
 - `struct Encoder { head: [HashSize]u32, previous: [WindowSize]u32, // Block symbols: length 0 is a literal byte in value, otherwise a match of // length bytes at distance value. lengths: [BlockSymbols]u16, values: [BlockSymbols]u16, symbol_count: usize, // Small inputs use fewer hash bits: less table to clear per call. hash_shift: u32, literal_counts: [LiteralCodes]u32, distance_counts: [DistanceCodes]u32, literal_lengths: [LiteralCodes]u8, distance_lengths: [DistanceCodes]u8, literal_codes: [LiteralCodes]u16, distance_codes: [DistanceCodes]u16, length_symbol: [MaxMatch + 1]u8, distance_symbol: [512]u8, // Huffman construction scratch, for up to LiteralCodes leaves. order: [LiteralCodes]u16, weights: [2 * LiteralCodes]u32, parents: [2 * LiteralCodes]u16, depths: [2 * LiteralCodes]u8, }`: Workspace for deflate.
-- `struct Encoded { value: []u8, failure: parse.Failure }`
 - `fn deflate_bound(size: usize) usize`: Bytes enough for any input of size bytes at any level: stored blocks of at most 65535 bytes, five bytes of header each, plus one block's ...
-- `fn deflate(destination: []u8, source: []const u8, level: u8, encoder: *Encoder) Encoded`: Raw DEFLATE stream of source into destination at level (1-9;
+- `fn deflate(status: *fail.Status, destination: []u8, source: []const u8, level: u8, encoder: *Encoder) []u8`: Raw DEFLATE stream of source into destination at level (1-9;
 
 ## std/compress/gzip
 
 - `type Result = deflate.Result`
 - `type Decoder = deflate.Decoder`
 - `type Inflated = deflate.Inflated`
-- `fn decompress(arena: *mem.Arena, source: []const u8) Inflated`: One member, into arena;
+- `fn decompress(arena: *mem.Arena, status: *fail.Status, source: []const u8) Inflated`: One member, into arena;
 - `fn decoder(input: stream.Reader, compressed_bytes: []u8, history: []u8) Decoder`: Reads concatenated members through EOF, verifying every header/trailer.
 - `fn decoder_reader(state: *Decoder) stream.Reader`
 - `type Encoder = deflate.Encoder`
-- `type Encoded = deflate.Encoded`
 - `fn compress_bound(size: usize) usize`: Destination bytes that always hold write's output for size bytes.
-- `fn write(destination: []u8, source: []const u8, level: u8, encoder: *Encoder) Encoded`: One gzip member (RFC 1952) holding source, compressed at level (1-9, see std/compress/deflate) into destination.
-- `fn compress(arena: *mem.Arena, source: []const u8, level: u8) Encoded`: write with output in arena.
+- `fn write(status: *fail.Status, destination: []u8, source: []const u8, level: u8, encoder: *Encoder) []u8`: One gzip member (RFC 1952) holding source, compressed at level (1-9, see std/compress/deflate) into destination;
+- `fn compress(arena: *mem.Arena, source: []const u8, level: u8) []u8`: write with output in arena.
 
 ## std/compress/zstd
 
-- `struct SizeResult { size: u64, known: bool, offset: usize, failure: parse.Failure }`
-- `struct BufferResult { value: []u8, provider_code: usize, offset: usize, failure: parse.Failure }`
-- `struct Decoder { source_reader: stream.Reader, compressed_storage: []u8, context: provider.StreamContext, used: usize, offset: usize, source_ended: bool, frame_ended: bool, saw_frame: bool, finished: bool, failed: bool, failure: parse.StreamFailure, provider_code: usize, }`
+- `struct FrameSize { size: u64, known: bool }`: A frame's decompressed size, when the frame header records it.
+- `struct Decoder { source_reader: stream.Reader, compressed_storage: []u8, context: provider.StreamContext, used: usize, offset: usize, source_ended: bool, frame_ended: bool, saw_frame: bool, finished: bool, failed: bool, failure: fail.Failure, }`: A failed decoder stays failed: later reads report the same failure.
 - `fn version() u32`
 - `fn compress_bound(source_size: usize) usize`
-- `fn compress(arena: *memory.Arena, source: []const u8, level: i32) BufferResult`
-- `fn decompress(arena: *memory.Arena, source: []const u8) BufferResult`
-- `fn frame_size(source: []const u8) SizeResult`
+- `fn compress(arena: *memory.Arena, status: *fail.Status, source: []const u8, level: i32) []u8`: Compresses source into arena at level.
+- `fn decompress(arena: *memory.Arena, status: *fail.Status, source: []const u8) []u8`: One frame whose header records its size, into arena.
+- `fn frame_size(status: *fail.Status, source: []const u8) FrameSize`
 - `fn error_name(code: usize, maximum: usize) []const u8`
 - `fn decoder_workspace_size(window_log: u32) usize`: Workspace and input storage must remain alive and disjoint from output.
 - `fn decoder(input: stream.Reader, compressed_bytes: []u8, workspace: []u8, window_log: u32) Decoder`
@@ -293,18 +284,13 @@ module's full declarations and comments.
 
 - `enum Cipher { Aes256Gcm, Chacha20Poly1305 }`
 - `struct Sealed { ciphertext: []u8, tag: []u8 }`
-- `struct SealResult { value: Sealed, provider_code: u64, failure: parse.Failure }`
-- `struct OpenResult { value: []u8, valid: bool, provider_code: u64, failure: parse.Failure }`: valid is true only after the tag verifies, so a zero result is never plaintext.
-- `fn seal(arena: *mem.Arena, kind: Cipher, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) SealResult`: Produces arena-owned ciphertext (same length as plaintext) and a 16-byte tag.
-- `fn open(arena: *mem.Arena, kind: Cipher, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) OpenResult`: Produces arena-owned authenticated plaintext of ciphertext length.
+- `fn seal(arena: *mem.Arena, status: *fail.Status, kind: Cipher, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Sealed`: Produces arena-owned ciphertext (same length as plaintext) and a 16-byte tag.
+- `fn open(arena: *mem.Arena, status: *fail.Status, kind: Cipher, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) []u8`: Produces arena-owned authenticated plaintext of ciphertext length.
 
 ## std/crypto/aes
 
-- `type Sealed = aead.Sealed`
-- `type SealResult = aead.SealResult`
-- `type OpenResult = aead.OpenResult`
-- `fn gcm_seal(arena: *mem.Arena, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) SealResult`: AES-256-GCM: arena-owned ciphertext and 16-byte tag.
-- `fn gcm_open(arena: *mem.Arena, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) OpenResult`: Returns arena-owned authenticated plaintext;
+- `fn gcm_seal(arena: *mem.Arena, status: *fail.Status, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) aead.Sealed`: AES-256-GCM: arena-owned ciphertext and 16-byte tag.
+- `fn gcm_open(arena: *mem.Arena, status: *fail.Status, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) []u8`: Returns arena-owned authenticated plaintext;
 
 ## std/crypto/aesgcm
 
@@ -322,8 +308,7 @@ module's full declarations and comments.
 ## std/crypto/certificate
 
 - `struct Certificate { encoded: []const u8, tbs: []const u8, signature_algorithm: []const u8, signature_bits: []const u8 }`: Borrowed DER envelope;
-- `struct Result { value: Certificate, offset: usize, failure: parse.Failure }`
-- `fn parse(encoded: []const u8) Result`
+- `fn parse(status: *fail.Status, encoded: []const u8) Certificate`: Malformed DER fails with InvalidInput (Overflow for an impossible length) at the offending byte.
 - `fn fingerprint_sha256(destination: []u8, certificate: Certificate) []u8`
 
 ## std/crypto/chacha20
@@ -369,10 +354,10 @@ module's full declarations and comments.
 ## std/crypto/der
 
 - `struct Element { tag: u8, content: []const u8, encoded: []const u8, constructed: bool }`
-- `struct Cursor { source: []const u8, offset: usize, kind: parse.Kind, error: isize, error_offset: usize }`
-- `struct Result { value: Element, offset: usize, found: bool, failure: parse.Failure }`
+- `struct Cursor { source: []const u8, offset: usize, failed: bool, error_kind: fail.Kind, error_offset: usize }`: After a failure the cursor stays failed: next fails the same way again.
+- `struct Next { value: Element, offset: usize, found: bool }`: An element, found false at the end of the input;
 - `fn cursor(source: []const u8) Cursor`
-- `fn next(state: *Cursor) Result`: EOF has ok=false and kind=None.
+- `fn next(status: *fail.Status, state: *Cursor) Next`: Malformed input fails with InvalidInput, a length past usize with Overflow, both at the offending byte.
 - `fn enter(element: Element) Cursor`
 - `fn finished(state: *const Cursor) bool`
 
@@ -385,9 +370,8 @@ module's full declarations and comments.
 
 ## std/crypto/exchange
 
-- `struct Result { value: []u8, provider_code: u64, failure: io.Failure, }`: Fixed-size keys and signatures use caller storage by exception.
-- `fn x25519_public(destination: []u8, private_key: []const u8) Result`: Destination must not overlap either borrowed input, including in its tail.
-- `fn x25519(destination: []u8, private_key: []const u8, peer_public_key: []const u8) Result`
+- `fn x25519_public(status: *fail.Status, destination: []u8, private_key: []const u8) []u8`: Destination must not overlap either borrowed input, including in its tail.
+- `fn x25519(status: *fail.Status, destination: []u8, private_key: []const u8, peer_public_key: []const u8) []u8`
 
 ## std/crypto/hmac
 
@@ -427,8 +411,8 @@ module's full declarations and comments.
 
 ## std/crypto/pem
 
-- `struct Result { value: []u8, label: []const u8, consumed: usize, offset: usize, failure: parse.Failure }`
-- `fn decode(arena: *mem.Arena, source: []const u8) Result`: Decodes the first PEM block.
+- `struct Block { data: []u8, label: []const u8, consumed: usize }`: A decoded block: data is arena-owned, label borrows the source, consumed counts the source bytes through the END line.
+- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Block`: Decodes the first PEM block.
 
 ## std/crypto/poly1305
 
@@ -463,12 +447,11 @@ module's full declarations and comments.
 
 ## std/crypto/signature
 
-- `struct Result { value: []u8, provider_code: u64, failure: io.Failure, }`: Fixed-size keys and signatures use caller storage by exception.
-- `fn ed25519_public(destination: []u8, private_key: []const u8) Result`: Destination must not overlap any borrowed input, including in its tail.
-- `fn ed25519_sign(destination: []u8, message: []const u8, private_key: []const u8) Result`
+- `fn ed25519_public(status: *fail.Status, destination: []u8, private_key: []const u8) []u8`: Destination must not overlap any borrowed input, including in its tail.
+- `fn ed25519_sign(status: *fail.Status, destination: []u8, message: []const u8, private_key: []const u8) []u8`
 - `fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool`
-- `fn p256_public(destination: []u8, private_key: []const u8) Result`: P-256 private keys are 32-byte big-endian scalars in 1..n-1.
-- `fn p256_sign(destination: []u8, message: []const u8, private_key: []const u8) Result`
+- `fn p256_public(status: *fail.Status, destination: []u8, private_key: []const u8) []u8`: P-256 private keys are 32-byte big-endian scalars in 1..n-1.
+- `fn p256_sign(status: *fail.Status, destination: []u8, message: []const u8, private_key: []const u8) []u8`
 - `fn p256_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool`
 
 ## std/crypto/x25519
@@ -482,10 +465,9 @@ module's full declarations and comments.
 - `enum Purpose { Any, Server, Client }`
 - `enum Reason { None, Malformed, UnsupportedAlgorithm, UnsupportedExtension, Expired, NotYetValid, Untrusted, Issuer, Signature, Constraints, Hostname, TooDeep }`
 - `struct View { envelope: certificate.Certificate, issuer: []const u8, subject: []const u8, public_key: []const u8, key_algorithm: Algorithm, signature_algorithm: Algorithm, not_before: i64, not_after: i64, ca: bool, basic_constraints: bool, basic_critical: bool, has_path_length: bool, path_length: i64, has_usage: bool, usage: u16, has_extended_usage: bool, server: bool, client: bool, san: []const u8, san_critical: bool, }`
-- `struct InspectResult { value: View, reason: Reason, failure: parse.Failure }`
 - `struct Options { now: i64, hostname: []const u8, ip: []const u8, purpose: Purpose }`
-- `struct Validation { reason: Reason, index: usize, anchor: usize, valid: bool, failure: parse.Failure }`
-- `fn inspect(encoded: []const u8) InspectResult`: All returned slices borrow the original DER, including the envelope.
+- `struct Validation { reason: Reason, index: usize, anchor: usize, valid: bool }`: The verdict on a chain: valid, or the reason it is not and the index of the certificate at fault.
+- `fn inspect(status: *fail.Status, encoded: []const u8) View`: All returned slices borrow the original DER, including the envelope.
 - `fn validate(chain: []const []const u8, anchors: []const []const u8, options: Options) Validation`: Exact anchor DER matching permits a directly pinned end certificate.
 
 ## std/debug
@@ -501,14 +483,9 @@ module's full declarations and comments.
 - `const Now: i32 = 2`
 - `const Local: i32 = 0`
 - `const Global: i32 = 256`
-- `struct OpenResult { value: Handle, message: *const u8, failure: io.Failure }`
-- `struct SymbolResult { value: rawptr, message: *const u8, failure: io.Failure }`
-- `struct Result { message: *const u8, failure: io.Failure }`: Loader messages borrow storage until the next loader operation.
-- `fn open(path: []const u8, flags: i32) OpenResult`
-- `fn symbol(handle: Handle, name: []const u8) SymbolResult`
-- `fn close(handle: *Handle) Result`: Clears the owned handle only after a successful close.
-- `fn last_error(maximum: usize) cabi.BytesResult`: Returned bytes borrow loader-owned storage and die at next loader operation.
-- `fn error_bytes(error: *const u8, maximum: usize) cabi.BytesResult`
+- `fn open(status: *fail.Status, path: []const u8, flags: i32) Handle`: Opens the library at path;
+- `fn symbol(status: *fail.Status, handle: Handle, name: []const u8) rawptr`: The address of the symbol called name;
+- `fn close(status: *fail.Status, handle: *Handle)`: Clears the owned handle only after a successful close.
 
 ## std/embedded/interrupt
 
@@ -523,7 +500,6 @@ module's full declarations and comments.
 
 ## std/embedded/timer
 
-- `struct Result { failure: io.Failure }`
 - `struct MachineTimer { time: usize, compare: usize }`: Little-endian split 64-bit MTIME/MTIMECMP registers.
 - `fn clint(base: usize, hart_index: usize) MachineTimer`
 - `fn now(timer: *const MachineTimer) u64`: RV32-safe coherent read.
@@ -531,7 +507,7 @@ module's full declarations and comments.
 - `fn disarm(timer: *const MachineTimer)`
 - `struct SysTick { base: usize }`
 - `const systick: SysTick = SysTick{ base: 0xe000e010 }`
-- `fn start(timer: *const SysTick, period: u32, interrupt: bool, processor_clock: bool) Result`: periods are 2..2^24 clock ticks.
+- `fn start(status: *fail.Status, timer: *const SysTick, period: u32, interrupt: bool, processor_clock: bool)`: periods are 2..2^24 clock ticks.
 - `fn stop(timer: *const SysTick)`
 - `fn current(timer: *const SysTick) u32`
 - `fn elapsed(timer: *const SysTick) bool`
@@ -546,21 +522,15 @@ module's full declarations and comments.
 - `fn write_byte(uart: *const Uart, byte: u8)`: Polls indefinitely, matching the board console's blocking transmit contract.
 - `fn write(uart: *const Uart, text: []const u8)`
 
-## std/encoding
-
-- `struct Result { data: []u8, required: usize, failure: parse.Failure }`: Shared byte-codec result.
-
 ## std/encoding/base32
 
-- `type Decoded = parse.Bytes`
 - `fn encode(arena: *mem.Arena, source: []const u8) []u8`: Encodes source into arena.
-- `fn decode(arena: *mem.Arena, source: []const u8) Decoded`: Decodes validated input into arena.
+- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8`: Decodes validated input into arena.
 
 ## std/encoding/base64
 
-- `type Decoded = parse.Bytes`
 - `fn encode(arena: *mem.Arena, source: []const u8) []u8`: Encodes source into arena.
-- `fn decode(arena: *mem.Arena, source: []const u8) Decoded`: Decodes validated input into arena.
+- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8`: Decodes validated input into arena.
 
 ## std/encoding/binary
 
@@ -586,43 +556,40 @@ module's full declarations and comments.
 - `enum Kind { Unsigned, Negative, Bytes, Text, Array, Map, Tag, Bool, Null, Undefined, Simple, Float, End }`: RFC 8949: https://www.rfc-editor.org/rfc/rfc8949.html Borrowed preorder tokens, with End only for indefinite containers/strings.
 - `struct Token { kind: Kind, value: u64, bytes: []const u8, real: f64, boolean: bool, indefinite: bool }`
 - `struct Frame { kind: Kind, remaining: u64, indefinite: bool, odd: bool }`
-- `struct Reader { source: []const u8, offset: usize, frames: [64]Frame, depth: usize, failed: bool, error_kind: parse.Kind, error_offset: usize }`
-- `struct Result { value: Token, offset: usize, found: bool, failure: parse.Failure }`
-- `struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }`
+- `struct Reader { source: []const u8, offset: usize, frames: [64]Frame, depth: usize, failed: bool, error_kind: fail.Kind, error_offset: usize }`: After a failure the reader stays failed: next fails the same way again.
+- `struct Next { value: Token, offset: usize, found: bool }`: A token, found false at the end of the input;
 - `fn reader(source: []const u8) Reader`
-- `fn next(state: *Reader) Result`
-- `fn encode(arena: *mem.Arena, tokens: []const Token) EncodeResult`: Arena-owned output.
+- `fn next(status: *fail.Status, state: *Reader) Next`: The next token.
+- `fn encode(arena: *mem.Arena, status: *fail.Status, tokens: []const Token) []u8`: Arena-owned output.
 
 ## std/encoding/csv
 
-- `struct Scanner { source: []const u8, offset: usize, finished: bool, failure: parse.StreamFailure }`
-- `struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, record_ended: bool, ended: bool, finished: bool, failure: parse.StreamFailure }`
-- `struct Field { text: []u8, end_record: bool, end_input: bool, found: bool, failure: parse.StreamFailure }`
-- `struct Writer { sink: stream.Writer, fields: usize, failed: bool, failure: parse.StreamFailure }`
+- `struct Scanner { source: []const u8, offset: usize, finished: bool }`
+- `struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, record_ended: bool, ended: bool, finished: bool }`
+- `struct Field { text: []u8, end_record: bool, end_input: bool, found: bool }`
+- `struct Writer { sink: stream.Writer, fields: usize }`
 - `fn scanner(source: []const u8) Scanner`
 - `fn stream_scanner(input: stream.Reader) StreamScanner`
-- `fn next_stream(state: *StreamScanner, destination: []u8) Field`: Reads one field from an arbitrarily chunked input stream.
+- `fn next_stream(status: *fail.Status, state: *StreamScanner, destination: []u8) Field`: Reads one field from an arbitrarily chunked input stream.
 - `fn writer(destination_writer: stream.Writer) Writer`
-- `fn write_field(state: *Writer, value: []const u8, end_record: bool) bool`: Writes one field.
-- `fn next(state: *Scanner, destination: []u8) Field`
+- `fn write_field(status: *fail.Status, state: *Writer, value: []const u8, end_record: bool)`: Writes one field.
+- `fn next(status: *fail.Status, state: *Scanner, destination: []u8) Field`
 
 ## std/encoding/hex
 
-- `type Decoded = parse.Bytes`
 - `fn encode(arena: *mem.Arena, source: []const u8, uppercase: bool) []u8`: Encodes source into arena.
-- `fn decode(arena: *mem.Arena, source: []const u8) Decoded`: Decodes validated input into arena.
+- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8`: Decodes validated input into arena.
 
 ## std/encoding/ini
 
 - `enum Kind { Section, Pair }`: Allocation-free INI scanner.
 - `struct Entry { section: []const u8, key: []const u8, value: []const u8, kind: Kind, line: usize }`
-- `struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, failure: parse.Failure, error_line: usize, errors: usize }`: line counts the lines read so far, so a zero Scanner{ source: text } is ready to use.
-- `struct Result { value: Entry, found: bool, failure: parse.Failure }`
+- `struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, failed: bool, error_offset: usize, error_line: usize }`: line counts the lines read so far, so a zero Scanner{ source: text } is ready to use.
+- `struct Next { value: Entry, found: bool }`: found is false at the end of the input.
 - `fn scanner(source: []const u8) Scanner`
-- `fn next(state: *Scanner) Result`
-- `fn find(source: []const u8, section: []const u8, key: []const u8) []const u8`
-- `struct ParseResult { value: []Entry, offset: usize, line: usize, failure: parse.Failure, }`: A materialized entry table.
-- `fn parse(arena: *mem.Arena, source: []const u8) ParseResult`: Ownership: table borrows the arena;
+- `fn next(status: *fail.Status, state: *Scanner) Next`
+- `fn find(source: []const u8, section: []const u8, key: []const u8) []const u8`: The value of key in section, or empty when absent or the text is malformed.
+- `fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) []Entry`: A materialized entry table.
 
 ## std/encoding/json
 
@@ -638,11 +605,10 @@ module's full declarations and comments.
 - `struct Token { kind: TokenKind, text: []const u8, offset: usize }`
 - `struct Value { kind: u8, boolean: bool, text: []const u8, key: []const u8, first: *Value, last: *Value, next: *Value, // Intrusive membership; mutate tree links only through add/add_member. parent: *Value, }`
 - `const nil_value: Value = Value{}`: Returned for every miss: a missing key, an index past the end, a lookup on the wrong kind, and the root of a failed parse.
-- `struct ParseResult { root: *const Value, offset: usize, failure: parse.Failure }`: root is the stub when parsing fails, so lookups work before ok is checked.
 - `fn tokenizer(source: []const u8) Tokenizer`
 - `fn token_next(state: *Tokenizer) Token`
 - `fn valid(source: []const u8) bool`
-- `fn parse(arena: *memory.Arena, source: []const u8) ParseResult`: Nodes, decoded strings, and object keys live in arena.
+- `fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *const Value`: Nodes, decoded strings, and object keys live in arena.
 - `fn push_null(arena: *memory.Arena) *Value`
 - `fn push_bool(arena: *memory.Arena, value: bool) *Value`
 - `fn push_number(arena: *memory.Arena, content: []const u8) *Value`: Retains text as a borrowed view;
@@ -699,8 +665,7 @@ module's full declarations and comments.
 - `const KindObject: u8 = 6`
 - `struct Value { tag: u64, bits: u64 }`: Experimental read-only DOM.
 - `const nil_value: Value = Value{}`
-- `struct ParseResult { root: *const Value, offset: usize, failure: parse.Failure }`
-- `fn parse(arena: *memory.Arena, source: []const u8) ParseResult`: @ownership All values and text live in arena;
+- `fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *const Value`: @ownership All values and text live in arena;
 - `fn kind(value: *const Value) u8`
 - `fn length(value: *const Value) usize`
 - `fn as_text(value: *const Value) []const u8`
@@ -725,9 +690,8 @@ module's full declarations and comments.
 - `enum Kind { Nil, Root, Main, Tag }`
 - `enum Label { None, Identifier, Number, String, Symbol }`
 - `struct Node { kind: Kind, label: Label, // Label text. Strings exclude their quotes and keep escapes as written. string: []const u8, // Byte offset of the node in the source. offset: usize, // '{', '(' or '[' when the children came from a group, otherwise 0. group: u8, parent: *Node, first: *Node, last: *Node, next: *Node, first_tag: *Node, last_tag: *Node, }`
-- `struct ParseResult { root: *Node, offset: usize, failure: parse.Failure }`: root is never nil.
 - `const nil_node: Node = Node{}`: The read-only stub returned for every miss.
-- `fn parse(arena: *mem.Arena, source: []const u8) ParseResult`: Nodes are pushed with mem.push, so a full fixed arena panics.
+- `fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *Node`: Nodes are pushed with mem.push, so a full fixed arena panics.
 - `fn empty() *Node`: The shared nil node.
 - `fn is_nil(node: *const Node) bool`
 - `fn child(node: *const Node, name: []const u8) *Node`: First child labeled name, or the nil node.
@@ -741,77 +705,72 @@ module's full declarations and comments.
 
 - `enum Kind { Nil, Bool, Unsigned, Signed, Float, Text, Bytes, Array, Map, Extension }`: MessagePack specification: https://github.com/msgpack/msgpack/blob/master/spec.md Flattened preorder tokens.
 - `struct Token { kind: Kind, value: u64, integer: i64, real: f64, boolean: bool, bytes: []const u8, extension: i8 }`
-- `struct Result { value: Token, offset: usize, found: bool, failure: parse.Failure }`
-- `struct Reader { source: []const u8, offset: usize, remaining: [64]u64, depth: usize, failed: bool, error_kind: parse.Kind, error_offset: usize }`
-- `struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }`
+- `struct Next { value: Token, offset: usize, found: bool }`: A token, found false at the end of the input;
+- `struct Reader { source: []const u8, offset: usize, remaining: [64]u64, depth: usize, failed: bool, error_kind: fail.Kind, error_offset: usize }`: After a failure the reader stays failed: next fails the same way again.
 - `fn reader(source: []const u8) Reader`
-- `fn next(state: *Reader) Result`
-- `fn encode(arena: *mem.Arena, tokens: []const Token) EncodeResult`: Tokens must be a complete preorder sequence.
+- `fn next(status: *fail.Status, state: *Reader) Next`: The next token.
+- `fn encode(arena: *mem.Arena, status: *fail.Status, tokens: []const Token) []u8`: Tokens must be a complete preorder sequence.
 
 ## std/encoding/protobuf
 
 - `enum Wire { Varint, Fixed64, Bytes, StartGroup, EndGroup, Fixed32 }`
 - `struct Field { number: u32, wire: Wire, value: u64, bytes: []const u8 }`
-- `struct FieldResult { value: Field, offset: usize, found: bool, failure: parse.Failure }`
-- `struct Reader { source: []const u8, offset: usize, failed: bool, kind: parse.Kind, error_offset: usize, groups: [64]u32, depth: usize }`: Input and field bytes are borrowed.
-- `struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }`
+- `struct Next { value: Field, offset: usize, found: bool }`: A field, found false at the end of the input;
+- `struct Reader { source: []const u8, offset: usize, failed: bool, kind: fail.Kind, error_offset: usize, groups: [64]u32, depth: usize }`: Input and field bytes are borrowed.
 - `fn reader(source: []const u8) Reader`
-- `fn next(state: *Reader) FieldResult`
+- `fn next(status: *fail.Status, state: *Reader) Next`: The next field.
 - `fn zigzag(value: i64) u64`
 - `fn unzigzag(value: u64) i64`
-- `fn encode(arena: *mem.Arena, fields: []const Field) EncodeResult`: A schema-free wire encoder.
+- `fn encode(arena: *mem.Arena, status: *fail.Status, fields: []const Field) []u8`: A schema-free wire encoder.
 
 ## std/encoding/toml
 
 - `enum Kind { Missing, String, Integer, Float, Bool, DateTime, Array, Table }`: TOML 1.0 tree.
 - `struct Value { kind: Kind, text: []const u8, boolean: bool, key: []const u8, first: *Value, last: *Value, next: *Value, defined: bool, header_defined: bool, sealed: bool, table_array: bool }`
 - `const nil_value: Value = Value{}`
-- `struct ParseResult { root: *const Value, offset: usize, failure: parse.Failure }`
-- `type EncodeResult = parse.Bytes`
 - `fn member(parent: *const Value, key: []const u8) *const Value`
 - `fn index(parent: *const Value, at: usize) *const Value`
-- `fn parse(arena: *mem.Arena, source: []const u8) ParseResult`: Inputs must not borrow unused backing of the output arena.
-- `fn encode(arena: *mem.Arena, root: *const Value) EncodeResult`: Normalized writer uses quoted keys and inline tables, preserving scalar lexemes.
+- `fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *const Value`: Inputs must not borrow unused backing of the output arena.
+- `fn encode(arena: *mem.Arena, status: *fail.Status, root: *const Value) []u8`: Normalized writer uses quoted keys and inline tables, preserving scalar lexemes.
 
 ## std/encoding/xml
 
 - `struct NamespaceBinding { prefix: []const u8, uri: []const u8 }`: Namespace context works with buffered or streaming events.
 - `struct NamespaceFrame { name: []const u8, bindings: usize, used: usize }`
 - `struct Namespaces { bindings: []NamespaceBinding, frames: []NamespaceFrame, storage: []u8, count: usize, depth: usize, used: usize, }`
-- `struct ExpandedName { prefix: []const u8, local: []const u8, uri: []const u8, failure: parse.Failure }`
+- `struct ExpandedName { prefix: []const u8, local: []const u8, uri: []const u8 }`
 - `fn namespaces(bindings: []NamespaceBinding, frames: []NamespaceFrame, storage: []u8) Namespaces`
-- `fn namespace_resolve(state: *const Namespaces, name: []const u8, attribute: bool) ExpandedName`
-- `fn namespace_enter(state: *Namespaces, event: Event) ExpandedName`: Enter every Start, including self-closing tags;
+- `fn namespace_resolve(status: *fail.Status, state: *const Namespaces, name: []const u8, attribute: bool) ExpandedName`: The expanded name of an element or attribute name in the current scope.
+- `fn namespace_enter(status: *fail.Status, state: *Namespaces, event: Event) ExpandedName`: Enter every Start, including self-closing tags;
 - `fn namespace_leave(state: *Namespaces, name: []const u8) bool`
 - `enum NodeKind { Missing, Document, Element, Text, Comment, Processing, Cdata }`: Arena-owned links, borrowed source slices.
 - `struct Node { kind: NodeKind, name: []const u8, text: []const u8, attributes: []const u8, first: *Node, last: *Node, next: *Node, parent: *Node, }`
 - `const nil_node: Node = Node{}`
-- `struct ParseResult { root: *const Node, offset: usize, failure: parse.Failure }`
 - `fn is_nil(node: *const Node) bool`
 - `fn next_sibling(node: *const Node) *const Node`
 - `fn child(node: *const Node, name: []const u8) *const Node`
 - `fn at(node: *const Node, index: usize) *const Node`
-- `fn parse(arena: *tree_memory.Arena, source: []const u8) ParseResult`: On validation failure rewind exactly the entry mark and return a read-only Missing stub.
+- `fn parse(arena: *tree_memory.Arena, status: *fail.Status, source: []const u8) *const Node`: On validation failure rewind exactly the entry mark and return a read-only Missing stub.
 - `enum Kind { Start, End, Text, Comment, Processing, Cdata }`
-- `struct Event { kind: Kind, name: []const u8, text: []const u8, attributes: []const u8, self_closing: bool }`: Scanners keep their first error: next returns ok false from then on, and the caller checks state.kind once after the loop.
-- `struct Scanner { source: []const u8, offset: usize, failure: parse.StreamFailure }`
-- `struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, ended: bool, failure: parse.StreamFailure }`
-- `struct Result { value: Event, found: bool, failure: parse.StreamFailure }`
-- `struct AttributeScanner { source: []const u8, offset: usize, failure: parse.Failure }`
-- `struct Attribute { name: []const u8, value: []const u8, found: bool, failure: parse.Failure }`
-- `struct Writer { sink: stream.Writer, failed: bool, failure: parse.StreamFailure }`
+- `struct Event { kind: Kind, name: []const u8, text: []const u8, attributes: []const u8, self_closing: bool }`: Malformed text fails with InvalidInput at its offset.
+- `struct Scanner { source: []const u8, offset: usize, failed: bool }`
+- `struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, ended: bool, failed: bool }`
+- `struct Next { value: Event, found: bool }`: An event, found false at the end of the input.
+- `struct AttributeScanner { source: []const u8, offset: usize, failed: bool }`
+- `struct Attribute { name: []const u8, value: []const u8, found: bool }`
+- `struct Writer { sink: stream.Writer }`
 - `fn scanner(source: []const u8) Scanner`
 - `fn stream_scanner(input: stream.Reader, storage: []u8) StreamScanner`
-- `fn next_stream(state: *StreamScanner) Result`: Events borrow storage until the next call.
+- `fn next_stream(status: *fail.Status, state: *StreamScanner) Next`: Events borrow storage until the next call.
 - `fn writer(destination_writer: stream.Writer) Writer`
-- `fn write_text(state: *Writer, value: []const u8) bool`
-- `fn write_start(state: *Writer, name: []const u8) bool`
-- `fn write_attribute(state: *Writer, name: []const u8, value: []const u8) bool`
-- `fn write_start_end(state: *Writer, self_closing: bool) bool`
-- `fn write_end(state: *Writer, name: []const u8) bool`
-- `fn next(state: *Scanner) Result`
+- `fn write_text(status: *fail.Status, state: *Writer, value: []const u8)`
+- `fn write_start(status: *fail.Status, state: *Writer, name: []const u8)`
+- `fn write_attribute(status: *fail.Status, state: *Writer, name: []const u8, value: []const u8)`
+- `fn write_start_end(status: *fail.Status, state: *Writer, self_closing: bool)`
+- `fn write_end(status: *fail.Status, state: *Writer, name: []const u8)`
+- `fn next(status: *fail.Status, state: *Scanner) Next`
 - `fn attributes(event: Event) AttributeScanner`
-- `fn next_attribute(state: *AttributeScanner) Attribute`
+- `fn next_attribute(status: *fail.Status, state: *AttributeScanner) Attribute`
 - `fn valid(source: []const u8, stack: [][]const u8) bool`
 
 ## std/enums
@@ -861,11 +820,9 @@ module's full declarations and comments.
 - `struct Option { name: []const u8, short: u8, kind: Kind, required: bool, default_value: []const u8, choices: [][]const u8 }`
 - `struct Value { text: []const u8, present: bool, occurrences: usize }`
 - `struct Parsed { values: []Value, positionals: [][]const u8 }`
-- `struct Result { value: Parsed, offset: usize, option: []const u8, failure: parse.Failure }`: offset is an argument index;
 - `fn bool_option(name: []const u8, short: u8) Option`
 - `fn string_option(name: []const u8, short: u8) Option`
-- `fn parse(arena: *memory.Arena, options: []const Option, arguments: [][]const u8) Result`: Output arrays belong to arena and live until rewind/reset/release.
-- `struct TextResult { value: []u8, required: usize, failure: parse.Failure }`
+- `fn parse(arena: *memory.Arena, status: *fail.Status, options: []const Option, arguments: [][]const u8) Parsed`: Output arrays belong to arena and live until rewind/reset/release.
 - `fn usage(arena: *memory.Arena, program: []const u8, options: []const Option) []u8`: Failure writes nothing.
 - `fn required_string_option(name: []const u8, short: u8) Option`
 - `fn integer_option(name: []const u8, short: u8) Option`
@@ -903,16 +860,13 @@ module's full declarations and comments.
 ## std/font
 
 - `struct Face { data: []const u8, cmap: []const u8, glyf: []const u8, loca: []const u8, hmtx: []const u8, units_per_em: u16, glyphs: u16, metrics: u16, long_loca: bool, ascent: i16, descent: i16, line_gap: i16, kern: []const u8, }`: A face borrows immutable font bytes.
-- `struct FaceResult { value: Face, offset: usize, failure: parse.Failure }`
 - `struct Bitmap { pixels: []u8, width: usize, height: usize, x_offset: i32, y_offset: i32, advance: i32 }`
-- `struct BitmapResult { value: Bitmap, offset: usize, failure: parse.Failure }`
-- `fn open(data: []const u8) FaceResult`
+- `fn open(status: *fail.Status, data: []const u8) Face`
 - `fn glyph_index(face: *const Face, codepoint: u32) u16`: Zero is the font's missing-glyph slot.
-- `fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u16) BitmapResult`: Unhinted 4x4 supersampling for simple and composite glyf outlines.
+- `fn raster(arena: *mem.Arena, status: *fail.Status, face: *const Face, index: u16, pixels_per_em: u16) Bitmap`: Unhinted 4x4 supersampling for simple and composite glyf outlines.
 - `struct AtlasGlyph { codepoint: u32, x: usize, y: usize, width: usize, height: usize, x_offset: i32, y_offset: i32, advance: i32 }`
 - `struct Atlas { pixels: []u8, width: usize, height: usize, line_height: i32, glyphs: []AtlasGlyph }`: Glyphs are sorted by codepoint.
-- `struct AtlasResult { value: Atlas, offset: usize, failure: parse.Failure }`
-- `fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: usize) AtlasResult`: Shelf packing with one transparent padding pixel.
+- `fn atlas(arena: *mem.Arena, status: *fail.Status, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: usize) Atlas`: Shelf packing with one transparent padding pixel.
 - `nil_glyph: AtlasGlyph`
 - `fn atlas_glyph(value: *const Atlas, codepoint: u32) *const AtlasGlyph`
 - `fn kerning(face: *const Face, left, right: u16, pixels_per_em: u16) f64`: Pixel adjustment added between left and right glyphs.
@@ -932,7 +886,7 @@ module's full declarations and comments.
 
 ## std/font/ui
 
-- `struct Adapter { face: *const font.Face, arena: *mem.Arena, pixels_per_em: u16, failed: bool, failure: parse.Failure }`: Keep this state at a stable address while rendering.
+- `struct Adapter { face: *const font.Face, arena: *mem.Arena, pixels_per_em: u16, failed: bool, failure: fail.Failure }`: Keep this state at a stable address while rendering.
 - `fn renderer(state: *Adapter) software.Font`
 - `fn atlas_renderer(atlas: *font.Atlas) software.Font`: No allocation or rerasterization.
 - `struct LayoutAdapter { atlas: *const font.Atlas, face: *const font.Face, pixels_per_em: u16 }`
@@ -997,8 +951,7 @@ module's full declarations and comments.
 ## std/fs/capability
 
 - `struct Directory { descriptor: isize, active: bool, events: *observe.Log, resource: u64 }`: A borrowed directory descriptor limits file lookup through this interface.
-- `type ReadResult = io.Count`
-- `fn read(directory: *const Directory, path: []const u8, destination: []u8) ReadResult`: Kernel-enforced relative lookup: no absolute paths, parent escapes, symlinks or magic links.
+- `fn read(status: *fail.Status, directory: *const Directory, path: []const u8, destination: []u8) usize`: Kernel-enforced relative lookup: no absolute paths, parent escapes, symlinks or magic links.
 
 ## std/fs/watch
 
@@ -1019,31 +972,28 @@ module's full declarations and comments.
 - `const HasMoveCookies: bool = false`
 - `const HasDirectoryFlag: bool = true`
 - `const FixedWatchCapacity: usize = 16`
-- `enum Status { Event, Empty }`
-- `type Result = io.Result(i32)`: `error` keeps the native code;
 - `struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }`
-- `struct EventResult { event: Event, status: Status, failure: io.Failure }`
-- `struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, error: isize, kind: io.Kind }`: Owns one bounded allocation: at most 16 streams and 63 queued names (1023 bytes).
-- `type OpenResult = io.Result(Watcher)`
-- `fn open(storage: []u8) OpenResult`
-- `fn add(watcher: *Watcher, path: []const u8, mask: u32) Result`
-- `fn remove(watcher: *Watcher, id: i32) Result`
+- `struct Next { event: Event, found: bool }`: found is false when no event is pending.
+- `struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, failure: fail.Failure }`: Owns one bounded allocation: at most 16 streams and 63 queued names (1023 bytes).
+- `fn open(status: *fail.Status, storage: []u8) Watcher`
+- `fn add(status: *fail.Status, watcher: *Watcher, path: []const u8, mask: u32) i32`: Watches path;
+- `fn remove(status: *fail.Status, watcher: *Watcher, id: i32)`
 - `fn close(watcher: *Watcher)`
-- `fn next(watcher: *Watcher) EventResult`
+- `fn next(status: *fail.Status, watcher: *Watcher) Next`: Empty and rescan events remain protocol states.
 - `fn acknowledge_rescan(watcher: *Watcher)`
 - `const SupportedEvents: u32 = 4046`
 - `const HasCloseWrite: bool = true`
 - `const HasMoveCookies: bool = true`
 - `const FixedWatchCapacity: usize = 0`: Zero means no fixed userspace slot limit;
-- `struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, error: isize, kind: io.Kind }`: Zero is a closed watcher: active is false.
-- `fn add(state: *Watcher, path: []const u8, mask: u32) Result`
-- `fn remove(state: *Watcher, watch: i32) Result`
+- `struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, failure: fail.Failure }`: Zero is a closed watcher: active is false.
+- `fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i32`: Watches path;
+- `fn remove(status: *fail.Status, state: *Watcher, watch: i32)`
 - `fn close(state: *Watcher)`
-- `fn next(state: *Watcher) EventResult`
+- `fn next(status: *fail.Status, state: *Watcher) Next`
 - `fn acknowledge_rescan(state: *Watcher)`: Call only after rebuilding the snapshot;
 - `const SupportedEvents: u32 = 966`
 - `const HasDirectoryFlag: bool = false`
-- `struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, error: isize, kind: io.Kind }`: Noncopyable owner.
+- `struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, failure: fail.Failure }`: Noncopyable owner.
 
 ## std/hash
 
@@ -1073,10 +1023,8 @@ module's full declarations and comments.
 
 - `type Template = core.Template`
 - `type Field = core.Field`
-- `type ParseResult = core.ParseResult`
-- `type RenderResult = core.RenderResult`
-- `fn parse(arena: *memory.Arena, source: []const u8) ParseResult`
-- `fn render(destination: io.Writer, template: *const Template, fields: []const Field) RenderResult`: Escapes text and quoted attribute values.
+- `fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) Template`
+- `fn render(status: *fail.Status, destination: io.Writer, template: *const Template, fields: []const Field)`: Escapes text and quoted attribute values.
 
 ## std/image
 
@@ -1090,10 +1038,8 @@ module's full declarations and comments.
 
 - `struct Info { width: usize, height: usize, channels: u8 }`: Windows DIB headers, uncompressed indexed/BGR and contiguous bitfields.
 - `struct Image { info: Info, pixels: []u8 }`
-- `struct Result { value: Image, offset: usize, failure: parse.Failure }`
-- `type EncodeResult = parse.Bytes`
-- `fn decode(arena: *mem.Arena, source: []const u8) Result`: Ownership: pixels borrow arena backing;
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width, height: usize, channels: u8) EncodeResult`: RGB is written as a 24-bit Windows DIB.
+- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image`: Ownership: pixels borrow arena backing;
+- `fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width, height: usize, channels: u8) []u8`: RGB is written as a 24-bit Windows DIB.
 
 ## std/image/color
 
@@ -1106,55 +1052,45 @@ module's full declarations and comments.
 
 - `struct Info { width: usize, height: usize, channels: u8 }`: Decodes the first composited GIF87a/89a image, including interlace and transparency.
 - `struct Image { info: Info, pixels: []u8 }`
-- `struct Result { value: Image, consumed: usize, offset: usize, failure: parse.Failure }`
-- `fn decode(arena: *mem.Arena, source: []const u8) Result`: Ownership: pixels borrow arena backing;
+- `struct Decoded { image: Image, consumed: usize }`: An image and the source bytes it took.
+- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decoded`: Ownership: pixels borrow arena backing;
 
 ## std/image/jpeg
 
 - `struct Info { width: usize, height: usize, channels: u8 }`: ITU-T T.81 baseline sequential Huffman JPEG, 8-bit gray/RGB/YCbCr.
 - `struct Image { info: Info, pixels: []u8 }`
-- `struct Result { value: Image, offset: usize, failure: parse.Failure }`
-- `fn decode(arena: *mem.Arena, source: []const u8) Result`: Ownership: pixels borrow arena backing;
+- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image`: Ownership: pixels borrow arena backing;
 
 ## std/image/png
 
 - `struct Info { width: usize, height: usize, channels: u8, valid: bool }`
-- `struct Image { info: Info, pixels: []u8 }`: Result.ok / InfoResult.ok are authoritative.
-- `struct Result { value: Image, offset: usize, failure: parse.Failure }`
-- `struct InfoResult { value: Info, offset: usize, failure: parse.Failure }`
-- `struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }`
-- `fn inspect(source: []const u8) InfoResult`
-- `fn decode(arena: *mem.Arena, source: []const u8) Result`
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8) EncodeResult`
+- `struct Image { info: Info, pixels: []u8 }`: Info.valid is true inside successful values.
+- `fn inspect(status: *fail.Status, source: []const u8) Info`: The header's description of the image, without decoding it.
+- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image`
+- `fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8) []u8`
 
 ## std/image/pnm
 
 - `struct Info { width: usize, height: usize, channels: u8 }`: consumed permits concatenated raw images.
 - `struct Image { info: Info, pixels: []u8 }`
-- `struct Result { value: Image, consumed: usize, offset: usize, failure: parse.Failure }`
-- `type EncodeResult = parse.Bytes`
-- `fn decode(arena: *mem.Arena, source: []const u8) Result`
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8) EncodeResult`: Emit binary P5 (one channel) or P6 (three channels) with Maxval 255.
+- `struct Decoded { image: Image, consumed: usize }`: An image and the source bytes it took.
+- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decoded`
+- `fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8) []u8`: Emit binary P5 (one channel) or P6 (three channels) with Maxval 255.
 
 ## std/image/qoi
 
 - `struct Info { width: usize, height: usize, channels: u8, srgb: bool, valid: bool }`
-- `struct Image { info: Info, pixels: []u8 }`: Result.ok / InfoResult.ok are authoritative.
-- `struct Result { value: Image, offset: usize, failure: parse.Failure }`
-- `struct InfoResult { value: Info, offset: usize, failure: parse.Failure }`
-- `struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }`
-- `fn inspect(source: []const u8) InfoResult`
-- `fn decode(arena: *mem.Arena, source: []const u8) Result`
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) EncodeResult`
+- `struct Image { info: Info, pixels: []u8 }`: Info.valid is true inside successful values.
+- `fn inspect(status: *fail.Status, source: []const u8) Info`: The header's description of the image, without decoding it.
+- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image`
+- `fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) []u8`
 
 ## std/image/tga
 
 - `struct Info { width: usize, height: usize, channels: u8 }`: True-color and gray TGA, including RLE and all origin directions.
 - `struct Image { info: Info, pixels: []u8 }`
-- `struct Result { value: Image, offset: usize, failure: parse.Failure }`
-- `type EncodeResult = parse.Bytes`
-- `fn decode(arena: *mem.Arena, source: []const u8) Result`: Ownership: pixels borrow arena backing;
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width, height: usize, channels: u8) EncodeResult`: Ownership: encoded bytes borrow arena backing;
+- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image`: Ownership: pixels borrow arena backing;
+- `fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width, height: usize, channels: u8) []u8`: Ownership: encoded bytes borrow arena backing;
 
 ## std/io
 
@@ -1451,7 +1387,6 @@ module's full declarations and comments.
 ## std/math/big
 
 - `struct Int { limbs: []const u32, negative: bool }`
-- `struct ParseResult { value: Int, offset: usize, failure: parse.Failure }`
 - `struct Division { quotient: Int, remainder: Int, valid: bool }`
 - `fn zero() Int`
 - `fn from_u64(arena: *mem.Arena, value: u64) Int`
@@ -1473,7 +1408,7 @@ module's full declarations and comments.
 - `struct ModResult { value: Int, valid: bool }`: base^exponent mod modulus by square and multiply.
 - `fn power_mod(arena: *mem.Arena, base: Int, exponent: Int, modulus: Int) ModResult`
 - `fn gcd(arena: *mem.Arena, a: Int, b: Int) Int`: Greatest common divisor, never negative.
-- `fn parse(arena: *mem.Arena, text: []const u8, base: u32) ParseResult`: Parses an optional sign and digits in base 2 through 36.
+- `fn parse(arena: *mem.Arena, status: *fail.Status, text: []const u8, base: u32) Int`: Parses an optional sign and digits in base 2 through 36.
 - `fn format(arena: *mem.Arena, value: Int, base: u32) []u8`: The value's digits in base 2 through 36, lowercase, with a leading '-' when negative.
 - `fn from_bytes(arena: *mem.Arena, data: []const u8) Int`: A non-negative value from big-endian bytes.
 - `fn to_bytes(arena: *mem.Arena, value: Int) []u8`: The magnitude as big-endian bytes without leading zeros;
@@ -1870,7 +1805,7 @@ module's full declarations and comments.
 - `struct Entry { offset: usize, name_length: usize, value_length: usize }`
 - `struct Table { storage: []u8, start: usize, end: usize, entries: []Entry, first: usize, count: usize, size: usize, max_size: usize, limit: usize, }`: Entry bytes live in storage[start..end], oldest first;
 - `struct Decoder { table: Table, // A field was decoded since decode_begin: size updates must come first. fields: bool, }`
-- `struct Field { name: []const u8, value: []const u8, consumed: usize, update: bool, // A never-indexed literal: intermediaries must not compress it. sensitive: bool, failure: parse.Failure, }`: One decoded representation.
+- `struct Field { name: []const u8, value: []const u8, consumed: usize, update: bool, // A never-indexed literal: intermediaries must not compress it. sensitive: bool, }`: One decoded representation.
 - `fn decoder(storage: []u8, entries: []Entry) Decoder`: Storage bounds the table: limit is #len(storage) bytes, and at most EntryOverhead bytes per entry (see entries_for).
 - `fn entries_for(storage_size: usize) usize`: Entries a decoder needs for storage bytes of table.
 - `fn decode_begin(decoder: *Decoder)`: Starts a header block: a size update is allowed again before its first field.
@@ -1878,16 +1813,16 @@ module's full declarations and comments.
 - `fn huffman_decode(source: []const u8, destination: []u8) Decoded`: Huffman-decodes source into destination (RFC 7541 5.2): padding must be at most 7 one bits, and EOS never appears.
 - `fn huffman_length(source: []const u8) usize`: Bytes huffman_encode writes for source.
 - `fn huffman_encode(source: []const u8, destination: []u8) usize`: Huffman-codes source into destination, which must hold huffman_length bytes.
-- `fn decode_field(decoder: *Decoder, block: []const u8, scratch: []u8) Field`: Decodes the representation at the start of block.
+- `fn decode_field(status: *fail.Status, decoder: *Decoder, block: []const u8, scratch: []u8) Field`: Decodes the representation at the start of block.
 - `fn encode_field(destination: []u8, name: []const u8, value: []const u8) usize`: Writes one field to destination and returns its length, or 0 when it does not fit.
 
 ## std/net/http/qpack
 
 - `const StaticCount: usize = 99`
-- `struct Field { name: []const u8, value: []const u8, consumed: usize, failure: parse.Failure }`: One decoded field line;
+- `struct Field { name: []const u8, value: []const u8, consumed: usize }`: One decoded field line;
 - `struct Prefix { consumed: usize, ok: bool }`
 - `fn decode_prefix(section: []const u8) Prefix`: Reads the field section prefix (RFC 9204 4.5.1).
-- `fn decode_field(section: []const u8, scratch: []u8) Field`: Decodes the field line at the start of section into scratch.
+- `fn decode_field(status: *fail.Status, section: []const u8, scratch: []u8) Field`: Decodes the field line at the start of section into scratch.
 - `fn encode_prefix(destination: []u8) usize`: The prefix of a section that uses no dynamic table: two zero bytes.
 - `fn encode_field(destination: []u8, name: []const u8, value: []const u8) usize`: Writes one field line and returns its length, or 0 when it does not fit.
 
@@ -2085,14 +2020,12 @@ module's full declarations and comments.
 
 ## std/os/macos
 
-- `struct IoResult { value: isize, failure: io.Failure }`
 - `struct PollDescriptor { descriptor: i32, events: i16, returned: i16 }`
 - `const has_native_threads: bool = false`
-- `fn io_value(result: *const IoResult) isize`
-- `fn file_open(path: []const u8, write_access: bool, create: bool) IoResult`
-- `fn file_close(handle: isize) IoResult`
+- `fn file_open(status: *fail.Status, path: []const u8, write_access: bool, create: bool) isize`: A descriptor, or -1 after a failure.
+- `fn file_close(status: *fail.Status, handle: isize)`
 - `fn thread_yield()`
-- `fn socket_open(family: i32, kind: i32, protocol: i32) IoResult`
+- `fn socket_open(status: *fail.Status, family: i32, kind: i32, protocol: i32) isize`: A socket, or -1 after a failure.
 - `fn socket_close(socket: usize) bool`
 - `fn socket_connect(socket: usize, address: []const u8) bool`
 - `fn event_poll(items: []PollDescriptor, milliseconds: i32) isize`
@@ -2136,13 +2069,11 @@ module's full declarations and comments.
 
 - `extern fn close "dyn_wasi_close"(fd: u32) u32`
 - `extern fn clock_time "dyn_wasi_clock"(clock: u32, precision: u64, time: *u64) u32`
-- `fn write(fd: u32, bytes: []const u8) io.Transfer`: Errors are WASI errno values;
-- `fn read(fd: u32, bytes: []u8) io.Transfer`
-- `struct OpenResult { fd: u32, failure: io.Failure }`
-- `fn open_read(directory: u32, path: []const u8) OpenResult`: Relative to a directory descriptor granted by the host.
+- `fn write(status: *fail.Status, fd: u32, bytes: []const u8) usize`: The count written;
+- `fn read(status: *fail.Status, fd: u32, bytes: []u8) usize`: The count read;
+- `fn open_read(status: *fail.Status, directory: u32, path: []const u8) u32`: Relative to a directory descriptor granted by the host.
 - `fn random(bytes: []u8) u32`
-- `struct Arguments { values: [][]const u8, failure: io.Failure }`
-- `fn arguments(arena: *mem.Arena) Arguments`: Both strings and slice descriptors belong to the supplied arena.
+- `fn arguments(arena: *mem.Arena, status: *fail.Status) [][]const u8`: Both strings and slice descriptors belong to the supplied arena.
 
 ## std/os/wasi/raw
 
@@ -2151,21 +2082,19 @@ module's full declarations and comments.
 
 ## std/os/windows
 
-- `struct IoResult { value: isize, failure: io.Failure }`
-- `fn io_value(result: *const IoResult) isize`
 - `extern fn close_handle_raw "dyn_win_close_handle"(handle: rawptr) i32`
 - `extern fn last_error_raw "dyn_win_last_error"() u32`
 - `extern fn wait_raw "dyn_win_wait"(handle: rawptr, milliseconds: u32) u32`
 - `struct Thread { handle: rawptr, id: u32 }`
 - `struct PollDescriptor { descriptor: usize, events: i16, returned: i16 }`
 - `const has_native_threads: bool = true`
-- `fn file_open(path: []const u8, write_access: bool, create: bool) IoResult`
-- `fn file_close(handle: isize) IoResult`
+- `fn file_open(status: *fail.Status, path: []const u8, write_access: bool, create: bool) isize`: A handle, or -1 after a failure.
+- `fn file_close(status: *fail.Status, handle: isize)`
 - `fn thread_spawn(thread: *Thread, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) bool`
 - `fn thread_join(thread: *Thread) bool`
 - `fn thread_error() isize`
 - `fn thread_yield()`
-- `fn socket_open(family: i32, kind: i32, protocol: i32) IoResult`
+- `fn socket_open(status: *fail.Status, family: i32, kind: i32, protocol: i32) isize`: A socket, or -1 after a failure.
 - `fn socket_error() isize`
 - `fn socket_close(socket: usize) bool`
 - `fn socket_connect(socket: usize, address: []const u8) bool`
@@ -2178,18 +2107,10 @@ module's full declarations and comments.
 
 ## std/parse
 
-- `enum Kind { Ok, Syntax, Truncated, Overflow, Capacity, Unsupported, Checksum, Overlap }`: Shared failure for parsers and decoders.
-- `struct Failure { kind: Kind, offset: usize, message: []const u8 }`: Kind.Ok is the zero value, so a zero Failure means success.
-- `fn failed(failure: Failure) bool`: A stream decoder fails on its input text or on the stream that carries it.
-- `enum StreamKind { Ok, Parse, Io }`
-- `struct StreamFailure { kind: StreamKind, parse: Failure, io: io.Failure }`
-- `fn parse_failure(kind: Kind, offset: usize, message: []const u8) StreamFailure`
-- `fn io_failure(kind: io.Kind, native: isize) StreamFailure`
-- `fn stream_result(failure: StreamFailure, transferred: usize) io.Transfer`: Payload readers speak io.Transfer, so a parse failure maps to the nearest io kind.
-- `struct Result(T) { value: T, failure: Failure }`: A value and how decoding went.
-- `type Bytes = Result([]u8)`: Decoded or encoded bytes, for codecs with nothing else to report.
-- `fn u64_decimal(text: []const u8) Result(u64)`: Whole text as a decimal u64: one or more ASCII digits, nothing else (no sign, space or underscore).
-- `fn i64_decimal(text: []const u8) Result(i64)`: Whole text as a decimal i64 with an optional leading '-'.
+- `fn malformed(status: *fail.Status, operation: []const u8, message: []const u8, offset: usize)`: Records that the input went wrong at offset.
+- `fn failed_at(status: *fail.Status, kind: fail.Kind, operation: []const u8, message: []const u8, offset: usize)`: Records a failure of kind at offset into the input.
+- `fn u64_decimal(status: *fail.Status, text: []const u8) u64`: Whole text as a decimal u64: one or more ASCII digits, nothing else (no sign, space or underscore).
+- `fn i64_decimal(status: *fail.Status, text: []const u8) i64`: Whole text as a decimal i64 with an optional leading '-'.
 
 ## std/path
 
@@ -2284,9 +2205,8 @@ module's full declarations and comments.
 ## std/semver
 
 - `struct Version { major: u32, minor: u32, patch: u32, prerelease: []const u8, build: []const u8, }`
-- `struct ParseResult { value: Version, offset: usize, failure: parse.Failure }`
-- `fn parse(text: []const u8) ParseResult`
-- `fn compare(a, b: Version) i32`: Build metadata does not affect precedence.
+- `fn parse(status: *fail.Status, text: []const u8) Version`: A version such as "1.2.3-alpha.1+build".
+- `fn compare(a, b: Version) i32`
 - `struct Range { minimum: Version, maximum: Version, has_minimum: bool, has_maximum: bool, include_minimum: bool, include_maximum: bool, }`
 - `fn contains(range: *const Range, version: Version) bool`
 
@@ -2488,21 +2408,19 @@ module's full declarations and comments.
 
 ## std/terminal
 
-- `fn read_state(descriptor: isize) Read`: The terminal settings of descriptor.
-- `fn restore(descriptor: isize, saved: *const State) Result`
-- `fn size(descriptor: isize) Size`
+- `fn read_state(status: *fail.Status, descriptor: isize) State`: The terminal settings of descriptor;
+- `fn restore(status: *fail.Status, descriptor: isize, saved: *const State)`
+- `fn size(status: *fail.Status, descriptor: isize) Size`
 - `struct State { bytes: [72]u8 }`: Saved terminal settings.
-- `struct Size { columns: usize, rows: usize, failure: io.Failure }`
-- `type Read = io.Result(State)`
-- `struct Result { failure: io.Failure }`
+- `struct Size { columns: usize, rows: usize }`
 - `fn is_attached(descriptor: isize) bool`: Descriptors 0, 1 and 2 are the standard streams on every platform.
-- `fn raw(descriptor: isize) Read`: Applies a small cfmakeraw equivalent: no echo, no line buffering, no signal keys, and on Windows virtual-terminal input or output.
+- `fn raw(status: *fail.Status, descriptor: isize) State`: Applies a small cfmakeraw equivalent: no echo, no line buffering, no signal keys, and on Windows virtual-terminal input or output.
 - `enum KeyKind { Text, Escape, Up, Down, Left, Right, Home, End, Delete, Unknown, Incomplete }`
 - `struct Key { kind: KeyKind, codepoint: u32, consumed: usize }`
 - `fn key_decode(bytes: []const u8) Key`: Recognizes UTF-8 text and common CSI cursor keys.
-- `fn read_state(_descriptor: isize) Read`: WASI Preview 1 has no terminal control.
-- `fn restore(_descriptor: isize, saved: *const State) Result`
-- `fn size(_descriptor: isize) Size`
+- `fn read_state(status: *fail.Status, _descriptor: isize) State`: WASI Preview 1 has no terminal control.
+- `fn restore(status: *fail.Status, _descriptor: isize, saved: *const State)`
+- `fn size(status: *fail.Status, _descriptor: isize) Size`
 
 ## std/testing
 
@@ -2525,8 +2443,7 @@ module's full declarations and comments.
 - `struct Samples { count: usize, minimum, median, p90, maximum: i64, valid: bool }`
 - `fn summarize(samples: []i64) Samples`: Sorts caller-owned nanosecond samples in place;
 - `struct TemporaryDirectory { path: []const u8, active: bool }`
-- `type TemporaryResult = io.Result(TemporaryDirectory)`
-- `fn temporary_directory(arena: *mem.Arena, prefix: []const u8) TemporaryResult`: Reserves a private 0700 directory.
+- `fn temporary_directory(arena: *mem.Arena, status: *fail.Status, prefix: []const u8) TemporaryDirectory`: Reserves a private 0700 directory.
 - `fn remove_temporary(status: *fail.Status, directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8)`
 - `fn temporary_path(arena: *mem.Arena, prefix: []const u8, suffix: []const u8) []u8`
 - `fn expect(condition: bool, message: []const u8)`
@@ -2570,21 +2487,19 @@ module's full declarations and comments.
 - `struct Glyph { codepoint: u32, start: usize, end: usize, x: f64, y: f64 }`: Offsets refer to Layout.text, an owned NFC copy by default.
 - `struct Line { start: usize, end: usize, glyph_start: usize, glyph_count: usize, width: f64, y: f64 }`
 - `struct Layout { text: []const u8, glyphs: []Glyph, lines: []Line, width: f64, height: f64, line_height: i32 }`
-- `struct Result { value: Layout, offset: usize, failure: parse.Failure }`
-- `fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Options) Result`: Latin shaping consists of optional NFC composition, code-point advances and pair kerning.
+- `fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: Font, requested: Options) Layout`: Latin shaping consists of optional NFC composition, code-point advances and pair kerning.
 
 ## std/text/regex
 
 - `struct Match { start: usize, end: usize, found: bool }`
-- `struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Match, error: parse.Kind, valid: bool }`: All slices belong to the compile arena, including the retained pattern bytes.
-- `struct Result { value: Program, offset: usize, failure: parse.Failure }`
-- `struct MatchResult { value: Match, captures: []Match, failure: parse.Failure }`: failure names a broken program.
-- `fn compile(arena: *mem.Arena, pattern: []const u8) Result`: Arena exhaustion/size overflow panics, like other arena producers.
-- `fn find(program: Program, text: []const u8) MatchResult`: Reuses arena-reserved workspace.
+- `struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Match, error: fail.Kind, valid: bool }`: All slices belong to the compile arena, including the retained pattern bytes.
+- `struct Found { value: Match, captures: []Match }`: value.found distinguishes a match from a miss.
+- `fn compile(arena: *mem.Arena, status: *fail.Status, pattern: []const u8) Program`: Arena exhaustion/size overflow panics, like other arena producers.
+- `fn find(program: Program, text: []const u8) Found`: Reuses arena-reserved workspace.
 - `fn matches(program: Program, text: []const u8) bool`
 - `struct Iterator { program: Program, text: []const u8, offset: usize, done: bool }`: Iterator shares its program's workspace and capture lifetime contract.
 - `fn iterator(program: Program, text: []const u8) Iterator`
-- `fn next(state: *Iterator) MatchResult`
+- `fn next(state: *Iterator) Found`
 
 ## std/text/scanner
 
@@ -2601,11 +2516,9 @@ module's full declarations and comments.
 
 - `struct Template { source: []const u8 }`
 - `struct Field { name: []const u8, value: []const u8 }`
-- `struct ParseResult { value: Template, offset: usize, failure: parse.Failure }`: Offsets identify source positions when known;
-- `struct RenderResult { offset: usize, failure: parse.StreamFailure }`
-- `fn parse(arena: *memory.Arena, source: []const u8) ParseResult`: Validates before allocating;
-- `fn render(destination: stream.Writer, template: *const Template, fields: []const Field) RenderResult`
-- `fn render_with(destination: stream.Writer, template: *const Template, fields: []const Field, render_field: fn(stream.Writer, []const u8) RenderResult) RenderResult`: Field rendering seam shared by plain-text and HTML templates.
+- `fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) Template`: Validates before allocating;
+- `fn render(status: *fail.Status, destination: stream.Writer, template: *const Template, fields: []const Field)`
+- `fn render_with(status: *fail.Status, destination: stream.Writer, template: *const Template, fields: []const Field, render_field: fn(*fail.Status, stream.Writer, []const u8))`: Field rendering seam shared by plain-text and HTML templates.
 
 ## std/thread
 
@@ -2798,9 +2711,8 @@ module's full declarations and comments.
 - `struct Surface { pixels: []u8, width: i32, height: i32, stride: usize }`: Straight-alpha RGBA bytes.
 - `struct Glyph { pixels: []const u8, width: i32, height: i32, stride: usize, x_offset: i32, y_offset: i32, advance: i32 }`: Coverage is one alpha byte per pixel, top-to-bottom.
 - `struct Font { data: rawptr, glyph: fn(rawptr, u32) Glyph, line_height: i32 }`: A caller supplies bitmap glyphs at the desired size.
-- `struct Result { failure: io.Failure }`
 - `fn rounded_coverage(shape: ui.Rect, radius: i32, x, y: i32) u8`: Coverage of a rounded rectangle at a pixel center, from its signed distance.
-- `fn render(surface: *Surface, commands: *const ui.Command, font: Font) Result`: Render in order after ui.end.
+- `fn render(status: *fail.Status, surface: *Surface, commands: *const ui.Command, font: Font)`: Render in order after ui.end.
 
 ## std/ui/text
 
@@ -2808,15 +2720,13 @@ module's full declarations and comments.
 
 ## std/unicode/text
 
-- `struct Graphemes { source: []const u8, offset: usize, error: parse.Kind, error_offset: usize }`: source and returned values borrow caller storage;
-- `struct GraphemeResult { value: []const u8, found: bool, offset: usize, failure: parse.Failure }`: offset is the first invalid UTF-8 sequence byte offset, otherwise zero.
+- `struct Graphemes { source: []const u8, offset: usize, failed: bool, error_offset: usize }`: source and returned values borrow caller storage;
+- `struct Grapheme { value: []const u8, found: bool }`: A grapheme cluster, found false at the end of the text.
 - `fn graphemes(source: []const u8) Graphemes`
-- `fn next_grapheme(state: *Graphemes) GraphemeResult`: Extended grapheme clusters, UAX #29 Unicode 17 default rules.
-- `struct Breaks { value: []usize, offset: usize, failure: parse.Failure }`
+- `fn next_grapheme(status: *fail.Status, state: *Graphemes) Grapheme`: Extended grapheme clusters, UAX #29 Unicode 17 default rules.
 - `struct LineBreak { offset: usize, mandatory: bool }`
-- `struct LineBreaks { value: []LineBreak, offset: usize, failure: parse.Failure }`
-- `fn word_breaks(arena: *mem.Arena, text: []const u8) Breaks`: Word boundaries as byte offsets, excluding 0 and including #len(text) when text is not empty.
-- `fn line_breaks(arena: *mem.Arena, text: []const u8) LineBreaks`: Line break opportunities as byte offsets where a line may start, excluding 0.
+- `fn word_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []usize`: Word boundaries as byte offsets, excluding 0 and including #len(text) when text is not empty.
+- `fn line_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []LineBreak`: Line break opportunities as byte offsets where a line may start, excluding 0.
 - `const UnicodeVersion: []const u8 = "17.0.0"`
 - `enum Form { NFD, NFC, NFKD, NFKC }`
 - `enum Category { Cn, Lu, Ll, Lt, Lm, Lo, Mn, Mc, Me, Nd, Nl, No, Pc, Pd, Ps, Pe, Pi, Pf, Po, Sm, Sc, Sk, So, Zs, Zl, Zp, Cc, Cf, Cs, Co }`
@@ -2825,9 +2735,8 @@ module's full declarations and comments.
 - `fn identifier_start(codepoint: u32) bool`
 - `fn identifier_continue(codepoint: u32) bool`
 - `fn whitespace(codepoint: u32) bool`
-- `struct Converted { value: []u8, offset: usize, failure: parse.Failure }`: value borrows arena storage until rewind/reset/release.
-- `fn case_fold(arena: *mem.Arena, source: []const u8) Converted`: Locale-independent full default case folding, without normalization, into arena.
-- `fn normalize(arena: *mem.Arena, source: []const u8, form: Form) Converted`: source in normalization form, into arena.
+- `fn case_fold(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8`: Locale-independent full default case folding, without normalization, into arena.
+- `fn normalize(arena: *mem.Arena, status: *fail.Status, source: []const u8, form: Form) []u8`: source in normalization form, into arena.
 
 ## std/unicode/utf16
 

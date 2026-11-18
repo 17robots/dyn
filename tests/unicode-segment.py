@@ -38,6 +38,7 @@ sources = {
 }
 assert any('17.0.0' in line for line in sources['line'][:3]), 'expected Unicode 17 test data'
 SOURCE = '''use "std/unicode/text" text
+use "std/fail"
 use "std/io" io
 use "std/mem" mem
 
@@ -52,6 +53,7 @@ fn main() {
   defer {
     mem.arena_release(arena)
   }
+  status := fail.Status{ on_failure: fail.panic_on_failure }
   at: usize = 0
   for at < #len(data) {
     kind := data[at]
@@ -60,14 +62,14 @@ fn main() {
     at += 5 + length
     mark := mem.arena_mark(arena)
     if kind == 0 {
-      found := text.word_breaks(arena, sample)
-      for offset in found.value {
+      found := text.word_breaks(arena, &status, sample)
+      for offset in found {
         io.print("{} ", offset)
       }
     }
     else {
-      found := text.line_breaks(arena, sample)
-      for entry in found.value {
+      found := text.line_breaks(arena, &status, sample)
+      for entry in found {
         io.print("{} ", entry.offset)
       }
     }

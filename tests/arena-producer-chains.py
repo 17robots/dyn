@@ -11,9 +11,7 @@ SOURCE=r'''use "std/mem"
 use "std/bytes"
 use "std/io" errors
 use "std/fail"
-use "std/encoding"
 use "std/encoding/base32" b32
-use "std/parse" parse
 use "std/encoding/base64" b64
 use "std/encoding/hex"
 use "std/encoding/json"
@@ -46,15 +44,16 @@ fn main() {
  check(mem.arena_overlaps_unallocated(f.arena,tail))
  _=mem.copy(tail,"YQ==")
  mark:=mem.arena_mark(f.arena)
- rejected:=b64.decode(f.arena,tail[..4])
- check(rejected.failure.kind==parse.Kind.Overlap && mem.arena_mark(f.arena)==mark)
+ rejected:fail.Status
+ _=b64.decode(f.arena,&rejected,tail[..4])
+ check(rejected.failure.kind==fail.Kind.InvalidInput && mem.arena_mark(f.arena)==mark)
  check(bytes.equal(tail[..4],"YQ=="))
- check(bytes.equal(b64.decode(f.arena,"aGVsbG8=").value,"hello"))
- check(bytes.equal(b32.decode(f.arena,"NBSWY3DP").value,"hello"))
- check(bytes.equal(hex.decode(f.arena,"68656c6c6f").value,"hello"))
- parsed:=json.parse(f.arena,"{\"answer\":42,\"text\":\"hello\"}")
- check(!parse.failed(parsed.failure) && json.get(i64,parsed.root,"answer")==42)
  status:fail.Status
+ check(bytes.equal(b64.decode(f.arena,&status,"aGVsbG8="),"hello"))
+ check(bytes.equal(b32.decode(f.arena,&status,"NBSWY3DP"),"hello"))
+ check(bytes.equal(hex.decode(f.arena,&status,"68656c6c6f"),"hello"))
+ root:=json.parse(f.arena,&status,"{\"answer\":42,\"text\":\"hello\"}")
+ check(!status.failed && json.get(i64,root,"answer")==42)
  chunked:=http.decode_chunked(f.arena,&status,"5\r\nhello\r\n0\r\n\r\n")
  check(!status.failed && bytes.equal(chunked.value,"hello"))
  packet:[46]u8=[18,52,129,128,0,1,0,1,0,0,0,0,7,101,120,97,109,112,108,101,4,116,101,115,116,0,0,1,0,1,192,12,0,1,0,1,0,0,0,1,0,4,1,2,3,4]
@@ -62,10 +61,9 @@ fn main() {
  check(!status.failed && #len(answers)==1 && answers[0].a==1 && answers[0].d==4)
  key:[32]u8
  nonce:[12]u8
- sealed:=aead.seal(f.arena,aead.Cipher.Aes256Gcm,"hello","",key[..],nonce[..])
- check(!parse.failed(sealed.failure))
- opened:=aead.open(f.arena,aead.Cipher.Aes256Gcm,sealed.value.ciphertext,sealed.value.tag,"",key[..],nonce[..])
- check(opened.valid && bytes.equal(opened.value,"hello"))
+ sealed:=aead.seal(f.arena,&status,aead.Cipher.Aes256Gcm,"hello","",key[..],nonce[..])
+ opened:=aead.open(f.arena,&status,aead.Cipher.Aes256Gcm,sealed.ciphertext,sealed.tag,"",key[..],nonce[..])
+ check(!status.failed && bytes.equal(opened,"hello"))
  PROCESS_CASE
  intact(f)
 }

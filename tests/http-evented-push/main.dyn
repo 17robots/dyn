@@ -305,8 +305,8 @@ fn large_body(status: *fail.Status, response: *http.Response, request: *const ht
   storage: [16]u8
   limit := http.query_value(status, request, "limit", storage[..])
   if limit.found {
-    parsed := parse.u64_decimal(limit.value)
-    job.limit = #cast(usize, parsed.value)
+    parsing: fail.Status
+    job.limit = #cast(usize, parse.u64_decimal(&parsing, limit.value))
   }
   reading: fail.Status
   evented.receive_body(&reading, response, job, large_chunk, large_finish)

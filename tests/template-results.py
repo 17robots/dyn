@@ -11,36 +11,43 @@ SOURCE = r'''use "std/text/template" text
 use "std/html/template" html
 use "std/fail"
 use "std/io" io
-use "std/parse" parse
 use "std/mem" mem
-use "std/io" errors
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("template results") } }
 struct Sink { calls: usize, code: isize }
-fn fail_transfer(data: rawptr, source: []const u8) io.Transfer {
+fn refuse(data: rawptr, status: *fail.Status, source: []const u8) usize {
   state := #cast(*Sink, data)
   state.calls += 1
-  return io.Transfer{ transferred: 1, failure: io.Failure{ kind: errors.Kind.Capacity, native: state.code } }
+  failure := fail.make(fail.Kind.Capacity, "write", "", "full")
+  failure.native = state.code
+  fail.set(status, failure)
+  return 0
 }
-fn fail(data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return io.from_transfer(status, fail_transfer(data, source), "write", "")
+fn custom(status: *fail.Status, destination: io.Writer, value: []const u8) {
+  failure := fail.make(fail.Kind.Unsupported, "render field", "", "custom")
+  failure.native = -73
+  fail.set(status, failure)
 }
-fn custom(destination: io.Writer, value: []const u8) text.RenderResult {
-  return text.RenderResult{ offset: 97, failure: parse.io_failure(errors.Kind.Unsupported, -73) }
+struct Parsed { value: text.Template, failure: fail.Failure }
+fn parse(mode: usize, arena: *mem.Arena, source: []const u8) Parsed {
+  status: fail.Status
+  value := text.Template{}
+  if mode == 0 { value = text.parse(arena, &status, source) } else { value = html.parse(arena, &status, source) }
+  return Parsed{ value: value, failure: status.failure }
+}
+fn render(mode: usize, writer: io.Writer, template: *const text.Template, fields: []const text.Field) fail.Failure {
+  status: fail.Status
+  if mode == 0 { text.render(&status, writer, template, fields) } else { html.render(&status, writer, template, fields) }
+  return status.failure
 }
 fn main() {
   storage: [4096 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(storage[..])
-  pzero: text.ParseResult
-  rzero: html.RenderResult
-  check(!parse.failed(pzero.failure) && pzero.offset == 0 && #len(pzero.value.source) == 0)
-  check(rzero.failure.kind == parse.StreamKind.Ok && rzero.offset == 0)
   empty: text.Template
   writer: io.Writer
   fields: [1]text.Field = [text.Field{ name: "x", value: "<&>\"'" }]
-  ready := text.render(writer, &empty, fields[..])
-  check(ready.failure.kind == parse.StreamKind.Ok && ready.offset == 0)
-  check(html.render(writer, &empty, fields[..]).failure.kind == parse.StreamKind.Ok)
+  check(render(0, writer, &empty, fields[..]).kind == fail.Kind.Ok)
+  check(render(1, writer, &empty, fields[..]).kind == fail.Kind.Ok)
   for mode in 0..2 {
     // Validation and empty input need no storage, even in a full fixed arena.
     tiny_storage: [1 + mem.ArenaBufferOverhead]u8
@@ -48,49 +55,48 @@ fn main() {
     tiny = mem.arena_from_buffer(tiny.data[..mem.ArenaHeader + 1])
     _ = mem.arena_push(tiny, 1, 1)
     tiny_mark := mem.arena_mark(tiny)
-    tiny_result := text.ParseResult{}
-    if mode == 0 { tiny_result = text.parse(tiny, "") } else { tiny_result = html.parse(tiny, "") }
-    check(!parse.failed(tiny_result.failure) && #len(tiny_result.value.source) == 0 && mem.arena_mark(tiny) == tiny_mark)
-    if mode == 0 { tiny_result = text.parse(tiny, "ab{{ }}") } else { tiny_result = html.parse(tiny, "ab{{ }}") }
-    check(tiny_result.failure.kind == parse.Kind.Syntax && tiny_result.offset == 2 && #len(tiny_result.value.source) == 0 && mem.arena_mark(tiny) == tiny_mark)
+    tiny_result := parse(mode, tiny, "")
+    check(tiny_result.failure.kind == fail.Kind.Ok && #len(tiny_result.value.source) == 0 && mem.arena_mark(tiny) == tiny_mark)
+    tiny_result = parse(mode, tiny, "ab{{ }}")
+    check(tiny_result.failure.kind == fail.Kind.InvalidInput && tiny_result.failure.offset == 2 && #len(tiny_result.value.source) == 0 && mem.arena_mark(tiny) == tiny_mark)
     mark := mem.arena_mark(arena)
-    parsed := text.ParseResult{}
-    if mode == 0 { parsed = text.parse(arena, "") } else { parsed = html.parse(arena, "") }
-    check(!parse.failed(parsed.failure) && #len(parsed.value.source) == 0 && parsed.offset == 0 && mem.arena_mark(arena) == mark)
+    parsed := parse(mode, arena, "")
+    check(parsed.failure.kind == fail.Kind.Ok && #len(parsed.value.source) == 0 && mem.arena_mark(arena) == mark)
     invalid: [3][]const u8 = ["{{", "ab{{ }}", "a{{x!}}"]
     offsets: [3]usize = [0, 2, 1]
     for i in 0..3 {
-      if mode == 0 { parsed = text.parse(arena, invalid[i]) } else { parsed = html.parse(arena, invalid[i]) }
-      check(parsed.failure.kind == parse.Kind.Syntax && parsed.offset == offsets[i] && #len(parsed.value.source) == 0 && mem.arena_mark(arena) == mark)
+      parsed = parse(mode, arena, invalid[i])
+      check(parsed.failure.kind == fail.Kind.InvalidInput && parsed.failure.offset == offsets[i] && #len(parsed.value.source) == 0 && mem.arena_mark(arena) == mark)
     }
     source: [10]u8 = ['<','b','>','{','{','x','}','}','!','!']
-    if mode == 0 { parsed = text.parse(arena, source[..]) } else { parsed = html.parse(arena, source[..]) }
-    check(!parse.failed(parsed.failure) && parsed.offset == 0)
+    parsed = parse(mode, arena, source[..])
+    check(parsed.failure.kind == fail.Kind.Ok)
     source[0] = '?'
     check(parsed.value.source[0] == '<') // parse owns an arena copy.
     output: [128]u8
     buffer := io.buffer_writer(output[..])
-    rendered := text.RenderResult{}
-    if mode == 0 { rendered = text.render(io.buffer_writer_adapter(&buffer), &parsed.value, fields[..]) } else { rendered = html.render(io.buffer_writer_adapter(&buffer), &parsed.value, fields[..]) }
-    check(rendered.failure.kind == parse.StreamKind.Ok && rendered.offset == 0)
+    check(render(mode, io.buffer_writer_adapter(&buffer), &parsed.value, fields[..]).kind == fail.Kind.Ok)
     if mode == 0 { check(bytes.equal(io.buffer_writer_bytes(&buffer), "<b><&>\"'!!")) } else { check(bytes.equal(io.buffer_writer_bytes(&buffer), "<b>&lt;&amp;&gt;&quot;&#39;!!")) }
     for code in [0, -91] {
       sink := Sink{ code: code }
-      failing := io.Writer{ data: &sink, write: fail }
-      if mode == 0 { rendered = text.render(failing, &parsed.value, fields[..]) } else { rendered = html.render(failing, &parsed.value, fields[..]) }
-      check(rendered.failure.io.kind == errors.Kind.Capacity && rendered.failure.io.native == #cast(isize, code) && rendered.offset == 1 && sink.calls == 1)
+      failing := io.Writer{ data: &sink, write: refuse }
+      rendered := render(mode, failing, &parsed.value, fields[..])
+      check(rendered.kind == fail.Kind.Capacity && rendered.native == #cast(isize, code) && sink.calls == 1)
       field_only := text.Template{ source: "{{x}}tail" }
       sink.calls = 0
-      if mode == 0 { rendered = text.render(failing, &field_only, fields[..]) } else { rendered = html.render(failing, &field_only, fields[..]) }
-      check(rendered.failure.io.kind == errors.Kind.Capacity && rendered.failure.io.native == #cast(isize, code) && rendered.offset == 0 && sink.calls == 1)
+      rendered = render(mode, failing, &field_only, fields[..])
+      check(rendered.kind == fail.Kind.Capacity && rendered.native == #cast(isize, code) && sink.calls == 1)
     }
     mem.arena_rewind(arena, mark)
   }
   seam := text.Template{ source: "{{x}}tail" }
-  unchanged := text.render_with(writer, &seam, fields[..], custom)
-  check(unchanged.failure.io.kind == errors.Kind.Unsupported && unchanged.failure.io.native == -73 && unchanged.offset == 97)
-  check(text.render(writer, nil, fields[..]).failure.parse.kind == parse.Kind.Syntax)
-  check(text.render_with(writer, &empty, fields[..], nil).failure.parse.kind == parse.Kind.Syntax)
+  custom_status: fail.Status
+  text.render_with(&custom_status, writer, &seam, fields[..], custom)
+  check(custom_status.failure.kind == fail.Kind.Unsupported && custom_status.failure.native == -73)
+  check(render(0, writer, nil, fields[..]).kind == fail.Kind.InvalidInput)
+  missing: fail.Status
+  text.render_with(&missing, writer, &empty, fields[..], nil)
+  check(missing.failure.kind == fail.Kind.InvalidInput)
 }
 '''
 
@@ -98,11 +104,13 @@ fn main() {
 # than return a portable parse failure. Keep each wrapper in its own process.
 PANIC_SOURCE = r'''use "std/PACKAGE/template" template
 use "std/mem" mem
+use "std/fail"
 fn main() {
+  status: fail.Status
   storage: [1 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(storage[..])
   arena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 1])
-  _ = template.parse(arena, "ab")
+  _ = template.parse(arena, &status, "ab")
 }
 '''
 

@@ -7,7 +7,7 @@ use "std/unicode/utf8" utf8
 use "std/bytes"
 use "std/encoding/json/scan"
 
-struct Cursor { source: []const u8, at: usize, error: parse.Kind }
+struct Cursor { source: []const u8, at: usize, error: fail.Kind }
 
 // Kind zero is a missing value: the nil_value stub that lookups return on a
 // miss. It is not a JSON null.
@@ -46,7 +46,6 @@ pub struct Value {
 pub const nil_value: Value = Value{}
 
 // root is the stub when parsing fails, so lookups work before ok is checked.
-pub struct ParseResult { root: *const Value, offset: usize, failure: parse.Failure }
 
 pub fn tokenizer(source: []const u8) Tokenizer {
   return Tokenizer{ source: source, offset: 0 }
@@ -332,8 +331,8 @@ fn write_string_into(destination: []u8, source: []const u8) []u8 {
 }
 
 fn failed_string(cursor: *Cursor) []const u8 {
-  if cursor.error == parse.Kind.Ok {
-    cursor.error = parse.Kind.Syntax
+  if cursor.error == fail.Kind.Ok {
+    cursor.error = fail.Kind.InvalidInput
   }
   return cursor.source[..0]
 }
@@ -490,7 +489,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
   }
   if byte == '"' {
     content := decoded_string(arena, cursor)
-    if cursor.error != parse.Kind.Ok { return nil }
+    if cursor.error != fail.Kind.Ok { return nil }
     string_node := node(arena, KindString)
     string_node.text = content
     return string_node
@@ -516,7 +515,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
       key: []const u8 = cursor.source[..0]
       if object {
         key = decoded_string(arena, cursor)
-        if cursor.error != parse.Kind.Ok { return nil }
+        if cursor.error != fail.Kind.Ok { return nil }
         skip(cursor)
         if cursor.at >= #len(cursor.source) || cursor.source[cursor.at] != ':' { return nil }
         cursor.at += 1
@@ -545,21 +544,25 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
 
 // Nodes, decoded strings, and object keys live in arena. Number text borrows source.
 // Source must outlive uses of number text; all nodes expire when arena storage resets.
-// Failure rewinds only this call's allocations. A full fixed arena panics.
-pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
+// Malformed input fails with InvalidInput at the offending byte and rewinds
+// this call's allocations; the root is then the missing value. A full fixed
+// arena panics.
+pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *const Value {
+  if status.failed { return &nil_value }
   mark := memory.arena_mark(arena)
   cursor := Cursor{ source: source, at: 0 }
   root := parse_node(arena, &cursor, 0)
   skip(&cursor)
   if root == nil || cursor.at != #len(source) {
     memory.arena_rewind(arena, mark)
-    message: []const u8 = ""
+    message: []const u8 = "malformed JSON"
     if root != nil {
       message = "trailing data"
     }
-    return ParseResult{ root: &nil_value, offset: cursor.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cursor.at, message: message } }
+    parse.malformed(status, "parse JSON", message, cursor.at)
+    return &nil_value
   }
-  return ParseResult{ root: root }
+  return root
 }
 
 pub fn push_null(arena: *memory.Arena) *Value {

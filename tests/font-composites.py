@@ -101,30 +101,37 @@ def fixture():
     for tag,data in tables.items(): directory+=tag.encode()+u32(0)+u32(offset)+u32(len(data));body+=data;offset+=len(data)
     return u32(0x10000)+u16(len(tables))+b'\0'*6+directory+body
 SOURCE='''use "std/font" font
-use "std/parse" parse
+use "std/fail"
 use "std/mem" mem
 fn check(ok: bool) { if !ok { #panic("composite contract") } }
 fn same(arena: *mem.Arena, face: *const font.Face, a, b: u16, size: u16) {
   mark := mem.arena_mark(arena)
-  left := font.raster(arena, face, a, size)
-  right := font.raster(arena, face, b, size)
-  check(!parse.failed(left.failure) && !parse.failed(right.failure))
-  check(left.value.width == right.value.width && left.value.height == right.value.height)
-  check(left.value.x_offset == right.value.x_offset && left.value.y_offset == right.value.y_offset && left.value.advance == right.value.advance)
-  check(#len(left.value.pixels) == #len(right.value.pixels))
-  for i in 0..#len(left.value.pixels) { check(left.value.pixels[i] == right.value.pixels[i]) }
+  status: fail.Status
+  left := font.raster(arena, &status, face, a, size)
+  right := font.raster(arena, &status, face, b, size)
+  check(!status.failed)
+  check(left.width == right.width && left.height == right.height)
+  check(left.x_offset == right.x_offset && left.y_offset == right.y_offset && left.advance == right.advance)
+  check(#len(left.pixels) == #len(right.pixels))
+  for i in 0..#len(left.pixels) { check(left.pixels[i] == right.pixels[i]) }
   mem.arena_rewind(arena, mark)
+}
+fn raster_kind(arena: *mem.Arena, face: *const font.Face, glyph: u16) fail.Kind {
+  status: fail.Status
+  _ = font.raster(arena, &status, face, glyph, 16)
+  return status.failure.kind
 }
 fn main() {
   arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
-  parsed := font.open(data[..])
-  check(!parse.failed(parsed.failure))
+  opening: fail.Status
+  face := font.open(&opening, data[..])
+  check(!opening.failed)
 '''
 for a,b in pairs:
-    for size in (16,25): SOURCE+=f'  same(arena, &parsed.value, {a}, {b}, {size})\n'
+    for size in (16,25): SOURCE+=f'  same(arena, &face, {a}, {b}, {size})\n'
 for index,kind in failures:
-    SOURCE+=f'  before_{index} := mem.arena_mark(arena)\n  check(font.raster(arena, &parsed.value, {index}, 16).failure.kind == parse.Kind.{kind})\n  check(mem.arena_mark(arena) == before_{index})\n'
+    SOURCE+=f'  before_{index} := mem.arena_mark(arena)\n  check(raster_kind(arena, &face, {index}) == fail.Kind.{ {'Syntax':'InvalidInput'}.get(kind, kind) })\n  check(mem.arena_mark(arena) == before_{index})\n'
 SOURCE+='}\n'
 with tempfile.TemporaryDirectory(prefix='dyn-composite-results-') as directory:
     work=Path(directory);data=fixture()

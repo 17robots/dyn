@@ -16,15 +16,23 @@ DYN = str(Path(os.environ.get("DYN", ROOT / "build/dyn-release")).resolve())
 
 AEAD = r'''use "std/crypto/aead" aead
 use "std/crypto/aes" aes
-use "std/parse" parse
+use "std/fail"
 use "std/mem" mem
-use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("fixture failed") } }
+fn seal_fails(arena: *mem.Arena, kind: aead.Cipher, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) fail.Kind {
+ status: fail.Status
+ sealed := aead.seal(arena, &status, kind, plaintext, additional, key, nonce)
+ check(!status.failed || (#len(sealed.ciphertext) == 0 && #len(sealed.tag) == 0))
+ return status.failure.kind
+}
+fn open_fails(arena: *mem.Arena, kind: aead.Cipher, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) fail.Kind {
+ status: fail.Status
+ plaintext := aead.open(arena, &status, kind, ciphertext, tag, additional, key, nonce)
+ check(!status.failed || #len(plaintext) == 0)
+ return status.failure.kind
+}
 fn main() {
- zs: aead.SealResult
- zo: aead.OpenResult
- check(!parse.failed(zs.failure) && zs.provider_code == 0 && #len(zs.value.ciphertext) == 0 && #len(zs.value.tag) == 0)
- check(!zo.valid && !parse.failed(zo.failure) && zo.provider_code == 0 && #len(zo.value) == 0)
+ status := fail.Status{ on_failure: fail.panic_on_failure }
  backing: [1024]u8
  mem.fill(backing[..], 165)
  arena := mem.arena_from_buffer(backing[..])
@@ -33,54 +41,51 @@ fn main() {
  key: [32]u8
  nonce: [12]u8
  plain: [16]u8
- sealed := aes.gcm_seal(arena, plain[..], "", key[..], nonce[..])
- check(!parse.failed(sealed.failure) && !parse.failed(sealed.failure) && sealed.provider_code == 0)
- check(mem.equal(sealed.value.ciphertext, "\xce\xa7\x40\x3d\x4d\x60\x6b\x6e\x07\x4e\xc5\xd3\xba\xf3\x9d\x18") && mem.equal(sealed.value.tag, "\xd0\xd1\xc8\xa7\x99\x99\x6b\xf0\x26\x5b\x98\xb5\xd4\x8a\xb9\x19"))
- opened := aes.gcm_open(arena, sealed.value.ciphertext, sealed.value.tag, "", key[..], nonce[..])
- check(opened.valid && mem.equal(opened.value, plain[..]) && mem.arena_used(arena) == 55)
+ sealed := aes.gcm_seal(arena, &status, plain[..], "", key[..], nonce[..])
+ check(mem.equal(sealed.ciphertext, "\xce\xa7\x40\x3d\x4d\x60\x6b\x6e\x07\x4e\xc5\xd3\xba\xf3\x9d\x18") && mem.equal(sealed.tag, "\xd0\xd1\xc8\xa7\x99\x99\x6b\xf0\x26\x5b\x98\xb5\xd4\x8a\xb9\x19"))
+ opened := aes.gcm_open(arena, &status, sealed.ciphertext, sealed.tag, "", key[..], nonce[..])
+ check(mem.equal(opened, plain[..]) && mem.arena_used(arena) == 55)
  mark := mem.arena_mark(arena)
- sealed.value.tag[0] ^= 1
- bad := aes.gcm_open(arena, sealed.value.ciphertext, sealed.value.tag, "", key[..], nonce[..])
- check(parse.failed(bad.failure) && !bad.valid && bad.failure.kind == parse.Kind.Checksum && bad.provider_code == 0 && #len(bad.value) == 0 && mem.arena_mark(arena) == mark)
+ sealed.tag[0] ^= 1
+ check(open_fails(arena, aead.Cipher.Aes256Gcm, sealed.ciphertext, sealed.tag, "", key[..], nonce[..]) == fail.Kind.InvalidInput && mem.arena_mark(arena) == mark)
  for i in mark..mark + 16 { check(arena.data[i] == 0) }
  for byte in prefix { check(byte == 77) }
- sealed.value.tag[0] ^= 1
- empty := aes.gcm_seal(arena, "", "", key[..], nonce[..])
- check(!parse.failed(empty.failure) && #len(empty.value.ciphertext) == 0 && mem.equal(empty.value.tag, "\x53\x0f\x8a\xfb\xc7\x45\x36\xb9\xa9\x63\xb4\xf1\xc4\xcb\x73\x8b"))
- empty_open := aes.gcm_open(arena, "", empty.value.tag, "", key[..], nonce[..])
- check(empty_open.valid && #len(empty_open.value) == 0)
- ch := aead.seal(arena, aead.Cipher.Chacha20Poly1305, "\x69\x6e\x64\x65\x70\x65\x6e\x64\x65\x6e\x74\x20\x4f\x70\x65\x6e\x53\x53\x4c\x20\x43\x68\x61\x43\x68\x61\x20\x6f\x72\x61\x63\x6c\x65\x20\x70\x6c\x61\x69\x6e\x74\x65\x78\x74", "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b")
- check(!parse.failed(ch.failure) && mem.equal(ch.value.ciphertext, "\xe0\x95\x6c\x65\x59\x72\xcb\x24\xd2\xed\x4b\xd3\xd7\x6d\x6b\x0d\x9a\x23\xfe\xc7\x12\x1c\xcc\xfa\x8e\xf6\x0f\xaa\x07\xa1\xc5\x50\x89\xa0\x5c\x9f\x87\x77\xdf\xec\x52\x4a\x02") && mem.equal(ch.value.tag, "\x46\x3e\x13\xac\xd0\x49\xe9\xc3\x29\x84\x24\x9a\xe9\x49\xc1\x4e"))
- co := aead.open(arena, aead.Cipher.Chacha20Poly1305, "\xe0\x95\x6c\x65\x59\x72\xcb\x24\xd2\xed\x4b\xd3\xd7\x6d\x6b\x0d\x9a\x23\xfe\xc7\x12\x1c\xcc\xfa\x8e\xf6\x0f\xaa\x07\xa1\xc5\x50\x89\xa0\x5c\x9f\x87\x77\xdf\xec\x52\x4a\x02", "\x46\x3e\x13\xac\xd0\x49\xe9\xc3\x29\x84\x24\x9a\xe9\x49\xc1\x4e", "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b")
- check(co.valid && mem.equal(co.value, "\x69\x6e\x64\x65\x70\x65\x6e\x64\x65\x6e\x74\x20\x4f\x70\x65\x6e\x53\x53\x4c\x20\x43\x68\x61\x43\x68\x61\x20\x6f\x72\x61\x63\x6c\x65\x20\x70\x6c\x61\x69\x6e\x74\x65\x78\x74"))
+ sealed.tag[0] ^= 1
+ empty := aes.gcm_seal(arena, &status, "", "", key[..], nonce[..])
+ check(#len(empty.ciphertext) == 0 && mem.equal(empty.tag, "\x53\x0f\x8a\xfb\xc7\x45\x36\xb9\xa9\x63\xb4\xf1\xc4\xcb\x73\x8b"))
+ empty_open := aes.gcm_open(arena, &status, "", empty.tag, "", key[..], nonce[..])
+ check(#len(empty_open) == 0)
+ ch := aead.seal(arena, &status, aead.Cipher.Chacha20Poly1305, "\x69\x6e\x64\x65\x70\x65\x6e\x64\x65\x6e\x74\x20\x4f\x70\x65\x6e\x53\x53\x4c\x20\x43\x68\x61\x43\x68\x61\x20\x6f\x72\x61\x63\x6c\x65\x20\x70\x6c\x61\x69\x6e\x74\x65\x78\x74", "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b")
+ check(mem.equal(ch.ciphertext, "\xe0\x95\x6c\x65\x59\x72\xcb\x24\xd2\xed\x4b\xd3\xd7\x6d\x6b\x0d\x9a\x23\xfe\xc7\x12\x1c\xcc\xfa\x8e\xf6\x0f\xaa\x07\xa1\xc5\x50\x89\xa0\x5c\x9f\x87\x77\xdf\xec\x52\x4a\x02") && mem.equal(ch.tag, "\x46\x3e\x13\xac\xd0\x49\xe9\xc3\x29\x84\x24\x9a\xe9\x49\xc1\x4e"))
+ co := aead.open(arena, &status, aead.Cipher.Chacha20Poly1305, "\xe0\x95\x6c\x65\x59\x72\xcb\x24\xd2\xed\x4b\xd3\xd7\x6d\x6b\x0d\x9a\x23\xfe\xc7\x12\x1c\xcc\xfa\x8e\xf6\x0f\xaa\x07\xa1\xc5\x50\x89\xa0\x5c\x9f\x87\x77\xdf\xec\x52\x4a\x02", "\x46\x3e\x13\xac\xd0\x49\xe9\xc3\x29\x84\x24\x9a\xe9\x49\xc1\x4e", "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b")
+ check(mem.equal(co, "\x69\x6e\x64\x65\x70\x65\x6e\x64\x65\x6e\x74\x20\x4f\x70\x65\x6e\x53\x53\x4c\x20\x43\x68\x61\x43\x68\x61\x20\x6f\x72\x61\x63\x6c\x65\x20\x70\x6c\x61\x69\x6e\x74\x65\x78\x74"))
  mark = mem.arena_mark(arena)
- ch.value.tag[0] ^= 1
- cb := aead.open(arena, aead.Cipher.Chacha20Poly1305, "\xe0\x95\x6c\x65\x59\x72\xcb\x24\xd2\xed\x4b\xd3\xd7\x6d\x6b\x0d\x9a\x23\xfe\xc7\x12\x1c\xcc\xfa\x8e\xf6\x0f\xaa\x07\xa1\xc5\x50\x89\xa0\x5c\x9f\x87\x77\xdf\xec\x52\x4a\x02", ch.value.tag, "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b")
- check(parse.failed(cb.failure) && !cb.valid && cb.failure.kind == parse.Kind.Checksum && cb.provider_code == 0 && #len(cb.value) == 0 && mem.arena_mark(arena) == mark)
+ ch.tag[0] ^= 1
+ check(open_fails(arena, aead.Cipher.Chacha20Poly1305, "\xe0\x95\x6c\x65\x59\x72\xcb\x24\xd2\xed\x4b\xd3\xd7\x6d\x6b\x0d\x9a\x23\xfe\xc7\x12\x1c\xcc\xfa\x8e\xf6\x0f\xaa\x07\xa1\xc5\x50\x89\xa0\x5c\x9f\x87\x77\xdf\xec\x52\x4a\x02", ch.tag, "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b") == fail.Kind.InvalidInput && mem.arena_mark(arena) == mark)
  for i in mark..mark + #len("\x69\x6e\x64\x65\x70\x65\x6e\x64\x65\x6e\x74\x20\x4f\x70\x65\x6e\x53\x53\x4c\x20\x43\x68\x61\x43\x68\x61\x20\x6f\x72\x61\x63\x6c\x65\x20\x70\x6c\x61\x69\x6e\x74\x65\x78\x74") { check(arena.data[i] == 0) }
  for k in 0..2 {
   kind := aead.Cipher.Aes256Gcm
   if k == 1 { kind = aead.Cipher.Chacha20Poly1305 }
-  check(parse.failed(aead.seal(arena, kind, "x", "", "short", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").failure))
-  check(parse.failed(aead.seal(arena, kind, "x", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "").failure))
-  check(parse.failed(aead.open(arena, kind, "x", "bad", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").failure))
+  check(seal_fails(arena, kind, "x", "", "short", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b") != fail.Kind.Ok)
+  check(seal_fails(arena, kind, "x", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "") != fail.Kind.Ok)
+  check(open_fails(arena, kind, "x", "bad", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b") != fail.Kind.Ok)
   huge := #slice(&key[0], 2147483648)
-  check(parse.failed(aead.seal(arena, kind, huge, "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").failure))
-  check(parse.failed(aead.seal(arena, kind, "", huge, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").failure))
-  check(parse.failed(aead.seal(arena, kind, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", huge).failure))
+  check(seal_fails(arena, kind, huge, "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b") != fail.Kind.Ok)
+  check(seal_fails(arena, kind, "", huge, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b") != fail.Kind.Ok)
+  check(seal_fails(arena, kind, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", huge) != fail.Kind.Ok)
  }
  invalid_kind := aead.Cipher.Aes256Gcm
  invalid_ptr := #cast(*u8, &invalid_kind)
  invalid_ptr.* = 99
- check(parse.failed(aead.seal(arena, invalid_kind, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").failure))
- check(parse.failed(aead.seal(arena, aead.Cipher.Chacha20Poly1305, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "12345678901").failure))
- check(parse.failed(aead.seal(arena, aead.Cipher.Chacha20Poly1305, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "1234567890123").failure))
+ check(seal_fails(arena, invalid_kind, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b") != fail.Kind.Ok)
+ check(seal_fails(arena, aead.Cipher.Chacha20Poly1305, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "12345678901") != fail.Kind.Ok)
+ check(seal_fails(arena, aead.Cipher.Chacha20Poly1305, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "1234567890123") != fail.Kind.Ok)
  check(mem.arena_mark(arena) == mark)
  long_nonce: [129]u8
- check(parse.failed(aes.gcm_seal(arena, "data", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", long_nonce[..]).failure) && mem.arena_mark(arena) == mark)
+ check(seal_fails(arena, aead.Cipher.Aes256Gcm, "data", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", long_nonce[..]) != fail.Kind.Ok && mem.arena_mark(arena) == mark)
  // GCM retains its variable nonempty nonce support.
- nonstandard := aes.gcm_seal(arena, "data", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "12345678")
- check(!parse.failed(nonstandard.failure) && !parse.failed(aes.gcm_open(arena, nonstandard.value.ciphertext, nonstandard.value.tag, "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "12345678").failure))
+ nonstandard := aes.gcm_seal(arena, &status, "data", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "12345678")
+ _ = aes.gcm_open(arena, &status, nonstandard.ciphertext, nonstandard.tag, "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "12345678")
  for algorithm in 0..2 {
  overlap_kind := aead.Cipher.Aes256Gcm
  if algorithm == 1 { overlap_kind = aead.Cipher.Chacha20Poly1305 }
@@ -101,8 +106,7 @@ fn main() {
   if which == 3 { no = storage[8..20] }
   if which == 4 { p = storage[..8] }
   if which == 5 { p = storage[25..30] }
-  failed := aead.seal(local, overlap_kind, p, ad, ke, no)
-  check(parse.failed(failed.failure) && failed.failure.kind == parse.Kind.Syntax && failed.provider_code == 0 && #len(failed.value.ciphertext) == 0 && #len(failed.value.tag) == 0 && mem.arena_used(local) == 7)
+  check(seal_fails(local, overlap_kind, p, ad, ke, no) == fail.Kind.InvalidInput && mem.arena_used(local) == 7)
   for byte in storage { check(byte == 42) }
  }
  for which in 0..5 {
@@ -121,14 +125,13 @@ fn main() {
   if which == 2 { ad = storage[8..11] }
   if which == 3 { ke = storage[8..40] }
   if which == 4 { no = storage[8..20] }
-  failed := aead.open(local, overlap_kind, ci, ta, ad, ke, no)
-  check(parse.failed(failed.failure) && failed.failure.kind == parse.Kind.Syntax && failed.provider_code == 0 && #len(failed.value) == 0 && mem.arena_used(local) == 7)
+  check(open_fails(local, overlap_kind, ci, ta, ad, ke, no) == fail.Kind.InvalidInput && mem.arena_used(local) == 7)
   for byte in storage { check(byte == 42) }
  }
  }
  mem.arena_release(arena)
  lazy := mem.arena_alloc(0)
- check(!parse.failed(aes.gcm_seal(lazy, "lazy", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").failure))
+ check(seal_fails(lazy, aead.Cipher.Aes256Gcm, "lazy", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b") == fail.Kind.Ok)
  mem.arena_release(lazy)
 }
 '''
@@ -136,7 +139,7 @@ fn main() {
 KEYS = r'''use "std/crypto/exchange" ex
 use "std/crypto/signature" sig
 use "std/bytes"
-use "std/io" errors
+use "std/fail"
 fn check(ok: bool) { if !ok { #panic("key contract") } }
 fn filled(data: []const u8, value: u8) bool { for i in 0..#len(data) { if data[i] != value { return false } }
 return true }
@@ -151,134 +154,172 @@ fn main() {
   signature: [64]u8 = [229, 86, 67, 0, 195, 96, 172, 114, 144, 134, 226, 204, 128, 110, 130, 138, 132, 135, 127, 30, 184, 229, 217, 116, 216, 115, 224, 101, 34, 73, 1, 85, 95, 184, 130, 21, 144, 163, 59, 172, 198, 30, 57, 112, 28, 249, 180, 107, 210, 91, 245, 240, 89, 91, 190, 36, 101, 81, 65, 67, 142, 122, 16, 11]
   output: [96]u8
   zero: [32]u8
-  zex := ex.Result{}
-  zsig := sig.Result{}
-  check(#len(zex.value) == 0 && !errors.failed(zex.failure) && zex.provider_code == 0)
-  check(#len(zsig.value) == 0 && !errors.failed(zsig.failure) && zsig.provider_code == 0)
   fill(output[..])
-  if true { r := ex.x25519_public(output[..], alice[..])
-    check(!errors.failed(r.failure) && r.provider_code == 0)
-    check(#len(r.value) == 32 && bytes.equal(r.value, alice_public[..]) && filled(output[32..], 165))
-    check(&r.value[0] == &output[0])
-    r.value[0] = 19
+  if true {
+    status: fail.Status
+    r := ex.x25519_public(&status, output[..], alice[..])
+    check(!status.failed)
+    check(#len(r) == 32 && bytes.equal(r, alice_public[..]) && filled(output[32..], 165))
+    check(&r[0] == &output[0])
+    r[0] = 19
     check(output[0] == 19)
   }
   fill(output[..])
-  if true { r := ex.x25519(output[..], alice[..], bob_public[..])
-    check(!errors.failed(r.failure) && r.provider_code == 0)
-    check(#len(r.value) == 32 && bytes.equal(r.value, shared[..]) && filled(output[32..], 165))
-    check(&r.value[0] == &output[0])
-    r.value[0] = 19
+  if true {
+    status: fail.Status
+    r := ex.x25519(&status, output[..], alice[..], bob_public[..])
+    check(!status.failed)
+    check(#len(r) == 32 && bytes.equal(r, shared[..]) && filled(output[32..], 165))
+    check(&r[0] == &output[0])
+    r[0] = 19
     check(output[0] == 19)
   }
   fill(output[..])
-  if true { r := sig.ed25519_public(output[..], seed[..])
-    check(!errors.failed(r.failure) && r.provider_code == 0)
-    check(#len(r.value) == 32 && bytes.equal(r.value, public[..]) && filled(output[32..], 165))
-    check(&r.value[0] == &output[0])
-    r.value[0] = 19
+  if true {
+    status: fail.Status
+    r := sig.ed25519_public(&status, output[..], seed[..])
+    check(!status.failed)
+    check(#len(r) == 32 && bytes.equal(r, public[..]) && filled(output[32..], 165))
+    check(&r[0] == &output[0])
+    r[0] = 19
     check(output[0] == 19)
   }
   fill(output[..])
-  if true { r := sig.ed25519_sign(output[..], "", seed[..])
-    check(!errors.failed(r.failure) && r.provider_code == 0)
-    check(#len(r.value) == 64 && bytes.equal(r.value, signature[..]) && filled(output[64..], 165))
-    check(&r.value[0] == &output[0])
-    r.value[0] = 19
+  if true {
+    status: fail.Status
+    r := sig.ed25519_sign(&status, output[..], "", seed[..])
+    check(!status.failed)
+    check(#len(r) == 64 && bytes.equal(r, signature[..]) && filled(output[64..], 165))
+    check(&r[0] == &output[0])
+    r[0] = 19
     check(output[0] == 19)
   }
   check(sig.ed25519_verify(signature[..], "", public[..]))
   check(!sig.ed25519_verify(signature[..], "x", public[..]))
   check(!sig.ed25519_verify(signature[..63], "", public[..]))
   fill(output[..])
-  if true { r := ex.x25519_public(output[..31], alice[..])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := ex.x25519_public(&status, output[..31], alice[..])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := ex.x25519_public(output[..], alice[..31])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := ex.x25519_public(&status, output[..], alice[..31])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := ex.x25519(output[..31], alice[..], bob_public[..])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := ex.x25519(&status, output[..31], alice[..], bob_public[..])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := ex.x25519(output[..], alice[..31], bob_public[..])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := ex.x25519(&status, output[..], alice[..31], bob_public[..])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := ex.x25519(output[..], alice[..], bob_public[..31])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := ex.x25519(&status, output[..], alice[..], bob_public[..31])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := sig.ed25519_public(output[..31], seed[..])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := sig.ed25519_public(&status, output[..31], seed[..])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := sig.ed25519_public(output[..], seed[..31])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := sig.ed25519_public(&status, output[..], seed[..31])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := sig.ed25519_sign(output[..63], "", seed[..])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := sig.ed25519_sign(&status, output[..63], "", seed[..])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := sig.ed25519_sign(output[..], "", seed[..31])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := sig.ed25519_sign(&status, output[..], "", seed[..31])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := ex.x25519_public(output[..], output[..32])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := ex.x25519_public(&status, output[..], output[..32])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := ex.x25519_public(output[..], output[64..96])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := ex.x25519_public(&status, output[..], output[64..96])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := ex.x25519(output[..], alice[..], output[32..64])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := ex.x25519(&status, output[..], alice[..], output[32..64])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := ex.x25519(output[..], output[16..48], bob_public[..])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := ex.x25519(&status, output[..], output[16..48], bob_public[..])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := sig.ed25519_public(output[..], output[64..96])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := sig.ed25519_public(&status, output[..], output[64..96])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := sig.ed25519_sign(output[..], "", output[..32])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := sig.ed25519_sign(&status, output[..], "", output[..32])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := sig.ed25519_sign(output[..], output[80..96], seed[..])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := sig.ed25519_sign(&status, output[..], output[80..96], seed[..])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  if true { r := sig.ed25519_sign(output[..], output[..1], seed[..])
-    check(r.failure.kind == errors.Kind.InvalidInput && r.provider_code == 0 && #len(r.value) == 0)
+  if true {
+    status: fail.Status
+    r := sig.ed25519_sign(&status, output[..], output[..1], seed[..])
+    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
-  failed := ex.x25519(output[..], alice[..], zero[..])
-  check(errors.failed(failed.failure) && failed.failure.kind == errors.Kind.System && #len(failed.value) == 0)
-  check(failed.provider_code == 0)
+  rejected: fail.Status
+  failed := ex.x25519(&rejected, output[..], alice[..], zero[..])
+  check(rejected.failed && rejected.failure.kind == fail.Kind.InvalidInput && #len(failed) == 0)
   check(filled(output[..32], 0) && filled(output[32..], 165))
   check(bytes.equal(alice[..], alice[..]) && filled(zero[..], 0))
 }
@@ -313,12 +354,12 @@ with tempfile.TemporaryDirectory(prefix="dyn-crypto-results-") as temporary:
             arguments = '"hello", "", key[..], nonce[..]'
             if operation == "open":
                 arguments = '"hello", tag[..], "", key[..], nonce[..]'
-            source = ('use "std/mem" mem\nuse "std/crypto/aead" aead\n'
-                      'fn main() {\n backing: [mem.ArenaBufferOverhead+4]u8\n'
+            source = ('use "std/mem" mem\nuse "std/fail"\nuse "std/crypto/aead" aead\n'
+                      'fn main() {\n status: fail.Status\n backing: [mem.ArenaBufferOverhead+4]u8\n'
                       ' arena := mem.arena_from_buffer(backing[..])\n'
                       ' _ = mem.push_bytes_uninit(arena, mem.arena_remaining(arena) - 4)\n'
                       ' key: [32]u8\n nonce: [12]u8\n tag: [16]u8\n'
-                      f' _ = aead.{operation}(arena, aead.Cipher.{cipher}, {arguments})\n}}\n')
+                      f' _ = aead.{operation}(arena, &status, aead.Cipher.{cipher}, {arguments})\n}}\n')
             exhaustion.append(project(root, cipher + "-" + operation, source))
     for release in (False, True):
         for case in cases:

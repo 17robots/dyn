@@ -1,11 +1,11 @@
-use "std/parse" parse
 use "std/mem" mem
 use "std/c" cabi
-use "std/io" io
+use "std/fail"
 // Dynamic-loader adapter for Linux, macOS and Windows. Handles own loader
 // references; symbols borrow them. Symbols are invalid after the library is
 // successfully closed. On Linux, linking requires libc (or libdl on older
 // systems). Flags apply only to POSIX loaders; Windows ignores them.
+// Failures carry the loader's own text (dlerror) or the Windows error code.
 pub type Handle = rawptr
 
 pub const Lazy: i32 = 1
@@ -13,56 +13,53 @@ pub const Now: i32 = 2
 pub const Local: i32 = 0
 pub const Global: i32 = 256
 
-pub struct OpenResult { value: Handle, message: *const u8, failure: io.Failure }
-pub struct SymbolResult { value: rawptr, message: *const u8, failure: io.Failure }
-
-// Loader messages borrow storage until the next loader operation.
-// POSIX dlerror supplies text, not a native integer code; error remains zero.
-// Windows supplies a GetLastError code in error; message stays nil.
-pub struct Result { message: *const u8, failure: io.Failure }
-
-pub fn open(path: []const u8, flags: i32) OpenResult {
+// Opens the library at path; nil after a failure.
+pub fn open(status: *fail.Status, path: []const u8, flags: i32) Handle {
+  if status.failed { return nil }
   storage: [4096 + mem.ArenaBufferOverhead]u8
   if #len(path) >= #len(storage) {
-    return OpenResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+    fail.invalid(status, "load library", path, "the path is too long")
+    return nil
   }
-  name := cabi.string_into(storage[..], path)
-  if parse.failed(name.failure) {
-    return OpenResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
-  return platform_open(name.value, flags)
+  name := cabi.string_into(status, storage[..], path)
+  if status.failed { return nil }
+  return platform_open(status, name, path, flags)
 }
 
-pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
-  if handle == nil { return SymbolResult{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
+// The address of the symbol called name; nil after a failure. A symbol may
+// itself be nil: check status.failed, not the address.
+pub fn symbol(status: *fail.Status, handle: Handle, name: []const u8) rawptr {
+  if status.failed { return nil }
+  if handle == nil {
+    fail.set(status, fail.make(fail.Kind.InvalidState, "find symbol", name, "the library is not open"))
+    return nil
+  }
   storage: [4096 + mem.ArenaBufferOverhead]u8
   if #len(name) >= #len(storage) {
-    return SymbolResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+    fail.invalid(status, "find symbol", name, "the name is too long")
+    return nil
   }
-  native_name := cabi.string_into(storage[..], name)
-  if parse.failed(native_name.failure) {
-    return SymbolResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
-  return platform_symbol(handle, native_name.value)
+  native_name := cabi.string_into(status, storage[..], name)
+  if status.failed { return nil }
+  return platform_symbol(status, handle, native_name, name)
 }
 
 // Clears the owned handle only after a successful close. Failure retains ownership.
-pub fn close(handle: *Handle) Result {
-  if handle == nil { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
-  value := handle.*
-  if value == nil { return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
-  closed := platform_close(value)
-  if !io.failed(closed.failure) {
+pub fn close(status: *fail.Status, handle: *Handle) {
+  if status.failed { return }
+  if handle == nil || handle.* == nil {
+    fail.set(status, fail.make(fail.Kind.InvalidState, "close library", "", "the library is not open"))
+    return
+  }
+  platform_close(status, handle.*)
+  if !status.failed {
     handle.* = nil
   }
-  return closed
 }
 
-// Returned bytes borrow loader-owned storage and die at next loader operation.
-pub fn last_error(maximum: usize) cabi.BytesResult {
-  return cabi.bytes_from_string(platform_error(), maximum)
-}
-
-pub fn error_bytes(error: *const u8, maximum: usize) cabi.BytesResult {
-  return cabi.bytes_from_string(error, maximum)
+// Records a POSIX loader failure with dlerror's text.
+fn loader_failed(status: *fail.Status, operation: []const u8, path: []const u8, message: *const u8) {
+  reading: fail.Status
+  text := cabi.bytes_from_string(&reading, message, 4096)
+  fail.set(status, fail.make(fail.Kind.System, operation, path, text))
 }

@@ -1,90 +1,75 @@
-use "std/io" io
-// Shared failure for parsers and decoders. Input decides the result, so a
-// failure names where the input went wrong instead of a system error code.
-pub enum Kind { Ok, Syntax, Truncated, Overflow, Capacity, Unsupported, Checksum, Overlap }
+use "std/fail"
+// Shared helpers for parsers and decoders. Input decides the result, so a
+// failure names where the input went wrong: InvalidInput (or Overflow,
+// Capacity, Unsupported) with the offset in bytes from the start of the
+// input, and a short message.
 
-// Kind.Ok is the zero value, so a zero Failure means success. The message is
-// static text; offset counts bytes from the start of the input.
-pub struct Failure { kind: Kind, offset: usize, message: []const u8 }
-
-// A stream decoder fails on its input text or on the stream that carries it.
-// Whether a step failed. Kind.Ok is the zero value, so a zero Failure succeeded.
-pub fn failed(failure: Failure) bool {
-  return failure.kind != Kind.Ok
+// Records that the input went wrong at offset.
+pub fn malformed(status: *fail.Status, operation: []const u8, message: []const u8, offset: usize) {
+  failed_at(status, fail.Kind.InvalidInput, operation, message, offset)
 }
 
-pub enum StreamKind { Ok, Parse, Io }
-pub struct StreamFailure { kind: StreamKind, parse: Failure, io: io.Failure }
-
-pub fn parse_failure(kind: Kind, offset: usize, message: []const u8) StreamFailure {
-  return StreamFailure{ kind: StreamKind.Parse, parse: Failure{ kind: kind, offset: offset, message: message } }
+// Records a failure of kind at offset into the input.
+pub fn failed_at(status: *fail.Status, kind: fail.Kind, operation: []const u8, message: []const u8, offset: usize) {
+  if status.failed { return }
+  failure := fail.make(kind, operation, "", message)
+  failure.offset = offset
+  failure.has_offset = true
+  fail.set(status, failure)
 }
-
-pub fn io_failure(kind: io.Kind, native: isize) StreamFailure {
-  return StreamFailure{ kind: StreamKind.Io, io: io.Failure{ kind: kind, native: native } }
-}
-
-// Payload readers speak io.Transfer, so a parse failure maps to the nearest io kind.
-pub fn stream_result(failure: StreamFailure, transferred: usize) io.Transfer {
-  kind := io.Kind.InvalidInput
-  if failure.kind == StreamKind.Io {
-    kind = failure.io.kind
-  } else if failure.parse.kind == Kind.Capacity {
-    kind = io.Kind.Capacity
-  } else if failure.parse.kind == Kind.Overflow {
-    kind = io.Kind.Overflow
-  }
-  return io.Transfer{ transferred: transferred, failure: io.Failure{ kind: kind, native: failure.io.native } }
-}
-
-// A value and how decoding went. value is zero or partial on failure.
-pub struct Result(T) { value: T, failure: Failure }
-// Decoded or encoded bytes, for codecs with nothing else to report.
-pub type Bytes = Result([]u8)
 
 // Whole text as a decimal u64: one or more ASCII digits, nothing else (no
-// sign, space or underscore). Syntax at the first bad byte; Overflow past
-// the u64 range.
-pub fn u64_decimal(text: []const u8) Result(u64) {
+// sign, space or underscore). InvalidInput at the first bad byte; Overflow
+// past the u64 range.
+pub fn u64_decimal(status: *fail.Status, text: []const u8) u64 {
+  if status.failed { return 0 }
   if #len(text) == 0 {
-    return Result(u64){ failure: Failure{ kind: Kind.Syntax, message: "expected digits" } }
+    malformed(status, "parse number", "expected digits", 0)
+    return 0
   }
   value: u64 = 0
   for i in 0..#len(text) {
     byte := text[i]
     if byte < '0' || byte > '9' {
-      return Result(u64){ failure: Failure{ kind: Kind.Syntax, offset: i, message: "expected a digit" } }
+      malformed(status, "parse number", "expected a digit", i)
+      return 0
     }
     digit := #cast(u64, byte - '0')
     if value > (18446744073709551615 - digit) / 10 {
-      return Result(u64){ failure: Failure{ kind: Kind.Overflow, offset: i, message: "number exceeds u64" } }
+      failed_at(status, fail.Kind.Overflow, "parse number", "number exceeds u64", i)
+      return 0
     }
     value = value * 10 + digit
   }
-  return Result(u64){ value: value }
+  return value
 }
 
 // Whole text as a decimal i64 with an optional leading '-'.
-pub fn i64_decimal(text: []const u8) Result(i64) {
+pub fn i64_decimal(status: *fail.Status, text: []const u8) i64 {
+  if status.failed { return 0 }
   negative := #len(text) > 0 && text[0] == '-'
   start: usize = 0
   if negative {
     start = 1
   }
-  magnitude := u64_decimal(text[start..])
-  if magnitude.failure.kind != Kind.Ok {
-    failure := magnitude.failure
+  digits: fail.Status
+  magnitude := u64_decimal(&digits, text[start..])
+  if digits.failed {
+    failure := digits.failure
     failure.offset += start
-    return Result(i64){ failure: failure }
+    fail.set(status, failure)
+    return 0
   }
   if negative {
-    if magnitude.value > 9223372036854775808 {
-      return Result(i64){ failure: Failure{ kind: Kind.Overflow, offset: start, message: "number below i64 minimum" } }
+    if magnitude > 9223372036854775808 {
+      failed_at(status, fail.Kind.Overflow, "parse number", "number below i64 minimum", start)
+      return 0
     }
-    return Result(i64){ value: #cast(i64, #wrapping(0 - magnitude.value)) }
+    return #cast(i64, #wrapping(0 - magnitude))
   }
-  if magnitude.value > 9223372036854775807 {
-    return Result(i64){ failure: Failure{ kind: Kind.Overflow, offset: start, message: "number exceeds i64" } }
+  if magnitude > 9223372036854775807 {
+    failed_at(status, fail.Kind.Overflow, "parse number", "number exceeds i64", start)
+    return 0
   }
-  return Result(i64){ value: #cast(i64, magnitude.value) }
+  return #cast(i64, magnitude)
 }

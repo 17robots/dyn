@@ -1,47 +1,57 @@
 use "std/parse" parse
+use "std/fail"
 use "std/mem" mem
 use "std/encoding/binary" binary
 // True-color and gray TGA, including RLE and all origin directions. Color-map
 // images, 15/16-bit true color, and interleaving return Unsupported.
 pub struct Info { width: usize, height: usize, channels: u8 }
 pub struct Image { info: Info, pixels: []u8 }
-pub struct Result { value: Image, offset: usize, failure: parse.Failure }
-pub type EncodeResult = parse.Bytes
 // Ownership: pixels borrow arena backing; source is read only during this call.
 // Inputs must not borrow unused backing of the output arena.
 // Invalid/unsupported input restores the arena mark. Allocation exhaustion panics.
-pub fn decode(arena: *mem.Arena, source: []const u8) Result {
-  if #len(source) < 18 { return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
+pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image {
+  if status.failed { return Image{} }
+  if #len(source) < 18 {
+    fail.set(status, fail.make(fail.Kind.InvalidInput, "decode TGA", "", "malformed TGA"))
+    return Image{}
+  }
   kind := source[2]
   if source[1] != 0 || (kind != 2 && kind != 3 && kind != 10 && kind != 11) || (source[17] & 192) != 0 {
-    return Result{ failure: parse.Failure{ kind: parse.Kind.Unsupported } }
+    fail.set(status, fail.make(fail.Kind.Unsupported, "decode TGA", "", "unsupported TGA feature"))
+    return Image{}
   }
   gray := kind == 3 || kind == 11
   rle := kind == 10 || kind == 11
   bits := source[16]
   if (gray && bits != 8 && bits != 16) || (!gray && bits != 24 && bits != 32) {
-    return Result{ offset: 16, failure: parse.Failure{ kind: parse.Kind.Unsupported, offset: 16 } }
+    parse.failed_at(status, fail.Kind.Unsupported, "decode TGA", "unsupported TGA feature", 16)
+    return Image{}
   }
   alpha := source[17] & 15
   if (bits == 8 || bits == 24) && alpha != 0 {
-    return Result{ offset: 17, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: 17 } }
+    parse.failed_at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", 17)
+    return Image{}
   }
   if (bits == 16 || bits == 32) && alpha != 0 && alpha != 8 {
-    return Result{ offset: 17, failure: parse.Failure{ kind: parse.Kind.Unsupported, offset: 17 } }
+    parse.failed_at(status, fail.Kind.Unsupported, "decode TGA", "unsupported TGA feature", 17)
+    return Image{}
   }
   width := #cast(u32, binary.load_u16_le(source[12..]))
   height := #cast(u32, binary.load_u16_le(source[14..]))
   if width == 0 || height == 0 {
-    return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
+    fail.set(status, fail.make(fail.Kind.InvalidInput, "decode TGA", "", "malformed TGA"))
+    return Image{}
   }
   count := #cast(usize, width) * #cast(usize, height)
   if #cast(u64, width) * #cast(u64, height) > 16777216 {
-    return Result{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
+    fail.set(status, fail.make(fail.Kind.Capacity, "decode TGA", "", "the TGA exceeds the limits"))
+    return Image{}
   }
   stride := #cast(usize, bits / 8)
   at := 18 + #cast(usize, source[0])
   if at > #len(source) {
-    return Result{ offset: 18, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: 18 } }
+    parse.failed_at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", 18)
+    return Image{}
   }
   mark := mem.arena_mark(arena)
   success := false
@@ -57,21 +67,24 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
     length: usize = 1
     if rle {
       if at == #len(source) {
-        return Result{ offset: at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: at } }
+        parse.failed_at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", at)
+        return Image{}
       }
       repeat = (source[at] & 128) != 0
       length = #cast(usize, source[at] & 127) + 1
       at += 1
     }
     if length > count - produced {
-      return Result{ offset: at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: at } }
+      parse.failed_at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", at)
+      return Image{}
     }
     needed := length * stride
     if repeat {
       needed = stride
     }
     if needed > #len(source) - at {
-      return Result{ offset: at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: at } }
+      parse.failed_at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", at)
+      return Image{}
     }
     for j in 0..length {
       src := at
@@ -106,19 +119,26 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
     produced += length
   }
   success = true
-  return Result{ value: Image{ info: Info{ width: width, height: height, channels: 4 }, pixels: pixels } }
+  return Image{ info: Info{ width: width, height: height, channels: 4 }, pixels: pixels }
 }
 // Ownership: encoded bytes borrow arena backing; pixels are not retained.
 // Inputs must not borrow unused backing of the output arena.
-pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: usize, channels: u8) EncodeResult {
+pub fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width, height: usize, channels: u8) []u8 {
+  empty: []u8
+  if status.failed { return empty }
   if width == 0 || height == 0 || width > 65535 || height > 65535 || (channels != 1 && channels != 2 && channels != 3 && channels != 4) {
-    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
+    fail.set(status, fail.make(fail.Kind.InvalidInput, "encode TGA", "", "invalid pixels or size"))
+    return empty
   }
   count := #cast(u64, width) * #cast(u64, height)
-  if count > 16777216 { return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Capacity } } }
+  if count > 16777216 {
+    fail.set(status, fail.make(fail.Kind.Capacity, "encode TGA", "", "the TGA exceeds the limits"))
+    return empty
+  }
   size := #cast(usize, count) * #cast(usize, channels)
   if #len(pixels) != size {
-    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
+    fail.set(status, fail.make(fail.Kind.InvalidInput, "encode TGA", "", "invalid pixels or size"))
+    return empty
   }
   output := mem.push_array(u8, arena, 18 + size)
   output[2] = 2
@@ -146,5 +166,5 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: usize, chann
       output[dst + channels - 1] = pixels[src + channels - 1]
     }
   }
-  return EncodeResult{ value: output }
+  return output
 }

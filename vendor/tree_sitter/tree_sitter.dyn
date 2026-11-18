@@ -1,4 +1,5 @@
 use "std/c"
+use "std/fail"
 #link("tree-sitter")
 
 // Tree-sitter C ABI. Parser/Tree are provider-owned; Node borrows its Tree.
@@ -8,7 +9,6 @@ pub type Language = rawptr
 pub struct Point { row: u32, column: u32 }
 pub struct Edit { start_byte: u32, old_end_byte: u32, new_end_byte: u32, start_point: Point, old_end_point: Point, new_end_point: Point }
 pub struct Node { context: [4]u32, id: rawptr, tree: Tree }
-pub struct ParseResult { tree: Tree, failure: io.Failure }
 
 pub fn parser_create_owned() Parser {
   return native_parser_new()
@@ -22,10 +22,14 @@ pub fn parser_language(parser: Parser, language: Language) bool {
   return parser != nil && language != nil && native_set_language(parser, language)
 }
 // Source borrowed only during call. Old tree remains caller-owned. Edit it first
-// when reparsing changed source. Syntax errors are represented in a successful tree.
-pub fn parse(parser: Parser, old_tree: Tree, source: []const u8) ParseResult {
+// when reparsing changed source. Syntax errors are represented in a successful
+// tree; the tree is the caller's to destroy. Without a language, or when the
+// parse is cancelled, fails with InvalidState.
+pub fn parse(status: *fail.Status, parser: Parser, old_tree: Tree, source: []const u8) Tree {
+  if status.failed { return nil }
   if parser == nil || #len(source) > 4294967295 {
-    return ParseResult{ failure: io.Failure{ kind: io.Kind.System } }
+    fail.invalid(status, "parse", "", "no parser, or the source is too large")
+    return nil
   }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
@@ -33,7 +37,10 @@ pub fn parse(parser: Parser, old_tree: Tree, source: []const u8) ParseResult {
     pointer = &source[0]
   }
   tree := native_parse(parser, old_tree, pointer, #cast(u32, #len(source)))
-  return ParseResult{ tree: tree, failure: io.failure_if(tree == nil) }
+  if tree == nil {
+    fail.set(status, fail.make(fail.Kind.InvalidState, "parse", "", "the parser has no language or was cancelled"))
+  }
+  return tree
 }
 pub fn tree_destroy_owned(tree: Tree) {
   if tree != nil {
@@ -85,7 +92,9 @@ pub fn child(node: Node, index: u32) Node {
   return native_child(node, index)
 }
 // Type name borrows grammar storage; grammar must remain loaded.
-pub fn node_type(node: Node, maximum: usize) c.BytesResult {
-  if !node_valid(node) { return c.BytesResult{} }
-  return c.bytes_from_string(native_type(node), maximum)
+// The node's grammar name; empty for an invalid node.
+pub fn node_type(node: Node, maximum: usize) []const u8 {
+  if !node_valid(node) { return "" }
+  reading: fail.Status
+  return c.bytes_from_string(&reading, native_type(node), maximum)
 }

@@ -1,5 +1,5 @@
 use "vendor/sdl3"
-use "std/io"
+use "std/fail"
 #link("SDL3_mixer")
 // SDL_mixer 3.2.4. Balance init/quit after destroying mixers and audio.
 // SDL owns these allocations. Destroy tracks before mixers; destroying a mixer
@@ -7,7 +7,6 @@ use "std/io"
 pub type Mixer = rawptr
 pub type Audio = rawptr
 pub type Track = rawptr
-pub struct Result { written: usize, code: i32, failure: io.Failure }
 pub extern fn init "MIX_Init"() bool
 pub extern fn quit "MIX_Quit"()
 // Offline stereo f32 at 48 kHz, no device. Pull audio into caller storage.
@@ -57,14 +56,19 @@ pub fn playing(track: Track) bool {
   return track != nil && native_playing(track)
 }
 // Samples are interleaved stereo f32. Length must be even. written is the
-// number of meaningful samples; provider fills the remaining output with silence.
-pub fn generate(mixer: Mixer, samples: []f32) Result {
+// The count of meaningful samples; provider fills the rest with silence.
+pub fn generate(status: *fail.Status, mixer: Mixer, samples: []f32) usize {
+  if status.failed { return 0 }
   if mixer == nil || #len(samples) == 0 || #len(samples) % 2 != 0 || #len(samples) > 536870911 {
-    return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
+    fail.invalid(status, "generate audio", "", "no mixer, or an odd or empty sample buffer")
+    return 0
   }
   code := native_generate(mixer, #cast(rawptr, &samples[0]), #cast(i32, (#len(samples) * 4)))
-  if code < 0 { return Result{ code: code, failure: io.Failure{ kind: io.Kind.System } } }
-  return Result{ written: #cast(usize, code) / 4, code: code }
+  if code < 0 {
+    sdl3.record_error(status, "generate audio")
+    return 0
+  }
+  return #cast(usize, code) / 4
 }
 extern fn native_create "MIX_CreateMixer"(spec: *const sdl3.AudioSpec) Mixer
 extern fn native_destroy "MIX_DestroyMixer"(mixer: Mixer)

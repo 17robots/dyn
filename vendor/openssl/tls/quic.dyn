@@ -120,28 +120,27 @@ pub struct QuicStream { handle: rawptr, id: u64, unidirectional: bool }
 pub fn quic_server_context_create(arena: *mem.Arena, certificate: []const u8, key: []const u8) ContextResult {
   mark := mem.arena_mark(arena)
   defer mem.arena_rewind(arena, mark)
-  certificate_path := c.string_from_bytes(arena, certificate)
-  key_path := c.string_from_bytes(arena, key)
-  if parse.failed(certificate_path.failure) || parse.failed(key_path.failure) {
-    return ContextResult{ error: ErrorKind.InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  converting: fail.Status
+  certificate_path := c.string_from_bytes(arena, &converting, certificate)
+  key_path := c.string_from_bytes(arena, &converting, key)
+  if converting.failed { return ContextResult{ error: ErrorKind.InvalidArgument } }
   provider_clear_error()
   method: rawptr = nil
   if load_native() {
     method = native.quic_server_method()
   }
   if method == nil {
-    return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error(), failure: io.Failure{ kind: io.Kind.System } }
+    return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error() }
   }
   context := ssl_context_new(method)
   if context == nil {
-    return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error(), failure: io.Failure{ kind: io.Kind.System } }
+    return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error() }
   }
-  if context_use_certificate(context, certificate_path.value) != 1 ||
-    context_use_key(context, key_path.value, FileTypePem) != 1 || context_check_key(context) != 1 {
+  if context_use_certificate(context, certificate_path) != 1 ||
+    context_use_key(context, key_path, FileTypePem) != 1 || context_check_key(context) != 1 {
     code := provider_error()
     ssl_context_free(context)
-    return ContextResult{ error: ErrorKind.Provider, provider_code: code, failure: io.Failure{ kind: io.Kind.System } }
+    return ContextResult{ error: ErrorKind.Provider, provider_code: code }
   }
   // Streams write what fits and report the count.
   _ = ssl_context_control(context, ControlMode, ModePartialWrite, nil)

@@ -12,74 +12,96 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 NATIVE = platform.system() == 'Darwin' and platform.machine() == 'arm64'
 SOURCE = r'''use "./watch" watch
+use "std/fail"
 use "std/io" io
 use "std/time" time
 use "std/bytes" bytes
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn stage(name: []const u8) { io.println("{}",name) }
 fn await_event(state: *watch.Watcher, id: i32, name: []const u8, mask: u32, renamed: bool) {
+  status: fail.Status
   for attempt in 0..1500 {
-    result := watch.next(state)
-    require(!io.failed(result.failure),"event error")
-    if result.status == watch.Status.Event && result.event.watch == id && (result.event.mask & mask) != 0 && bytes.equal(result.event.name,name) {
+    result := watch.next(&status, state)
+    require(!status.failed,"event error")
+    if result.found && result.event.watch == id && (result.event.mask & mask) != 0 && bytes.equal(result.event.name,name) {
       if renamed { require(result.event.cookie == 0 && result.event.rescan && state.rescan_required,"rename rescan") }
       return
     }
-    _ = time.sleep(time.Millisecond*10)
+    time.sleep(time.Millisecond*10)
   }
   #panic("event timed out")
+}
+fn added(state: *watch.Watcher, path: []const u8) i32 {
+  status: fail.Status
+  id := watch.add(&status, state, path, watch.Changes)
+  require(!status.failed,"add")
+  return id
+}
+fn rejected(state: *watch.Watcher, path: []const u8) bool {
+  status: fail.Status
+  _ = watch.add(&status, state, path, watch.Changes)
+  return status.failed
+}
+fn removed(state: *watch.Watcher, id: i32) bool {
+  status: fail.Status
+  watch.remove(&status, state, id)
+  return !status.failed
 }
 fn main() {
   watch.audit_callbacks()
   empty := watch.Watcher{}
   watch.close(&empty)
-  require(io.failed(watch.next(&empty).failure),"default next")
+  unopened: fail.Status
+  _ = watch.next(&unopened, &empty)
+  require(unopened.failed,"default next")
   storage: [1024]u8
-  failed := watch.open(storage[..271])
-  watch.close(&failed.value)
-  require(io.failed(failed.failure),"short buffer")
-  opened := watch.open(storage[..])
-  require(!io.failed(opened.failure),"FSEvents open")
-  defer { watch.close(&opened.value) }
-  require(io.failed(watch.add(&opened.value,"missing-directory",watch.Changes).failure),"missing path")
-  require(io.failed(watch.add(&opened.value,"existing",watch.Changes).failure),"file path")
-  added := watch.add(&opened.value,".",watch.Changes)
-  other := watch.add(&opened.value,"other",watch.Changes)
-  require(!io.failed(added.failure) && !io.failed(other.failure) && added.value != other.value,"multiple watches")
-  require(watch.add(&opened.value,".",watch.Changes).value == added.value,"repeat add identity")
+  short: fail.Status
+  failed := watch.open(&short, storage[..271])
+  watch.close(&failed)
+  require(short.failed,"short buffer")
+  status: fail.Status
+  opened := watch.open(&status, storage[..])
+  require(!status.failed,"FSEvents open")
+  defer { watch.close(&opened) }
+  require(rejected(&opened,"missing-directory"),"missing path")
+  require(rejected(&opened,"existing"),"file path")
+  current := added(&opened,".")
+  other := added(&opened,"other")
+  require(current != other,"multiple watches")
+  require(added(&opened,".") == current,"repeat add identity")
   stage("create")
-  await_event(&opened.value,added.value,"café-😀",watch.Create,false)
+  await_event(&opened,current,"café-😀",watch.Create,false)
   stage("write")
-  await_event(&opened.value,added.value,"existing",watch.Modify,false)
+  await_event(&opened,current,"existing",watch.Modify,false)
   stage("rename")
-  await_event(&opened.value,added.value,"renamed",watch.MoveTo,true)
-  watch.acknowledge_rescan(&opened.value)
-  require(!opened.value.rescan_required,"rescan acknowledgement")
+  await_event(&opened,current,"renamed",watch.MoveTo,true)
+  watch.acknowledge_rescan(&opened)
+  require(!opened.rescan_required,"rescan acknowledgement")
   stage("delete")
-  await_event(&opened.value,added.value,"renamed",watch.Delete,false)
+  await_event(&opened,current,"renamed",watch.Delete,false)
   stage("other")
-  await_event(&opened.value,other.value,"second",watch.Create,false)
-  require(!io.failed(watch.remove(&opened.value,added.value).failure),"remove")
-  require(io.failed(watch.remove(&opened.value,added.value).failure),"stale remove")
+  await_event(&opened,other,"second",watch.Create,false)
+  require(removed(&opened,current),"remove")
+  require(!removed(&opened,current),"stale remove")
   stage("removed")
-  await_event(&opened.value,other.value,"third",watch.Create,false)
+  await_event(&opened,other,"third",watch.Create,false)
   for attempt in 0..50 {
-    result := watch.next(&opened.value)
-    require(!io.failed(result.failure),"after remove")
-    require(result.status != watch.Status.Event || result.event.watch != added.value,"removed watch delivery")
-    _ = time.sleep(time.Millisecond*10)
+    result := watch.next(&status, &opened)
+    require(!status.failed,"after remove")
+    require(!result.found || result.event.watch != current,"removed watch delivery")
+    time.sleep(time.Millisecond*10)
   }
   stage("close")
   // Each close invalidates pending callbacks before freeing/reusing contexts.
   for iteration in 0..16 {
-    pending := watch.open(storage[..])
-    require(!io.failed(pending.failure),"pending open")
-    require(!io.failed(watch.add(&pending.value,".",watch.Changes).failure),"pending add")
-    _ = time.sleep(time.Millisecond*5)
-    watch.close(&pending.value)
-    watch.close(&pending.value)
+    pending := watch.open(&status, storage[..])
+    require(!status.failed,"pending open")
+    _ = added(&pending,".")
+    time.sleep(time.Millisecond*5)
+    watch.close(&pending)
+    watch.close(&pending)
   }
-  watch.close(&opened.value)
+  watch.close(&opened)
   stage("passed")
 }
 '''
@@ -87,6 +109,18 @@ fn main() {
 # actual private callback/queue without manufacturing filesystem overflow or
 # exporting testing APIs. The nonzero stream value is compared, never called.
 AUDIT = r'''
+fn audit_next(watcher: *Watcher) Next {
+  status: fail.Status
+  item := next(&status, watcher)
+  if status.failed { #panic("audit next") }
+  return item
+}
+fn audit_path(storage: []u8, text: []const u8) *const u8 {
+  status: fail.Status
+  path := c.string_into(&status, storage, text)
+  if status.failed { #panic("audit path") }
+  return path
+}
 pub fn audit_callbacks() {
   allocation := mem.arena_alloc(mem.ArenaHeader + #alignof(State) + #sizeof(State))
   defer { mem.arena_release(allocation) }
@@ -103,40 +137,37 @@ pub fn audit_callbacks() {
   output: [1024]u8
   watcher := Watcher{state:state,storage:output[..]}
   name_storage: [128]u8
-  path := c.string_into(name_storage[..],"/watched/café-😀")
-  pointers: [1]*const u8 = [path.value]
+  pointers: [1]*const u8 = [audit_path(name_storage[..],"/watched/café-😀")]
   flags: [1]u32 = [256]
   ids: [1]u64 = [1]
   callback(nil,#cast(rawptr, slot),1,#cast(rawptr, &pointers[0]),&flags[0],&ids[0])
-  item := next(&watcher)
-  if item.status != Status.Event || item.event.watch != 7 || item.event.mask != Create || !bytes.equal(item.event.name,"café-😀") { #panic("callback Unicode child") }
+  item := audit_next(&watcher)
+  if !item.found || item.event.watch != 7 || item.event.mask != Create || !bytes.equal(item.event.name,"café-😀") { #panic("callback Unicode child") }
   for i in 0..128 { name_storage[i] = 0 }
   if !bytes.equal(item.event.name,"café-😀") { #panic("callback retained borrowed native path") }
-  path = c.string_into(name_storage[..],"/watched/nested/file")
-  pointers[0] = path.value
+  pointers[0] = audit_path(name_storage[..],"/watched/nested/file")
   callback(nil,#cast(rawptr, slot),1,#cast(rawptr, &pointers[0]),&flags[0],&ids[0])
-  if next(&watcher).status != Status.Empty { #panic("recursive event leaked") }
-  path = c.string_into(name_storage[..],"/watched/file")
-  pointers[0] = path.value
+  if audit_next(&watcher).found { #panic("recursive event leaked") }
+  pointers[0] = audit_path(name_storage[..],"/watched/file")
   flags[0] = 2048
   callback(nil,#cast(rawptr, slot),1,#cast(rawptr, &pointers[0]),&flags[0],&ids[0])
-  item = next(&watcher)
+  item = audit_next(&watcher)
   if !item.event.rescan || item.event.cookie != 0 || item.event.mask != (MoveFrom|MoveTo) { #panic("callback rename") }
   flags[0] = 4
   callback(nil,#cast(rawptr, slot),1,#cast(rawptr, &pointers[0]),&flags[0],&ids[0])
-  if !next(&watcher).event.rescan || !watcher.rescan_required { #panic("kernel dropped events") }
-  for next(&watcher).status == Status.Event {}
+  if !audit_next(&watcher).event.rescan || !watcher.rescan_required { #panic("kernel dropped events") }
+  for audit_next(&watcher).found {}
   acknowledge_rescan(&watcher)
   for i in 0..80 { publish(slot,"overflow",Create,false) }
-  if !next(&watcher).event.rescan || !watcher.rescan_required { #panic("bounded queue overflow") }
+  if !audit_next(&watcher).event.rescan || !watcher.rescan_required { #panic("bounded queue overflow") }
   count: usize = 0
-  for next(&watcher).status == Status.Event { count += 1 }
+  for audit_next(&watcher).found { count += 1 }
   if count != 63 { #panic("queue capacity") }
   publish(slot,"reused",Create,false)
-  if !bytes.equal(next(&watcher).event.name,"reused") { #panic("queue wrap/reuse") }
+  if !bytes.equal(audit_next(&watcher).event.name,"reused") { #panic("queue wrap/reuse") }
   watcher.storage = output[..1]
   publish(slot,"long",Create,false)
-  if !next(&watcher).event.rescan { #panic("short caller output") }
+  if !audit_next(&watcher).event.rescan { #panic("short caller output") }
 }
 '''
 

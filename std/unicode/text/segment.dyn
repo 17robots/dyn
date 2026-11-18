@@ -94,10 +94,7 @@ const FlagFinal: u32 = 16384
 const FlagUnassigned: u32 = 32768
 const FlagDottedCircle: u32 = 65536
 
-pub struct Breaks { value: []usize, offset: usize, failure: parse.Failure }
-
 pub struct LineBreak { offset: usize, mandatory: bool }
-pub struct LineBreaks { value: []LineBreak, offset: usize, failure: parse.Failure }
 
 // One unit after attaching marks: base class and flags, first and last code
 // point indexes, and its starting byte.
@@ -151,14 +148,18 @@ fn mid_num_q(class: u8) bool {
 }
 
 // Word boundaries as byte offsets, excluding 0 and including #len(text) when
-// text is not empty. Invalid UTF-8 fails with its offset and allocates nothing.
-pub fn word_breaks(arena: *mem.Arena, text: []const u8) Breaks {
+// text is not empty. Invalid UTF-8 fails with InvalidInput at its offset and
+// allocates nothing.
+pub fn word_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []usize {
+  empty: []usize
+  if status.failed { return empty }
   count := utf8.codepoint_count(text)
   if !count.valid {
-    return Breaks{ offset: first_invalid(text), failure: parse.Failure{ kind: parse.Kind.Syntax, offset: first_invalid(text) } }
+    parse.malformed(status, "find word breaks", "invalid UTF-8", first_invalid(text))
+    return empty
   }
   n := count.value
-  if n == 0 { return Breaks{} }
+  if n == 0 { return empty }
   result := mem.push_array(usize, arena, n)
   mark := mem.arena_mark(arena)
   values := mem.push_array(u32, arena, n)
@@ -242,7 +243,7 @@ pub fn word_breaks(arena: *mem.Arena, text: []const u8) Breaks {
   result[used] = #len(text)
   used += 1
   mem.arena_rewind(arena, mark - (n - used) * #sizeof(usize))
-  return Breaks{ value: result[..used] }
+  return result[..used]
 }
 
 fn unit_class(units: []Unit, index: usize) u8 {
@@ -403,13 +404,17 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
 // Line break opportunities as byte offsets where a line may start, excluding
 // 0. The last entry is #len(text) and is always mandatory. Mandatory breaks
 // follow hard line breaks (BK, CR, LF, NL).
-pub fn line_breaks(arena: *mem.Arena, text: []const u8) LineBreaks {
+// Invalid UTF-8 fails as for word_breaks.
+pub fn line_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []LineBreak {
+  empty: []LineBreak
+  if status.failed { return empty }
   count := utf8.codepoint_count(text)
   if !count.valid {
-    return LineBreaks{ offset: first_invalid(text), failure: parse.Failure{ kind: parse.Kind.Syntax, offset: first_invalid(text) } }
+    parse.malformed(status, "find line breaks", "invalid UTF-8", first_invalid(text))
+    return empty
   }
   n := count.value
-  if n == 0 { return LineBreaks{} }
+  if n == 0 { return empty }
   result := mem.push_array(LineBreak, arena, n)
   mark := mem.arena_mark(arena)
   values := mem.push_array(u32, arena, n)
@@ -452,5 +457,5 @@ pub fn line_breaks(arena: *mem.Arena, text: []const u8) LineBreaks {
   result[used] = LineBreak{ offset: #len(text), mandatory: true }
   used += 1
   mem.arena_rewind(arena, mark - (n - used) * #sizeof(LineBreak))
-  return LineBreaks{ value: result[..used] }
+  return result[..used]
 }

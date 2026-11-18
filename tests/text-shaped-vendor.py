@@ -24,6 +24,52 @@ use "std/io" errors
 use "std/bytes" bytes
 use "std/unicode/utf8" utf8
 use "std/encoding/binary" binary
+struct layout_build_Outcome { value: layout.Layout, failure: fail.Failure, kind: fail.Kind }
+fn layout_build(a0: *mem.Arena, p0:[]const u8, p1:layout.Font, p2:*const hb.Api, p3:*const bidi.Api, p4:layout.Options) layout_build_Outcome {
+  status: fail.Status
+  value := layout.build(a0, &status, p0, p1, p2, p3, p4)
+  return layout_build_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct hb_font_owned_Outcome { value: rawptr, failure: fail.Failure, kind: fail.Kind }
+fn hb_font_owned(p0: *const hb.Api, p1: []const u8, p2: u32) hb_font_owned_Outcome {
+  status: fail.Status
+  value := hb.font_owned(&status, p0, p1, p2)
+  return hb_font_owned_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct hb_load_Outcome { api: hb.Api, failure: fail.Failure, kind: fail.Kind }
+fn hb_load(p0: dynlib.Handle) hb_load_Outcome {
+  status: fail.Status
+  value := hb.load(&status, p0)
+  return hb_load_Outcome{ api: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct bidi_load_Outcome { api: bidi.Api, failure: fail.Failure, kind: fail.Kind }
+fn bidi_load(p0: dynlib.Handle) bidi_load_Outcome {
+  status: fail.Status
+  value := bidi.load(&status, p0)
+  return bidi_load_Outcome{ api: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct dynlib_open_Outcome { value: dynlib.Handle, failure: fail.Failure, kind: fail.Kind }
+fn dynlib_open(p0: []const u8, p1: i32) dynlib_open_Outcome {
+  status: fail.Status
+  value := dynlib.open(&status, p0, p1)
+  return dynlib_open_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+}
+
+struct dynlib_close_Outcome { failure: fail.Failure, kind: fail.Kind }
+fn dynlib_close(p0: *dynlib.Handle) dynlib_close_Outcome {
+  status: fail.Status
+  dynlib.close(&status, p0)
+  return dynlib_close_Outcome{ failure: status.failure, kind: status.failure.kind }
+}
+
+fn failed(failure: fail.Failure) bool {
+  return failure.kind != fail.Kind.Ok
+}
+
 fn check(ok:bool) {if !ok {#panic("shaped text layout")}}
 fn select(data:rawptr,text:[]const u8) layout.Face {return layout.Face{font:data,data:data}}
 other_font:rawptr
@@ -45,47 +91,47 @@ fn save(arena:*mem.Arena,result:*const layout.Layout,path:[]const u8) {
 fn main() {
  arena:=mem.arena_alloc(0)
  defer mem.arena_release(arena)
- hb_library:=dynlib.open("HB_LIBRARY",dynlib.Now)
- bidi_library:=dynlib.open("BIDI_LIBRARY",dynlib.Now)
- check(!errors.failed(hb_library.failure) && !errors.failed(bidi_library.failure))
- defer {_=dynlib.close(&hb_library.value)
-  _=dynlib.close(&bidi_library.value)}
- h:=hb.load(hb_library.value)
- b:=bidi.load(bidi_library.value)
- check(!errors.failed(h.failure) && !errors.failed(b.failure))
+ hb_library:=dynlib_open("HB_LIBRARY",dynlib.Now)
+ bidi_library:=dynlib_open("BIDI_LIBRARY",dynlib.Now)
+ check(!failed(hb_library.failure) && !failed(bidi_library.failure))
+ defer {_=dynlib_close(&hb_library.value)
+  _=dynlib_close(&bidi_library.value)}
+ h:=hb_load(hb_library.value)
+ b:=bidi_load(bidi_library.value)
+ check(!failed(h.failure) && !failed(b.failure))
  data_file: fail.Status
  data := fs.read_all(arena, &data_file, "font.ttf", 10000000)
  check(!data_file.failed)
- created:=hb.font_owned(&h.api,data,0)
- check(!errors.failed(created.failure))
+ created:=hb_font_owned(&h.api,data,0)
+ check(!failed(created.failure))
  defer h.api.font_destroy(created.value)
  h.api.font_set_scale(created.value,2048,2048)
  font:=layout.Font{data:created.value,select:select,line_height:40,space_advance:10.171875}
- other:=hb.font_owned(&h.api,data,0)
- check(!errors.failed(other.failure))
+ other:=hb_font_owned(&h.api,data,0)
+ check(!failed(other.failure))
  other_font=other.value
  defer h.api.font_destroy(other.value)
  h.api.font_set_scale(other.value,2048,2048)
- fallback:=layout.build(arena,"بجح",layout.Font{data:created.value,select:context_select,line_height:40,space_advance:10.171875},&h.api,&b.api,layout.Options{})
- check(!errors.failed(fallback.failure) && #len(fallback.value.glyphs)==3)
+ fallback:=layout_build(arena,"بجح",layout.Font{data:created.value,select:context_select,line_height:40,space_advance:10.171875},&h.api,&b.api,layout.Options{})
+ check(!failed(fallback.failure) && #len(fallback.value.glyphs)==3)
  save(arena,&fallback.value,"actual-fallback.bin")
  CASES
- empty:=layout.build(arena,"",font,&h.api,&b.api,layout.Options{})
- check(!errors.failed(empty.failure) && #len(empty.value.lines)==1 && #len(empty.value.glyphs)==0 && empty.value.height==40.0)
+ empty:=layout_build(arena,"",font,&h.api,&b.api,layout.Options{})
+ check(!failed(empty.failure) && #len(empty.value.lines)==1 && #len(empty.value.glyphs)==0 && empty.value.height==40.0)
  eof:=layout.cluster_at(&empty.value,0)
- check(!errors.failed(eof.failure) && eof.start==0 && eof.end==0)
- multiline:=layout.build(arena,"a\r\n\nאבג\xe2\x80\xa8z",font,&h.api,&b.api,layout.Options{})
- check(!errors.failed(multiline.failure) && #len(multiline.value.lines)==4 && multiline.value.lines[1].start==3 && multiline.value.lines[2].start==4)
- rtl:=layout.build(arena,"אבג",font,&h.api,&b.api,layout.Options{})
- check(!errors.failed(rtl.failure) && rtl.value.glyphs[0].start>rtl.value.glyphs[#len(rtl.value.glyphs)-1].start)
+ check(eof.found && eof.start==0 && eof.end==0)
+ multiline:=layout_build(arena,"a\r\n\nאבג\xe2\x80\xa8z",font,&h.api,&b.api,layout.Options{})
+ check(!failed(multiline.failure) && #len(multiline.value.lines)==4 && multiline.value.lines[1].start==3 && multiline.value.lines[2].start==4)
+ rtl:=layout_build(arena,"אבג",font,&h.api,&b.api,layout.Options{})
+ check(!failed(rtl.failure) && rtl.value.glyphs[0].start>rtl.value.glyphs[#len(rtl.value.glyphs)-1].start)
  left:=layout.at_point(&rtl.value,-10.0,0.0)
  right:=layout.at_point(&rtl.value,10000.0,0.0)
- check(!errors.failed(left.failure) && !errors.failed(right.failure) && right.start==0 && right.end==0)
+ check(left.found && right.found && right.start==0 && right.end==0)
  mark:=mem.arena_mark(arena)
- check(layout.build(arena,"\xff",font,&h.api,&b.api,layout.Options{}).kind==errors.Kind.InvalidInput && mem.arena_mark(arena)==mark)
- check(layout.build(arena,"x",layout.Font{select:reject,line_height:40,space_advance:10.0},&h.api,&b.api,layout.Options{}).kind==errors.Kind.NotFound && mem.arena_mark(arena)==mark)
- wrapped:=layout.build(arena,"office office السلام abc אבג",font,&h.api,&b.api,layout.Options{width:65})
- check(!errors.failed(wrapped.failure) && #len(wrapped.value.lines)>1)
+ check(layout_build(arena,"\xff",font,&h.api,&b.api,layout.Options{}).kind==fail.Kind.InvalidInput && mem.arena_mark(arena)==mark)
+ check(layout_build(arena,"x",layout.Font{select:reject,line_height:40,space_advance:10.0},&h.api,&b.api,layout.Options{}).kind==fail.Kind.NotFound && mem.arena_mark(arena)==mark)
+ wrapped:=layout_build(arena,"office office السلام abc אבג",font,&h.api,&b.api,layout.Options{width:65})
+ check(!failed(wrapped.failure) && #len(wrapped.value.lines)>1)
  for line in wrapped.value.lines {
   if line.width>65.0 {check(line.glyph_count>0)
    first:=wrapped.value.glyphs[line.glyph_start]
@@ -94,31 +140,31 @@ fn main() {
  }
  for g in wrapped.value.glyphs {check(g.start<g.end && g.end<=#len(wrapped.value.text))
   hit:=layout.cluster_at(&wrapped.value,g.start)
-  check(!errors.failed(hit.failure) && hit.start==g.start && hit.end==g.end)
+  check(hit.found && hit.start==g.start && hit.end==g.end)
  }
- check(errors.failed(layout.cluster_at(&wrapped.value,#len(wrapped.value.text)+1).failure))
- alias:=layout.build(arena,wrapped.value.text,font,&h.api,&b.api,layout.Options{})
- check(!errors.failed(alias.failure) && bytes.equal(alias.value.text,wrapped.value.text))
+ check(!layout.cluster_at(&wrapped.value,#len(wrapped.value.text)+1).found)
+ alias:=layout_build(arena,wrapped.value.text,font,&h.api,&b.api,layout.Options{})
+ check(!failed(alias.failure) && bytes.equal(alias.value.text,wrapped.value.text))
  // A long unwrapped editor line must not perform a source scan per glyph.
  long_text:=mem.push_bytes_uninit(arena,20000)
  for i in 0..#len(long_text) {long_text[i]=120}
- long_line:=layout.build(arena,long_text,font,&h.api,&b.api,layout.Options{})
- check(!errors.failed(long_line.failure) && #len(long_line.value.glyphs)==20000 && #len(long_line.value.lines)==1)
+ long_line:=layout_build(arena,long_text,font,&h.api,&b.api,layout.Options{})
+ check(!failed(long_line.failure) && #len(long_line.value.glyphs)==20000 && #len(long_line.value.lines)==1)
  long_hit:=layout.at_point(&long_line.value,long_line.value.width-1.0,0.0)
- check(!errors.failed(long_hit.failure) && long_hit.start==19999)
- missing:=layout.build(arena,"कर्म",font,&h.api,&b.api,layout.Options{width:5})
- check(!errors.failed(missing.failure))
+ check(long_hit.found && long_hit.start==19999)
+ missing:=layout_build(arena,"कर्म",font,&h.api,&b.api,layout.Options{width:5})
+ check(!failed(missing.failure))
  for g in missing.value.glyphs {check(g.start<g.end && g.end<=12)}
- dash:=layout.build(arena,"-",font,&h.api,&b.api,layout.Options{})
- soft:=layout.build(arena,"ab\xc2\xadcd",font,&h.api,&b.api,layout.Options{width:55})
- check(!errors.failed(dash.failure) && !errors.failed(soft.failure) && #len(soft.value.lines)==2)
+ dash:=layout_build(arena,"-",font,&h.api,&b.api,layout.Options{})
+ soft:=layout_build(arena,"ab\xc2\xadcd",font,&h.api,&b.api,layout.Options{width:55})
+ check(!failed(dash.failure) && !failed(soft.failure) && #len(soft.value.lines)==2)
  soft_line:=soft.value.lines[0]
  soft_glyph:=soft.value.glyphs[soft_line.glyph_start+soft_line.glyph_count-1]
  check(soft_glyph.id==dash.value.glyphs[0].id && soft_glyph.start==2 && soft_glyph.end==4)
- mixed:=layout.build(arena,"abc אבג",font,&h.api,&b.api,layout.Options{})
- check(!errors.failed(mixed.failure))
+ mixed:=layout_build(arena,"abc אבג",font,&h.api,&b.api,layout.Options{})
+ check(!failed(mixed.failure))
  mixed_eof:=layout.cluster_at(&mixed.value,#len(mixed.value.text))
- check(!errors.failed(mixed_eof.failure) && mixed_eof.rtl && mixed_eof.x<mixed.value.width)
+ check(mixed_eof.found && mixed_eof.rtl && mixed_eof.x<mixed.value.width)
 
 }
 
@@ -173,7 +219,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-shaped-layout-') as directory:
     for i,text in enumerate(CASES):
         (work/f'case-{i}.txt').write_text(text,encoding='utf-8')
         subprocess.run([str(work/'oracle'),'font.ttf',f'case-{i}.txt',f'expected-{i}.bin'],cwd=work,check=True)
-        cases.append(f'result_{i}:=layout.build(arena,{lit(text)},font,&h.api,&b.api,layout.Options{{}})\ncheck(!io.failed(result_{i}.failure))\nsave(arena,&result_{i}.value,"actual-{i}.bin")')
+        cases.append(f'result_{i}:=layout_build(arena,{lit(text)},font,&h.api,&b.api,layout.Options{{}})\ncheck(!failed(result_{i}.failure))\nsave(arena,&result_{i}.value,"actual-{i}.bin")')
     source=SOURCE.replace('CASES','\n'.join(cases)).replace('HB_LIBRARY',ctypes.util.find_library('harfbuzz') or 'libharfbuzz.so.0').replace('BIDI_LIBRARY',ctypes.util.find_library('fribidi') or 'libfribidi.so.0')
     (work/'main.dyn').write_text(source,encoding='utf-8')
     for flags in (['--debug'],['--release'],['--release','--opt-level','3']):

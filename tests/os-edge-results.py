@@ -10,44 +10,52 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = '''use "std/terminal" terminal
 use "std/fs/capability" cap
-use "std/io" errors
+use "std/fail"
 use "std/bytes" bytes
 fn require(ok: bool) { if !ok { #panic("OS edge result contract") } }
+fn read_failure(directory: *const cap.Directory, path: []const u8, output: []u8) fail.Failure {
+ status: fail.Status
+ count := cap.read(&status, directory, path, output)
+ require(status.failed && count == 0)
+ return status.failure
+}
 fn main() {
- r := terminal.read_state(-1)
- require(errors.failed(r.failure) && r.failure.native == -9 && r.failure.kind == errors.Kind.InvalidState)
- s := terminal.size(-1)
- require(errors.failed(s.failure) && s.failure.native == -9 && s.failure.kind == errors.Kind.InvalidState && s.rows == 0 && s.columns == 0)
+ r: fail.Status
+ _ = terminal.read_state(&r, -1)
+ require(r.failed && r.failure.native == -9 && r.failure.kind == fail.Kind.InvalidState)
+ s: fail.Status
+ size := terminal.size(&s, -1)
+ require(s.failed && s.failure.native == -9 && s.failure.kind == fail.Kind.InvalidState && size.rows == 0 && size.columns == 0)
  saved := terminal.State{}
- restored := terminal.restore(-1, &saved)
- require(errors.failed(restored.failure) && restored.failure.native == -9 && restored.failure.kind == errors.Kind.InvalidState)
- restored = terminal.restore(-1, nil)
- require(errors.failed(restored.failure) && restored.failure.native == 0 && restored.failure.kind == errors.Kind.InvalidInput)
- r = terminal.raw(-1)
- require(errors.failed(r.failure) && r.failure.native == -9 && r.failure.kind == errors.Kind.InvalidState)
+ restored: fail.Status
+ terminal.restore(&restored, -1, &saved)
+ require(restored.failed && restored.failure.native == -9 && restored.failure.kind == fail.Kind.InvalidState)
+ missing: fail.Status
+ terminal.restore(&missing, -1, nil)
+ require(missing.failed && missing.failure.native == 0 && missing.failure.kind == fail.Kind.InvalidInput)
+ raw: fail.Status
+ _ = terminal.raw(&raw, -1)
+ require(raw.failed && raw.failure.native == -9 && raw.failure.kind == fail.Kind.InvalidState)
  require(!terminal.is_attached(-1))
- r = terminal.read_state(PTY_DESCRIPTOR)
- require(!errors.failed(r.failure) && r.failure.native == 0 && !errors.failed(r.failure))
- changed := terminal.raw(PTY_DESCRIPTOR)
- require(!errors.failed(changed.failure) && changed.failure.native == 0 && !errors.failed(changed.failure))
- require(!errors.failed(terminal.restore(PTY_DESCRIPTOR, &changed.value).failure))
- after := terminal.read_state(PTY_DESCRIPTOR)
- require(!errors.failed(after.failure) && bytes.equal(r.value.bytes[..], after.value.bytes[..]))
+ status: fail.Status
+ original := terminal.read_state(&status, PTY_DESCRIPTOR)
+ changed := terminal.raw(&status, PTY_DESCRIPTOR)
+ terminal.restore(&status, PTY_DESCRIPTOR, &changed)
+ after := terminal.read_state(&status, PTY_DESCRIPTOR)
+ require(!status.failed && bytes.equal(original.bytes[..], after.bytes[..]))
  output: [32]u8
  directory := cap.Directory{descriptor: DIRECTORY_DESCRIPTOR, active: true}
- read := cap.read(&directory, "ok", output[..])
- require(!errors.failed(read.failure) && read.value == 3 && read.failure.native == 0 && !errors.failed(read.failure) && bytes.equal(output[..3], "yes"))
- read = cap.read(&directory, "missing", output[..])
- require(errors.failed(read.failure) && read.value == 0 && read.failure.native == -2 && read.failure.kind == errors.Kind.NotFound)
- read = cap.read(&directory, "../secret", output[..])
- require(errors.failed(read.failure) && read.value == 0 && read.failure.native < 0 && errors.failed(read.failure))
- read = cap.read(&directory, "link", output[..])
- require(errors.failed(read.failure) && read.value == 0 && read.failure.native < 0 && errors.failed(read.failure))
- read = cap.read(nil, "ok", output[..])
- require(errors.failed(read.failure) && read.failure.native == -22 && read.failure.kind == errors.Kind.InvalidInput)
+ count := cap.read(&status, &directory, "ok", output[..])
+ require(!status.failed && count == 3 && bytes.equal(output[..3], "yes"))
+ absent := read_failure(&directory, "missing", output[..])
+ require(absent.native == -2 && absent.kind == fail.Kind.NotFound)
+ require(read_failure(&directory, "../secret", output[..]).native < 0)
+ require(read_failure(&directory, "link", output[..]).native < 0)
+ none := read_failure(nil, "ok", output[..])
+ require(none.native == -22 && none.kind == fail.Kind.InvalidInput)
  zero := cap.Directory{}
- read = cap.read(&zero, "ok", output[..])
- require(errors.failed(read.failure) && read.failure.native == -9 && read.failure.kind == errors.Kind.InvalidState)
+ closed := read_failure(&zero, "ok", output[..])
+ require(closed.native == -9 && closed.kind == fail.Kind.InvalidState)
 }
 '''
 

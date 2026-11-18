@@ -56,6 +56,25 @@ X11 = r'''use "std/io" io
 use "vendor/window" window
 use "vendor/window/events" events
 use "std/time" time
+use "std/fail"
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
+  status: fail.Status
+  window.open(&status, p0, p1, p2, p3)
+  return status.failure
+}
+
+fn window_poll(p0: *window.Window) fail.Failure {
+  status: fail.Status
+  window.poll(&status, p0)
+  return status.failure
+}
+
+fn window_wake(p0: *const window.Window) fail.Failure {
+  status: fail.Status
+  window.wake(&status, p0)
+  return status.failure
+}
+
 #link("pthread")
 #link("c")
 extern fn key "dyn_send_key"(display:rawptr,handle:usize,symbol:usize,modifiers:u32,down:i32)
@@ -64,7 +83,7 @@ extern fn wake_thread "dyn_wake_thread"(callback:fn(rawptr)i32,context:rawptr) r
 extern fn join_wake "dyn_join_wake"(worker:rawptr) i32
 fn check(ok:bool) { if !ok { #panic("ordered X11 events") } }
 fn callback(context:rawptr) i32 {
-  if window.wake(#cast(*window.Window,context)).kind == io.Kind.Ok { return 1 }
+  if window_wake(#cast(*window.Window,context)).kind == fail.Kind.Ok { return 1 }
   return 0
 }
 fn drain(host:*window.Window) {
@@ -73,21 +92,21 @@ fn drain(host:*window.Window) {
 }
 fn main() {
  host := window.Window{}
- check(window.open(&host,"ordered events",80,80).kind == io.Kind.Ok)
+ check(window_open(&host,"ordered events",80,80).kind == fail.Kind.Ok)
  defer { window.close(&host) }
- _ = window.poll(&host)
+ _ = window_poll(&host)
  event := window.Event{}
  // Listening is explicitly opt-in; legacy summary clients accumulate nothing.
  key(host.display,host.handle,0x61,0,1)
- check(window.poll(&host).kind == io.Kind.Ok && !window.next_event(&host,&event))
+ check(window_poll(&host).kind == fail.Kind.Ok && !window.next_event(&host,&event))
  key(host.display,host.handle,0x61,0,0)
- _ = window.poll(&host)
+ _ = window_poll(&host)
  window.listen_events(&host,true)
  key(host.display,host.handle,0x61,0,1)
  key(host.display,host.handle,0x61,0,0)
  key(host.display,host.handle,0xff51,4,1)
  key(host.display,host.handle,0xff51,4,0)
- check(window.poll(&host).kind == io.Kind.Ok)
+ check(window_poll(&host).kind == fail.Kind.Ok)
  check(window.next_event(&host,&event) && event.kind == events.Kind.KeyDown && event.key == 97 && event.repeated == 0 && event.scancode != 0)
  check(window.next_event(&host,&event) && event.kind == events.Kind.Text && event.text_length == 1 && event.text[0] == 97)
  saved := event
@@ -97,25 +116,25 @@ fn main() {
  check(!window.next_event(&host,&event) && saved.text[0] == 97)
  key(host.display,host.handle,0x62,0,1)
  key(host.display,host.handle,0x62,0,1)
- check(window.poll(&host).kind == io.Kind.Ok)
+ check(window_poll(&host).kind == fail.Kind.Ok)
  check(window.next_event(&host,&event) && event.kind == events.Kind.KeyDown && event.repeated == 0)
  check(window.next_event(&host,&event) && event.kind == events.Kind.Text && event.text[0] == 98)
  check(window.next_event(&host,&event) && event.kind == events.Kind.KeyDown && event.repeated == 1)
  check(window.next_event(&host,&event) && event.kind == events.Kind.Text)
  check(saved.text[0] == 97)
  key(host.display,host.handle,0x62,0,0)
- _ = window.poll(&host)
+ _ = window_poll(&host)
  drain(&host)
  for i in 0..200 { _ = i
    key(host.display,host.handle,0xff51,0,1) }
- check(window.poll(&host).kind == io.Kind.Ok)
+ check(window_poll(&host).kind == fail.Kind.Ok)
  for i in 0..128 { _ = i
    check(window.next_event(&host,&event) && event.kind == events.Kind.KeyDown && event.key == events.Left) }
  check(window.next_event(&host,&event) && event.kind == events.Kind.Overflow && event.dropped == 72)
  check(!window.next_event(&host,&event))
  window.listen_events(&host,false)
  key(host.display,host.handle,0xff51,0,0)
- _ = window.poll(&host)
+ _ = window_poll(&host)
  check(!window.next_event(&host,&event))
  window.listen_events(&host,true)
  // Wake must interrupt a GUI wait from a real pthread without touching Xlib.
@@ -125,13 +144,13 @@ fn main() {
  found := false
  for !found {
    window.wait(&host,1000)
-   check(window.poll(&host).kind == io.Kind.Ok)
+   check(window_poll(&host).kind == fail.Kind.Ok)
    for window.next_event(&host,&event) { if event.kind == events.Kind.Wake { found = true } }
    check(time.elapsed(now,time.monotonic_now()) < 500000000)
  }
  check(join_wake(worker) == 1)
  close_event(host.display,host.handle,host.protocol_atom,host.close_atom)
- check(window.poll(&host).kind == io.Kind.Ok && host.close_requested)
+ check(window_poll(&host).kind == fail.Kind.Ok && host.close_requested)
  check(window.next_event(&host,&event) && event.kind == events.Kind.Close)
 }
 '''
@@ -139,19 +158,38 @@ WAYLAND_WAKE = r'''use "std/io" io
 use "vendor/window/wayland" window
 use "vendor/window/events" events
 use "std/time" time
+use "std/fail"
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
+  status: fail.Status
+  window.open(&status, p0, p1, p2, p3)
+  return status.failure
+}
+
+fn window_poll(p0: *window.Window) fail.Failure {
+  status: fail.Status
+  window.poll(&status, p0)
+  return status.failure
+}
+
+fn window_wake(p0: *const window.Window) fail.Failure {
+  status: fail.Status
+  window.wake(&status, p0)
+  return status.failure
+}
+
 #link("pthread")
 #link("c")
 extern fn wake_thread "dyn_wake_thread"(callback:fn(rawptr)i32,context:rawptr) rawptr
 extern fn join_wake "dyn_join_wake"(worker:rawptr) i32
 fn check(ok:bool){if !ok{#panic("Wayland external wake")}}
-fn callback(context:rawptr)i32 { if window.wake(#cast(*window.Window,context)).kind == io.Kind.Ok{return 1}
+fn callback(context:rawptr)i32 { if window_wake(#cast(*window.Window,context)).kind == fail.Kind.Ok{return 1}
  return 0 }
 fn main(){
  host:=window.Window{}
- check(window.open(&host,"Wayland external wake",64,64).kind == io.Kind.Ok)
+ check(window_open(&host,"Wayland external wake",64,64).kind == fail.Kind.Ok)
  defer{window.close(&host)}
  window.listen_events(&host,true)
- check(window.poll(&host).kind == io.Kind.Ok)
+ check(window_poll(&host).kind == fail.Kind.Ok)
  event:=window.Event{}
  for window.next_event(&host,&event){}
  worker:=wake_thread(callback,&host)
@@ -160,7 +198,7 @@ fn main(){
  found:=false
  for !found {
   window.wait(&host,1000)
-  check(window.poll(&host).kind == io.Kind.Ok)
+  check(window_poll(&host).kind == fail.Kind.Ok)
   for window.next_event(&host,&event){if event.kind==events.Kind.Wake {found=true}}
   check(time.elapsed(started,time.monotonic_now())<500000000)
  }
@@ -187,6 +225,19 @@ use "vendor/window/events" events
 use "std/unicode/utf8" utf8
 use "std/process" process
 use "std/mem" mem
+use "std/fail"
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
+  status: fail.Status
+  window.open(&status, p0, p1, p2, p3)
+  return status.failure
+}
+
+fn window_poll(p0: *window.Window) fail.Failure {
+  status: fail.Status
+  window.poll(&status, p0)
+  return status.failure
+}
+
 extern fn key "dyn_send_key"(display:rawptr,handle:usize,symbol:usize,modifiers:u32,down:i32)
 fn check(ok:bool){if !ok{#panic("XIM commit bounds")}}
 fn main(){
@@ -194,9 +245,9 @@ fn main(){
  defer{mem.arena_release(arena)}
  split:=#len(process.environment_or(arena,"DYN_TEST_SPLIT_COMMIT","")) != 0
  host:=window.Window{}
- check(window.open(&host,"XIM commit bounds",64,64).kind == io.Kind.Ok)
+ check(window_open(&host,"XIM commit bounds",64,64).kind == fail.Kind.Ok)
  defer{window.close(&host)}
- _=window.poll(&host)
+ _=window_poll(&host)
  window.listen_events(&host,true)
  original:=host.desktop.context
  // The interposed lookup never dereferences XIC. Force the production lookup
@@ -204,7 +255,7 @@ fn main(){
  host.desktop.context=#cast(rawptr,1)
  key(host.display,host.handle,0x61,0,1)
  if split {key(host.display,host.handle,0x62,0,1)}
- check(window.poll(&host).kind == io.Kind.Ok)
+ check(window_poll(&host).kind == fail.Kind.Ok)
  host.desktop.context=original
  event:=window.Event{}
  check(window.next_event(&host,&event)&&event.kind==events.Kind.KeyDown)

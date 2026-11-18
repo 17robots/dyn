@@ -89,12 +89,14 @@ fn main() {
         # Both public APIs must share one declaration for each runtime symbol.
         (project/'wasi.dyn').write_text('''#target(kernel: wasi)
 use "std/os/wasi"
+use "std/fail"
 fn check_descriptors() {
   bytes: [1]u8
-  empty := wasi.read(0, bytes[..0])
-  if (empty.status != io.Status.Complete || io.failed(empty.failure)) { #panic("empty descriptor read") }
-  invalid := wasi.write(4294967295, "x")
-  if !io.failed(invalid.failure) || invalid.failure.native == 0 { #panic("descriptor error") }
+  empty: fail.Status
+  if wasi.read(&empty, 0, bytes[..0]) != 0 || empty.failed { #panic("empty descriptor read") }
+  invalid: fail.Status
+  _ = wasi.write(&invalid, 4294967295, "x")
+  if !invalid.failed || invalid.failure.native == 0 { #panic("descriptor error") }
 }
 ''')
         source = project/'main.dyn'

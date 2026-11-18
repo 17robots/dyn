@@ -83,7 +83,7 @@ pub fn certificate_subject(arena: *memory.Arena, status: *fail.Status, certifica
     return empty
   }
   formatted := provider.subject_text_owned(certificate)
-  if io.failed(formatted.failure) {
+  if formatted.value == nil {
     provider_failure(status, "certificate subject", provider.ErrorKind.Provider, formatted.provider_code)
     return empty
   }

@@ -41,17 +41,27 @@ def vector(key,message):
  return b'\4'+b''.join(x.to_bytes(32,'big') for x in public),r.to_bytes(32,'big')+s.to_bytes(32,'big')
 def literal(value):return '"'+''.join('\\x%02x'%b for b in value)+'"'
 s='''use "std/crypto/signature" facade
-use "std/io" errors
+use "std/fail"
 use "std/crypto/p256" p
 use "std/bytes" bytes
+fn facade_p256_public_fails(output: []u8, a1: []const u8) bool {
+ status: fail.Status
+ _ = facade.p256_public(&status, output, a1)
+ return status.failed
+}
+fn facade_p256_sign_fails(output: []u8, a1: []const u8, a2: []const u8) bool {
+ status: fail.Status
+ _ = facade.p256_sign(&status, output, a1, a2)
+ return status.failed
+}
 fn check(ok: bool) { if !ok { #panic("P256 contract") } }
 fn vector(key: []const u8,message: []const u8,expected_public: []const u8,expected_signature: []const u8) {
  public: [73]u8
  signature: [72]u8
  for i in 0..73 { public[i]=165 }
  for i in 0..72 { signature[i]=165 }
- check(!errors.failed(facade.p256_public(public[..],key).failure) && bytes.equal(public[..65],expected_public))
- check(!errors.failed(facade.p256_sign(signature[..],message,key).failure) && bytes.equal(signature[..64],expected_signature))
+ check(!facade_p256_public_fails(public[..],key) && bytes.equal(public[..65],expected_public))
+ check(!facade_p256_sign_fails(signature[..],message,key) && bytes.equal(signature[..64],expected_signature))
  check(p.valid_public_key(public[..65]))
  check(facade.p256_verify(signature[..64],message,public[..65]))
  for i in 65..73 { check(public[i]==165) }
@@ -93,16 +103,17 @@ s+=''' key: [32]u8
  signature: [64]u8
  public: [65]u8
  for i in 0..96 { output[i]=165 }
- invalid:=facade.p256_public(output[..],key[..])
- check(errors.failed(invalid.failure) && invalid.failure.kind == errors.Kind.InvalidInput && #len(invalid.value)==0 && invalid.provider_code==0)
- check(errors.failed(facade.p256_sign(output[..],"",key[..]).failure))
+ rejected: fail.Status
+ invalid:=facade.p256_public(&rejected,output[..],key[..])
+ check(rejected.failed && rejected.failure.kind == fail.Kind.InvalidInput && #len(invalid)==0)
+ check(facade_p256_sign_fails(output[..],"",key[..]))
  for i in 0..96 { check(output[i]==165) }
  check(!p.public_key(output[..],key[..]) && !p.sign(output[..],"",key[..]))
  key[31]=1
  check(!p.public_key(output[..64],key[..]))
- check(errors.failed(facade.p256_public(output[..],output[64..96]).failure))
+ check(facade_p256_public_fails(output[..],output[64..96]))
  check(!p.public_key(output[..],output[64..96]))
- check(errors.failed(facade.p256_sign(output[..],output[80..81],key[..]).failure))
+ check(facade_p256_sign_fails(output[..],output[80..81],key[..]))
  check(!p.sign(output[..],output[80..81],key[..]))
  check(!p.valid_public_key(public[..]) && !p.valid_public_key(public[..64]))
  check(!p.verify(signature[..],"",public[..]))

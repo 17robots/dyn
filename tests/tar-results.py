@@ -29,89 +29,106 @@ def literal(data):
 
 SOURCE = r'''use "std/archive/tar" tar
 use "std/fail"
-use "std/io" errors
-use "std/parse" parse
 use "std/io" io
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("tar fixture") } }
 struct Input { source: []const u8, offset: usize, fail: usize, calls: usize, native: isize }
-fn read_transfer(data: rawptr, destination: []u8) io.Transfer {
+fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
  s := #cast(*Input,data)
  s.calls += 1
+ if s.offset == s.fail {
+  failure := fail.make(fail.Kind.PermissionDenied, "read", "", "denied")
+  failure.native = s.native
+  fail.set(status, failure)
+  return 0
+ }
  take := #len(destination)
  if take > s.fail - s.offset { take = s.fail - s.offset }
  if take > #len(s.source) - s.offset { take = #len(s.source) - s.offset }
  for i in 0..take { destination[i] = s.source[s.offset+i] }
  s.offset += take
- if s.offset == s.fail { return io.Transfer{ transferred: take, failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: s.native } } }
- if s.offset == #len(s.source) { return io.Transfer{ transferred: take, status: io.Status.End } }
- return io.Transfer{ transferred: take }
+ return take
 }
-fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
-  return io.from_transfer(status, read_transfer(data, destination), "read", "")
+struct Streamed { entry: tar.StreamEntry, failure: fail.Failure }
+fn stream_next(state: *tar.StreamReader) Streamed {
+ status: fail.Status
+ entry := tar.next_stream(&status, state)
+ return Streamed{ entry: entry, failure: status.failure }
+}
+fn read_failure(state: *tar.StreamReader, destination: []u8) fail.Failure {
+ status: fail.Status
+ count := tar.read_stream(&status, state, destination)
+ check(status.failed && count == 0)
+ return status.failure
+}
+struct Found { next: tar.Next, failure: fail.Failure }
+fn next(state: *tar.ArchiveReader) Found {
+ status: fail.Status
+ found := tar.next(&status, state)
+ return Found{ next: found, failure: status.failure }
 }
 fn replay(state: *tar.StreamReader, input: *Input, native: isize, offset: usize) {
  calls := input.calls
- again := tar.next_stream(state)
- check(!again.found && again.failure.io.kind == errors.Kind.PermissionDenied && again.failure.io.native == native && again.offset == offset)
+ again := stream_next(state)
+ check(!again.entry.found && again.failure.kind == fail.Kind.PermissionDenied && again.failure.native == native && again.entry.offset == offset)
  storage: [8]u8
  for count in [0, 8] {
-   result := tar.read_stream(state, storage[..count])
-   check(io.failed(result.failure) && result.failure.kind == errors.Kind.PermissionDenied && result.failure.native == native)
+   failure := read_failure(state, storage[..count])
+   check(failure.kind == fail.Kind.PermissionDenied && failure.native == native)
  }
  check(input.calls == calls)
 }
 fn main() {
+ status := fail.Status{ on_failure: fail.panic_on_failure }
  data: []const u8 = DATA
  for archive in [data, PAX, GNU] {
    state := tar.reader(archive)
-   first := tar.next(&state)
-   check(first.found && !parse.failed(first.failure) )
+   first := tar.next(&status, &state)
+   check(first.found)
    check(bytes.equal(first.entry.data,"hello") && first.entry.kind == '0')
-   empty := tar.next(&state)
+   empty := tar.next(&status, &state)
    check(empty.found && #len(empty.entry.data) == 0)
-   end := tar.next(&state)
-   check(!end.found && !parse.failed(end.failure))
-   check(!tar.next(&state).found)
+   end := tar.next(&status, &state)
+   check(!end.found)
+   check(!tar.next(&status, &state).found)
    header: [512]u8
    metadata: [2048]u8
    cursor := io.cursor(archive)
    stream := tar.stream_reader(io.cursor_reader(&cursor),header[..],metadata[..])
-   item := tar.next_stream(&stream)
-   check(item.found && item.failure.kind == parse.StreamKind.Ok && item.typeflag == '0' && item.size == 5)
+   item := tar.next_stream(&status, &stream)
+   check(item.found && item.typeflag == '0' && item.size == 5)
    check(bytes.equal(item.name,first.entry.name))
    payload: [8]u8
-   loaded := tar.read_stream(&stream,payload[..])
-   check(loaded.status == io.Status.End && loaded.transferred == 5 && bytes.equal(payload[..5],"hello"))
-   check(tar.read_stream(&stream,payload[..]).status == io.Status.End)
-   check(tar.next_stream(&stream).found)
-   check(tar.read_stream(&stream,payload[..]).status == io.Status.End)
-   check(!tar.next_stream(&stream).found && stream.ended && !stream.failed)
+   loaded := tar.read_stream(&status, &stream,payload[..])
+   check(loaded == 5 && bytes.equal(payload[..5],"hello"))
+   check(tar.read_stream(&status, &stream,payload[..]) == 0)
+   check(tar.next_stream(&status, &stream).found)
+   check(tar.read_stream(&status, &stream,payload[..]) == 0)
+   check(!tar.next_stream(&status, &stream).found && stream.ended && !stream.failed)
  }
  // Physical EOF exactly at a record boundary remains normal exhaustion.
  for source in ["", data[..1536]] {
    state := tar.reader(source)
-   result := tar.next(&state)
-   for result.found { result = tar.next(&state) }
-   check(!result.found && !parse.failed(result.failure))
+   result := tar.next(&status, &state)
+   for result.found { result = tar.next(&status, &state) }
    header: [512]u8
    cursor := io.cursor(source)
    stream := tar.stream_reader(io.cursor_reader(&cursor),header[..],header[..0])
-   item := tar.next_stream(&stream)
-   for item.found { item = tar.next_stream(&stream) }
-   check(item.failure.kind == parse.StreamKind.Ok && item.offset == #len(source))
-   check(tar.next_stream(&stream).offset == item.offset)
+   item := tar.next_stream(&status, &stream)
+   for item.found { item = tar.next_stream(&status, &stream) }
+   check(item.offset == #len(source))
+   check(tar.next_stream(&status, &stream).offset == item.offset)
  }
- // Native zero is an error, even when a callback fills the requested slice.
+ // A reader failure stays on the stream, with its native code, even zero.
  for native in [#cast(isize,0), #cast(isize,-13)] {
    for raw_limit in [0, 1, 511, 512, 514, 517, 518, 1023, 1024, 1536] {
    limit := #cast(usize,raw_limit)
      input := Input{ source: data, fail: limit, native: native }
      header: [512]u8
      stream := tar.stream_reader(io.Reader{ data: &input, read: read },header[..],header[..0])
-     item := tar.next_stream(&stream)
-     for item.found { item = tar.next_stream(&stream) }
-     check(item.failure.io.kind == errors.Kind.PermissionDenied && item.failure.io.native == native && item.offset == limit)
+     item := stream_next(&stream)
+     for item.entry.found { item = stream_next(&stream) }
+     check(item.failure.kind == fail.Kind.PermissionDenied && item.failure.native == native && item.entry.offset == limit)
      replay(&stream,&input,native,limit)
    }
    for raw_limit in [512, 513, 517] {
@@ -119,11 +136,17 @@ fn main() {
      input := Input{ source: data, fail: limit, native: native }
      header: [512]u8
      stream := tar.stream_reader(io.Reader{ data: &input, read: read },header[..],header[..0])
-     item := tar.next_stream(&stream)
-     if item.found {
+     item := stream_next(&stream)
+     if item.entry.found {
+       // The payload may arrive whole before the reader fails; then the
+       // next header read meets the failure.
        destination: [8]u8
-       loaded := tar.read_stream(&stream,destination[..])
-       check(io.failed(loaded.failure) && loaded.failure.kind == errors.Kind.PermissionDenied && loaded.failure.native == native && loaded.transferred == limit - 512)
+       reading: fail.Status
+       for !reading.failed && tar.read_stream(&reading, &stream, destination[..]) != 0 {}
+       if !reading.failed {
+         reading.failure = stream_next(&stream).failure
+       }
+       check(reading.failure.kind == fail.Kind.PermissionDenied && reading.failure.native == native && stream.offset == limit)
      }
      replay(&stream,&input,native,limit)
    }
@@ -134,8 +157,8 @@ fn main() {
      header: [512]u8
      metadata: [2048]u8
      stream := tar.stream_reader(io.Reader{ data: &input, read: read },header[..],metadata[..])
-     item := tar.next_stream(&stream)
-     check(!item.found && item.failure.io.kind == errors.Kind.PermissionDenied && item.failure.io.native == native && item.offset == limit)
+     item := stream_next(&stream)
+     check(!item.entry.found && item.failure.kind == fail.Kind.PermissionDenied && item.failure.native == native && item.entry.offset == limit)
      replay(&stream,&input,native,limit)
    }
  }
@@ -143,51 +166,50 @@ fn main() {
  for raw_length in [1, 511, 512, 514, 517, 518, 1023] {
    length := #cast(usize,raw_length)
    state := tar.reader(data[..length])
-   failed := tar.next(&state)
-   check(failed.failure.kind == parse.Kind.Truncated && failed.offset == length && state.offset == 0)
+   failed := next(&state)
+   check(failed.failure.kind == fail.Kind.InvalidInput && failed.failure.offset == length && state.offset == 0)
    header: [512]u8
    cursor := io.cursor(data[..length])
    stream := tar.stream_reader(io.cursor_reader(&cursor),header[..],header[..0])
-   item := tar.next_stream(&stream)
-   for item.found { item = tar.next_stream(&stream) }
-   check(item.failure.parse.kind == parse.Kind.Truncated && item.offset == length)
-   check(tar.next_stream(&stream).offset == length)
+   item := stream_next(&stream)
+   for item.entry.found { item = stream_next(&stream) }
+   check(item.failure.kind == fail.Kind.InvalidInput && item.entry.offset == length)
+   check(stream_next(&stream).entry.offset == length)
  }
  bad_header: [512]u8
  for i in 0..512 { bad_header[i] = data[i] }
  bad_header[0] = '!'
  bad := tar.reader(bad_header[..])
- result := tar.next(&bad)
- check(bytes.equal(result.failure.message, "invalid header") && result.offset == 0 && bad.offset == 0)
+ result := next(&bad)
+ check(result.failure.kind == fail.Kind.InvalidInput && result.failure.offset == 0 && bad.offset == 0)
  invalid := tar.ArchiveReader{ source: data, offset: #len(data)+1 }
- invalid_result := tar.next(&invalid)
- check(bytes.equal(invalid_result.failure.message, "invalid offset") && invalid_result.offset == #len(data)+1)
+ invalid_result := next(&invalid)
+ check(invalid_result.failure.kind == fail.Kind.InvalidInput && invalid_result.failure.offset == #len(data)+1)
  checksum_input := Input{ source: bad_header[..], fail: 9999 }
  checksum_storage: [512]u8
  checksum_stream := tar.stream_reader(io.Reader{ data: &checksum_input, read: read },checksum_storage[..],checksum_storage[..0])
- checksum_result := tar.next_stream(&checksum_stream)
- check(!checksum_result.found && checksum_result.failure.parse.kind == parse.Kind.Syntax && checksum_result.offset == 512)
+ checksum_result := stream_next(&checksum_stream)
+ check(!checksum_result.entry.found && checksum_result.failure.kind == fail.Kind.InvalidInput && checksum_result.entry.offset == 512)
  checksum_calls := checksum_input.calls
- check(tar.next_stream(&checksum_stream).offset == 512)
- check(tar.read_stream(&checksum_stream,checksum_storage[..0]).failure.kind == errors.Kind.InvalidInput && checksum_input.calls == checksum_calls)
+ check(stream_next(&checksum_stream).entry.offset == 512)
+ check(read_failure(&checksum_stream,checksum_storage[..0]).kind == fail.Kind.InvalidInput && checksum_input.calls == checksum_calls)
  // A global PAX prefix followed by a damaged header commits neither cursor nor defaults.
  dirty := tar.reader(DIRTY)
- prefix_error := tar.next(&dirty)
- check(bytes.equal(prefix_error.failure.message, "invalid header") && prefix_error.offset == 1024 && dirty.offset == 0)
- check(tar.next(&dirty).offset == prefix_error.offset)
+ prefix_error := next(&dirty)
+ check(prefix_error.failure.kind == fail.Kind.InvalidInput && prefix_error.failure.offset == 1024 && dirty.offset == 0)
+ check(next(&dirty).failure.offset == prefix_error.failure.offset)
  dirty.source = data
- check(bytes.equal(tar.next(&dirty).entry.name,"a"))
+ check(bytes.equal(tar.next(&status, &dirty).entry.name,"a"))
  zero: tar.ArchiveReader
- check(!tar.next(&zero).found)
+ check(!tar.next(&status, &zero).found)
  zero_stream: tar.StreamReader
- check(tar.next_stream(&zero_stream).failure.parse.kind == parse.Kind.Capacity)
- check(tar.read_stream(&zero_stream,bad_header[..0]).failure.kind == errors.Kind.Capacity)
+ check(stream_next(&zero_stream).failure.kind == fail.Kind.Capacity)
+ check(read_failure(&zero_stream,bad_header[..0]).kind == fail.Kind.Capacity)
  no_entry: tar.StreamReader
- check(tar.read_stream(&no_entry,bad_header[..0]).failure.kind == errors.Kind.InvalidState)
- check(tar.next_stream(&no_entry).failure.io.kind == errors.Kind.InvalidState)
+ check(read_failure(&no_entry,bad_header[..0]).kind == fail.Kind.InvalidState)
  overlap := tar.stream_reader(io.Reader{},bad_header[..],bad_header[..])
- check(tar.next_stream(&overlap).failure.parse.kind == parse.Kind.Overlap)
- check(tar.read_stream(&overlap,bad_header[..0]).failure.kind == errors.Kind.InvalidInput)
+ check(stream_next(&overlap).failure.kind == fail.Kind.InvalidInput)
+ check(read_failure(&overlap,bad_header[..0]).kind == fail.Kind.InvalidInput)
 }
 '''
 

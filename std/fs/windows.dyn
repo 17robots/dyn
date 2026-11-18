@@ -32,18 +32,18 @@ fn limit(length: usize) u32 {
   return #cast(u32, length)
 }
 // Paths are borrowed UTF-8, converted into bounded stack storage; no hidden allocation.
-fn native_open(path: []const u8, mode: u8) FileResult {
+// A handle, or a negative code: ERROR_INVALID_NAME (123) for a path that is
+// empty or not UTF-8, ERROR_FILENAME_EXCED_RANGE (206) for one too long.
+fn native_open(path: []const u8, mode: u8) isize {
   storage: [32768]u16
   at: usize = 0
   used: usize = 0
-  if #len(path) == 0 { return FileResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
+  if #len(path) == 0 { return -123 }
   for at < #len(path) {
     codepoint := utf8.decode(path, at)
-    if !codepoint.valid || codepoint.codepoint == 0 {
-      return FileResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-    }
+    if !codepoint.valid || codepoint.codepoint == 0 { return -123 }
     width := utf16.encode(storage[used..32767], codepoint.codepoint)
-    if width == 0 { return FileResult{ failure: io.Failure{ kind: io.Kind.Capacity } } }
+    if width == 0 { return -206 }
     used += width
     at += codepoint.width
   }
@@ -61,11 +61,8 @@ fn native_open(path: []const u8, mode: u8) FileResult {
     creation = 1
   }
   handle := #cast(isize, #cast(usize, win_open(&storage[0], access, 7, nil, creation, 128, nil)))
-  if !native_valid(handle) {
-    code := last_error()
-    return FileResult{ failure: io.Failure{ kind: native_kind(code), native: code } }
-  }
-  return FileResult{ value: owned_file(handle) }
+  if !native_valid(handle) { return last_error() }
+  return handle
 }
 fn native_close(handle: isize) isize {
   if win_close(pointer(handle)) == 0 { return last_error() }

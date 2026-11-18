@@ -1,4 +1,4 @@
-use "std/parse" parse
+use "std/fail"
 use "std/mem" mem
 use "std/io" io
 use "std/math" math
@@ -15,12 +15,12 @@ pub struct Options { width: i32, no_wrap: bool, tab_columns: usize, base: u32 }
 pub struct Glyph { id: u32, font: rawptr, start: usize, end: usize, x: f64, y: f64, x_offset: f64, y_offset: f64, advance: f64, rtl: bool, hidden: bool }
 pub struct Line { start: usize, end: usize, glyph_start: usize, glyph_count: usize, width: f64, y: f64, rtl: bool }
 pub struct Layout { text: []const u8, glyphs: []Glyph, lines: []Line, width: f64, height: f64, line_height: i32 }
-pub struct Result { value: Layout, kind: io.Kind, offset: usize, failure: io.Failure }
-pub struct Hit { start: usize, end: usize, line: usize, x: f64, y: f64, width: f64, height: f64, rtl: bool, failure: io.Failure }
+// found is false without a layout or for an offset or point outside it.
+pub struct Hit { start: usize, end: usize, line: usize, x: f64, y: f64, width: f64, height: f64, rtl: bool, found: bool }
 struct Cluster { start: usize, end: usize, scalar: usize, level: i8, script: u32, face: Face, tab: bool }
 struct Unit { start: usize, end: usize, advance: f64, tab: bool, break_after: bool }
 struct Run { start: usize, end: usize, first: usize, last: usize, level: i8, script: u32, face: Face, glyphs: []hb.Glyph, advance: f64, tab: bool }
-struct Span { runs: []Run, units: []Unit, kind: io.Kind, failure: io.Failure }
+struct Span { runs: []Run, units: []Unit, kind: fail.Kind }
 struct GlyphNode { value: Glyph, next: *GlyphNode }
 struct LineNode { value: Line, next: *LineNode }
 struct Output { arena: *mem.Arena, first: *GlyphNode, last: *GlyphNode, lines: *LineNode, tail: *LineNode, glyph_count: usize, line_count: usize, width: f64 }
@@ -107,18 +107,15 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
       if soft && run.last==last {
         item_length-=1
       }
-      shaped:=hb.shape_run(arena, api, run.face.font, context_text, hb.Options{direction:direction, script:run.script, cluster_level:hb.MonotoneGraphemes, flags:flags, item_offset:#cast(u32, item_offset), has_item_length:true, item_length:#cast(i32, item_length)}, features[..])
-      if io.failed(shaped.failure) {
-        return Span{ kind:shaped.kind, failure: io.Failure{ kind: io.Kind.System } }
+      shaping: fail.Status
+      shaped:=hb.shape_run(arena, &shaping, api, run.face.font, context_text, hb.Options{direction:direction, script:run.script, cluster_level:hb.MonotoneGraphemes, flags:flags, item_offset:#cast(u32, item_offset), has_item_length:true, item_length:#cast(i32, item_length)}, features[..])
+      if shaping.failed { return Span{ kind:shaping.failure.kind } }
+      run.glyphs=shaped
+      for g in shaped {
+        if g.cluster<item_offset { return Span{ kind:fail.Kind.InvalidInput } }
       }
-      run.glyphs=shaped.value
-      for g in shaped.value {
-        if g.cluster<item_offset {
-          return Span{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
-        }
-      }
-      for g in 0..#len(shaped.value) {
-        shaped.value[g].cluster-=#cast(u32, item_offset)
+      for g in 0..#len(shaped) {
+        shaped[g].cluster-=#cast(u32, item_offset)
       }
       begin_units:=unit_count
       i:usize=0
@@ -126,7 +123,7 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
       for i<#len(run.glyphs) {
         source:=run.start+run.glyphs[i].cluster
         if source<run.start || source>=run.end || !utf8.decode(text, source).valid {
-          return Span{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
+          return Span{ kind:fail.Kind.InvalidInput }
         }
         next:=i+1
         advance:f64=0.0
@@ -143,7 +140,7 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
           end=run.start+run.glyphs[next].cluster
         }
         if end<=source || end>run.end || advance<0.0 || !finite(advance) || unit_count>=#len(units) {
-          return Span{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
+          return Span{ kind:fail.Kind.InvalidInput }
         }
         c:=cluster_index(clusters, source)
         if c==#len(clusters) || clusters[c].start>source {
@@ -217,21 +214,22 @@ fn scalar_index(paragraph:*const bidi.Paragraph, offset:usize) usize {
   }
   return low
 }
-fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, paragraph:*const bidi.Paragraph, clusters:[]Cluster, start, end, base:usize, font:Font, tab:f64) io.Kind {
+fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, paragraph:*const bidi.Paragraph, clusters:[]Cluster, start, end, base:usize, font:Font, tab:f64) fail.Kind {
   work:=mem.arena_alloc(0)
   defer mem.arena_release(work)
   first:=cluster_index(clusters, start)
   last:=cluster_index(clusters, end)
   first_scalar:=scalar_index(paragraph, start)
   last_scalar:=scalar_index(paragraph, end)
-  reordered:=bidi.reorder(work, bidi_api, paragraph, first_scalar, last_scalar)
-  if io.failed(reordered.failure) { return reordered.kind }
-  span:=shape(work, api, text, clusters, first, last, reordered.value.levels, first_scalar, end<#len(text))
-  if io.failed(span.failure) { return span.kind }
+  reordering: fail.Status
+  reordered:=bidi.reorder(work, &reordering, bidi_api, paragraph, first_scalar, last_scalar)
+  if reordering.failed { return reordering.failure.kind }
+  span:=shape(work, api, text, clusters, first, last, reordered.levels, first_scalar, end<#len(text))
+  if span.kind!=fail.Kind.Ok { return span.kind }
   order:=mem.push_array(usize, work, #len(span.runs))
   seen:=mem.push_array(u8, work, #len(span.runs))
   count:usize=0
-  for scalar in reordered.value.visual_to_logical {
+  for scalar in reordered.visual_to_logical {
     byte:=paragraph.starts[scalar]
     low:usize=0
     high:=#len(span.runs)
@@ -296,13 +294,14 @@ fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]cons
     }
   }
   line_append(output, Line{start:base+start, end:base+end, glyph_start:glyph_start, glyph_count:output.glyph_count-glyph_start, width:x, y:y, rtl:paragraph.base==bidi.RightToLeft})
-  return io.Kind.Ok
+  return fail.Kind.Ok
 }
-fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, base:usize, font:Font, options:Options) io.Kind {
+fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, base:usize, font:Font, options:Options) fail.Kind {
   work:=mem.arena_alloc(0)
   defer mem.arena_release(work)
-  resolved:=bidi.resolve(work, bidi_api, text, options.base)
-  if io.failed(resolved.failure) { return resolved.kind }
+  resolving: fail.Status
+  resolved:=bidi.resolve(work, &resolving, bidi_api, text, options.base)
+  if resolving.failed { return resolving.failure.kind }
   count:=utf8.codepoint_count(text).value
   clusters:=mem.push_array(Cluster, work, count)
   used:usize=0
@@ -311,10 +310,11 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
   unicode_api:=api.unicode_get_default()
   for iterator.offset<#len(text) {
     start:=iterator.offset
-    grapheme:=unicode.next_grapheme(&iterator)
-    if !grapheme.found { return io.Kind.InvalidInput }
+    splitting: fail.Status
+    grapheme:=unicode.next_grapheme(&splitting, &iterator)
+    if !grapheme.found { return fail.Kind.InvalidInput }
     face:=font.select(font.data, grapheme.value)
-    if face.font==nil { return io.Kind.NotFound }
+    if face.font==nil { return fail.Kind.NotFound }
     script:u32=0
     at:=start
     for at<iterator.offset {
@@ -325,7 +325,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
       }
       at+=cp.width
     }
-    clusters[used]=Cluster{start:start, end:iterator.offset, scalar:scalar, level:resolved.value.levels[scalar], script:script, face:face, tab:utf8.decode(text, start).codepoint==9}
+    clusters[used]=Cluster{start:start, end:iterator.offset, scalar:scalar, level:resolved.levels[scalar], script:script, face:face, tab:utf8.decode(text, start).codepoint==9}
     scalar+=utf8.codepoint_count(grapheme.value).value
     used+=1
   }
@@ -352,24 +352,25 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
   }
   tab:=font.space_advance*#cast(f64, options.tab_columns)
   if options.no_wrap || options.width==0 || #len(text)==0 {
-    return emit(output, api, bidi_api, text, &resolved.value, clusters, 0, #len(text), base, font, tab)
+    return emit(output, api, bidi_api, text, &resolved, clusters, 0, #len(text), base, font, tab)
   }
-  breaks:=unicode.line_breaks(work, text)
-  if parse.failed(breaks.failure) { return io.Kind.InvalidInput }
+  breaking: fail.Status
+  breaks:=unicode.line_breaks(work, &breaking, text)
+  if breaking.failed { return fail.Kind.InvalidInput }
   spans:=mem.arena_alloc(0)
   defer mem.arena_release(spans)
   adjusted:[0]i8
   measured:=shape(spans, api, text, clusters, 0, used, adjusted[..], 0, false)
-  if io.failed(measured.failure) { return measured.kind }
+  if measured.kind!=fail.Kind.Ok { return measured.kind }
   breaks_index:usize=0
   for u in 0..#len(measured.units) {
-    for breaks_index<#len(breaks.value) && breaks.value[breaks_index].offset<measured.units[u].end {
+    for breaks_index<#len(breaks) && breaks[breaks_index].offset<measured.units[u].end {
       breaks_index+=1
     }
-    measured.units[u].break_after=breaks_index<#len(breaks.value) && breaks.value[breaks_index].offset==measured.units[u].end
+    measured.units[u].break_after=breaks_index<#len(breaks) && breaks[breaks_index].offset==measured.units[u].end
   }
   if #len(measured.units)==0 {
-    return emit(output, api, bidi_api, text, &resolved.value, clusters, 0, 0, base, font, tab)
+    return emit(output, api, bidi_api, text, &resolved, clusters, 0, 0, base, font, tab)
   }
   u:usize=0
   for u<#len(measured.units) {
@@ -400,8 +401,8 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
     for !accepted {
       mem.arena_reset(candidate)
       temporary:=Output{arena:candidate, line_count:output.line_count}
-      kind:=emit(&temporary, api, bidi_api, text, &resolved.value, clusters, measured.units[u].start, measured.units[end-1].end, base, font, tab)
-      if kind!=io.Kind.Ok {
+      kind:=emit(&temporary, api, bidi_api, text, &resolved, clusters, measured.units[u].start, measured.units[end-1].end, base, font, tab)
+      if kind!=fail.Kind.Ok {
         mem.arena_release(candidate)
         return kind
       }
@@ -423,7 +424,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
     mem.arena_release(candidate)
     u=end
   }
-  return io.Kind.Ok
+  return fail.Kind.Ok
 }
 fn separator(cp:u32) bool {
   return cp==10 || cp==13 || cp==11 || cp==12 || cp==28 || cp==29 || cp==30 || cp==133 || cp==8232 || cp==8233
@@ -431,7 +432,11 @@ fn separator(cp:u32) bool {
 // Owns the source byte copy and placements in arena. Font handles/data remain
 // caller-owned. Wrapping uses shaped clusters and reshapes each accepted line;
 // an overwide indivisible cluster is emitted intact rather than split.
-pub fn build(arena:*mem.Arena, source:[]const u8, font:Font, api:*const hb.Api, bidi_api:*const bidi.Api, requested:Options) Result {
+// Bad options fail with InvalidInput, an incomplete API with InvalidState; a
+// paragraph that cannot be shaped fails with the provider's kind, at the
+// paragraph's offset.
+pub fn build(arena:*mem.Arena, status:*fail.Status, source:[]const u8, font:Font, api:*const hb.Api, bidi_api:*const bidi.Api, requested:Options) Layout {
+  if status.failed { return Layout{} }
   options:=requested
   if options.tab_columns==0 {
     options.tab_columns=4
@@ -440,10 +445,12 @@ pub fn build(arena:*mem.Arena, source:[]const u8, font:Font, api:*const hb.Api, 
     options.base=bidi.Auto
   }
   if arena==nil || api==nil || bidi_api==nil || font.select==nil || font.line_height<=0 || !finite(font.space_advance) || font.space_advance<=0.0 || options.width<0 || options.tab_columns==0 || options.tab_columns>256 || !utf8.valid(source) || #len(source)>2147483647 || (options.base!=bidi.Auto && options.base!=bidi.LeftToRight && options.base!=bidi.RightToLeft) {
-    return Result{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
+    fail.invalid(status, "lay out text", "", "invalid font, API or options")
+    return Layout{}
   }
   if api.unicode_get_default==nil || api.unicode_script==nil || api.shape==nil {
-    return Result{ kind:io.Kind.InvalidState, failure: io.Failure{ kind: io.Kind.System } }
+    fail.set(status, fail.make(fail.Kind.InvalidState, "lay out text", "", "the HarfBuzz API is incomplete"))
+    return Layout{}
   }
   mark:=mem.arena_mark(arena)
   success:=false
@@ -461,9 +468,7 @@ pub fn build(arena:*mem.Arena, source:[]const u8, font:Font, api:*const hb.Api, 
     decoded:=utf8.decode(source, at)
     if separator(decoded.codepoint) {
       kind:=paragraph(&output, api, bidi_api, source[begin..at], begin, font, options)
-      if kind!=io.Kind.Ok {
-        return Result{ kind:kind, offset:begin, failure: io.Failure{ kind: io.Kind.System } }
-      }
+      if kind!=fail.Kind.Ok { return paragraph_failed(status, kind, begin) }
       at+=decoded.width
       if decoded.codepoint==13 && at<#len(source) && source[at]==10 {
         at+=1
@@ -474,9 +479,7 @@ pub fn build(arena:*mem.Arena, source:[]const u8, font:Font, api:*const hb.Api, 
     }
   }
   kind:=paragraph(&output, api, bidi_api, source[begin..], begin, font, options)
-  if kind!=io.Kind.Ok {
-    return Result{ kind:kind, offset:begin, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if kind!=fail.Kind.Ok { return paragraph_failed(status, kind, begin) }
   text:=mem.push_bytes_uninit(arena, #len(source))
   _=mem.copy(text, source)
   glyphs:=mem.push_array(Glyph, arena, output.glyph_count)
@@ -496,7 +499,14 @@ pub fn build(arena:*mem.Arena, source:[]const u8, font:Font, api:*const hb.Api, 
     line_node=line_node.next
   }
   success=true
-  return Result{ value:Layout{text:text, glyphs:glyphs, lines:lines, width:output.width, height:#cast(f64, output.line_count)*#cast(f64, font.line_height), line_height:font.line_height} }
+  return Layout{text:text, glyphs:glyphs, lines:lines, width:output.width, height:#cast(f64, output.line_count)*#cast(f64, font.line_height), line_height:font.line_height}
+}
+fn paragraph_failed(status:*fail.Status, kind:fail.Kind, offset:usize) Layout {
+  failure:=fail.make(kind, "lay out text", "", "a paragraph could not be shaped")
+  failure.offset=offset
+  failure.has_offset=true
+  fail.set(status, failure)
+  return Layout{}
 }
 fn hit(layout:*const Layout, line_index, offset:usize) Hit {
   line:=layout.lines[line_index]
@@ -531,13 +541,11 @@ fn hit(layout:*const Layout, line_index, offset:usize) Hit {
       x=left
     }
   }
-  return Hit{ start:offset, end:offset, line:line_index, x:x, y:line.y, height:layout.line_height, rtl:rtl }
+  return Hit{ found:true, start:offset, end:offset, line:line_index, x:x, y:line.y, height:layout.line_height, rtl:rtl }
 }
 
 pub fn cluster_at(layout:*const Layout, offset:usize) Hit {
-  if layout==nil || offset>#len(layout.text) || #len(layout.lines)==0 {
-    return Hit{ failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if layout==nil || offset>#len(layout.text) || #len(layout.lines)==0 { return Hit{} }
   line_index:usize=0
   for i in 1..#len(layout.lines) {
     if offset>=layout.lines[i].start {
@@ -557,15 +565,13 @@ pub fn cluster_at(layout:*const Layout, offset:usize) Hit {
           right=math.max(right, other.x+other.advance)
         }
       }
-      return Hit{ start:glyph.start, end:glyph.end, line:line_index, x:left, y:line.y, width:right-left, height:layout.line_height, rtl:glyph.rtl }
+      return Hit{ found:true, start:glyph.start, end:glyph.end, line:line_index, x:left, y:line.y, width:right-left, height:layout.line_height, rtl:glyph.rtl }
     }
   }
   return hit(layout, line_index, offset)
 }
 pub fn at_point(layout:*const Layout, x, y:f64) Hit {
-  if layout==nil || #len(layout.lines)==0 || !finite(x) || !finite(y) {
-    return Hit{ failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if layout==nil || #len(layout.lines)==0 || !finite(x) || !finite(y) { return Hit{} }
   line_index:usize=0
   if y>0.0 {
     line_index=#cast(usize, math.floor64(y/layout.line_height))
@@ -579,7 +585,7 @@ pub fn at_point(layout:*const Layout, x, y:f64) Hit {
     if first.rtl {
       offset=first.end
     }
-    return Hit{ start:offset, end:offset, line:line_index, x:first.x, y:line.y, height:layout.line_height, rtl:first.rtl }
+    return Hit{ found:true, start:offset, end:offset, line:line_index, x:first.x, y:line.y, height:layout.line_height, rtl:first.rtl }
   }
   i:=line.glyph_start
   for i<line.glyph_start+line.glyph_count {
@@ -594,7 +600,7 @@ pub fn at_point(layout:*const Layout, x, y:f64) Hit {
       next+=1
     }
     if x<right {
-      return Hit{ start:glyph.start, end:glyph.end, line:line_index, x:left, y:line.y, width:right-left, height:layout.line_height, rtl:glyph.rtl }
+      return Hit{ found:true, start:glyph.start, end:glyph.end, line:line_index, x:left, y:line.y, width:right-left, height:layout.line_height, rtl:glyph.rtl }
     }
     i=next
   }
@@ -603,14 +609,13 @@ pub fn at_point(layout:*const Layout, x, y:f64) Hit {
   if last.rtl {
     offset=last.start
   }
-  return Hit{ start:offset, end:offset, line:line_index, x:line.width, y:line.y, height:layout.line_height, rtl:last.rtl }
+  return Hit{ found:true, start:offset, end:offset, line:line_index, x:line.width, y:line.y, height:layout.line_height, rtl:last.rtl }
 }
 
 // Visual cells touched by a logical source selection. start/end are the source
 // hull of each merged rectangle; at bidi boundaries that hull need not describe
 // a contiguous visual or logical run. Geometry is authoritative for drawing.
 pub struct SelectionRect { line: usize, start: usize, end: usize, x: f64, y: f64, width: f64, height: f64 }
-pub struct SelectionResult { value: []SelectionRect, kind: io.Kind, failure: io.Failure }
 fn selection_boundary(text: []const u8, offset: usize) bool {
   return offset<=#len(text) && (offset==#len(text) || (text[offset]&0xc0)!=0x80)
 }
@@ -682,36 +687,45 @@ fn selection_walk(layout: *const Layout, start, end: usize, destination: []Selec
 // Newline extensions and empty-line selection policy belong to the application.
 // Layouts built by build have contiguous line glyph slices; forged malformed
 // layouts are rejected before allocation. Empty ranges allocate nothing.
-pub fn selection(arena: *mem.Arena, layout: *const Layout, start, end: usize) SelectionResult {
+// A range or layout that breaks these rules fails with InvalidInput.
+pub fn selection(arena: *mem.Arena, status: *fail.Status, layout: *const Layout, start, end: usize) []SelectionRect {
+  empty: []SelectionRect
+  if status.failed { return empty }
   if arena==nil || layout==nil || start>end || end>#len(layout.text) || !utf8.valid(layout.text) || !selection_boundary(layout.text, start) || !selection_boundary(layout.text, end) {
-    return SelectionResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
+    fail.invalid(status, "select text", "", "the range is not on character boundaries")
+    return empty
   }
-  if start==end { return SelectionResult{} }
+  if start==end { return empty }
   if layout.line_height<=0 {
-    return SelectionResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
+    fail.invalid(status, "select text", "", "malformed layout")
+    return empty
   }
   used: usize=0
   for line in layout.lines {
     if line.start>line.end || line.end>#len(layout.text) || line.glyph_start!=used || line.glyph_count>#len(layout.glyphs)-used || !selection_boundary(layout.text, line.start) || !selection_boundary(layout.text, line.end) || !finite(line.y) || !finite(line.y+layout.line_height) {
-      return SelectionResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
+      fail.invalid(status, "select text", "", "malformed layout")
+      return empty
     }
     used+=line.glyph_count
   }
   if used!=#len(layout.glyphs) {
-    return SelectionResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
+    fail.invalid(status, "select text", "", "malformed layout")
+    return empty
   }
   for glyph in layout.glyphs {
     if glyph.start>=glyph.end || glyph.end>#len(layout.text) || !selection_boundary(layout.text, glyph.start) || !selection_boundary(layout.text, glyph.end) || !finite(glyph.x) || !finite(glyph.advance) || !finite(glyph.x+glyph.advance) {
-      return SelectionResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
+      fail.invalid(status, "select text", "", "malformed layout")
+      return empty
     }
   }
-  empty: [0]SelectionRect
-  count:=selection_walk(layout, start, end, empty[..])
+  none: [0]SelectionRect
+  count:=selection_walk(layout, start, end, none[..])
   if count>#max(usize)/#sizeof(SelectionRect) {
-    return SelectionResult{ kind:io.Kind.Overflow, failure: io.Failure{ kind: io.Kind.System } }
+    fail.set(status, fail.make(fail.Kind.Overflow, "select text", "", "too many rectangles"))
+    return empty
   }
-  if count==0 { return SelectionResult{} }
+  if count==0 { return empty }
   rects:=mem.push_array(SelectionRect, arena, count)
   _=selection_walk(layout, start, end, rects)
-  return SelectionResult{ value:rects }
+  return rects
 }

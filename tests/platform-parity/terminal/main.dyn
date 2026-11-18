@@ -1,5 +1,5 @@
 use "std/terminal" terminal
-use "std/io" errors
+use "std/fail"
 fn check(ok: bool) {
   if !ok {
     #panic("terminal")
@@ -10,18 +10,20 @@ pub fn main() {
   zero: terminal.State
   check(zero.bytes[0] == 0)
   check(!terminal.is_attached(-1))
-  bad := terminal.raw(-1)
-  check(errors.failed(bad.failure))
-  check(terminal.restore(0, nil).failure.kind == errors.Kind.InvalidInput)
+  bad: fail.Status
+  _ = terminal.raw(&bad, -1)
+  check(bad.failed)
+  missing: fail.Status
+  terminal.restore(&missing, 0, nil)
+  check(missing.failure.kind == fail.Kind.InvalidInput)
   key := terminal.key_decode("\x1b[A")
   check(key.kind == terminal.KeyKind.Up && key.consumed == 3)
   if terminal.is_attached(0) {
-    saved := terminal.raw(0)
-    check(!errors.failed(saved.failure))
-    check(!errors.failed(terminal.restore(0, &saved.value).failure))
-    again := terminal.read_state(0)
-    check(!errors.failed(again.failure))
-    shown := terminal.size(1)
-    check(!errors.failed(shown.failure) && shown.columns == 91 && shown.rows == 37)
+    status: fail.Status
+    saved := terminal.raw(&status, 0)
+    terminal.restore(&status, 0, &saved)
+    _ = terminal.read_state(&status, 0)
+    shown := terminal.size(&status, 1)
+    check(!status.failed && shown.columns == 91 && shown.rows == 37)
   }
 }

@@ -1,41 +1,59 @@
 use "std/parse" parse
+use "std/fail"
 use "std/mem" mem
 use "std/compress/deflate" deflate
 
 pub struct Info { width: usize, height: usize, channels: u8, valid: bool }
-// Result.ok / InfoResult.ok are authoritative. Info.ok is legacy parser state:
-// true inside successful values, false in the zero failure value.
-// On failure value is zero. error is zero: codec details are not native errors.
-// offset is a source byte offset when known, otherwise zero (also for encoding).
+// Info.valid is true inside successful values. Malformed data fails with
+// InvalidInput (at its offset when known), an impossible size with Overflow,
+// data past the codec's working limits with Capacity.
 pub struct Image { info: Info, pixels: []u8 }
-pub struct Result { value: Image, offset: usize, failure: parse.Failure }
-pub struct InfoResult { value: Info, offset: usize, failure: parse.Failure }
 struct DecodeWork { info: Info, pixels: []u8, error: isize, ok: bool, offset: usize }
-pub struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }
 struct EncodeWork { data: []u8, error: isize, ok: bool }
 
-fn codec_kind(detail: isize) parse.Kind {
-  if detail == -75 { return parse.Kind.Overflow }
-  if detail == -28 { return parse.Kind.Capacity }
-  return parse.Kind.Syntax
-}
-
-pub fn inspect(source: []const u8) InfoResult {
-  info := inspect_info(source)
-  if !info.valid { return InfoResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
-  return InfoResult{ value: info }
-}
-
-fn decode_result(work: DecodeWork) Result {
-  if !work.ok {
-    return Result{ offset: work.offset, failure: parse.Failure{ kind: codec_kind(work.error), offset: work.offset } }
+fn codec_failure(status: *fail.Status, operation: []const u8, detail: isize, offset: usize, located: bool) {
+  kind := fail.Kind.InvalidInput
+  message: []const u8 = "malformed PNG"
+  if detail == -75 {
+    kind = fail.Kind.Overflow
+    message = "the image is too large"
+  } else if detail == -28 {
+    kind = fail.Kind.Capacity
+    message = "the image exceeds the codec's limits"
+  } else if !located {
+    message = "invalid pixels or size"
   }
-  return Result{ value: Image{ info: work.info, pixels: work.pixels } }
+  failure := fail.make(kind, operation, "", message)
+  failure.offset = offset
+  failure.has_offset = located
+  fail.set(status, failure)
 }
 
-fn encode_result(work: EncodeWork) EncodeResult {
-  if !work.ok { return EncodeResult{ failure: parse.Failure{ kind: codec_kind(work.error) } } }
-  return EncodeResult{ value: work.data }
+// The header's description of the image, without decoding it.
+pub fn inspect(status: *fail.Status, source: []const u8) Info {
+  if status.failed { return Info{} }
+  info := inspect_info(source)
+  if !info.valid {
+    parse.malformed(status, "inspect PNG", "malformed PNG header", 0)
+    return Info{}
+  }
+  return info
+}
+
+fn decode_result(status: *fail.Status, work: DecodeWork) Image {
+  if !work.ok {
+    codec_failure(status, "decode PNG", work.error, work.offset, true)
+    return Image{}
+  }
+  return Image{ info: work.info, pixels: work.pixels }
+}
+
+fn encode_result(status: *fail.Status, work: EncodeWork) []u8 {
+  if !work.ok {
+    codec_failure(status, "encode PNG", work.error, 0, false)
+    return work.data[..0]
+  }
+  return work.data
 }
 
 fn u32be(source: []const u8, at: usize) u32 {
@@ -348,45 +366,59 @@ fn pixel_count(width: usize, height: usize, channels: u8) usize {
   return count * channels
 }
 
-pub fn decode(arena: *mem.Arena, source: []const u8) Result {
+pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image {
+  if status.failed { return Image{} }
   info := inspect_info(source)
-  if !info.valid { return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
+  if !info.valid {
+    fail.set(status, fail.make(fail.Kind.InvalidInput, "decode PNG", "", "malformed PNG"))
+    return Image{}
+  }
   size := pixel_count(info.width, info.height, info.channels)
   limit := #max(usize)
   if size == 0 || size > limit - info.height {
-    return Result{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
+    fail.set(status, fail.make(fail.Kind.Overflow, "decode PNG", "", "the PNG is too large"))
+    return Image{}
   }
   scan := size + info.height
   if size > limit - scan || #len(source) > limit - size - scan {
-    return Result{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
+    fail.set(status, fail.make(fail.Kind.Overflow, "decode PNG", "", "the PNG is too large"))
+    return Image{}
   }
-  return decode_result(decode_work(arena, source))
+  return decode_result(status, decode_work(arena, source))
 }
 
-pub fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8) EncodeResult {
+pub fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8) []u8 {
+  empty: []u8
+  if status.failed { return empty }
   if width == 0 || height == 0 || channels < 1 || channels > 4 {
-    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
+    fail.set(status, fail.make(fail.Kind.InvalidInput, "encode PNG", "", "invalid pixels or size"))
+    return empty
   }
   size := pixel_count(width, height, channels)
   limit := #max(usize)
   if size == 0 || size > limit - height {
-    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
+    fail.set(status, fail.make(fail.Kind.Overflow, "encode PNG", "", "the PNG is too large"))
+    return empty
   }
   if size != #len(pixels) {
-    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
+    fail.set(status, fail.make(fail.Kind.InvalidInput, "encode PNG", "", "invalid pixels or size"))
+    return empty
   }
   scan := size + height
   overhead := (scan / 65535 + 1) * 5 + 6
   if scan > limit - overhead {
-    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
+    fail.set(status, fail.make(fail.Kind.Overflow, "encode PNG", "", "the PNG is too large"))
+    return empty
   }
   compressed := scan + overhead
   if scan > limit - 64 || compressed > (limit - 64 - scan) / 2 {
-    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
+    fail.set(status, fail.make(fail.Kind.Overflow, "encode PNG", "", "the PNG is too large"))
+    return empty
   }
   // PNG stores its IDAT length in a u32.
   if compressed > 4294967295 {
-    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
+    fail.set(status, fail.make(fail.Kind.Overflow, "encode PNG", "", "the PNG is too large"))
+    return empty
   }
-  return encode_result(encode_work(arena, pixels, width, height, channels))
+  return encode_result(status, encode_work(arena, pixels, width, height, channels))
 }

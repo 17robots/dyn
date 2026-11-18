@@ -6,11 +6,12 @@
 // when shorter (the code is HPACK's).
 use "std/net/http/hpack" hpack
 use "std/parse" parse
+use "std/fail"
 
 pub const StaticCount: usize = 99
 
 // One decoded field line; name and value point into scratch.
-pub struct Field { name: []const u8, value: []const u8, consumed: usize, failure: parse.Failure }
+pub struct Field { name: []const u8, value: []const u8, consumed: usize }
 
 pub struct Prefix { consumed: usize, ok: bool }
 
@@ -66,8 +67,15 @@ fn static_value(index: usize) []const u8 {
   return StaticText[start..start + StaticValueLength[index]]
 }
 
-fn failed(kind: parse.Kind, offset: usize) Field {
-  return Field{ failure: parse.Failure{ kind: kind, offset: offset } }
+// Malformed or truncated input fails with InvalidInput, a field larger than
+// scratch with Capacity, at the offending offset in the block.
+fn failed(status: *fail.Status, kind: fail.Kind, offset: usize) Field {
+  message: []const u8 = "malformed QPACK field"
+  if kind == fail.Kind.Capacity {
+    message = "the field does not fit scratch"
+  }
+  parse.failed_at(status, kind, "decode QPACK", message, offset)
+  return Field{}
 }
 
 fn copy_into(destination: []u8, source: []const u8) bool {
@@ -90,19 +98,20 @@ pub fn decode_prefix(section: []const u8) Prefix {
 
 // Decodes the field line at the start of section into scratch. A reference
 // to the dynamic table fails with Syntax (QPACK_DECOMPRESSION_FAILED).
-pub fn decode_field(section: []const u8, scratch: []u8) Field {
-  if #len(section) == 0 { return failed(parse.Kind.Truncated, 0) }
+pub fn decode_field(status: *fail.Status, section: []const u8, scratch: []u8) Field {
+  if status.failed { return Field{} }
+  if #len(section) == 0 { return failed(status, fail.Kind.InvalidInput, 0) }
   first := section[0]
   if (first & 0x80) != 0 {
     // Indexed field line; T (0x40) selects the static table.
     index := read_integer(section, 6)
     if (first & 0x40) == 0 || !index.ok || index.value >= StaticCount {
-      return failed(parse.Kind.Syntax, 0)
+      return failed(status, fail.Kind.InvalidInput, 0)
     }
     name := static_name(index.value)
     value := static_value(index.value)
     if !copy_into(scratch, name) || !copy_into(scratch[#len(name)..], value) {
-      return failed(parse.Kind.Capacity, 0)
+      return failed(status, fail.Kind.Capacity, 0)
     }
     return Field{ name: scratch[..#len(name)], value: scratch[#len(name)..#len(name) + #len(value)], consumed: index.consumed }
   }
@@ -110,26 +119,26 @@ pub fn decode_field(section: []const u8, scratch: []u8) Field {
     // Literal with a name reference; T (0x10) selects the static table.
     index := read_integer(section, 4)
     if (first & 0x10) == 0 || !index.ok || index.value >= StaticCount {
-      return failed(parse.Kind.Syntax, 0)
+      return failed(status, fail.Kind.InvalidInput, 0)
     }
     name := static_name(index.value)
-    if !copy_into(scratch, name) { return failed(parse.Kind.Capacity, 0) }
+    if !copy_into(scratch, name) { return failed(status, fail.Kind.Capacity, 0) }
     value := read_string(section[index.consumed..], 7, scratch[#len(name)..])
-    if !value.ok { return failed(parse.Kind.Syntax, index.consumed) }
+    if !value.ok { return failed(status, fail.Kind.InvalidInput, index.consumed) }
     return Field{ name: scratch[..#len(name)], value: scratch[#len(name)..#len(name) + value.length],
       consumed: index.consumed + value.consumed }
   }
   if (first & 0xe0) == 0x20 {
     // Literal with a literal name: H at 0x08, a 3-bit length.
     name := read_string(section, 3, scratch)
-    if !name.ok { return failed(parse.Kind.Syntax, 0) }
+    if !name.ok { return failed(status, fail.Kind.InvalidInput, 0) }
     value := read_string(section[name.consumed..], 7, scratch[name.length..])
-    if !value.ok { return failed(parse.Kind.Syntax, name.consumed) }
+    if !value.ok { return failed(status, fail.Kind.InvalidInput, name.consumed) }
     return Field{ name: scratch[..name.length], value: scratch[name.length..name.length + value.length],
       consumed: name.consumed + value.consumed }
   }
   // Post-base references need the dynamic table.
-  return failed(parse.Kind.Syntax, 0)
+  return failed(status, fail.Kind.InvalidInput, 0)
 }
 
 // ---------------------------------------------------------------- encoding

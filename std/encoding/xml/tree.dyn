@@ -14,7 +14,6 @@ pub struct Node {
   parent: *Node,
 }
 pub const nil_node: Node = Node{}
-pub struct ParseResult { root: *const Node, offset: usize, failure: parse.Failure }
 
 pub fn is_nil(node: *const Node) bool {
   return node == nil || node.kind == NodeKind.Missing
@@ -43,9 +42,14 @@ pub fn at(node: *const Node, index: usize) *const Node {
   if is_nil(item) { return &nil_node }
   return item
 }
-fn tree_failure(arena: *tree_memory.Arena, mark: usize, offset: usize, message: []const u8) ParseResult {
+fn tree_failure(arena: *tree_memory.Arena, status: *fail.Status, mark: usize, offset: usize, message: []const u8) *const Node {
   tree_memory.arena_rewind(arena, mark)
-  return ParseResult{ root: &nil_node, offset: offset, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: offset, message: message } }
+  text := message
+  if #len(text) == 0 {
+    text = "malformed XML"
+  }
+  parse.malformed(status, "parse XML", text, offset)
+  return &nil_node
 }
 fn tree_append(arena: *tree_memory.Arena, parent: *Node, kind: NodeKind, event: Event) *Node {
   node := tree_memory.push(Node, arena)
@@ -60,13 +64,14 @@ fn tree_append(arena: *tree_memory.Arena, parent: *Node, kind: NodeKind, event: 
 // Semantic failures point to the token start; scanner failures use its offset;
 // invalid UTF-8/XML characters point to the first invalid source byte; missing
 // root/unclosed elements point to EOF. Success offset is source length.
-pub fn parse(arena: *tree_memory.Arena, source: []const u8) ParseResult {
+pub fn parse(arena: *tree_memory.Arena, status: *fail.Status, source: []const u8) *const Node {
+  if status.failed { return &nil_node }
   mark := tree_memory.arena_mark(arena)
   position: usize = 0
   for position < #len(source) {
     decoded := utf8.decode(source, position)
     if !decoded.valid || !xml_character(decoded.codepoint) {
-      return tree_failure(arena, mark, position, "")
+      return tree_failure(arena, status, mark, position, "")
     }
     position += decoded.width
   }
@@ -77,25 +82,26 @@ pub fn parse(arena: *tree_memory.Arena, source: []const u8) ParseResult {
   scan := scanner(source)
   for {
     start := scan.offset
-    result := next(&scan)
+    result := next(status, &scan)
     if !result.found {
-      if scan.failure.kind != parse.StreamKind.Ok {
-        return tree_failure(arena, mark, scan.failure.parse.offset, scan.failure.parse.message)
+      if status.failed {
+        tree_memory.arena_rewind(arena, mark)
+        return &nil_node
       }
-      if parent != document { return tree_failure(arena, mark, #len(source), "mismatched tag") }
-      if roots != 1 { return tree_failure(arena, mark, #len(source), "") }
-      return ParseResult{ root: document, offset: #len(source) }
+      if parent != document { return tree_failure(arena, status, mark, #len(source), "mismatched tag") }
+      if roots != 1 { return tree_failure(arena, status, mark, #len(source), "") }
+      return document
     }
     event := result.value
     if event.kind == Kind.End {
       if parent == document || !bytes.equal(parent.name, event.name) {
-        return tree_failure(arena, mark, start, "mismatched tag")
+        return tree_failure(arena, status, mark, start, "mismatched tag")
       }
       parent = parent.parent
     } else if event.kind == Kind.Start {
-      if !valid_attributes(event) { return tree_failure(arena, mark, start, "") }
+      if !valid_attributes(event) { return tree_failure(arena, status, mark, start, "") }
       if parent == document {
-        if roots != 0 { return tree_failure(arena, mark, start, "") }
+        if roots != 0 { return tree_failure(arena, status, mark, start, "") }
         roots += 1
       }
       node := tree_append(arena, parent, NodeKind.Element, event)
@@ -105,31 +111,31 @@ pub fn parse(arena: *tree_memory.Arena, source: []const u8) ParseResult {
     } else {
       kind := NodeKind.Missing
       if event.kind == Kind.Text {
-        if !valid_text(event.text, false) { return tree_failure(arena, mark, start, "") }
+        if !valid_text(event.text, false) { return tree_failure(arena, status, mark, start, "") }
         if parent == document {
           for byte in event.text {
-            if !whitespace(byte) { return tree_failure(arena, mark, start, "") }
+            if !whitespace(byte) { return tree_failure(arena, status, mark, start, "") }
           }
         }
         kind = NodeKind.Text
       } else if event.kind == Kind.Comment {
         for i in 0..#len(event.text) {
           if event.text[i] == '-' && (i + 1 == #len(event.text) || event.text[i + 1] == '-') {
-            return tree_failure(arena, mark, start, "")
+            return tree_failure(arena, status, mark, start, "")
           }
         }
         kind = NodeKind.Comment
       } else if event.kind == Kind.Cdata {
-        if parent == document { return tree_failure(arena, mark, start, "") }
+        if parent == document { return tree_failure(arena, status, mark, start, "") }
         kind = NodeKind.Cdata
       } else if event.kind == Kind.Processing {
         kind = NodeKind.Processing
         event.text = source[start + 2 + #len(event.name)..scan.offset - 2]
       } else {
-        return tree_failure(arena, mark, start, "")
+        return tree_failure(arena, status, mark, start, "")
       }
       _ = tree_append(arena, parent, kind, event)
     }
   }
-  return tree_failure(arena, mark, #len(source), "")
+  return tree_failure(arena, status, mark, #len(source), "")
 }

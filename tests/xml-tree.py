@@ -11,19 +11,25 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve()
-source = '''use "std/parse" parse
+source = '''use "std/fail"
 use "std/encoding/xml" xml
 use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("xml tree contract") } }
+struct Tree { root: *const xml.Node, offset: usize, failure: fail.Failure }
+fn parse(arena: *mem.Arena, source: []const u8) Tree {
+  status: fail.Status
+  root := xml.parse(arena, &status, source)
+  return Tree{ root: root, offset: status.failure.offset, failure: status.failure }
+}
 fn main() {
   arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   zero: xml.Node
   check(xml.is_nil(&zero) && xml.is_nil(nil))
   check(xml.child(nil, "x") == &xml.nil_node && xml.at(nil, 0) == &xml.nil_node && xml.next_sibling(nil) == &xml.nil_node)
-  r := xml.parse(arena, "<?xml version='1.0'?>\\n<!--before--><root a='&amp;' b=\\"2\\"><leaf/>raw&amp;<!--hi--><![CDATA[<raw>]]><?pi body  ?></root> ")
-  check(!parse.failed(r.failure) && !parse.failed(r.failure))
+  r := parse(arena, "<?xml version='1.0'?>\\n<!--before--><root a='&amp;' b=\\"2\\"><leaf/>raw&amp;<!--hi--><![CDATA[<raw>]]><?pi body  ?></root> ")
+  check(r.failure.kind == fail.Kind.Ok && r.failure.kind == fail.Kind.Ok)
   check(r.root.kind == xml.NodeKind.Document && r.root.parent == nil)
   check(xml.at(r.root, 0).kind == xml.NodeKind.Processing && bytes.equal(xml.at(r.root, 0).text, " version='1.0'"))
   root := xml.child(r.root, "root")
@@ -38,34 +44,34 @@ fn main() {
   check(xml.child(root, "absent") == &xml.nil_node && xml.at(root, 5) == &xml.nil_node)
   check(xml.child(&xml.nil_node, "x") == &xml.nil_node && xml.at(&zero, 0) == &xml.nil_node)
   borrowed: [8]u8 = ['<', 't', '>', 'x', '<', '/', 't', '>']
-  borrowed_tree := xml.parse(arena, borrowed[..])
+  borrowed_tree := parse(arena, borrowed[..])
   borrowed_text := xml.at(xml.child(borrowed_tree.root, "t"), 0)
-  check(!parse.failed(borrowed_tree.failure) && #cast(usize, &borrowed_text.text[0]) == #cast(usize, &borrowed[3]))
+  check(borrowed_tree.failure.kind == fail.Kind.Ok && #cast(usize, &borrowed_text.text[0]) == #cast(usize, &borrowed[3]))
   borrowed[3] = 'y'
   check(bytes.equal(borrowed_text.text, "y"))
   mark := mem.arena_mark(arena)
 '''
-bad = [('', 0, ''), ('<a></b>', 3, 'mismatched tag'),
-       ('<a/><b/>', 4, ''), ('<a>', 3, 'mismatched tag'),
-       ('text<a/>', 0, ''), ('<a/>text', 4, ''),
-       ('<!--only-->', 11, ''), ('<a x=bad/>', 0, ''),
-       ('<a x="1" x="2"/>', 0, ''), ('<a 1x="a"/>', 0, ''),
-       ('<a x="<"/>', 0, ''), ('<a>&unknown;</a>', 3, ''),
-       ('<!DOCTYPE a><a/>', 1, ''), ('<![CDATA[x]]><a/>', 0, ''),
-       ('<a><!--a--b--></a>', 3, ''), ('<a><!--a---></a>', 3, ''),
-       ('<a', 2, ''), ('</a>', 0, 'mismatched tag')]
+bad = [('', 0, 'malformed XML'), ('<a></b>', 3, 'mismatched tag'),
+       ('<a/><b/>', 4, 'malformed XML'), ('<a>', 3, 'mismatched tag'),
+       ('text<a/>', 0, 'malformed XML'), ('<a/>text', 4, 'malformed XML'),
+       ('<!--only-->', 11, 'malformed XML'), ('<a x=bad/>', 0, 'malformed XML'),
+       ('<a x="1" x="2"/>', 0, 'malformed XML'), ('<a 1x="a"/>', 0, 'malformed XML'),
+       ('<a x="<"/>', 0, 'malformed XML'), ('<a>&unknown;</a>', 3, 'malformed XML'),
+       ('<!DOCTYPE a><a/>', 1, 'malformed XML'), ('<![CDATA[x]]><a/>', 0, 'malformed XML'),
+       ('<a><!--a--b--></a>', 3, 'malformed XML'), ('<a><!--a---></a>', 3, 'malformed XML'),
+       ('<a', 2, 'malformed XML'), ('</a>', 0, 'mismatched tag')]
 for value, offset, detail in bad:
     source += f'''  if true {{
-    bad := xml.parse(arena, {json.dumps(value)})
-    check(parse.failed(bad.failure) && bad.root == &xml.nil_node && bad.failure.kind == parse.Kind.Syntax && bad.offset == {offset} && bytes.equal(bad.failure.message, "{detail}"))
+    bad := parse(arena, {json.dumps(value)})
+    check(bad.failure.kind != fail.Kind.Ok && bad.root == &xml.nil_node && bad.failure.kind == fail.Kind.InvalidInput && bad.offset == {offset} && bytes.equal(fail.message_text(&bad.failure), "{detail}"))
     check(mem.arena_mark(arena) == mark && bytes.equal(root.name, "root"))
     check(xml.child(bad.root, "a") == &xml.nil_node)
   }}
 '''
 source += '''
   invalid: [8]u8 = ['<', 'a', '>', 255, '<', '/', 'a', '>']
-  bad_utf8 := xml.parse(arena, invalid[..])
-  check(parse.failed(bad_utf8.failure) && bad_utf8.offset == 3 && bad_utf8.failure.kind == parse.Kind.Syntax && bad_utf8.failure.kind == parse.Kind.Syntax && bad_utf8.root == &xml.nil_node)
+  bad_utf8 := parse(arena, invalid[..])
+  check(bad_utf8.failure.kind != fail.Kind.Ok && bad_utf8.offset == 3 && bad_utf8.failure.kind == fail.Kind.InvalidInput && bad_utf8.failure.kind == fail.Kind.InvalidInput && bad_utf8.root == &xml.nil_node)
   check(mem.arena_mark(arena) == mark)
   backing: [4096]u8
   for i in 0..#len(backing) { backing[i] = 255 }
@@ -73,12 +79,12 @@ source += '''
   prefix := mem.push(u8, fixed)
   prefix.* = 42
   fixed_mark := mem.arena_mark(fixed)
-  failed := xml.parse(fixed, "<a><b/></z>")
-  check(parse.failed(failed.failure) && mem.arena_mark(fixed) == fixed_mark && prefix.* == 42)
+  failed := parse(fixed, "<a><b/></z>")
+  check(failed.failure.kind != fail.Kind.Ok && mem.arena_mark(fixed) == fixed_mark && prefix.* == 42)
   input: [11]u8 = ['<', 'a', ' ', 'x', '=', '"', 'v', '"', '/', '>', ' ']
-  owned := xml.parse(fixed, input[..])
+  owned := parse(fixed, input[..])
   element := xml.child(owned.root, "a")
-  check(!parse.failed(owned.failure) && element.first == nil && element.last == nil && element.next == xml.at(owned.root, 1) && #len(element.text) == 0)
+  check(owned.failure.kind == fail.Kind.Ok && element.first == nil && element.last == nil && element.next == xml.at(owned.root, 1) && #len(element.text) == 0)
   check(#cast(usize, owned.root) >= #cast(usize, &backing[0]) && #cast(usize, owned.root) < #cast(usize, &backing[4095]))
   check(#cast(usize, element) >= #cast(usize, &backing[0]) && #cast(usize, element) < #cast(usize, &backing[4095]))
   check(#cast(usize, &element.name[0]) == #cast(usize, &input[1]) && #cast(usize, &element.attributes[0]) == #cast(usize, &input[2]))
@@ -95,8 +101,8 @@ source += '''
     deep[30002 + i * 4] = 'a'
     deep[30003 + i * 4] = '>'
   }
-  nested := xml.parse(arena, deep)
-  check(!parse.failed(nested.failure))
+  nested := parse(arena, deep)
+  check(nested.failure.kind == fail.Kind.Ok)
   cursor := nested.root
   for i in 0..10000 { cursor = xml.at(cursor, 0)
     check(cursor.kind == xml.NodeKind.Element) }
@@ -108,11 +114,13 @@ source += '''
 with tempfile.TemporaryDirectory(prefix='dyn-xml-tree-') as temporary:
     work = Path(temporary)
     for name, code in [('main', source), ('capacity', '''use "std/encoding/xml" xml
+use "std/fail"
 use "std/mem" mem
 fn main() {
+  status: fail.Status
   backing: [8]u8
   arena := mem.arena_from_buffer(backing[..])
-  _ = xml.parse(arena, "<a/>")
+  _ = xml.parse(arena, &status, "<a/>")
 }
 ''')]:
         project = work / name

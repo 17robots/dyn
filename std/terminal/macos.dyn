@@ -1,4 +1,5 @@
 use "std/io" io
+use "std/fail"
 use "std/os/macos/sys"
 #target(kernel: darwin)
 
@@ -8,19 +9,27 @@ fn control(descriptor: isize, request: isize, bytes: *const u8) isize {
   return #syscall(sys.Ioctl, descriptor, request, bytes)
 }
 
-// The terminal settings of descriptor. ok is false when it is not a terminal.
-pub fn read_state(descriptor: isize) Read {
-  result: Read
-  code := control(descriptor, 1078490131, &result.value.bytes[0])
-  if code < 0 { return Read{ failure: io.darwin_failure(code) } }
+// The terminal settings of descriptor; fails when it is not a terminal.
+pub fn read_state(status: *fail.Status, descriptor: isize) State {
+  result: State
+  if status.failed { return result }
+  code := control(descriptor, 1078490131, &result.bytes[0])
+  if code < 0 {
+    fail.set(status, io.from_darwin("read terminal", "", code))
+  }
   return result
 }
 
-pub fn restore(descriptor: isize, saved: *const State) Result {
-  if saved == nil { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
+pub fn restore(status: *fail.Status, descriptor: isize, saved: *const State) {
+  if status.failed { return }
+  if saved == nil {
+    fail.invalid(status, "restore terminal", "", "no saved settings")
+    return
+  }
   code := control(descriptor, 2152231956, &saved.bytes[0])
-  if code < 0 { return Result{ failure: io.darwin_failure(code) } }
-  return Result{}
+  if code < 0 {
+    fail.set(status, io.from_darwin("restore terminal", "", code))
+  }
 }
 
 // cfmakeraw in the Darwin termios layout: 64-bit iflag, oflag, cflag and
@@ -36,10 +45,14 @@ fn make_raw(_descriptor: isize, state: *State) {
   state.bytes[49] = 0
 }
 
-pub fn size(descriptor: isize) Size {
+pub fn size(status: *fail.Status, descriptor: isize) Size {
+  if status.failed { return Size{} }
   bytes: [8]u8
   code := control(descriptor, 1074295912, &bytes[0])
-  if code < 0 { return Size{ failure: io.darwin_failure(code) } }
+  if code < 0 {
+    fail.set(status, io.from_darwin("terminal size", "", code))
+    return Size{}
+  }
   rows := #cast(usize, bytes[0]) + #cast(usize, bytes[1]) * 256
   columns := #cast(usize, bytes[2]) + #cast(usize, bytes[3]) * 256
   return Size{ columns: columns, rows: rows }

@@ -24,83 +24,84 @@ libc = Path(libc_query).resolve()
 if libc_query == 'libc.so.6' or not libc.is_file():
     raise RuntimeError('C compiler did not resolve libc.so.6: ' + libc_query)
 
-SOURCE = r'''use "std/parse" parse
+HELPERS = r'''use "std/fail"
 use "std/dynlib" dl
-use "std/io" errors
 #link("c")
-fn check(ok: bool) { if !ok { #panic("dynlib results") } }
-fn invalid_open(result: dl.OpenResult) {
-  check(errors.failed(result.failure) && result.value == nil && result.failure.kind == errors.Kind.InvalidInput && result.failure.native == 0 && result.message == nil)
+struct Opened { value: dl.Handle, failure: fail.Failure }
+fn open(path: []const u8, flags: i32) Opened {
+  status: fail.Status
+  value := dl.open(&status, path, flags)
+  return Opened{ value: value, failure: status.failure }
 }
-fn invalid_symbol(result: dl.SymbolResult, kind: errors.Kind) {
-  check(errors.failed(result.failure) && result.value == nil && result.failure.kind == kind && result.failure.native == 0 && result.message == nil)
+struct Found { value: rawptr, failure: fail.Failure }
+fn symbol(handle: dl.Handle, name: []const u8) Found {
+  status: fail.Status
+  value := dl.symbol(&status, handle, name)
+  return Found{ value: value, failure: status.failure }
+}
+fn close(handle: *dl.Handle) fail.Failure {
+  status: fail.Status
+  dl.close(&status, handle)
+  return status.failure
+}
+fn described(failure: *const fail.Failure) bool {
+  return #len(fail.message_text(failure)) > 0
+}
+'''
+SOURCE = HELPERS + r'''fn check(ok: bool) { if !ok { #panic("dynlib results") } }
+fn invalid_open(result: Opened) {
+  check(result.value == nil && result.failure.kind == fail.Kind.InvalidInput && result.failure.native == 0)
+}
+fn invalid_symbol(result: Found, kind: fail.Kind) {
+  check(result.value == nil && result.failure.kind == kind && result.failure.native == 0)
 }
 fn main() {
-  zero: dl.OpenResult
-  symbol_zero: dl.SymbolResult
-  close_zero: dl.Result
-  check(zero.value == nil && !errors.failed(zero.failure) && zero.failure.native == 0 && zero.message == nil)
-  check(symbol_zero.value == nil && !errors.failed(symbol_zero.failure) && symbol_zero.failure.native == 0 && symbol_zero.message == nil)
-  check(!errors.failed(close_zero.failure) && close_zero.failure.native == 0 && close_zero.message == nil)
-  native_code: isize = zero.failure.native
-  message_pointer: *const u8 = zero.message
-  check(native_code == 0 && message_pointer == nil)
-  invalid_open(dl.open("bad\x00path", dl.Now))
+  invalid_open(open("bad\x00path", dl.Now))
   long_name: [4096]u8
-  invalid_open(dl.open(long_name[..], dl.Now))
-  invalid_symbol(dl.symbol(nil, "malloc"), errors.Kind.InvalidState)
-  badclose := dl.close(nil)
-  check(errors.failed(badclose.failure) && badclose.failure.kind == errors.Kind.InvalidInput && badclose.failure.native == 0 && badclose.message == nil)
-  missing := dl.open(MISSING_PATH, dl.Now)
-  check(errors.failed(missing.failure) && missing.value == nil && missing.failure.kind == errors.Kind.System && missing.failure.native == 0 && missing.message != nil)
-  // Inspect borrowed loader storage before any subsequent loader operation.
-  description := dl.error_bytes(missing.message, 8192)
-  check(!parse.failed(description.failure) && #len(description.value) > 0)
-  library := dl.open(LIBC_PATH, dl.Now | dl.Local)
-  check(!errors.failed(library.failure) && library.value != nil && !errors.failed(library.failure) && library.failure.native == 0 && library.message == nil)
-  invalid_symbol(dl.symbol(library.value, "bad\x00symbol"), errors.Kind.InvalidInput)
-  invalid_symbol(dl.symbol(library.value, long_name[..]), errors.Kind.InvalidInput)
-  absent := dl.symbol(library.value, "dyn_regression_nonexistent_symbol_17robots")
-  check(errors.failed(absent.failure) && absent.value == nil && absent.failure.kind == errors.Kind.System && absent.failure.native == 0 && absent.message != nil)
-  borrowed := dl.error_bytes(absent.message, 8192)
-  check(!parse.failed(borrowed.failure) && #len(borrowed.value) > 0)
-  found := dl.symbol(library.value, "malloc")
-  check(!errors.failed(found.failure) && found.value != nil && !errors.failed(found.failure) && found.failure.native == 0 && found.message == nil)
-  closed := dl.close(&library.value)
-  check(!errors.failed(closed.failure) && closed.failure.native == 0 && closed.message == nil && library.value == nil)
-  twice := dl.close(&library.value)
-  check(errors.failed(twice.failure) && twice.failure.kind == errors.Kind.InvalidState && twice.failure.native == 0 && twice.message == nil && library.value == nil)
+  invalid_open(open(long_name[..], dl.Now))
+  invalid_symbol(symbol(nil, "malloc"), fail.Kind.InvalidState)
+  nothing: dl.Handle
+  badclose := close(&nothing)
+  check(badclose.kind == fail.Kind.InvalidState && badclose.native == 0)
+  missing := open(MISSING_PATH, dl.Now)
+  check(missing.value == nil && missing.failure.kind == fail.Kind.System && missing.failure.native == 0 && described(&missing.failure))
+  library := open(LIBC_PATH, dl.Now | dl.Local)
+  check(library.failure.kind == fail.Kind.Ok && library.value != nil)
+  invalid_symbol(symbol(library.value, "bad\x00symbol"), fail.Kind.InvalidInput)
+  invalid_symbol(symbol(library.value, long_name[..]), fail.Kind.InvalidInput)
+  absent := symbol(library.value, "dyn_regression_nonexistent_symbol_17robots")
+  check(absent.value == nil && absent.failure.kind == fail.Kind.System && absent.failure.native == 0 && described(&absent.failure))
+  found := symbol(library.value, "malloc")
+  check(found.failure.kind == fail.Kind.Ok && found.value != nil)
+  closed := close(&library.value)
+  check(closed.kind == fail.Kind.Ok && library.value == nil)
+  twice := close(&library.value)
+  check(twice.kind == fail.Kind.InvalidState && twice.native == 0 && library.value == nil)
   ORACLE
 }
 '''
 ORACLE = r'''
-  oracle := dl.open(ORACLE_PATH, dl.Now)
-  check(!errors.failed(oracle.failure) && oracle.value != nil && !errors.failed(oracle.failure) && oracle.failure.native == 0 && oracle.message == nil)
-  stale := dl.symbol(oracle.value, "missing_before_null")
-  check(errors.failed(stale.failure) && stale.failure.kind == errors.Kind.System && stale.message != nil && stale.failure.native == 0)
-  null_symbol := dl.symbol(oracle.value, "dyn_valid_null")
-  check(!errors.failed(null_symbol.failure) && null_symbol.value == nil && !errors.failed(null_symbol.failure) && null_symbol.failure.native == 0 && null_symbol.message == nil)
-  check(!errors.failed(dl.close(&oracle.value).failure) && oracle.value == nil)
+  oracle := open(ORACLE_PATH, dl.Now)
+  check(oracle.failure.kind == fail.Kind.Ok && oracle.value != nil)
+  stale := symbol(oracle.value, "missing_before_null")
+  check(stale.failure.kind == fail.Kind.System && described(&stale.failure) && stale.failure.native == 0)
+  null_symbol := symbol(oracle.value, "dyn_valid_null")
+  check(null_symbol.failure.kind == fail.Kind.Ok && null_symbol.value == nil)
+  check(close(&oracle.value).kind == fail.Kind.Ok && oracle.value == nil)
 '''
 
 # Only this child process preloads the shim; production std sources are untouched.
-CLOSE_SOURCE = r'''use "std/parse" parse
-use "std/dynlib" dl
-use "std/io" errors
-#link("c")
-fn check(ok: bool) { if !ok { #panic("dynlib close failure") } }
+CLOSE_SOURCE = HELPERS + r'''fn check(ok: bool) { if !ok { #panic("dynlib close failure") } }
 fn main() {
-  library := dl.open(LIBC_PATH, dl.Now)
-  check(!errors.failed(library.failure) && library.value != nil)
+  library := open(LIBC_PATH, dl.Now)
+  check(library.failure.kind == fail.Kind.Ok && library.value != nil)
   owner := library.value
-  failed := dl.close(&library.value)
-  check(errors.failed(failed.failure) && failed.failure.kind == errors.Kind.System && failed.failure.native == 0 && failed.message != nil && library.value == owner)
-  message := dl.error_bytes(failed.message, 4096)
-  check(!parse.failed(message.failure) && #len(message.value) > 0)
-  closed := dl.close(&library.value)
-  check(!errors.failed(closed.failure) && closed.failure.native == 0 && closed.message == nil && library.value == nil)
-  twice := dl.close(&library.value)
-  check(errors.failed(twice.failure) && twice.failure.kind == errors.Kind.InvalidState && twice.failure.native == 0 && twice.message == nil)
+  failed := close(&library.value)
+  check(failed.kind == fail.Kind.System && failed.native == 0 && described(&failed) && library.value == owner)
+  closed := close(&library.value)
+  check(closed.kind == fail.Kind.Ok && library.value == nil)
+  twice := close(&library.value)
+  check(twice.kind == fail.Kind.InvalidState && twice.native == 0)
 }
 '''
 

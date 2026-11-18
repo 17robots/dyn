@@ -2,35 +2,19 @@ use "std/io" io
 use "std/os/linux/sys"
 #target(kernel: linux)
 
-fn open_flags(path: []const u8, flags: usize, mode: usize) FileResult {
+// A descriptor, or a negative code: -36 for a path that cannot be passed.
+fn open_flags(path: []const u8, flags: usize, mode: usize) isize {
   storage: [4096]u8
   raw := terminated(path, storage[..])
-  if raw == nil {
-    return FileResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -36 } }
-  }
-  descriptor := #syscall(sys.Openat, -100, raw, flags | 524288, mode)
-  if descriptor < 0 { return FileResult{ failure: io.linux_failure(descriptor) } }
-  return FileResult{ value: owned_file(descriptor) }
+  if raw == nil { return -36 }
+  return #syscall(sys.Openat, -100, raw, flags | 524288, mode)
 }
 
-fn native_open_read(path: []const u8) FileResult {
+fn native_open(path: []const u8, mode: u8) isize {
+  if mode == 1 { return open_flags(path, 577, 420) }
+  if mode == 2 { return open_flags(path, 1089, 420) }
+  if mode == 3 { return open_flags(path, 193, 420) }
   return open_flags(path, 0, 0)
-}
-fn native_create(path: []const u8) FileResult {
-  return open_flags(path, 577, 420)
-}
-fn native_append(path: []const u8) FileResult {
-  return open_flags(path, 1089, 420)
-}
-fn native_create_exclusive(path: []const u8) FileResult {
-  return open_flags(path, 193, 420)
-}
-
-fn native_open(path: []const u8, mode: u8) FileResult {
-  if mode == 1 { return native_create(path) }
-  if mode == 2 { return native_append(path) }
-  if mode == 3 { return native_create_exclusive(path) }
-  return native_open_read(path)
 }
 fn native_close(handle: isize) isize {
   return #syscall(sys.Close, handle)

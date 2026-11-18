@@ -1,16 +1,30 @@
-use "std/parse" parse
 use "std/c"
-use "std/io"
+use "std/fail"
 #link("dyn_cgltf")
 // cgltf 1.15. Provider owns parsed model; keep input bytes alive until destroy.
 // In particular GLB binary buffers borrow input. Handles must not be copied for ownership.
 pub type Model = rawptr
-pub struct Result { value: Model, code: i32, failure: io.Failure }
-pub fn parse_owned(bytes: []const u8) Result {
-  if #len(bytes) == 0 { return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } } }
+// Malformed or truncated glTF fails with InvalidInput, native keeping
+// cgltf's result code.
+pub fn parse_owned(status: *fail.Status, bytes: []const u8) Model {
+  if status.failed { return nil }
+  if #len(bytes) == 0 {
+    fail.invalid(status, "parse glTF", "", "no data")
+    return nil
+  }
   model: Model = nil
   code := native_parse(#cast(rawptr, &bytes[0]), #len(bytes), &model)
-  return Result{ value: model, code: code, failure: io.failure_if(code != 0) }
+  if code != 0 {
+    kind := fail.Kind.InvalidInput
+    if code == 6 {
+      kind = fail.Kind.Capacity
+    }
+    failure := fail.make(kind, "parse glTF", "", "malformed glTF")
+    failure.native = code
+    fail.set(status, failure)
+    return nil
+  }
+  return model
 }
 pub fn destroy_owned(model: Model) {
   if model != nil {
@@ -48,9 +62,8 @@ pub fn attach_buffer(model: Model, index: usize, bytes: []const u8) bool {
   return native_attach(model, index, #cast(rawptr, &bytes[0]), #len(bytes))
 }
 pub fn buffer_uri(model: Model, index: usize, maximum: usize) []const u8 {
-  value := c.bytes_from_string(native_uri(model, index), maximum)
-  if parse.failed(value.failure) { return "" }
-  return value.value
+  reading: fail.Status
+  return c.bytes_from_string(&reading, native_uri(model, index), maximum)
 }
 pub const Position: i32 = 1
 pub const Normal: i32 = 2
@@ -70,11 +83,15 @@ pub extern fn material "dyn_cgltf_material"(model: Model, mesh: usize, primitive
 pub extern fn topology "dyn_cgltf_topology"(model: Model, mesh: usize, primitive: usize) i32
 pub extern fn element_count "dyn_cgltf_elements"(model: Model, accessor: usize) usize
 pub extern fn node_mesh "dyn_cgltf_node_mesh"(model: Model, node: usize) i64
-pub struct Index { value: u32, failure: io.Failure }
-pub fn read_index(model: Model, accessor: usize, element: usize) Index {
-  result := Index{ failure: io.Failure{ kind: io.Kind.System } }
-  result.failure = io.failure_if(!(native_index(model, accessor, element, &result.value)))
-  return result
+// An accessor or element out of range fails with InvalidInput.
+pub fn read_index(status: *fail.Status, model: Model, accessor: usize, element: usize) u32 {
+  if status.failed { return 0 }
+  value: u32 = 0
+  if !native_index(model, accessor, element, &value) {
+    fail.invalid(status, "read index", "", "no such accessor element")
+    return 0
+  }
+  return value
 }
 // Column-major world matrix and RGBA base factor, copied into caller storage.
 pub fn world_transform(model: Model, node: usize, output: []f32) bool {

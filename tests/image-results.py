@@ -11,94 +11,94 @@ ENV = dict(os.environ, DYN_SDK=str(ROOT))
 SOURCE = r'''
 use "std/image/png" png
 use "std/image/qoi" qoi
-use "std/parse" parse
+use "std/fail"
 use "std/mem" mem
+fn png_failure(arena: *mem.Arena, data: []const u8) fail.Failure {
+  status: fail.Status
+  image := png.decode(arena, &status, data)
+  if !status.failed || #len(image.pixels) != 0 || image.info.valid { #panic("PNG should fail") }
+  return status.failure
+}
+fn qoi_failure(arena: *mem.Arena, data: []const u8) fail.Failure {
+  status: fail.Status
+  image := qoi.decode(arena, &status, data)
+  if !status.failed || #len(image.pixels) != 0 || image.info.valid { #panic("QOI should fail") }
+  return status.failure
+}
 fn main() {
   storage: [8192]u8
   arena := mem.arena_from_buffer(storage[..])
+  status := fail.Status{ on_failure: fail.panic_on_failure }
   pixels: [8]u8 = [255,0,0,255,0,255,0,128]
-  p := png.encode(arena, pixels[..], 2, 1, 4)
-  if parse.failed(p.failure) { #panic("PNG encode") }
-  pi := png.inspect(p.value)
-  if parse.failed(pi.failure) || !pi.value.valid || pi.value.width != 2 { #panic("PNG inspect") }
-  pd := png.decode(arena, p.value)
-  if parse.failed(pd.failure) || pd.value.info.width != 2 || #len(pd.value.pixels) != 8 { #panic("PNG decode") }
-  for i in 0..8 { if pd.value.pixels[i] != pixels[i] { #panic("PNG pixels") } }
-  q := qoi.encode(arena, pixels[..], 2, 1, 4, true)
-  qi := qoi.inspect(q.value)
-  qd := qoi.decode(arena, q.value)
-  if parse.failed(q.failure) || parse.failed(qi.failure) || parse.failed(qd.failure) || !qi.value.valid || qd.value.info.width != 2 { #panic("QOI roundtrip") }
-  for i in 0..8 { if qd.value.pixels[i] != pixels[i] { #panic("QOI pixels") } }
+  p := png.encode(arena, &status, pixels[..], 2, 1, 4)
+  pi := png.inspect(&status, p)
+  if !pi.valid || pi.width != 2 { #panic("PNG inspect") }
+  pd := png.decode(arena, &status, p)
+  if pd.info.width != 2 || #len(pd.pixels) != 8 { #panic("PNG decode") }
+  for i in 0..8 { if pd.pixels[i] != pixels[i] { #panic("PNG pixels") } }
+  q := qoi.encode(arena, &status, pixels[..], 2, 1, 4, true)
+  qi := qoi.inspect(&status, q)
+  qd := qoi.decode(arena, &status, q)
+  if !qi.valid || qd.info.width != 2 { #panic("QOI roundtrip") }
+  for i in 0..8 { if qd.pixels[i] != pixels[i] { #panic("QOI pixels") } }
   external: [70]u8 = [137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,1,0,0,0,1,8,6,0,0,0,31,21,196,137,0,0,0,13,73,68,65,84,120,156,99,248,207,192,240,31,0,5,0,1,255,137,153,61,29,0,0,0,0,73,69,78,68,174,66,96,130]
-  independent := png.decode(arena, external[..])
-  if parse.failed(independent.failure) || independent.value.pixels[0] != 255 || independent.value.pixels[3] != 255 { #panic("external PNG") }
+  independent := png.decode(arena, &status, external[..])
+  if independent.pixels[0] != 255 || independent.pixels[3] != 255 { #panic("external PNG") }
   for c in 1..5 {
     channels := #cast(u8, c)
-    enc := png.encode(arena, pixels[..c], 1, 1, channels)
-    dec := png.decode(arena, enc.value)
-    if parse.failed(enc.failure) || parse.failed(dec.failure) || #len(dec.value.pixels) != c { #panic("PNG channels") }
-    for i in 0..c { if dec.value.pixels[i] != pixels[i] { #panic("PNG channels pixels") } }
+    enc := png.encode(arena, &status, pixels[..c], 1, 1, channels)
+    dec := png.decode(arena, &status, enc)
+    if #len(dec.pixels) != c { #panic("PNG channels") }
+    for i in 0..c { if dec.pixels[i] != pixels[i] { #panic("PNG channels pixels") } }
   }
-  rgb := qoi.encode(arena, pixels[..3], 1, 1, 3, false)
-  rgbd := qoi.decode(arena, rgb.value)
-  if parse.failed(rgb.failure) || parse.failed(rgbd.failure) || rgbd.value.info.srgb || rgbd.value.pixels[3] != 255 { #panic("QOI RGB") }
-  if parse.failed(p.failure) || p.offset != 0 ||
-    parse.failed(pi.failure) || pi.offset != 0 ||
-    parse.failed(pd.failure) || pd.offset != 0 ||
-    parse.failed(q.failure) || q.offset != 0 ||
-    parse.failed(qi.failure) || qi.offset != 0 ||
-    parse.failed(qd.failure) || qd.offset != 0 {
-    #panic("success metadata")
-  }
-  if pi.value.height != 1 || pi.value.channels != 4 || !pd.value.info.valid ||
-    pd.value.info.height != 1 || pd.value.info.channels != 4 ||
-    qi.value.width != 2 || qi.value.height != 1 || qi.value.channels != 4 || !qi.value.srgb ||
-    !qd.value.info.valid || qd.value.info.height != 1 || qd.value.info.channels != 4 || !qd.value.info.srgb {
+  rgb := qoi.encode(arena, &status, pixels[..3], 1, 1, 3, false)
+  rgbd := qoi.decode(arena, &status, rgb)
+  if rgbd.info.srgb || rgbd.pixels[3] != 255 { #panic("QOI RGB") }
+  if pi.height != 1 || pi.channels != 4 || !pd.info.valid ||
+    pd.info.height != 1 || pd.info.channels != 4 ||
+    qi.width != 2 || qi.height != 1 || qi.channels != 4 || !qi.srgb ||
+    !qd.info.valid || qd.info.height != 1 || qd.info.channels != 4 || !qd.info.srgb {
     #panic("success image info")
   }
-  pzero: png.Result
-  qzero: qoi.Result
-  pizero: png.InfoResult
-  qizero: qoi.InfoResult
-  pezero: png.EncodeResult
-  qezero: qoi.EncodeResult
-  if pzero.value.info.valid || qzero.value.info.valid || pizero.value.valid || qizero.value.valid ||
-    #len(pzero.value.pixels) != 0 || #len(qzero.value.pixels) != 0 ||
-    #len(pezero.value) != 0 || #len(qezero.value) != 0 ||
-    parse.failed(pzero.failure) || parse.failed(qzero.failure) ||
-    pzero.offset != 0 || qzero.offset != 0 ||
-    false { #panic("zero results") }
+  pzero: png.Image
+  qzero: qoi.Image
+  if pzero.info.valid || qzero.info.valid || #len(pzero.pixels) != 0 || #len(qzero.pixels) != 0 { #panic("zero values") }
   mark := mem.arena_mark(arena)
-  marker_original := q.value[#len(q.value)-1]
-  q.value[#len(q.value)-1] = 99
-  corrupt := qoi.decode(arena, q.value)
-  if !parse.failed(corrupt.failure) || corrupt.failure.kind != parse.Kind.Syntax || #len(corrupt.value.pixels) != 0 || mem.arena_mark(arena) != mark { #panic("QOI end marker") }
-  q.value[#len(q.value)-1] = marker_original
+  marker_original := q[#len(q)-1]
+  q[#len(q)-1] = 99
+  corrupt := qoi_failure(arena, q)
+  if corrupt.kind != fail.Kind.InvalidInput || mem.arena_mark(arena) != mark { #panic("QOI end marker") }
+  q[#len(q)-1] = marker_original
   excessive: [23]u8 = [113,111,105,102,0,0,0,1,0,0,0,1,4,0,253,0,0,0,0,0,0,0,1]
-  runbad := qoi.decode(arena, excessive[..])
-  if !parse.failed(runbad.failure) || runbad.failure.kind != parse.Kind.Syntax || #len(runbad.value.pixels) != 0 || mem.arena_mark(arena) != mark { #panic("QOI excessive run") }
+  runbad := qoi_failure(arena, excessive[..])
+  if runbad.kind != fail.Kind.InvalidInput || mem.arena_mark(arena) != mark { #panic("QOI excessive run") }
   extra_payload: [24]u8 = [113,111,105,102,0,0,0,1,0,0,0,1,4,0,192,192,0,0,0,0,0,0,0,1]
-  trailingbad := qoi.decode(arena, extra_payload[..])
-  if !parse.failed(trailingbad.failure) || trailingbad.failure.kind != parse.Kind.Syntax || #len(trailingbad.value.pixels) != 0 || mem.arena_mark(arena) != mark { #panic("QOI trailing payload") }
-  p.value[29] ^= 1
-  bad := png.decode(arena, p.value)
-  if !parse.failed(bad.failure) || bad.failure.kind != parse.Kind.Syntax || bad.offset != 29 || #len(bad.value.pixels) != 0 || bad.value.info.valid || mem.arena_mark(arena) != mark { #panic("PNG malformed rollback") }
+  trailingbad := qoi_failure(arena, extra_payload[..])
+  if trailingbad.kind != fail.Kind.InvalidInput || mem.arena_mark(arena) != mark { #panic("QOI trailing payload") }
+  p[29] ^= 1
+  bad := png_failure(arena, p)
+  if bad.kind != fail.Kind.InvalidInput || bad.offset != 29 || mem.arena_mark(arena) != mark { #panic("PNG malformed rollback") }
   truncated: [22]u8 = ['q','o','i','f',0,0,0,1,0,0,0,1,4,0,0,0,0,0,0,0,0,1]
-  qb := qoi.decode(arena, truncated[..])
-  if !parse.failed(qb.failure) || qb.offset != 14 || qb.value.info.valid || #len(qb.value.pixels) != 0 || mem.arena_mark(arena) != mark { #panic("QOI malformed rollback") }
+  qb := qoi_failure(arena, truncated[..])
+  if qb.offset != 14 || mem.arena_mark(arena) != mark { #panic("QOI malformed rollback") }
   empty: [0]u8
-  pbad := png.inspect(empty[..])
-  qbad := qoi.inspect(empty[..])
-  if !parse.failed(pbad.failure) || !parse.failed(qbad.failure) || pbad.failure.kind != parse.Kind.Syntax || qbad.failure.kind != parse.Kind.Syntax ||
-    pbad.offset != 0 || qbad.offset != 0 ||
-    pbad.value.valid || qbad.value.valid ||
-    pbad.value.width != 0 || qbad.value.width != 0 { #panic("inspect malformed") }
-  pe := png.encode(arena, empty[..], 0, 1, 4)
-  qe := qoi.encode(arena, empty[..], 1, 1, 4, true)
-  if #len(pe.value) != 0 || #len(qe.value) != 0 || pe.offset != 0 || qe.offset != 0 || !parse.failed(pe.failure) || pe.failure.kind != parse.Kind.Syntax || !parse.failed(qe.failure) || qe.failure.kind != parse.Kind.Syntax || mem.arena_mark(arena) != mark { #panic("validation") }
-  po := png.encode(arena, empty[..], 4294967295, 4294967295, 4)
-  qo := qoi.encode(arena, empty[..], 4294967295, 4294967295, 4, true)
-  if po.failure.kind != parse.Kind.Overflow || qo.failure.kind != parse.Kind.Overflow || mem.arena_mark(arena) != mark { #panic("overflow") }
+  pbad: fail.Status
+  qbad: fail.Status
+  pinfo := png.inspect(&pbad, empty[..])
+  qinfo := qoi.inspect(&qbad, empty[..])
+  if pbad.failure.kind != fail.Kind.InvalidInput || qbad.failure.kind != fail.Kind.InvalidInput ||
+    pbad.failure.offset != 0 || qbad.failure.offset != 0 ||
+    pinfo.valid || qinfo.valid || pinfo.width != 0 || qinfo.width != 0 { #panic("inspect malformed") }
+  pe_status: fail.Status
+  qe_status: fail.Status
+  pe := png.encode(arena, &pe_status, empty[..], 0, 1, 4)
+  qe := qoi.encode(arena, &qe_status, empty[..], 1, 1, 4, true)
+  if #len(pe) != 0 || #len(qe) != 0 || pe_status.failure.kind != fail.Kind.InvalidInput || qe_status.failure.kind != fail.Kind.InvalidInput || mem.arena_mark(arena) != mark { #panic("validation") }
+  po: fail.Status
+  qo: fail.Status
+  _ = png.encode(arena, &po, empty[..], 4294967295, 4294967295, 4)
+  _ = qoi.encode(arena, &qo, empty[..], 4294967295, 4294967295, 4, true)
+  if po.failure.kind != fail.Kind.Overflow || qo.failure.kind != fail.Kind.Overflow || mem.arena_mark(arena) != mark { #panic("overflow") }
 
 }
 '''
@@ -118,8 +118,10 @@ with tempfile.TemporaryDirectory(prefix="dyn-image-results-") as directory:
 # Fixed arena exhaustion is a programming error, not an external-input result.
 PANIC_SOURCE = '''use "std/image/png" png
 use "std/image/qoi" qoi
+use "std/fail"
 use "std/mem" mem
 fn main() {
+  status: fail.Status
   backing: [mem.ArenaBufferOverhead+1]u8
   skip := (16-(#cast(usize,&backing[0]) & 15)) & 15
   arena := mem.arena_from_buffer(backing[skip..skip+mem.ArenaHeader+1])
@@ -128,7 +130,7 @@ fn main() {
   OPERATION
 }
 '''
-for operation in ('_=png.decode(arena,external[..])', '_=png.encode(arena,pixels[..],1,1,4)', '_=qoi.encode(arena,pixels[..],1,1,4,true)', '_=qoi.decode(arena,"qoif\\x00\\x00\\x00\\x01\\x00\\x00\\x00\\x01\\x04\\x00\\xc0\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x01")'):
+for operation in ('_=png.decode(arena,&status,external[..])', '_=png.encode(arena,&status,pixels[..],1,1,4)', '_=qoi.encode(arena,&status,pixels[..],1,1,4,true)', '_=qoi.decode(arena,&status,"qoif\\x00\\x00\\x00\\x01\\x00\\x00\\x00\\x01\\x04\\x00\\xc0\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x01")'):
     with tempfile.TemporaryDirectory(prefix='dyn-image-exhaustion-') as directory:
         work = Path(directory)
         (work/'main.dyn').write_text(PANIC_SOURCE.replace('OPERATION', operation))

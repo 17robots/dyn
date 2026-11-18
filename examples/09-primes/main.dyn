@@ -70,12 +70,13 @@ fn work(w: *Worker) isize {
 
 fn argument(args: [][]const u8, index: usize, fallback: u64) u64 {
   if index >= #len(args) { return fallback }
-  parsed := parse.u64_decimal(args[index])
-  if parse.failed(parsed.failure) {
+  status: fail.Status
+  value := parse.u64_decimal(&status, args[index])
+  if status.failed {
     io.eprintln("primes: {} is not a number", args[index])
     return fallback
   }
-  return parsed.value
+  return value
 }
 
 fn main() i32 {

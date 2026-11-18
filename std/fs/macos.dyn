@@ -1,4 +1,4 @@
-use "std/parse" parse
+use "std/fail"
 #target(kernel: darwin)
 use "std/io" io
 use "std/mem" mem
@@ -7,14 +7,14 @@ use "std/os/macos/sys"
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
   if #len(path) == 0 { return nil }
-  value := cstrings.string_into(storage, path)
-  if parse.failed(value.failure) { return nil }
-  return value.value
+  status: fail.Status
+  return cstrings.string_into(&status, storage, path)
 }
-fn native_open(path: []const u8, mode: u8) FileResult {
+// A descriptor, or a negative code: -22 for a path that cannot be passed.
+fn native_open(path: []const u8, mode: u8) isize {
   storage: [4096 + mem.ArenaBufferOverhead]u8
   name := terminated(path, storage[..])
-  if name == nil { return FileResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
+  if name == nil { return -22 }
   flags: usize = 16777216 // O_CLOEXEC
   if mode == 1 {
     flags = flags | 1537 // O_WRONLY | O_CREAT | O_TRUNC
@@ -23,11 +23,7 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   } else if mode == 3 {
     flags = flags | 2561 // O_WRONLY | O_CREAT | O_EXCL
   }
-  value := #syscall(sys.Open, name, flags, 420)
-  if value < 0 {
-    return FileResult{ failure: io.Failure{ kind: native_kind(value), native: value } }
-  }
-  return FileResult{ value: owned_file(value) }
+  return #syscall(sys.Open, name, flags, 420)
 }
 fn native_close(handle: isize) isize {
   return #syscall(sys.Close, handle)

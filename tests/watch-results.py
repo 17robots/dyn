@@ -8,29 +8,41 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 PORTABLE = '''use "std/fs/watch" watch
-use "std/io" errors
+use "std/fail"
 fn require(ok: bool) { if !ok { #panic("watch result contract") } }
+fn next_failure(state: *watch.Watcher) fail.Failure {
+ status: fail.Status
+ next := watch.next(&status, state)
+ require(status.failed && !next.found)
+ return status.failure
+}
 fn main() {
  state := watch.Watcher{}
- first := watch.next(&state)
- require(errors.failed(first.failure) && errors.failed(first.failure) && first.failure.native == -9 && first.failure.kind == errors.Kind.InvalidState)
+ first := next_failure(&state)
+ require(first.native == -9 && first.kind == fail.Kind.InvalidState)
  for i in 0..3 {
-  next := watch.next(&state)
-  require(errors.failed(next.failure) && next.status == first.status && next.failure.native == first.failure.native && next.failure.kind == first.failure.kind)
+  next := next_failure(&state)
+  require(next.native == first.native && next.kind == first.kind)
  }
  watch.close(&state)
- again := watch.next(&state)
- require(errors.failed(again.failure) && again.failure.native == first.failure.native && again.failure.kind == first.failure.kind)
+ again := next_failure(&state)
+ require(again.native == first.native && again.kind == first.kind)
 }
 '''
 LINUX = '''use "std/fs/watch" watch
-use "std/io" errors
+use "std/fail"
 fn require(ok: bool) { if !ok { #panic("watch read after failure") } }
+fn next_failure(state: *watch.Watcher) fail.Failure {
+ status: fail.Status
+ next := watch.next(&status, state)
+ require(status.failed && !next.found)
+ return status.failure
+}
 fn main() {
  backing: [272]u8
  state := watch.Watcher{descriptor: 999999, active: true, storage: backing[..]}
- first := watch.next(&state)
- require(errors.failed(first.failure) && first.failure.native == -9 && first.failure.kind == errors.Kind.InvalidState)
+ first := next_failure(&state)
+ require(first.native == -9 && first.kind == fail.Kind.InvalidState)
  descriptors: [2]i32
  require(#syscall(293, &descriptors[0], 2048) == 0)
  defer { _ = #syscall(3, descriptors[0])
@@ -39,17 +51,17 @@ fn main() {
  require(#syscall(1, descriptors[1], &byte[0], 1) == 1)
  state.descriptor = #cast(isize, descriptors[0])
  for i in 0..3 {
-  result := watch.next(&state)
-  require(errors.failed(result.failure) && result.failure.native == first.failure.native && result.failure.kind == first.failure.kind && state.used == 0)
+  result := next_failure(&state)
+  require(result.native == first.native && result.kind == first.kind && state.used == 0)
  }
  byte[0] = 0
  require(#syscall(0, descriptors[0], &byte[0], 1) == 1 && byte[0] == 91)
  state = watch.Watcher{storage: backing[..], used: 273}
- malformed := watch.next(&state)
- require(errors.failed(malformed.failure) && malformed.failure.native == -74 && malformed.failure.kind == errors.Kind.System)
+ malformed := next_failure(&state)
+ require(malformed.native == -74 && malformed.kind == fail.Kind.System)
  state.used = 0
- repeated := watch.next(&state)
- require(repeated.failure.native == -74 && repeated.failure.kind == malformed.failure.kind)
+ repeated := next_failure(&state)
+ require(repeated.native == -74 && repeated.kind == malformed.kind)
 }
 '''
 

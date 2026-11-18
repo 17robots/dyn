@@ -33,11 +33,16 @@ fn swap_extension(list: []const u8, wanted: []const u8) bool {
 // install process-global error handlers. Missing extensions return Unsupported;
 // a non-nil GLX procedure address alone does not establish driver support.
 // Only immediate (0) and one-refresh (1) intervals are part of this contract.
-pub fn set_swap_interval(window:*Window, interval:i32) Result {
+pub fn set_swap_interval(status: *fail.Status, window:*Window, interval:i32) {
+  if status.failed { return }
   if window==nil || window.display==nil || window.context==nil || window.handle==0 {
-    return Result{kind:io.Kind.InvalidState}
+    window_failed(status, fail.Kind.InvalidState, "set swap interval")
+    return
   }
-  if interval!=0 && interval!=1 { return Result{kind:io.Kind.InvalidInput} }
+  if interval!=0 && interval!=1 {
+    window_failed(status, fail.Kind.InvalidInput, "set swap interval")
+    return
+  }
   saved_display:=context_error_display
   saved_seen:=context_error_seen
   saved_previous:=context_previous_handler
@@ -53,16 +58,28 @@ pub fn set_swap_interval(window:*Window, interval:i32) Result {
   // Drain old requests before attributing errors to the interval operation.
   _=sync(window.display, 0)
   context_error_seen=false
-  if make_current(window).kind != io.Kind.Ok {
+  current: fail.Status
+  make_current(&current, window)
+  if current.failed {
     _=sync(window.display, 0)
-    return Result{kind:io.Kind.System}
+    window_failed(status, fail.Kind.System, "set swap interval")
+    return
   }
   pointer:=swap_extensions(window.display, screen(window.display))
   _=sync(window.display, 0)
-  if context_error_seen { return Result{kind:io.Kind.System} }
-  if pointer==nil { return Result{kind:io.Kind.Unsupported} }
+  if context_error_seen {
+    window_failed(status, fail.Kind.System, "set swap interval")
+    return
+  }
+  if pointer==nil {
+    window_failed(status, fail.Kind.Unsupported, "set swap interval")
+    return
+  }
   length:=c.string_length(pointer, 65536)
-  if length==65536 { return Result{kind:io.Kind.Capacity} }
+  if length==65536 {
+    window_failed(status, fail.Kind.Capacity, "set swap interval")
+    return
+  }
   extensions:=#slice(pointer, length)
   if swap_extension(extensions, "GLX_EXT_swap_control") {
     name:="glXSwapIntervalEXT\x00"
@@ -70,31 +87,43 @@ pub fn set_swap_interval(window:*Window, interval:i32) Result {
     if apply!=nil {
       apply(window.display, window.handle, interval)
       _=sync(window.display, 0)
-      if context_error_seen { return Result{kind:io.Kind.System} }
-      return Result{}
+      if context_error_seen {
+        window_failed(status, fail.Kind.System, "set swap interval")
+        return
+      }
+      return
     }
   }
   if swap_extension(extensions, "GLX_MESA_swap_control") {
     name:="glXSwapIntervalMESA\x00"
     apply:=#cast(fn(u32)i32, gl_proc(&name[0]))
     if apply!=nil {
-      status:=apply(#cast(u32, interval))
+      code:=apply(#cast(u32, interval))
       _=sync(window.display, 0)
-      if status!=0 || context_error_seen { return Result{kind:io.Kind.System} }
-      return Result{}
+      if code!=0 || context_error_seen {
+        window_failed(status, fail.Kind.System, "set swap interval")
+        return
+      }
+      return
     }
   }
   if interval==1 && swap_extension(extensions, "GLX_SGI_swap_control") {
     name:="glXSwapIntervalSGI\x00"
     apply:=#cast(fn(i32)i32, gl_proc(&name[0]))
     if apply!=nil {
-      status:=apply(interval)
+      code:=apply(interval)
       _=sync(window.display, 0)
-      if status!=0 || context_error_seen { return Result{kind:io.Kind.System} }
-      return Result{}
+      if code!=0 || context_error_seen {
+        window_failed(status, fail.Kind.System, "set swap interval")
+        return
+      }
+      return
     }
   }
   _=sync(window.display, 0)
-  if context_error_seen { return Result{kind:io.Kind.System} }
-  return Result{kind:io.Kind.Unsupported}
+  if context_error_seen {
+    window_failed(status, fail.Kind.System, "set swap interval")
+    return
+  }
+  window_failed(status, fail.Kind.Unsupported, "set swap interval")
 }

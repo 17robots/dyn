@@ -9,7 +9,7 @@ use "std/io"
 use "std/mem"
 use "std/net/http/hpack"
 use "std/net/http/qpack"
-use "std/parse"
+use "std/fail"
 
 const Vectors: []const u8 = #load("vectors.txt")
 
@@ -19,15 +19,12 @@ fn decode_all(decoder: *hpack.Decoder, block: []const u8, output: []u8) []const 
   used: usize = 0
   at: usize = 0
   hpack.decode_begin(decoder)
+  status: fail.Status
   for at < #len(block) {
-    field := hpack.decode_field(decoder, block[at..], scratch[..])
-    if parse.failed(field.failure) {
-      return "error"
-    }
+    field := hpack.decode_field(&status, decoder, block[at..], scratch[..])
+    if status.failed { return "error" }
     at += field.consumed
-    if field.update {
-      continue
-    }
+    if field.update { continue }
     if used > 0 {
       output[used] = '|'
       used += 1
@@ -43,17 +40,14 @@ fn decode_all(decoder: *hpack.Decoder, block: []const u8, output: []u8) []const 
 // A QPACK section decoded as name=value|...; "error" on failure.
 fn qpack_all(section: []const u8, output: []u8) []const u8 {
   prefix := qpack.decode_prefix(section)
-  if !prefix.ok {
-    return "error"
-  }
+  if !prefix.ok { return "error" }
   scratch: [1024]u8
   used: usize = 0
   at := prefix.consumed
+  status: fail.Status
   for at < #len(section) {
-    field := qpack.decode_field(section[at..], scratch[..])
-    if parse.failed(field.failure) {
-      return "error"
-    }
+    field := qpack.decode_field(&status, section[at..], scratch[..])
+    if status.failed { return "error" }
     at += field.consumed
     if used > 0 {
       output[used] = '|'
@@ -78,31 +72,26 @@ fn main() {
   lines := bytes.splitter(Vectors, "\n")
   for {
     piece := bytes.split_next(&lines)
-    if !piece.found {
-      break
-    }
-    if #len(piece.value) == 0 {
-      continue
-    }
+    if !piece.found { break }
+    if #len(piece.value) == 0 { continue }
     tab := bytes.find_byte(piece.value, '\t')
-    block := hex.decode(arena, piece.value[..tab])
-    want := hex.decode(arena, piece.value[tab + 1..])
+    vectors := fail.Status{ on_failure: fail.panic_on_failure }
+    block := hex.decode(arena, &vectors, piece.value[..tab])
+    want := hex.decode(arena, &vectors, piece.value[tab + 1..])
     output: [4096]u8
-    got := decode_all(&decoder, block.value, output[..])
-    if !bytes.equal(got, want.value) {
-      io.println("decode mismatch {}: {} != {}", decoded, got, want.value)
+    got := decode_all(&decoder, block, output[..])
+    if !bytes.equal(got, want) {
+      io.println("decode mismatch {}: {} != {}", decoded, got, want)
       return
     }
     decoded += 1
     // Round trip: encode the same fields, decode with a fresh table.
     wire: [4096]u8
     length: usize = 0
-    fields := bytes.splitter(want.value, "|")
+    fields := bytes.splitter(want, "|")
     for {
       item := bytes.split_next(&fields)
-      if !item.found {
-        break
-      }
+      if !item.found { break }
       equals := bytes.find_byte(item.value, '=')
       written := hpack.encode_field(wire[length..], item.value[..equals], item.value[equals + 1..])
       if written == 0 {
@@ -116,7 +105,7 @@ fn main() {
     fresh := hpack.decoder(fresh_storage[..], fresh_entries[..])
     again: [4096]u8
     round := decode_all(&fresh, wire[..length], again[..])
-    if !bytes.equal(round, want.value) {
+    if !bytes.equal(round, want) {
       io.println("round trip mismatch {}: {}", encoded, round)
       return
     }
@@ -124,17 +113,15 @@ fn main() {
     // The same fields through QPACK, which has no dynamic table here.
     section: [4096]u8
     section_length := qpack.encode_prefix(section[..])
-    items := bytes.splitter(want.value, "|")
+    items := bytes.splitter(want, "|")
     for {
       item := bytes.split_next(&items)
-      if !item.found {
-        break
-      }
+      if !item.found { break }
       equals := bytes.find_byte(item.value, '=')
       section_length += qpack.encode_field(section[section_length..], item.value[..equals], item.value[equals + 1..])
     }
     qpack_out: [4096]u8
-    if !bytes.equal(qpack_all(section[..section_length], qpack_out[..]), want.value) {
+    if !bytes.equal(qpack_all(section[..section_length], qpack_out[..]), want) {
       io.println("qpack mismatch {}", encoded)
       return
     }

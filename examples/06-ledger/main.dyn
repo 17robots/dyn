@@ -14,7 +14,6 @@ use "std/fs"
 use "std/io"
 use "std/math"
 use "std/mem"
-use "std/parse"
 use "std/process"
 
 const Columns := 4
@@ -54,6 +53,7 @@ fn main() i32 {
   storage: [Columns][128]u8
   fields: [Columns][]const u8
   scan := csv.scanner(file)
+  reading: fail.Status
   line: u32 = 0
   ended := false
   for !ended {
@@ -65,7 +65,7 @@ fn main() i32 {
       if column >= Columns {
         column = Columns - 1      // extra fields are read and counted, not kept
       }
-      field := csv.next(&scan, storage[column][..])
+      field := csv.next(&reading, &scan, storage[column][..])
       if !field.found {
         ended = true
         break
@@ -75,7 +75,7 @@ fn main() i32 {
       record_ended = field.end_record
       ended = field.end_input
     }
-    if scan.failure.kind != parse.StreamKind.Ok {
+    if reading.failed {
       io.eprintln("ledger: {}:{}: not valid CSV", path, line)
       return 1
     }
@@ -87,8 +87,9 @@ fn main() i32 {
       skipped += 1
       continue
     }
-    amount := parse_cents(fields[3])
-    if parse.failed(amount.failure) {
+    amounting: fail.Status
+    amount := parse_cents(&amounting, fields[3])
+    if amounting.failed {
       io.eprintln("ledger: {}:{}: bad amount {}", path, line, fields[3])
       skipped += 1
       continue
@@ -99,10 +100,10 @@ fn main() i32 {
       skipped += 1
       continue
     }
-    add_to(&categories, arena, fields[1], amount.value)
-    add_to(&months, arena, date[..7], amount.value)
-    if amount.value > largest.amount {
-      largest.amount = amount.value
+    add_to(&categories, arena, fields[1], amount)
+    add_to(&months, arena, date[..7], amount)
+    if amount > largest.amount {
+      largest.amount = amount
       // fields[2] is overwritten by the next row, so keep a copy, cut to fit.
       length := math.min(#len(fields[2]), #len(largest.storage))
       kept := mem.copy(largest.storage[..], fields[2][..length])

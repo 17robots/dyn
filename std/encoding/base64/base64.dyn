@@ -1,9 +1,9 @@
 use "std/parse" parse
 use "std/mem" mem
-use "std/encoding" codec
+use "std/fail"
 use "std/bytes" bytes
-use "std/io" io
-type Result = codec.Result
+// A pass over the input: the bytes written, the exact size needed, or failed.
+struct Result { data: []u8, required: usize, failed: bool }
 
 // Source and destination must not overlap. All failures leave destination unchanged.
 const Alphabet: []const u8 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -18,14 +18,10 @@ fn encoded_size(source_size: usize) usize {
 
 fn encode_into(destination: []u8, source: []const u8) Result {
   required := encoded_size(#len(source))
-  if #len(source) != 0 && required == 0 {
-    return Result{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
-  }
-  if required > #len(destination) {
-    return Result{ failure: parse.Failure{ kind: parse.Kind.Capacity }, required: required }
-  }
+  if #len(source) != 0 && required == 0 { return Result{ failed: true } }
+  if required > #len(destination) { return Result{ failed: true, required: required } }
   if bytes.overlaps(destination[..required], source) {
-    return Result{ failure: parse.Failure{ kind: parse.Kind.Overlap }, required: required }
+    return Result{ failed: true, required: required }
   }
   input: usize = 0
   output: usize = 0
@@ -88,7 +84,7 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usiz
   offset.* = #len(source)
   required: usize = 0
   if !decoded_extent(source, &required) || (write && required > #len(destination)) {
-    return Result{ data: destination[..0], failure: parse.Failure{ kind: parse.Kind.Syntax } }
+    return Result{ data: destination[..0], failed: true }
   }
   input: usize = 0
   output: usize = 0
@@ -99,18 +95,18 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usiz
       if source[input] != '=' {
         offset.* += 1
       }
-      return Result{ data: destination[..0], failure: parse.Failure{ kind: parse.Kind.Syntax } }
+      return Result{ data: destination[..0], failed: true }
     }
     if !last && (source[input + 2] == '=' || source[input + 3] == '=') {
       offset.* = input + 2
       if source[input + 2] != '=' {
         offset.* += 1
       }
-      return Result{ data: destination[..0], failure: parse.Failure{ kind: parse.Kind.Syntax } }
+      return Result{ data: destination[..0], failed: true }
     }
     if source[input + 2] == '=' && source[input + 3] != '=' {
       offset.* = input + 3
-      return Result{ data: destination[..0], failure: parse.Failure{ kind: parse.Kind.Syntax } }
+      return Result{ data: destination[..0], failed: true }
     }
     a := digit_value(source[input])
     b := digit_value(source[input + 1])
@@ -133,16 +129,16 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usiz
           }
         }
       }
-      return Result{ data: destination[..0], failure: parse.Failure{ kind: parse.Kind.Syntax } }
+      return Result{ data: destination[..0], failed: true }
     }
     // Reject non-canonical encodings with non-zero unused bits.
     if source[input + 2] == '=' && b % 16 != 0 {
       offset.* = input + 1
-      return Result{ data: destination[..0], failure: parse.Failure{ kind: parse.Kind.Syntax } }
+      return Result{ data: destination[..0], failed: true }
     }
     if source[input + 3] == '=' && source[input + 2] != '=' && c % 4 != 0 {
       offset.* = input + 2
-      return Result{ data: destination[..0], failure: parse.Failure{ kind: parse.Kind.Syntax } }
+      return Result{ data: destination[..0], failed: true }
     }
     if write {
       destination[output] = #cast(u8, (a * 4 + b / 16))
@@ -169,12 +165,12 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usiz
 fn decode_into(destination: []u8, source: []const u8) Result {
   offset: usize = 0
   measured := decode_pass(destination[..0], source, false, &offset)
-  if parse.failed(measured.failure) { return measured }
+  if measured.failed { return measured }
   if measured.required > #len(destination) {
-    return Result{ failure: parse.Failure{ kind: parse.Kind.Capacity }, required: measured.required }
+    return Result{ failed: true, required: measured.required }
   }
   if bytes.overlaps(destination[..measured.required], source) {
-    return Result{ failure: parse.Failure{ kind: parse.Kind.Overlap }, required: measured.required }
+    return Result{ failed: true, required: measured.required }
   }
   _ = decode_pass(destination, source, true, &offset)
   return Result{ data: destination[..measured.required], required: measured.required }
@@ -188,10 +184,9 @@ fn decoded_size(source: []const u8) Size {
   empty: [0]u8
   offset: usize = 0
   measured := decode_pass(empty[..], source, false, &offset)
-  return Size{ value: measured.required, ok: !parse.failed(measured.failure), offset: offset }
+  return Size{ value: measured.required, ok: !measured.failed, offset: offset }
 }
 
-pub type Decoded = parse.Bytes
 
 // Encodes source into arena. Size overflow or overlapping input/output panics.
 pub fn encode(arena: *mem.Arena, source: []const u8) []u8 {
@@ -201,34 +196,29 @@ pub fn encode(arena: *mem.Arena, source: []const u8) []u8 {
   }
   output := mem.push_bytes_uninit(arena, required)
   result := encode_into(output, source)
-  if parse.failed(result.failure) {
+  if result.failed {
     #panic("base64.encode: invalid source/output overlap")
   }
   return output
 }
 
-// Decodes validated input into arena. Failures preserve the arena and source;
-// offset identifies an offending byte, or the end of a truncated group.
-// Arena exhaustion panics. Pure codec failures have no native error code.
-pub fn decode(arena: *mem.Arena, source: []const u8) Decoded {
-  mark := mem.arena_mark(arena)
+// Decodes validated input into arena. Failures preserve the arena and source:
+// malformed input fails with InvalidInput at an offending byte, or at the
+// end of a truncated group. Arena exhaustion panics.
+pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8 {
+  empty: []u8
+  if status.failed { return empty }
   size := decoded_size(source)
   if !size.ok {
-    return Decoded{ failure: parse.Failure{ kind: parse.Kind.Syntax, offset: size.offset } }
-  }
-  if size.value > #max(usize) - mark {
-    return Decoded{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
+    parse.malformed(status, "decode base64", "invalid base64", size.offset)
+    return empty
   }
   // Check borrowed backing before allocation or rewind can modify aliased input.
   if mem.arena_overlaps_unallocated(arena, source) {
-    return Decoded{ failure: parse.Failure{ kind: parse.Kind.Overlap } }
+    fail.invalid(status, "decode base64", "", "the input lies in the arena's free space")
+    return empty
   }
   output := mem.push_bytes_uninit(arena, size.value)
-  result := decode_into(output, source)
-  if parse.failed(result.failure) {
-    mem.arena_rewind(arena, mark)
-    return Decoded{ failure: result.failure }
-  }
-  return Decoded{ value: output }
+  _ = decode_into(output, source)
+  return output
 }
-

@@ -1,11 +1,8 @@
-use "std/io"
+use "std/fail"
 #link("lua5.4")
 // Lua 5.4 default ABI (64-bit integers, double numbers). State is provider-owned.
 // No standard libraries are opened automatically. This is not a sandbox.
 pub type State = rawptr
-pub struct Result { code: i32, failure: io.Failure }
-pub struct IntegerResult { value: i64, failure: io.Failure }
-pub struct BytesResult { value: []const u8, failure: io.Failure }
 pub fn create_owned() State {
   return native_new()
 }
@@ -27,11 +24,18 @@ pub fn pop(state: State, count: i32) bool {
 // Text-only protected execution. On success leaves exactly one result (nil if
 // chunk returns none); on failure leaves one error. Earlier stack values survive.
 // Chunk source borrowed only during call. Caller must pop result/error.
-// Wrapper errors -1/-2 leave the stack unchanged.
-pub fn execute(state: State, source: []const u8) Result {
-  if state == nil { return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } } }
+// A syntax error fails with InvalidInput, a runtime error with System, running
+// out of memory with Capacity; the message is Lua's and native its code. With
+// no state, or no stack room, the stack is unchanged.
+pub fn execute(status: *fail.Status, state: State, source: []const u8) {
+  if status.failed { return }
+  if state == nil {
+    fail.invalid(status, "run Lua", "", "no state")
+    return
+  }
   if native_checkstack(state, 2) == 0 {
-    return Result{ code: -2, failure: io.Failure{ kind: io.Kind.System } }
+    fail.set(status, fail.make(fail.Kind.Capacity, "run Lua", "", "no stack room"))
+    return
   }
   name: [4]u8 = ['d', 'y', 'n', 0]
   mode: [2]u8 = ['t', 0]
@@ -44,31 +48,62 @@ pub fn execute(state: State, source: []const u8) Result {
   if code == 0 {
     code = native_pcall(state, 0, 1, 0, 0, nil)
   }
-  return Result{ code: code, failure: io.failure_if(code != 0) }
+  if code != 0 {
+    kind := fail.Kind.System
+    if code == 3 {
+      kind = fail.Kind.InvalidInput
+    } else if code == 4 {
+      kind = fail.Kind.Capacity
+    }
+    message: []const u8 = "Lua failed"
+    if native_type(state, -1) == 4 {
+      length: usize = 0
+      text := native_string(state, -1, &length)
+      if text != nil {
+        message = #slice(text, length)
+      }
+    }
+    failure := fail.make(kind, "run Lua", "", message)
+    failure.native = code
+    fail.set(status, failure)
+  }
 }
 fn valid_index(state: State, index: i32) bool {
   if state == nil || index == 0 { return false }
   top := native_top(state)
   return (index > 0 && index <= top) || (index < 0 && index >= 0 - top)
 }
-pub fn integer(state: State, index: i32) IntegerResult {
+// A missing slot or a value that is not an integer fails with InvalidInput.
+pub fn integer(status: *fail.Status, state: State, index: i32) i64 {
+  if status.failed { return 0 }
   if !valid_index(state, index) {
-    return IntegerResult{ failure: io.Failure{ kind: io.Kind.System } }
+    fail.invalid(status, "read Lua value", "", "no such stack slot")
+    return 0
   }
   ok: i32 = 0
   value := native_integer(state, index, &ok)
-  return IntegerResult{ value: value, failure: io.failure_if(ok == 0) }
+  if ok == 0 {
+    fail.invalid(status, "read Lua value", "", "not an integer")
+    return 0
+  }
+  return value
 }
 // Borrows an existing string while it remains on the stack and state stays alive.
 // No numeric conversion: that could allocate outside a protected Lua call.
-pub fn bytes(state: State, index: i32) BytesResult {
+// A missing slot or a value that is not a string fails with InvalidInput.
+pub fn bytes(status: *fail.Status, state: State, index: i32) []const u8 {
+  if status.failed { return "" }
   if !valid_index(state, index) || native_type(state, index) != 4 {
-    return BytesResult{ failure: io.Failure{ kind: io.Kind.System } }
+    fail.invalid(status, "read Lua value", "", "not a string")
+    return ""
   }
   length: usize = 0
   pointer := native_string(state, index, &length)
-  if pointer == nil { return BytesResult{ failure: io.Failure{ kind: io.Kind.System } } }
-  return BytesResult{ value: #slice(pointer, length) }
+  if pointer == nil {
+    fail.invalid(status, "read Lua value", "", "not a string")
+    return ""
+  }
+  return #slice(pointer, length)
 }
 extern fn native_new "luaL_newstate"() State
 extern fn native_close "lua_close"(state: State)

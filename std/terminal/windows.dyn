@@ -1,5 +1,6 @@
 use "std/os/windows" native_windows
 use "std/io" io
+use "std/fail"
 #target(kernel: windows)
 
 extern fn get_mode "dyn_terminal_get_mode"(handle: rawptr, mode: *u32) i32
@@ -20,9 +21,8 @@ fn handle_of(descriptor: isize) rawptr {
   return #cast(rawptr, descriptor)
 }
 
-fn failure() Result {
-  code := #cast(isize, native_windows.last_error_raw())
-  return Result{ failure: io.windows_failure(code) }
+fn failure(status: *fail.Status, operation: []const u8) {
+  fail.set(status, io.from_windows(operation, "", #cast(isize, native_windows.last_error_raw())))
 }
 
 fn mode_of(state: *const State) u32 {
@@ -36,22 +36,26 @@ fn set_mode_bytes(state: *State, mode: u32) {
   state.bytes[3] = #cast(u8, mode >> 24)
 }
 
-// The console mode of descriptor. ok is false when it is not a console.
-pub fn read_state(descriptor: isize) Read {
+// The console mode of descriptor; fails when it is not a console.
+pub fn read_state(status: *fail.Status, descriptor: isize) State {
+  result := State{}
+  if status.failed { return result }
   mode: u32 = 0
   if get_mode(handle_of(descriptor), &mode) == 0 {
-    failed := failure()
-    return Read{ failure: io.Failure{ kind: failed.failure.kind, native: failed.failure.native } }
+    failure(status, "read terminal")
+    return result
   }
-  result := Read{}
-  set_mode_bytes(&result.value, mode)
+  set_mode_bytes(&result, mode)
   return result
 }
 
-pub fn restore(descriptor: isize, saved: *const State) Result {
-  if saved == nil { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
-  if set_mode(handle_of(descriptor), mode_of(saved)) == 0 { return failure() }
-  return Result{}
+pub fn restore(status: *fail.Status, descriptor: isize, saved: *const State) {
+  if status.failed { return }
+  if saved == nil {
+    fail.invalid(status, "restore terminal", "", "no saved settings")
+    return
+  }
+  if set_mode(handle_of(descriptor), mode_of(saved)) == 0 { failure(status, "restore terminal") }
 }
 
 // Output streams (1 and 2) gain virtual-terminal processing. Every other
@@ -69,15 +73,16 @@ fn make_raw(descriptor: isize, state: *State) {
 
 // The visible window of the console screen buffer. Descriptor 0 reports the
 // standard output buffer.
-pub fn size(descriptor: isize) Size {
+pub fn size(status: *fail.Status, descriptor: isize) Size {
+  if status.failed { return Size{} }
   handle := handle_of(descriptor)
   if descriptor == 0 {
     handle = handle_of(1)
   }
   info: [22]u8
   if buffer_info(handle, &info[0]) == 0 {
-    failed := failure()
-    return Size{ failure: io.Failure{ kind: failed.failure.kind, native: failed.failure.native } }
+    failure(status, "terminal size")
+    return Size{}
   }
   left := #cast(i16, #cast(u16, info[10]) | #cast(u16, info[11]) << 8)
   top := #cast(i16, #cast(u16, info[12]) | #cast(u16, info[13]) << 8)

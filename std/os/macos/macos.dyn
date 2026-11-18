@@ -1,34 +1,34 @@
-use "std/parse" parse
 #target(kernel: darwin)
 
 use "std/mem" mem
 use "std/c" cstrings
 use "std/os/macos/sys"
 use "std/io"
+use "std/fail"
 
 // libSystem has no BSD yield call; sched_yield wraps the swtch_pri Mach trap.
 extern fn native_yield "sched_yield"() i32
 
-pub struct IoResult { value: isize, failure: io.Failure }
 pub struct PollDescriptor { descriptor: i32, events: i16, returned: i16 }
 pub const has_native_threads: bool = false
-pub fn io_value(result: *const IoResult) isize {
-  return result.value
-}
-fn io_result(value: isize) IoResult {
-  if value < 0 { return IoResult{ value: value, failure: io.darwin_failure(value) } }
-  return IoResult{ value: value }
+fn checked(status: *fail.Status, operation: []const u8, path: []const u8, value: isize) isize {
+  if value < 0 {
+    fail.set(status, io.from_darwin(operation, path, value))
+    return -1
+  }
+  return value
 }
 fn terminated(path: []const u8, storage: []u8) *const u8 {
   if #len(path) == 0 { return nil }
-  result := cstrings.string_into(storage, path)
-  if parse.failed(result.failure) { return nil }
-  return result.value
+  status: fail.Status
+  return cstrings.string_into(&status, storage, path)
 }
-pub fn file_open(path: []const u8, write_access: bool, create: bool) IoResult {
+// A descriptor, or -1 after a failure.
+pub fn file_open(status: *fail.Status, path: []const u8, write_access: bool, create: bool) isize {
+  if status.failed { return -1 }
   storage: [4096 + mem.ArenaBufferOverhead]u8
   name := terminated(path, storage[..])
-  if name == nil { return IoResult{ value: -1, failure: io.darwin_failure(-63) } }
+  if name == nil { return checked(status, "open", path, -63) }
   flags: usize = 0
   if write_access {
     flags = 2
@@ -36,16 +36,19 @@ pub fn file_open(path: []const u8, write_access: bool, create: bool) IoResult {
   if create {
     flags = flags | 512
   }
-  return io_result(#syscall(sys.Open, name, flags, 420))
+  return checked(status, "open", path, #syscall(sys.Open, name, flags, 420))
 }
-pub fn file_close(handle: isize) IoResult {
-  return io_result(#syscall(sys.Close, handle))
+pub fn file_close(status: *fail.Status, handle: isize) {
+  if status.failed { return }
+  _ = checked(status, "close", "", #syscall(sys.Close, handle))
 }
 pub fn thread_yield() {
   _ = native_yield()
 }
-pub fn socket_open(family: i32, kind: i32, protocol: i32) IoResult {
-  return io_result(#syscall(sys.Socket, family, kind, protocol))
+// A socket, or -1 after a failure.
+pub fn socket_open(status: *fail.Status, family: i32, kind: i32, protocol: i32) isize {
+  if status.failed { return -1 }
+  return checked(status, "socket", "", #syscall(sys.Socket, family, kind, protocol))
 }
 pub fn socket_close(socket: usize) bool {
   return #syscall(sys.Close, socket) == 0

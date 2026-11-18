@@ -1,12 +1,11 @@
-use "std/parse" parse
 use "std/c"
+use "std/fail"
 #link("vulkan")
 
 // Vulkan deliberately exposes one stable loader seam. Applications generate typed
 // commands/structures for the header version they target instead of coupling SDK releases.
 pub type Instance = rawptr
 pub type Procedure = rawptr
-pub struct ProcedureResult { value: Procedure, failure: io.Failure }
 
 pub fn make_version(variant, major, minor, patch: u32) u32 {
   return (variant << 29) | (major << 22) | (minor << 12) | patch
@@ -24,15 +23,18 @@ pub fn version_patch(version: u32) u32 {
   return version & 4095
 }
 
-// name_buffer receives a temporary NUL-terminated copy. Returned function is loader-owned.
-pub fn procedure(instance: Instance, name: []const u8, name_buffer: []u8) ProcedureResult {
-  encoded := c.string_into(name_buffer, name)
-  if parse.failed(encoded.failure) {
-    return ProcedureResult{ failure: io.Failure{ kind: io.Kind.System } }
+// name_buffer receives a temporary NUL-terminated copy. Returned function is
+// loader-owned. A name the loader does not know fails with NotFound.
+pub fn procedure(status: *fail.Status, instance: Instance, name: []const u8, name_buffer: []u8) Procedure {
+  if status.failed { return nil }
+  encoded := c.string_into(status, name_buffer, name)
+  if status.failed { return nil }
+  value := vulkan_get_instance_proc_address(instance, encoded)
+  if value == nil {
+    fail.set(status, fail.make(fail.Kind.NotFound, "load Vulkan procedure", name, "the loader has no such procedure"))
   }
-  value := vulkan_get_instance_proc_address(instance, encoded.value)
-  return ProcedureResult{ value: value, failure: io.failure_if(value == nil) }
+  return value
 }
-pub fn global_procedure(name: []const u8, buffer: []u8) ProcedureResult {
-  return procedure(nil, name, buffer)
+pub fn global_procedure(status: *fail.Status, name: []const u8, buffer: []u8) Procedure {
+  return procedure(status, nil, name, buffer)
 }

@@ -1,5 +1,6 @@
 #target(kernel: windows)
 use "std/io" io
+use "std/fail"
 use "std/mem" mem
 use "std/unicode/utf8" utf8
 use "std/unicode/utf16" utf16
@@ -21,7 +22,6 @@ pub const FixedWatchCapacity: usize = 16
 pub const HasCloseWrite: bool = false
 pub const HasMoveCookies: bool = false
 pub const HasDirectoryFlag: bool = false
-pub enum Status { Event, Empty }
 struct Overlapped { internal: usize, transferred: usize, offset: u32, offset_high: u32, event: rawptr }
 struct Slot { handle: rawptr, event: rawptr, overlap: Overlapped, buffer: [1024]u32, used: usize, offset: usize, pending: bool, id: i32, mask: u32 }
 struct Native { slots: [16]Slot, next_id: i32, cursor: usize }
@@ -29,12 +29,10 @@ struct Native { slots: [16]Slot, next_id: i32, cursor: usize }
 // Names borrow caller storage until the next next() call. Watches are nonrecursive.
 // Windows reports paired rename actions without cookies, and cannot distinguish
 // close-write, directory flags, or deletion/movement of the watched directory.
-pub struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, error: isize, kind: io.Kind }
-pub type OpenResult = io.Result(Watcher)
-// `error` keeps the native code; `kind` is its portable category.
-pub type Result = io.Result(i32)
+pub struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, failure: fail.Failure }
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
-pub struct EventResult { event: Event, status: Status, failure: io.Failure }
+// found is false when no event is pending.
+pub struct Next { event: Event, found: bool }
 extern fn native_open "dyn_watch_open"(name: *const u16, access: u32, share: u32, security: rawptr, creation: u32, flags: u32, template: rawptr) rawptr
 extern fn native_close "dyn_watch_close"(handle: rawptr) i32
 extern fn native_error "dyn_watch_error"() u32
@@ -46,26 +44,36 @@ extern fn cancel "dyn_watch_cancel"(handle: rawptr, overlap: *Overlapped) i32
 fn error() isize {
   return 0 - #cast(isize, native_error())
 }
-fn arm(slot: *Slot) Result {
-  if reset_event(slot.event) == 0 { return failure(error()) }
+// Whether the read was queued; on failure code holds the negated native
+// code, which may be zero.
+fn arm(slot: *Slot, code: *isize) bool {
+  if reset_event(slot.event) == 0 {
+    code.* = error()
+    return false
+  }
   slot.overlap = Overlapped{ event: slot.event }
   slot.used = 0
   slot.offset = 0
   if read_changes(slot.handle, &slot.buffer[0], 4096, 0, 31, nil, &slot.overlap, nil) == 0 {
-    code := native_error()
-    if code != 997 { return failure(0 - #cast(isize, code)) }
+    native := native_error()
+    if native != 997 {
+      code.* = 0 - #cast(isize, native)
+      return false
+    }
   }
   slot.pending = true
-  return Result{}
+  return true
 }
-pub fn open(storage: []u8) OpenResult {
+pub fn open(status: *fail.Status, storage: []u8) Watcher {
+  if status.failed { return Watcher{} }
   if #len(storage) < 272 {
-    return OpenResult{ value: Watcher{}, failure: io.Failure{ kind: io.Kind.Capacity, native: -28 } }
+    _ = validation_failure(status, "watch", "", -28)
+    return Watcher{}
   }
   owner := mem.arena_alloc(#sizeof(Native))
   native := mem.push(Native, owner)
   native.next_id = 1
-  return OpenResult{ value: Watcher{ native: native, owner: owner, storage: storage } }
+  return Watcher{ native: native, owner: owner, storage: storage }
 }
 fn retire(slot: *Slot) isize {
   if slot.pending {
@@ -95,9 +103,11 @@ fn retire(slot: *Slot) isize {
   slot.offset = 0
   return 0
 }
-pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
-  if state.native == nil || #len(path) == 0 { return validation_failure(-22) }
-  if (mask & SupportedEvents) == 0 { return validation_failure(-95) }
+// Watches path; the watch identifier, -1 after a failure.
+pub fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i32 {
+  if status.failed { return -1 }
+  if state.native == nil || #len(path) == 0 { return validation_failure(status, "watch", path, -22) }
+  if (mask & SupportedEvents) == 0 { return validation_failure(status, "watch", path, -95) }
   index: usize = 16
   for i in 0..16 {
     if state.native.slots[i].handle == nil && state.native.slots[i].event == nil {
@@ -105,15 +115,15 @@ pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
       break
     }
   }
-  if index == 16 || state.native.next_id == 2147483647 { return validation_failure(-28) }
+  if index == 16 || state.native.next_id == 2147483647 { return validation_failure(status, "watch", path, -28) }
   wide: [4096]u16
   at: usize = 0
   used: usize = 0
   for at < #len(path) {
     decoded := utf8.decode(path, at)
-    if !decoded.valid || decoded.codepoint == 0 { return validation_failure(-22) }
+    if !decoded.valid || decoded.codepoint == 0 { return validation_failure(status, "watch", path, -22) }
     width := utf16.encode(wide[used..4095], decoded.codepoint)
-    if width == 0 { return validation_failure(-36) }
+    if width == 0 { return validation_failure(status, "watch", path, -36) }
     used += width
     at += decoded.width
   }
@@ -121,33 +131,40 @@ pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
   slot.handle = native_open(&wide[0], 1, 7, nil, 3, 1107296256, nil)
   if #cast(usize, slot.handle) == #max(usize) {
     slot.handle = nil
-    return failure(error())
+    return failure(status, "watch", path, error())
   }
   slot.event = create_event(nil, 1, 0, nil)
   if slot.event == nil {
     code := error()
     _ = retire(slot)
-    return failure(code)
+    return failure(status, "watch", path, code)
   }
-  armed := arm(slot)
-  if io.failed(armed.failure) {
+  armed: isize = 0
+  if !arm(slot, &armed) {
     _ = retire(slot)
-    return armed
+    return failure(status, "watch", path, armed)
   }
   slot.id = state.native.next_id
   state.native.next_id += 1
   slot.mask = mask
-  return Result{ value: slot.id }
+  return slot.id
 }
-pub fn remove(state: *Watcher, watch: i32) Result {
-  if state.native == nil || watch <= 0 { return validation_failure(-22) }
+pub fn remove(status: *fail.Status, state: *Watcher, watch: i32) {
+  if status.failed { return }
+  if state.native == nil || watch <= 0 {
+    _ = validation_failure(status, "unwatch", "", -22)
+    return
+  }
   for i in 0..16 {
     if state.native.slots[i].id == watch {
       code := retire(&state.native.slots[i])
-      return status(code)
+      if code != 0 {
+        _ = failure(status, "unwatch", "", code)
+      }
+      return
     }
   }
-  return validation_failure(-22)
+  _ = validation_failure(status, "unwatch", "", -22)
 }
 pub fn close(state: *Watcher) {
   if state.native == nil { return }
@@ -159,35 +176,37 @@ pub fn close(state: *Watcher) {
   state.native = nil
   state.storage = state.storage[..0]
 }
-fn rescan(state: *Watcher, id: i32) EventResult {
+fn rescan(state: *Watcher, id: i32) Next {
   state.rescan_required = true
-  return EventResult{ status: Status.Event, event: Event{ watch: id, rescan: true } }
+  return Next{ found: true, event: Event{ watch: id, rescan: true } }
 }
-// Terminal failures are sticky. Empty and rescan events remain protocol states.
-fn event_failure(state: *Watcher, code: isize, kind: io.Kind) EventResult {
-  if !state.failed {
-    state.failed = true
-    state.error = code
-    state.kind = kind
-    if state.kind == io.Kind.Ok {
-      state.kind = io.Kind.System
-    }
+// Empty and rescan events remain protocol states.
+fn next_failed(status: *fail.Status, state: *Watcher, code: isize) Next {
+  state.failed = true
+  _ = failure(status, "read events", "", code)
+  state.failure = status.failure
+  return Next{}
+}
+pub fn next(status: *fail.Status, state: *Watcher) Next {
+  if status.failed { return Next{} }
+  if state.failed {
+    fail.set(status, state.failure)
+    return Next{}
   }
-  return EventResult{ failure: io.Failure{ kind: state.kind, native: state.error } }
-}
-pub fn next(state: *Watcher) EventResult {
-  if state.failed { return event_failure(state, state.error, state.kind) }
-  if state.native == nil { return event_failure(state, -9, io.Kind.InvalidState) }
+  if state.native == nil {
+    state.failed = true
+    fail.set(status, fail.make(fail.Kind.InvalidState, "read events", "", "the watcher is closed"))
+    state.failure = status.failure
+    return Next{}
+  }
   for checked in 0..16 {
     index := state.native.cursor
     state.native.cursor = (index + 1) % 16
     slot := &state.native.slots[index]
     if slot.id == 0 { continue }
     if !slot.pending && slot.offset == slot.used {
-      armed := arm(slot)
-      if io.failed(armed.failure) {
-        return event_failure(state, armed.failure.native, armed.failure.kind)
-      }
+      armed: isize = 0
+      if !arm(slot, &armed) { return next_failed(status, state, armed) }
     }
     if slot.pending {
       transferred: u32 = 0
@@ -198,7 +217,7 @@ pub fn next(state: *Watcher) EventResult {
           slot.pending = false
           return rescan(state, slot.id)
         }
-        return event_failure(state, 0 - #cast(isize, code), io.windows(#cast(isize, code)))
+        return next_failed(status, state, 0 - #cast(isize, code))
       }
       slot.pending = false
       slot.used = transferred
@@ -253,27 +272,21 @@ pub fn next(state: *Watcher) EventResult {
         used += width
         position += decoded.width
       }
-      return EventResult{ status: Status.Event, event: Event{ watch: slot.id, mask: mask, name: state.storage[..used] } }
+      return Next{ found: true, event: Event{ watch: slot.id, mask: mask, name: state.storage[..used] } }
     }
   }
-  return EventResult{ status: Status.Empty }
+  return Next{}
 }
 pub fn acknowledge_rescan(state: *Watcher) {
   state.rescan_required = false
 }
 
-fn failure(code: isize) Result {
-  kind := io.windows(code)
-  if kind == io.Kind.Ok {
-    kind = io.Kind.System
-  }
-  return Result{ failure: io.Failure{ kind: kind, native: code } }
+fn failure(status: *fail.Status, operation: []const u8, path: []const u8, code: isize) i32 {
+  fail.set(status, io.from_windows(operation, path, code))
+  return -1
 }
-fn status(code: isize) Result {
-  if code == 0 { return Result{} }
-  return failure(code)
-}
-// Validation codes retain their errno-style namespace separately from Win32.
-fn validation_failure(code: isize) Result {
-  return Result{ failure: io.linux_failure(code) }
+// Checks that fail before Windows is asked use errno-style codes.
+fn validation_failure(status: *fail.Status, operation: []const u8, path: []const u8, code: isize) i32 {
+  fail.set(status, io.from_linux(operation, path, code))
+  return -1
 }
