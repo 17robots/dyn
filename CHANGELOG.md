@@ -391,6 +391,12 @@ Compiler speed of generated code:
   large, so every call stayed a call, although the backend makes it one
   instruction. Only the size limit changes; the growth budget still counts
   everything, so other inlining choices stay as they were.
+- `http` header lookups (`request_header`, `cookie`, conditional and range
+  requests in `serve_asset`) scan the request head once with `find_byte`
+  instead of parsing and validating it again on every lookup, and header
+  values are checked eight bytes at a time: static responses 530k to 562k
+  requests per second on two cores. `argon2id` runs its block XOR as one
+  operation per loop, about 4% faster.
 - `html` escaping writes each byte's entity as one 8-byte word from a table,
   without branches: 1.05 to 0.70 ns per byte on entity-dense text, and Chirp's
   pages 98k to 121k requests per second on two cores. `html.print` writes
