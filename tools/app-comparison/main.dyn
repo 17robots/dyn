@@ -10,7 +10,7 @@ use "std/io"
 use "std/parse"
 use "std/net"
 use "std/net/http"
-use "std/net/http/concurrent"
+use "std/net/http/evented"
 use "std/sync"
 use "std/time"
 
@@ -243,37 +243,27 @@ fn handle(response: *http.Response, request: *const http.Request) http.Result {
   return http.respond(response, encoded_summary(arena, &summary), http.ResponseOptions{ content_type: "application/json", close_connection: true })
 }
 fn serve() {
-  arena := mem.arena_alloc(0)
+  config := evented.default_config()
+  // Bodies up to 1 MiB borrow an upload block; one per connection slot in use.
+  config.upload_size = mem.MiB + 16384
+  config.upload_count = 4
+  config.connections_per_worker = 64
+  arena := mem.arena_alloc(evented.storage_size(config, 4) + mem.MiB)
   defer mem.arena_release(arena)
   state := mem.push(App, arena)
-  address := net.ipv4(127, 0, 0, 1, 0)
-  opened := net.tcp_listen_ipv4(&address, 128)
-  if io.failed(opened.failure) {
-    #panic("listen")
-  }
-  listener := net.listener_take(&opened.value)
-  bound: net.Address
-  if io.failed(net.local_address(listener.descriptor, &bound).failure) {
-    #panic("local address")
-  }
-  workers := mem.push_array(concurrent.Worker, arena, 4)
-  receive := mem.push_array(u8, arena, #cast(usize, 4) * (mem.MiB + 16384))
-  stacks := mem.push_array(u8, arena, #cast(usize, 4) * 512 * mem.KiB)
-  started := concurrent.start_context(arena, workers, &listener, receive, mem.MiB + 16384, stacks, 512 * mem.KiB, handle, state)
+  workers := mem.push_array(evented.Worker, arena, 4)
+  started := evented.start_shared(arena, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, handle, state)
   if io.failed(started.failure) {
     #panic("workers")
   }
-  port := #cast(u64, bound.bytes[2]) * 256 + #cast(u64, bound.bytes[3])
   _ = io.write_all(io.stdout(), "port ")
-  _ = io.write_all(io.stdout(), fmt.u64_decimal(arena, port))
+  _ = io.write_all(io.stdout(), fmt.u64_decimal(arena, #cast(u64, evented.local_port(workers))))
   _ = io.write_all(io.stdout(), "\n")
   for sync.load_u32(&state.quit) == 0 {
     _ = time.sleep(time.Millisecond)
   }
-  concurrent.stop(workers)
-  joined := concurrent.join(workers)
-  net.listener_close(&listener)
-  if io.failed(joined.failure) {
+  evented.stop(workers)
+  if io.failed(evented.join(workers).failure) {
     #panic("join workers")
   }
 }

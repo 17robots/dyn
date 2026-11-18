@@ -19,8 +19,6 @@ class LifetimeFlow(unittest.TestCase):
             ('struct B { bad: []u8, good: []u8 } fn good(input: []u8) []u8 { x:[8]u8\nb:=B{bad:x[..],good:input}\nreturn b.good }',True),
             ('fn good(input: []u8) []u8 { p:=input\nreturn p }',True),
             ('fn good(input: *i32) *i32 { x:i32=1\np:=&x\np=input\nreturn p }',True),
-            ('use "std/mem"\nfn bad() { storage:[64]u8\na:=mem.arena_from_buffer(storage[..])\np:=mem.arena_push(a,8,1)\nmem.arena_reset(a)\np.*=7 }',False),
-            ('use "std/mem"\nfn good() { storage:[64]u8\na:=mem.arena_from_buffer(storage[..])\n_=mem.arena_push(a,8,1)\nmem.arena_reset(a)\np:=mem.arena_push(a,8,1)\np.*=7 }',True),
         ]
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'main.dyn'
@@ -29,6 +27,6 @@ class LifetimeFlow(unittest.TestCase):
                 result=subprocess.run([DYN,'check',directory,'--no-cache','--diagnostics','json'],capture_output=True,text=True)
                 with self.subTest(source=source):
                     self.assertEqual(result.returncode,0 if valid else 1,result.stderr)
-                    if not valid: self.assertTrue('borrows function-local' in result.stderr or 'after arena_reset' in result.stderr,result.stderr)
+                    if not valid: self.assertIn('borrows function-local', result.stderr)
 
 if __name__=='__main__': unittest.main()

@@ -4,10 +4,10 @@ use "std/os/linux" os
 use "std/fs" fs
 use "std/time" time
 use "std/os/linux/sys"
-fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) SpawnResult {
+fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) NativeSpawn {
   native := os.spawn_environment(arena, path, arguments, configuration.environment,
     os.SpawnOptions{ input: native_stream(configuration.input), output: native_stream(configuration.output), error: native_stream(configuration.error), directory: configuration.directory })
-  return SpawnResult{ value: Child{ handle: native.process, active: !io.failed(native.failure) }, failure: io.linux_failure(native.failure.native) }
+  return NativeSpawn{ value: Child{ handle: native.process, active: !io.failed(native.failure) }, failure: io.linux_failure(native.failure.native) }
 }
 fn wait_native(child: *Child, nonblocking: bool) ExitResult {
   value := os.wait(child.handle, nonblocking)
@@ -43,7 +43,7 @@ fn pipe_native() Pipe {
   return Pipe{ input: descriptors[0], output: descriptors[1] }
 }
 fn read_native(handle: isize, destination: []u8) ReadResult {
-  file := fs.borrow_handle(handle)
+  file := fs.adopt_handle(handle)
   result := fs.read(&file, destination)
   if io.failed(result.failure) && result.failure.native == -11 { return ReadResult{ ok: true } }
   return ReadResult{ count: result.transferred, ended: !io.failed(result.failure) && result.transferred == 0, error: result.failure.native, kind: result.failure.kind, ok: !io.failed(result.failure) }

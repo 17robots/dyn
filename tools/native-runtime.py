@@ -358,12 +358,27 @@ class Assembler:
             r, _ = self.reg(args[0] if source_reg else args[1])
             self.modrm(b'\x0f\x7f' if source_reg else b'\x0f\x6f', r, args[1] if source_reg else args[0], 32,
                        b'\xf3' if op == 'movdqu' else b'\x66'); return
+        if op == 'movd':
+            # movd %r32, %xmm (66 0F 6E) or movd %xmm, %r32 (66 0F 7E).
+            if args[0].startswith('%xmm'):
+                r, _ = self.reg(args[0]); self.modrm(b'\x0f\x7e', r, args[1], 32, b'\x66')
+            else:
+                r, _ = self.reg(args[1]); self.modrm(b'\x0f\x6e', r, args[0], 32, b'\x66')
+            return
+        if op in ('imul', 'imull'):
+            # imul $imm32, source, destination
+            r, width = self.reg(args[2]); self.modrm(b'\x69', r, args[1], width)
+            self.emit(pack('i', int(args[0][1:], 0))); return
+        if op in ('bsf', 'bsfl', 'bsfq'):
+            r, width = self.reg(args[1]); self.modrm(b'\x0f\xbc', r, args[0], width); return
         # SSE forms used by SHA-256: op [$imm,] source, destination. An
         # immediate takes register operands only, so no relocation follows it.
         sse = {'paddd': (b'\x66', b'\x0f\xfe', False), 'pshufb': (b'\x66', b'\x0f\x38\x00', False),
                'pshufd': (b'\x66', b'\x0f\x70', True), 'palignr': (b'\x66', b'\x0f\x3a\x0f', True),
                'pblendw': (b'\x66', b'\x0f\x3a\x0e', True), 'sha256rnds2': (b'', b'\x0f\x38\xcb', False),
-               'sha256msg1': (b'', b'\x0f\x38\xcc', False), 'sha256msg2': (b'', b'\x0f\x38\xcd', False)}
+               'sha256msg1': (b'', b'\x0f\x38\xcc', False), 'sha256msg2': (b'', b'\x0f\x38\xcd', False),
+               'pcmpeqb': (b'\x66', b'\x0f\x74', False), 'pmovmskb': (b'\x66', b'\x0f\xd7', False),
+               'por': (b'\x66', b'\x0f\xeb', False), 'pcmpgtb': (b'\x66', b'\x0f\x64', False)}
         if op in sse:
             prefix, opcode, immediate = sse[op]
             value = int(args.pop(0)[1:], 0) if immediate else None
@@ -1208,6 +1223,8 @@ def main():
     assembler.assemble(ROOT / 'runtime' / ('native_memory_thumb.S' if assembler.thumb else 'native_memory_riscv64.S' if assembler.rv64 else 'native_memory_aarch64.S' if assembler.a64 else 'native_memory_x86_64.S'), defines | ({'DYN_WINDOWS'} if assembler.coff else set()) | ({'DYN_MACOS'} if assembler.macho else set()))
     if not (assembler.thumb or assembler.rv64 or assembler.a64):
         assembler.assemble(ROOT / 'runtime/native_sha256_x86_64.S', defines | ({'DYN_WINDOWS'} if assembler.coff else set()) |
+                           ({'DYN_MACOS'} if assembler.macho else set()))
+        assembler.assemble(ROOT / 'runtime/native_bytes_x86_64.S', defines | ({'DYN_WINDOWS'} if assembler.coff else set()) |
                            ({'DYN_MACOS'} if assembler.macho else set()))
     if assembler.coff and not assembler.a64:
         assembler.assemble(ROOT / 'runtime/native_windows_imports.S')

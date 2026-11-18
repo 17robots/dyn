@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Debug builds check overflow by default: the program's own + - * << and
-negation panic on overflow, std code keeps wrapping, math.wrapping_* never
-checks, --no-check-overflow wraps, and release builds reject --check-overflow."""
+"""Integer arithmetic wraps in every build. --check-overflow opts in, in debug
+and release: the program's own + - * << and negation then panic on overflow,
+std code keeps wrapping and math.wrapping_* never checks."""
 import os
 from pathlib import Path
 import platform
@@ -52,8 +52,8 @@ fn main() {
 with tempfile.TemporaryDirectory(prefix='dyn-check-overflow-') as directory:
     work = Path(directory)
     (work / 'main.dyn').write_text(SOURCE)
-    for checked, flags in ((True, []), (True, ['--check-overflow']), (False, ['--no-check-overflow']),
-                           (False, ['--release'])):
+    for checked, flags in ((False, []), (True, ['--check-overflow']), (False, ['--no-check-overflow']),
+                           (False, ['--release']), (True, ['--release', '--check-overflow'])):
         output = work / ('checked' if checked else 'plain')
         built = subprocess.run([DYN, 'build', *flags, '--no-cache', str(work), '--output', str(output)],
                                capture_output=True, text=True, timeout=120)
@@ -64,10 +64,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-check-overflow-') as directory:
             if checked:
                 assert result.returncode == 101, result
                 assert f'runtime check failed (overflow.ok)' in result.stderr, result.stderr
-                assert f'main.dyn:{line}\n' in result.stderr, (line, result.stderr)
+                # Release builds name the function but carry no line table.
+                assert '--release' in flags or f'main.dyn:{line}\n' in result.stderr, (line, result.stderr)
             else:
                 assert result.returncode == 0 and result.stdout.endswith('bump -2147483648\n'), result
-    rejected = subprocess.run([DYN, 'build', '--release', '--check-overflow', str(work), '--output', str(work / 'r')],
-                              capture_output=True, text=True, timeout=60)
-    assert rejected.returncode == 2 and '--check-overflow is for debug builds' in rejected.stderr, rejected.stderr
-print('PASS overflow checks: debug default checks own arithmetic, std and wrapping_* wrap, opt-out and release wrap')
+print('PASS overflow checks: wrap by default in debug and release; --check-overflow checks own arithmetic in both')

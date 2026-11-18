@@ -11,6 +11,7 @@ use "std/mem" memory
 use "std/strings" text
 use "std/unicode/utf8" utf8
 use "std/bytes"
+use "std/encoding/json/scan"
 
 pub const KindMissing: u8 = 0
 pub const KindNull: u8 = 1
@@ -296,7 +297,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
 
 pub fn kind(value: *const Value) u8 {
   if value == nil { return KindMissing }
-  return #cast(u8, value.tag & 255)
+  return value.tag & 255
 }
 pub fn length(value: *const Value) usize {
   if value == nil { return 0 }
@@ -356,15 +357,10 @@ pub fn at(array: *const Value, index: usize) *const Value {
   return at
 }
 
-// Stop before any byte that needs the full JSON string scanner. The compiler
-// may replace this exact SDK helper with bounded SIMD; other targets use this
-// body, including for short slices and bytes outside printable ASCII.
+// Stop before any byte that needs the full string scanner: a control byte,
+// a byte at or above 128, '"' or '\\'.
 fn ascii_string_prefix(source: []const u8) usize {
-  for i in 0..#len(source) {
-    byte := source[i]
-    if byte < 32 || byte >= 128 || byte == '"' || byte == '\\' { return i }
-  }
-  return #len(source)
+  return scan.text_prefix(source)
 }
 
 fn read_decoded_string(state: *ReadParser) []const u8 {

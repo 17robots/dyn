@@ -44,9 +44,7 @@ pub fn push(s: *Stack($T), value: $T) {
 
 pub fn pop(s: *Stack($T)) Popped(T) {
   used := #len(s.items)
-  if used == 0 {
-    return Popped(T){}
-  }
+  if used == 0 { return Popped(T){} }
   value := s.items[used - 1]
   s.items = s.storage[..used - 1]
   return Popped(T){ value: value, found: true }

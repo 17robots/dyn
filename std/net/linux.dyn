@@ -22,10 +22,11 @@ fn address_family(bytes: []u8, _length: usize, family: usize) {
   bytes[0] = #cast(u8, family)
 }
 fn read_family(bytes: []const u8) usize {
-  return #cast(usize, bytes[0])
+  return bytes[0]
 }
+// SOCK_CLOEXEC: sockets, like files, do not leak into spawned programs.
 fn native_socket(family: usize, kind: usize, protocol: usize) isize {
-  return #syscall(sys.Socket, family, kind, protocol)
+  return #syscall(sys.Socket, family, kind | 524288, protocol)
 }
 fn native_close(descriptor: isize) isize {
   return #syscall(sys.Close, descriptor)
@@ -42,8 +43,11 @@ fn native_connect(descriptor: isize, address: *const u8, length: usize) isize {
 fn native_bind(descriptor: isize, address: *const u8, length: usize) isize {
   return #syscall(sys.Bind, descriptor, address, length)
 }
-fn native_accept(descriptor: isize, address: *u8, length: *u32) isize {
-  return #syscall(sys.Accept, descriptor, address, length)
+// One accept4 sets SOCK_CLOEXEC, and SOCK_NONBLOCK when asked.
+fn native_accept(descriptor: isize, address: *u8, length: *u32, nonblocking: bool) isize {
+  flags: usize = 524288
+  if nonblocking { flags = flags | 2048 }
+  return #syscall(sys.Accept4, descriptor, address, length, flags)
 }
 fn native_local(descriptor: isize, address: *u8, length: *u32) isize {
   return #syscall(sys.Getsockname, descriptor, address, length)

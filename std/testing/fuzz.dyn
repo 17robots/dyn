@@ -39,7 +39,7 @@ fn mutate(generator: *Random, sample: []u8, length: usize, corpus: []const []con
     return length
   }
   if choice == 1 {
-    sample[random_below(generator, length)] = #cast(u8, random_next(generator) & 255)
+    sample[random_below(generator, length)] = random_next(generator) & 255
     return length
   }
   if choice == 2 {
@@ -63,7 +63,7 @@ fn mutate(generator: *Random, sample: []u8, length: usize, corpus: []const []con
       sample[index] = sample[index - 1]
       index -= 1
     }
-    sample[at] = #cast(u8, random_next(generator) & 255)
+    sample[at] = random_next(generator) & 255
     return length + 1
   }
   if choice == 5 && length != 0 && length < capacity {
@@ -123,7 +123,7 @@ pub fn fuzz(options: FuzzOptions, corpus: []const []const u8, work: []u8,
     } else {
       length = random_below(&generator, capacity + 1)
       for i in 0..length {
-        sample[i] = #cast(u8, random_next(&generator) & 255)
+        sample[i] = random_next(&generator) & 255
       }
     }
     rounds := 1 + random_below(&generator, 4)

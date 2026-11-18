@@ -1,37 +1,26 @@
 use "std/mem" memory
 use "std/io" io
-// File{} is unopened. Owners must not be copied: transfer with take(), or borrow().
-// Borrowed files never close the underlying handle. Their owner must outlive them.
-pub struct File { descriptor: isize, active: bool, owned: bool }
+// A file handle is a plain value: copy it freely, and close it once. Closing
+// marks the value it was called on as closed; other copies still hold the
+// number, which the system may reuse for the next file opened. File{} is
+// not open.
+pub struct File { descriptor: isize, active: bool }
 pub type FileResult = io.Result(File)
 pub struct Result { transferred: usize, failure: io.Failure }
 pub type OffsetResult = io.Count
 pub type ReadAllResult = io.Bytes
 fn owned_file(handle: isize) File {
-  return File{ descriptor: handle, active: true, owned: true }
+  return File{ descriptor: handle, active: true }
 }
 pub fn is_open(file: *const File) bool {
   return file.active && native_valid(file.descriptor)
 }
-// Adopt transfers responsibility for a native handle to the returned owner.
+// A File for a native handle opened elsewhere; close it once, or not at all
+// when something else will.
 pub fn adopt_handle(handle: isize) File {
   if !native_valid(handle) { return File{} }
   return owned_file(handle)
 }
-pub fn borrow_handle(handle: isize) File {
-  if !native_valid(handle) { return File{} }
-  return File{ descriptor: handle, active: true }
-}
-pub fn borrow(file: *const File) File {
-  if !is_open(file) { return File{} }
-  return borrow_handle(file.descriptor)
-}
-pub fn take(file: *File) File {
-  result := file.*
-  file.* = File{}
-  return result
-}
-
 pub fn open(path: []const u8) FileResult {
   return native_open(path, 0)
 }
@@ -48,7 +37,7 @@ fn failure(code: isize) Result {
   return Result{ failure: io.Failure{ kind: native_kind(code), native: code } }
 }
 pub fn close(file: *File) {
-  if !is_open(file) || !file.owned { return }
+  if !is_open(file) { return }
   handle := file.descriptor
   // Never retry close on a possibly reused native handle, including after EINTR.
   file.* = File{}

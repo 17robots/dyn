@@ -564,7 +564,7 @@ static void *sema_worker(void *argument) {
   k.sema.program = &k.w;
   k.sema.locals = (SemaNames){0}; k.sema.indexed_locals = 0;
   k.sema.active_loops = NULL; k.sema.active_loop_count = k.sema.active_loop_capacity = 0;
-  k.sema.mem_kinds = NULL; k.sema.mem_kind_count = 0; k.sema.late_vet = NULL;
+  k.sema.late_vet = NULL;
   memset(&sema_report, 0, sizeof(sema_report));
   sema_work = &k;
   for (;;) {

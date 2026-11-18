@@ -163,22 +163,19 @@ not follow it. Earlier independent arena allocations remain at their addresses.
 
 Arenas are the only owners of memory. Everything else that must be cleaned up,
 such as files, sockets, child processes, threads, watchers, loaded libraries and
-TLS objects, is a handle: a plain value naming an outside resource. Ownership
-of handles stays a programmer discipline, with these conventions:
+TLS objects, is a handle: a plain value naming an outside resource, as in C,
+Go or Odin. Copy a handle freely; close it once.
 
-- Each handle has one owner, the variable that will close it. Pass `*T` to
-  borrow it; never keep a second copy that might also close it.
-- `take(&owner)` (`fs.take`, `process.take`, `net.listener_take`,
-  `net.connection_take`) moves the handle out and leaves the
-  source closed, so only the result can close it.
-- `close(&handle)` for OS resources clears the handle before returning, even
-  on failure. Never retry a failed close: the OS may already have reused the descriptor. A second close of
-  the same variable is harmless (it reports `InvalidState` or does nothing).
-- Close each handle once, usually with `defer` right after a successful open.
-- `dyn vet` warns when code copies an arena or a std handle struct (`fs.File`,
-  `watch.Watcher`, `process.Child`, `thread.Thread`, `net.Listener`,
-  `net.Connection`). Handles that are raw pointers, such as `dynlib.Handle`
-  and the TLS types, cannot be tracked; follow the conventions by hand.
+- `close(&handle)` for OS resources clears that variable before returning,
+  even on failure, so a second close of the same variable does nothing.
+  Never retry a failed close: the OS may already have reused the descriptor.
+- Other copies keep the old number. Closing one of them too, or using it
+  after the close, reaches whatever the system opened next under that number.
+  Decide which variable closes the handle, usually with `defer` right after
+  a successful open, and pass `*T` to code that only uses it.
+- `dyn vet` warns about the obvious case: a variable copied with `=` and
+  both copies then passed to the same function, as in
+  `copy := file`, `fs.close(&file)`, `fs.close(&copy)`.
 
 ## Lifetimes
 

@@ -67,6 +67,10 @@ Every response carries `Date`, formatted once per loop pass by the server.
 `1xx`, `204` and `304` heads carry no `Content-Type` or `Content-Length`, and
 `respond` rejects a body for them.
 
+`evented` is the one server. Outside it, `http.serve_stream` runs a handler
+over any `io.Reader` and `io.Writer` pair, one request at a time on the
+calling thread: for a single-threaded or embedded server, or a test.
+
 ## Sessions and CSRF
 
 `std/net/http/session` handles cookie sessions in front of your own store,
@@ -358,6 +362,31 @@ tells a duplicate key from other errors. `first` stops at the first row,
 (copied into an arena) read columns. Copy borrowed bytes before the next
 step. See [sqlite.md](sqlite.md).
 
+Every connection to the file can read at once, but only one can write. Give
+the app one `sync.Mutex` and hold it around each write or transaction:
+writers then take turns in microseconds. Without it they meet SQLite's file
+lock, and `sqlite.open_schema`'s busy handler (`sqlite.busy_wait`, retrying
+from 20 microseconds up to 1 millisecond apart) keeps them correct but slower:
+Chirp's creates ran at 119k per second that way and 191k with the mutex.
+
+## Caching across workers
+
+Each worker can keep its own copy of something built from shared data, such
+as a rendered list, without locks. `std/cache` keeps them current: the
+writer calls `cache.changed(&app.posts)` after a write, and a worker checks
+before using its copy.
+
+```dyn
+seen := cache.stale(&worker.posts, &app.posts)
+if seen != 0 {
+  // rebuild the worker's copy
+  cache.rebuilt(&worker.posts, seen)
+}
+```
+
+`seen` is read before the rebuild, so a write that lands during it leaves
+the copy stale for the next request. The session cache works the same way.
+
 ## Logging
 
 Set `Config.access_log` to a `log.Logger` and the server writes one line per
@@ -365,13 +394,21 @@ answered request: client, method, path, status and the microseconds spent in
 the handler (and its finish, for `run` and `later`). `log.write` sends a line
 in one write, so workers' lines do not interleave.
 
+A handler that blocks (a slow query, file I/O, password hashing) stalls
+every connection on its worker. Set `Config.slow_handler_microseconds` and
+the server warns about each handler that runs that long, with method, path
+and time, in the access log or on standard error; move that work to `run`.
+
 ## Shutdown
 
 `evented.serve` watches SIGINT and SIGTERM, serves, then stops the workers
 and waits for them: workers close their connections and wait for running
-jobs. Close the database after it returns. To run more than the server, call
-`signal.watch` on the main thread yourself, then `start_shared`,
-`signal.wait`, `evented.stop` and `evented.join`. Threads from `std/thread`
+jobs. Close the database after it returns. On Linux every worker gets its
+own `SO_REUSEPORT` listener; where the kernel cannot balance those (macOS,
+Windows) the workers share one. To run more than the server, call
+`signal.watch` on the main thread yourself, then `start_shared` (Linux) or
+`start` with your own listener, `signal.wait`, `evented.stop` and
+`evented.join`. Threads from `std/thread`
 and `std/thread/posix` start with SIGINT, SIGTERM and SIGHUP blocked, so a
 pool started earlier cannot take the signal.
 
@@ -427,6 +464,11 @@ whose window is closed is reset. Headers are HPACK-compressed
 static indexes and Huffman-coded literals.
 
 ## HTTP/3
+
+Experimental. HTTP/3 is off unless `Config.http3` is set, and one test
+covers it, which needs OpenSSL 3.5 and a curl built with HTTP/3. Use
+HTTP/2 over TLS for production; most deployments put a proxy in front for
+HTTP/3 anyway.
 
 Set `Config.http3` (with `Config.http2`) and give `Config.quic` a QUIC stack:
 `https.quic(https.quic_context(arena, "cert.pem", "key.pem").value)` from

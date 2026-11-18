@@ -668,7 +668,7 @@ static void vet_unused_imports(DynSources *sources, const size_t *owners) {
     const char *path, *text;
     size_t length, at;
     dyn_source_position(source, 0, &path, &text, &length, &at);
-    if (path && (strstr(path, "/std/") || strstr(path, "/share/dyn/") || strstr(path, "/vendor/"))) continue;
+    if (dyn_path_in_library(path)) continue;
     DynImports reader;
     if (!dyn_imports_open(&reader, source)) continue;
     DynImportView view;

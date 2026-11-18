@@ -17,6 +17,7 @@ static bool compact_add_enum_names(const DynSource *s, DynAstProgram *a,
       }
     }
     DynSpan ns = compact_span(name);
+    if (report_reserved_name(ns, s, errors)) continue;
     if (find_enum(a, ns, s) != UINT32_MAX) {
       compact_report(name, s, errors, "duplicate enum declaration");
       continue;
@@ -58,6 +59,7 @@ static bool compact_add_struct_names(const DynSource *s, DynAstProgram *a,
       continue;
     CompactNode name = compact_child(d, 0);
     DynSpan ns = compact_span(name);
+    if (report_reserved_name(ns, s, errors)) continue;
     if (find_struct(a, ns, s) != UINT32_MAX) {
       compact_report(name, s, errors, "duplicate struct declaration");
       continue;
@@ -341,6 +343,7 @@ static bool compact_add_globals(const DynSource *s, DynAstProgram *a,
                           : compact_child(v, 0),
            tq = {0}, init = {0};
     DynSpan ns = compact_span(name);
+    if (report_reserved_name(ns, s, errors)) continue;
     if (find_global(globals, a, ns, s) != UINT32_MAX ||
         find_struct(a, ns, s) != UINT32_MAX) {
       compact_report(name, s, errors, "duplicate declaration name");
@@ -529,6 +532,7 @@ static bool compact_add_function_signatures(const DynSource *s,
       continue;
     CompactNode name = compact_field(d, EXP_ROLE_NAME);
     DynSpan ns = compact_span(name);
+    if (report_reserved_name(ns, s, errors)) continue;
     if (find_function(index, a, ns, s) != UINT32_MAX ||
         find_struct(a, ns, s) != UINT32_MAX ||
         find_global(globals, a, ns, s) != UINT32_MAX) {

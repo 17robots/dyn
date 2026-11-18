@@ -49,13 +49,13 @@ with tempfile.TemporaryDirectory(prefix='dyn-arena-strings-') as temporary:
     project = Path(temporary)
     (project / 'main.dyn').write_text(SOURCE)
     # Misuse and exhaustion panic instead of returning a result.
-    # A literal template that does not match its arguments fails to compile.
+    # dyn vet reports a literal template that does not match its arguments.
     mismatch = project / 'template'
     mismatch.mkdir()
     (mismatch / 'main.dyn').write_text('use "std/mem" mem\nuse "std/strings" strings\nuse "std/bytes"\n\nfn main() {\n'
                                        '  arena := mem.arena_alloc(0)\n  _ = strings.format(arena, "{} {}", 1)\n}\n')
-    checked = subprocess.run([DYN, 'check', str(mismatch)], cwd=ROOT, capture_output=True, text=True, timeout=60)
-    assert checked.returncode != 0 and 'format template has 2 {} but the call passes 1 argument' in checked.stderr, checked.stderr
+    checked = subprocess.run([DYN, 'vet', str(mismatch)], cwd=ROOT, capture_output=True, text=True, timeout=60)
+    assert checked.returncode != 0 and 'format template has 2 {} but the call passes 1 value' in checked.stderr, checked.stderr
     for name, body in (('separator', 'strings.split(arena, "a,b", "")'),
                        ('exhausted', 'strings.format(arena, "{}", "too long for eight")')):
         panic = project / name

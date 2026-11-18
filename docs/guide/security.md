@@ -1,8 +1,9 @@
 # Security model and review checklist
 
 Dyn keeps allocation, ownership, foreign calls, and unsafe pointer conversion visible. Bounds,
-nil, alignment, shift, division, and integer-overflow checks remain enabled in release builds unless
-the compiler proves them redundant. Arenas improve lifetime organization but do not prevent stale
+nil, alignment and division checks remain enabled in release builds unless the compiler proves
+them redundant. Integer arithmetic wraps and shift counts are masked in every build;
+`--check-overflow` adds overflow checks to the program's own code. Arenas improve lifetime organization but do not prevent stale
 slices, aliasing mistakes, data races, or incorrect foreign layouts.
 
 Trust boundaries:

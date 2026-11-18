@@ -1,17 +1,18 @@
 #ifndef DYN_LIFETIME_H
 #define DYN_LIFETIME_H
-/* Conservative straight-line provenance. Branch/loop joins discard facts rather * than diagnosing a possible path as a proven error. This is not a borrow checker. */
-typedef struct { bool stack, expired; uint32_t arena, address; } LifeValue;
+/* Conservative straight-line provenance of addresses into a function's own
+   frame. Branch and loop joins discard facts rather than diagnosing a
+   possible path as a proven error. This is not a borrow checker, and it knows
+   no library function by name. */
+typedef struct { bool stack; uint32_t address; } LifeValue;
 typedef struct { uint32_t local, field; LifeValue value; } LifeField;
 typedef struct {
   Sema *sema; DynAstProgram *a; const DynSource *source; unsigned *errors;
-  uint32_t first, count; LifeValue *locals;
+  uint32_t first, count, params; LifeValue *locals;
   LifeField *fields; size_t field_count, field_capacity;
 } Life;
 static LifeValue life_join(LifeValue a, LifeValue b) {
-  a.stack |= b.stack; a.expired |= b.expired;
-  if (!a.arena) a.arena = b.arena;
-  else if (b.arena && a.arena != b.arena) a.arena = 0;
+  a.stack |= b.stack;
   if (!a.address) a.address = b.address;
   else if (b.address && a.address != b.address) a.address = 0;
   return a;
@@ -29,112 +30,8 @@ static bool life_borrow_type(DynAstProgram *a, DynType t, unsigned depth) {
   }
   return false;
 }
-static const char *const life_mem_names[] = {
-  "arena_push_or_panic", "arena_push_uninit_or_panic", "arena_push", "arena_push_uninit",
-  "arena_push_array", "push", "push_array", "push_bytes_uninit", "arena_rewind",
-  "arena_from_buffer", "arena_reset"};
-/* Which std/mem function a callee is. Mapping a span back to its file is a linear search, so each function is classified once and cached. */
-static uint8_t life_mem_kind(Life *l, uint64_t function) {
-  Sema *sema = l->sema;
-  if (function >= sema->mem_kind_count) {
-    size_t count = l->a->function_count;
-    uint8_t *grown = realloc(sema->mem_kinds, count);
-    if (!grown) { l->a->allocation_failed = true; return 1; }
-    memset(grown + sema->mem_kind_count, 0, count - sema->mem_kind_count);
-    sema->mem_kinds = grown; sema->mem_kind_count = count;
-  }
-  if (sema->mem_kinds[function]) return sema->mem_kinds[function];
-  uint8_t kind = 1;
-  DynSpan span=l->a->functions[function].name;
-  const char *path,*text; size_t n,at;
-  dyn_source_position(l->source,span.start_byte,&path,&text,&n,&at);
-  if (path && (strstr(path,"/std/mem/") || strstr(path,"/share/dyn/mem/")))
-    for (size_t i=0;i<sizeof(life_mem_names)/sizeof(*life_mem_names);++i) {
-      size_t z=strlen(life_mem_names[i]);
-      if (at+z<=n && !memcmp(text+at,life_mem_names[i],z) &&
-          (at+z==n || !(isalnum((unsigned char)text[at+z]) || text[at+z]=='_'))) { kind = (uint8_t)(2+i); break; }
-    }
-  return sema->mem_kinds[function] = kind;
-}
-static bool life_mem_call(Life *l, DynAstExpr *e, const char *name) {
-  if (e->kind != DYN_EXPR_CALL || e->integer >= l->a->function_count) return false;
-  uint8_t kind = life_mem_kind(l, e->integer);
-  return kind >= 2 && !strcmp(life_mem_names[kind-2], name);
-}
-/* Arena pushes; the first argument is the arena. */
-static bool life_push_call(Life *l, DynAstExpr *e) {
-  static const char *names[]={"arena_push_or_panic","arena_push_uninit_or_panic","arena_push", "arena_push_uninit","arena_push_array","push","push_array","push_bytes_uninit"};
-  for (size_t i=0;i<sizeof(names)/sizeof(*names);++i) if (life_mem_call(l,e,names[i])) return true;
-  return false;
-}
-static bool life_zero_rewind(Life *l, DynAstExpr *e) {
-  if (!life_mem_call(l, e, "arena_rewind") || e->item_count != 2) return false;
-  DynExprId id = l->a->items[e->item_start + 1].expression;
-  if (id == DYN_NO_EXPR || id >= l->a->expression_count) return false;
-  DynAstExpr *mark = &l->a->expressions[id];
-  return mark->kind == DYN_EXPR_INT && mark->integer == 0;
-}
-static void life_invalidate(Life *l,uint32_t arena) {
-  if (!arena) return;
-  for (uint32_t i=0;i<l->count;++i) if (l->locals[i].arena==arena) l->locals[i].expired=true;
-  for (size_t i=0;i<l->field_count;++i) if (l->fields[i].value.arena==arena) l->fields[i].value.expired=true;
-}
 static LifeValue life_expr(Life *,DynExprId,unsigned);
 static void life_forget(Life *l);
-/* Std types whose copies share one owned resource. Arenas own memory; the
-   others hold OS handles that must be closed once. */
-typedef enum { LIFE_NOT_OWNER, LIFE_ARENA_OWNER, LIFE_HANDLE_OWNER } LifeOwner;
-static LifeOwner life_owner(Life *l, DynType type) {
-  static const struct { const char *module, *name; LifeOwner kind; } owners[] = {
-    {"mem/", "Arena", LIFE_ARENA_OWNER},
-    {"fs/", "File", LIFE_HANDLE_OWNER}, {"fs/watch/", "Watcher", LIFE_HANDLE_OWNER},
-    {"process/", "Child", LIFE_HANDLE_OWNER}, {"thread/", "Thread", LIFE_HANDLE_OWNER},
-    {"net/", "Listener", LIFE_HANDLE_OWNER}, {"net/", "Connection", LIFE_HANDLE_OWNER},
-  };
-  if (!dyn_type_is_struct(type)) return LIFE_NOT_OWNER;
-  DynSpan name = l->a->structs[type - DYN_TYPE_STRUCT_BASE].name;
-  const char *path, *text; size_t length, at;
-  dyn_source_position(l->source, name.start_byte, &path, &text, &length, &at);
-  if (!path) return LIFE_NOT_OWNER;
-  for (size_t i = 0; i < sizeof(owners) / sizeof(*owners); ++i) {
-    char std_dir[64], share_dir[64];
-    snprintf(std_dir, sizeof(std_dir), "/std/%s", owners[i].module);
-    snprintf(share_dir, sizeof(share_dir), "/share/dyn/%s", owners[i].module);
-    const char *found = strstr(path, std_dir);
-    size_t prefix = strlen(std_dir);
-    if (!found) { found = strstr(path, share_dir); prefix = strlen(share_dir); }
-    /* The struct must be declared directly in that module directory. */
-    if (!found || strchr(found + prefix, '/')) continue;
-    size_t n = strlen(owners[i].name);
-    if (at + n <= length && !memcmp(text + at, owners[i].name, n) &&
-        (at + n == length || !(isalnum((unsigned char)text[at+n]) || text[at+n] == '_')))
-      return owners[i].kind;
-  }
-  return LIFE_NOT_OWNER;
-}
-static void life_warn_copy(Life *l, DynAstStmt *statement) {
-  if (!l->source->context.vet || statement->expression == DYN_NO_EXPR) return;
-  if (statement->kind != DYN_STMT_LOCAL && statement->kind != DYN_STMT_ASSIGN) return;
-  DynAstExpr *value = &l->a->expressions[statement->expression];
-  if (value->kind != DYN_EXPR_NAME && value->kind != DYN_EXPR_FIELD &&
-      !(value->kind == DYN_EXPR_UNARY && value->op == DYN_OP_DEREF)) return;
-  LifeOwner owner = life_owner(l, value->type);
-  if (owner == LIFE_NOT_OWNER) return;
-  // Only assignment destinations copy a value; `_ = arena` does not create an owner.
-  if (statement->kind == DYN_STMT_ASSIGN && statement->target == DYN_NO_EXPR &&
-      discard_name(statement->name, l->source)) return;
-  const char *path, *text; size_t length, at;
-  dyn_source_position(l->source, statement->span.start_byte, &path, &text, &length, &at);
-  // The standard library implements these types and transfers them deliberately.
-  if (path && (strstr(path, "/std/") || strstr(path, "/share/dyn/"))) return;
-  dyn_diagnostic_source("warning", l->source,
-      statement->span.start_byte, statement->span.end_byte,
-      owner == LIFE_ARENA_OWNER
-        ? "copying an arena descriptor duplicates mutable allocation state; borrow its address or transfer ownership explicitly"
-        : "copying a handle duplicates an OS resource that must be closed once; borrow its address or transfer it with take");
-  if (l->sema->late_vet) ++*l->sema->late_vet;
-  else if (l->source->context.vet_findings) ++*l->source->context.vet_findings;
-}
 static LifeValue life_field(Life *l,uint32_t local,uint32_t field) {
   for (size_t i=l->field_count;i;--i) if(l->fields[i-1].local==local && l->fields[i-1].field==field) return l->fields[i-1].value;
   LifeValue *v=life_local(l,local); return v ? *v : (LifeValue){0};
@@ -161,55 +58,63 @@ static LifeValue life_expr(Life *l,DynExprId id,unsigned depth) {
   } else if(e->kind==DYN_EXPR_UNARY && e->op==DYN_OP_ADDRESS && a->expressions[e->left].kind==DYN_EXPR_NAME) {
     uint32_t local=(uint32_t)a->expressions[e->left].integer;
     v.stack=life_local(l,local)!=NULL;v.address=local+1;
+  } else if(e->kind==DYN_EXPR_UNARY && e->op==DYN_OP_ADDRESS && a->expressions[e->left].kind==DYN_EXPR_STRUCT) {
+    /* &T{...} lives in this function's frame, like a local. */
+    v=life_expr(l,e->left,depth+1);v.stack=true;
   } else {
     LifeValue left=life_expr(l,e->left,depth+1), right=life_expr(l,e->right,depth+1);
     bool view=e->kind==DYN_EXPR_SLICE || e->kind==DYN_EXPR_CAST || e->kind==DYN_EXPR_CONVERT || e->kind==DYN_EXPR_BITCAST || e->kind==DYN_EXPR_FIELD || e->kind==DYN_EXPR_INDEX || e->kind==DYN_EXPR_UNARY;
     if(view && life_borrow_type(a,e->type,0)) v=left;
+    (void)right;
     if(returns_local_borrow(l->sema,a,id)) v.stack=true;
-    if(left.expired || right.expired) v.expired=true;
     for(uint32_t i=0;i<e->item_count;++i) {
       LifeValue item=life_expr(l,a->items[e->item_start+i].expression,depth+1);
       if(e->kind==DYN_EXPR_STRUCT || e->kind==DYN_EXPR_ARRAY || e->kind==DYN_EXPR_ENUM) v=life_join(v,item);
-      else if(item.expired) v.expired=true;
     }
-    if(e->kind==DYN_EXPR_CALL && e->item_count) {
-      DynExprId first_id=a->items[e->item_start].expression;
-      LifeValue first=life_expr(l,first_id,depth+1);
-      /* An arena is named by the local that holds it: an Arena value passed
-         by address, or a *Arena handle passed directly. */
-      uint32_t arena=first.address;
-      if(!arena && first_id<a->expression_count && a->expressions[first_id].kind==DYN_EXPR_NAME &&
-         life_local(l,(uint32_t)a->expressions[first_id].integer))
-        arena=(uint32_t)a->expressions[first_id].integer+1;
-      bool push=life_push_call(l,e);
-      if(push) {
-        v.arena=arena;v.stack=false;
-        LifeValue *backing=arena ? life_local(l,arena-1) : NULL;
-        if(backing) v.stack=backing->stack;
-      }
-      if(life_mem_call(l,e,"arena_from_buffer")) v.stack=first.stack;
-      if(life_mem_call(l,e,"arena_reset") || life_zero_rewind(l,e)) life_invalidate(l,arena);
-      /* Unknown callees may mutate any address-exposed local or alias. */
-      if (!push &&
-          !life_mem_call(l,e,"arena_from_buffer") && !life_mem_call(l,e,"arena_reset") && !life_zero_rewind(l,e)) life_forget(l);
-      /* Rewind invalidates only a suffix; without allocation offsets it is
-       * unsound to mark every arena pointer expired. Release may fail. */
-    }
+    /* A callee may change any address-exposed local or alias. */
+    if(e->kind==DYN_EXPR_CALL) life_forget(l);
   }
-  if (e->kind==DYN_EXPR_LEN) v.expired=false; /* Descriptor length does not read backing storage. */
-  if (!life_borrow_type(a,e->type,0)) { v.stack=false; v.arena=0; v.address=0; }
-  if (e->kind==DYN_EXPR_CALL && !e->item_count) life_forget(l);
+  if (!life_borrow_type(a,e->type,0)) { v.stack=false; v.address=0; }
   return v;
 }
 static void life_forget(Life *l) { memset(l->locals,0,l->count*sizeof(*l->locals)); l->field_count=0; }
+/* Whether a pointer comes from outside this call: a parameter, a global, or
+   a pointer read through one of them. Pointers made in the function are
+   unknown here, so they never count. */
+static bool life_outside_pointer(Life *l,DynExprId id,unsigned depth) {
+  DynAstProgram *a=l->a;
+  if(id==DYN_NO_EXPR || id>=a->expression_count || depth>64) return false;
+  DynAstExpr *e=&a->expressions[id];
+  if(e->kind==DYN_EXPR_NAME) return e->integer>=l->first && e->integer<(uint64_t)l->first+l->params;
+  if(e->kind==DYN_EXPR_GLOBAL) return true;
+  if(e->kind==DYN_EXPR_FIELD || e->kind==DYN_EXPR_INDEX || e->kind==DYN_EXPR_CONVERT || e->kind==DYN_EXPR_CAST ||
+     (e->kind==DYN_EXPR_UNARY && e->op==DYN_OP_DEREF))
+    return life_outside_pointer(l,e->left,depth+1);
+  return false;
+}
+/* Whether a write to target lands where the caller or a global can see it. */
+static bool life_target_escapes(Life *l,DynExprId id,unsigned depth) {
+  DynAstProgram *a=l->a;
+  if(id==DYN_NO_EXPR || id>=a->expression_count || depth>64) return false;
+  DynAstExpr *e=&a->expressions[id];
+  if(e->kind==DYN_EXPR_GLOBAL) return true;
+  if(e->kind==DYN_EXPR_UNARY && e->op==DYN_OP_DEREF) return life_outside_pointer(l,e->left,depth+1);
+  if(e->kind==DYN_EXPR_FIELD) {
+    if(dyn_type_is_pointer(a->expressions[e->left].type)) return life_outside_pointer(l,e->left,depth+1);
+    return life_target_escapes(l,e->left,depth+1);
+  }
+  if(e->kind==DYN_EXPR_INDEX) {
+    if(dyn_type_is_array(a->expressions[e->left].type)) return life_target_escapes(l,e->left,depth+1);
+    return life_outside_pointer(l,e->left,depth+1);
+  }
+  return false;
+}
 static void life_block(Life *l,uint32_t start,uint32_t count,unsigned depth) {
   if(depth>128) { life_forget(l); return; }
   for(uint32_t i=0;i<count && dyn_work_step(&l->source->context,1);++i) {
     DynAstStmt *st=&l->a->statements[l->a->children[start+i]];
-    life_warn_copy(l, st);
     if(st->kind==DYN_STMT_DEFER) { life_forget(l); continue; }
     LifeValue value=life_expr(l,st->expression,0);
-    if(value.expired) error_span(st->span,l->source,l->errors,"use of storage after arena_reset or arena_rewind to zero");
     if(st->kind==DYN_STMT_RETURN) {
       if(value.stack && !returns_local_borrow(l->sema,l->a,st->expression))
         error_span(st->span,l->source,l->errors,"returned value borrows function-local storage through an alias");
@@ -259,17 +164,20 @@ static void life_block(Life *l,uint32_t start,uint32_t count,unsigned depth) {
       }
     } else if(st->kind == DYN_STMT_ASSIGN && st->target != DYN_NO_EXPR) {
       DynAstExpr *target = &l->a->expressions[st->target];
-      LifeValue dest=life_expr(l,st->target,0);
+      (void)life_expr(l,st->target,0);
       bool direct_field= target->kind == DYN_EXPR_FIELD && !target->boolean && l->a->expressions[target->left].kind == DYN_EXPR_NAME;
-      if(dest.expired && !direct_field) error_span(st->span,l->source,l->errors,"write to storage after arena_reset or arena_rewind to zero");
       if(direct_field) life_set_field(l,(uint32_t)l->a->expressions[target->left].integer,(uint32_t)target->integer,value);
-      else life_forget(l); /* An indirect write may replace tracked provenance. */
+      else {
+        if(value.stack && life_target_escapes(l,st->target,0))
+          error_span(st->span,l->source,l->errors,"stores the address of function-local storage where it outlives the function");
+        life_forget(l); /* An indirect write may replace tracked provenance. */
+      }
     }
   }
 }
 static void life_check_function(Sema *sema,DynAstProgram *a,const DynSource *s,unsigned *errors,DynAstFn *fn) {
   if(*errors || !fn->local_count) return;
-  Life l = {.sema=sema,.a=a,.source=s,.errors=errors,.first=fn->local_start,.count=fn->local_count};
+  Life l = {.sema=sema,.a=a,.source=s,.errors=errors,.first=fn->local_start,.count=fn->local_count,.params=fn->param_count};
   l.locals = calloc(l.count,sizeof(*l.locals));
   if(!l.locals) {
     a->allocation_failed = true;

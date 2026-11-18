@@ -77,7 +77,7 @@ fn modulo(output: []u8, wide: [64]i64) {
   }
   for i in 0..32 {
     x[i+1]+=x[i]>>8
-    output[i]=#cast(u8, x[i]&255)
+    output[i]=x[i]&255
   }
 }
 fn reduce(hash: []u8) {

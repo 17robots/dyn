@@ -56,9 +56,6 @@ typedef enum {
   SO_COPYMEM,    /* copy aux bytes from b to a, as memmove */
   SO_ZEROMEM,    /* zero aux bytes at a */
   SO_FILLMEM,    /* x86 only: fill aux bytes at global address a with byte aux2 */
-  SO_FIND_BYTE,  /* x86 only: first c byte in a[0..b], or b; memory read */
-  SO_FIND,       /* x86 only: four list operands: hay ptr/len, needle ptr/len */
-  SO_JSON_ASCII_PREFIX, /* x86 only: safe JSON ASCII prefix in a[0..b]; memory read */
   SO_BYTE_COUNT, /* x86 only: count predicate matches in a[0..b], starting at c */
   SO_AXPY,       /* x86 only: dst[i] +/- v * src[i]; a: frame {dst, src, count, v}; aux: bytes, aux2: operator */
   SO_SUM,        /* x86 only: wrapping sum of a[0..b] from c; aux: bytes, aux2: bit 0 squares, bit 1 signed */
@@ -383,7 +380,7 @@ static int32_t ssa_value(Ssa *s, uint32_t block, SsaOp op, uint8_t cls, int32_t 
   v->pos = s->pos;
   v->block = block; v->reg = v->slot = -1; v->hint = -1; v->scale = 1;
   v->effect = op == SO_CHECK || op == SO_CHECK_SHL || op == SO_ADDO || op == SO_SUBO || op == SO_MULO ||
-              op == SO_LOAD || op == SO_STORE || op == SO_CALL || op == SO_COPYMEM || op == SO_ZEROMEM || op == SO_FILLMEM || op == SO_FIND_BYTE || op == SO_FIND || op == SO_JSON_ASCII_PREFIX || op == SO_BYTE_COUNT || op == SO_SUM || op == SO_AXPY || op == SO_COPYN || op == SO_VLOOP ||
+              op == SO_LOAD || op == SO_STORE || op == SO_CALL || op == SO_COPYMEM || op == SO_ZEROMEM || op == SO_FILLMEM || op == SO_BYTE_COUNT || op == SO_SUM || op == SO_AXPY || op == SO_COPYN || op == SO_VLOOP ||
               op == SO_PANIC || op == SO_DIV || op == SO_REM || op == SO_RESULT || op == SO_PARAM || op == SO_VECTOR || op == SO_TRAP || op == SO_FAIL || op == SO_CONTINUE;
   return (int32_t)s->value_count++;
 }
@@ -860,6 +857,13 @@ static int32_t ssa_unary(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned d
   if (e->op == DYN_OP_ADDRESS) {
     if (e->left < ir->expression_count && ir->expressions[e->left].kind == DYN_EXPR_FUNCTION)
       return ssa_expr(s, e->left, NULL, depth + 1);
+    /* &T{...} may be written through: the literal gets its own frame slot,
+       never the shared read-only copy of a constant literal. */
+    if (e->left < ir->expression_count && ir->expressions[e->left].kind == DYN_EXPR_STRUCT) {
+      int32_t literal = ssa_temporary(s, ir->expressions[e->left].type);
+      ssa_initialize(s, literal, ir->expressions[e->left].type, e->left, depth + 1);
+      return literal;
+    }
     int32_t address = ssa_address(s, e->left, depth + 1);
     uint32_t size, alignment;
     if (!s->failed && address >= 0 && e->left < ir->expression_count && ir->expressions[e->left].kind == DYN_EXPR_INDEX &&
@@ -1539,74 +1543,6 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
       pack_type = ir->slices[callee->variadic_type - DYN_TYPE_SLICE_BASE].element;
     }
   }
-  if (callee && !ctx->debug_mode && !ctx->dwarf && callee->byte_intrinsic == DYN_BYTE_INTRINSIC_FIND &&
-      !ctx->a64 && !ctx->rv64 && !ctx->rv32 && !ctx->t32) {
-    if (callee->variadic || callee->return_type != DYN_TYPE_USIZE || result != DYN_TYPE_USIZE ||
-        callee->param_count != 2 || e->item_count != 2 ||
-        (uint64_t)callee->param_start + 2 > ir->param_count) { SSA_GIVE_UP(s); return 0; }
-    DynExprId arguments[2];
-    for (unsigned i = 0; i < 2; ++i) {
-      DynType type = ir->params[callee->param_start + i].type;
-      arguments[i] = ir->items[e->item_start + i].expression;
-      if (!dyn_type_is_slice(type) || type - DYN_TYPE_SLICE_BASE >= ir->slice_count ||
-          ir->slices[type - DYN_TYPE_SLICE_BASE].element != DYN_TYPE_U8 ||
-          !ir->slices[type - DYN_TYPE_SLICE_BASE].is_const ||
-          arguments[i] >= ir->expression_count || ir->expressions[arguments[i]].type != type) {
-        SSA_GIVE_UP(s); return 0;
-      }
-    }
-    int32_t operands[4] = {-1, -1, -1, -1};
-    operands[0] = ssa_expr(s, arguments[0], &operands[1], depth + 1);
-    operands[2] = ssa_expr(s, arguments[1], &operands[3], depth + 1);
-    if (operands[1] < 0 || operands[3] < 0) { SSA_GIVE_UP(s); return 0; }
-    uint32_t saved_origin = s->check_origin;
-    s->check_origin = (uint32_t)e->integer + 1;
-    int32_t found = ssa_emit(s, SO_FIND, SC_INT, -1, -1, -1, 0, 0);
-    uint32_t list = ssa_list(s, operands, 4);
-    if (!s->failed) { s->values[found].list = list; s->values[found].count = 4; }
-    s->check_origin = saved_origin;
-    return found;
-  }
-  if (callee && !ctx->debug_mode && !ctx->dwarf && callee->byte_intrinsic == DYN_BYTE_INTRINSIC_JSON_ASCII_PREFIX &&
-      !ctx->a64 && !ctx->rv64 && !ctx->rv32 && !ctx->t32) {
-    if (callee->variadic || callee->return_type != DYN_TYPE_USIZE || result != DYN_TYPE_USIZE ||
-        callee->param_count != 1 || e->item_count != 1 || callee->param_start >= ir->param_count) {
-      SSA_GIVE_UP(s); return 0;
-    }
-    DynType slice = ir->params[callee->param_start].type;
-    DynExprId source = ir->items[e->item_start].expression;
-    if (!dyn_type_is_slice(slice) || slice - DYN_TYPE_SLICE_BASE >= ir->slice_count ||
-        ir->slices[slice - DYN_TYPE_SLICE_BASE].element != DYN_TYPE_U8 ||
-        !ir->slices[slice - DYN_TYPE_SLICE_BASE].is_const || source >= ir->expression_count ||
-        ir->expressions[source].type != slice) { SSA_GIVE_UP(s); return 0; }
-    int32_t length = -1;
-    int32_t pointer = ssa_expr(s, source, &length, depth + 1);
-    if (length < 0) { SSA_GIVE_UP(s); return 0; }
-    return ssa_emit(s, SO_JSON_ASCII_PREFIX, SC_INT, pointer, length, -1, 0, 0);
-  }
-  if (callee && !ctx->debug_mode && !ctx->dwarf && callee->byte_intrinsic == DYN_BYTE_INTRINSIC_FIND_BYTE &&
-      !ctx->a64 && !ctx->rv64 && !ctx->rv32 && !ctx->t32) {
-    if (callee->variadic || callee->return_type != DYN_TYPE_USIZE || result != DYN_TYPE_USIZE ||
-        callee->param_count != 2 || e->item_count != 2 ||
-        (uint64_t)callee->param_start + 2 > ir->param_count) { SSA_GIVE_UP(s); return 0; }
-    DynType slice = ir->params[callee->param_start].type;
-    if (!dyn_type_is_slice(slice) || slice - DYN_TYPE_SLICE_BASE >= ir->slice_count ||
-        ir->slices[slice - DYN_TYPE_SLICE_BASE].element != DYN_TYPE_U8 ||
-        !ir->slices[slice - DYN_TYPE_SLICE_BASE].is_const ||
-        ir->params[callee->param_start + 1].type != DYN_TYPE_U8) { SSA_GIVE_UP(s); return 0; }
-    DynExprId source = ir->items[e->item_start].expression, needle = ir->items[e->item_start + 1].expression;
-    if (source >= ir->expression_count || needle >= ir->expression_count ||
-        ir->expressions[source].type != slice || ir->expressions[needle].type != DYN_TYPE_U8) { SSA_GIVE_UP(s); return 0; }
-    int32_t length = -1;
-    int32_t pointer = ssa_expr(s, source, &length, depth + 1);
-    int32_t byte_value = ssa_expr(s, needle, NULL, depth + 1);
-    if (length < 0) { SSA_GIVE_UP(s); return 0; }
-    uint32_t saved_origin = s->check_origin;
-    s->check_origin = (uint32_t)e->integer + 1;
-    int32_t found = ssa_emit(s, SO_FIND_BYTE, SC_INT, pointer, length, byte_value, 0, 0);
-    s->check_origin = saved_origin;
-    return found;
-  }
   if (callee && isa_math_supported(ctx, callee->math_intrinsic, result)) {
     DynMathIntrinsic kind = callee->math_intrinsic;
     unsigned count = kind == DYN_MATH_INTRINSIC_FMA ? 3 : kind == DYN_MATH_INTRINSIC_COPYSIGN ? 2 : 1;
@@ -1973,6 +1909,23 @@ static bool ssa_mentions_local(Ssa *s, DynExprId id, uint64_t local, unsigned de
     if (ssa_mentions_local(s, ir->items[e->item_start + i].expression, local, depth + 1)) return true;
   return false;
 }
+/* A struct or array literal whose items are all constants, at any depth. */
+static bool ssa_constant_literal(const DynIrProgram *ir, DynExprId id, unsigned depth) {
+  if (id >= ir->expression_count || depth > 16) return false;
+  const DynIrExpr *e = &ir->expressions[id];
+  if (e->kind != DYN_EXPR_STRUCT && e->kind != DYN_EXPR_ARRAY) return false;
+  if ((uint64_t)e->item_start + e->item_count > ir->item_count) return false;
+  for (uint32_t i = 0; i < e->item_count; ++i) {
+    DynExprId item = ir->items[e->item_start + i].expression;
+    if (item >= ir->expression_count) return false;
+    const DynIrExpr *x = &ir->expressions[item];
+    while (x->kind == DYN_EXPR_CONVERT && x->left < ir->expression_count) x = &ir->expressions[x->left];
+    bool constant = x->kind == DYN_EXPR_INT || x->kind == DYN_EXPR_FLOAT || x->kind == DYN_EXPR_BOOL ||
+                    x->kind == DYN_EXPR_CHAR || x->kind == DYN_EXPR_NIL || x->kind == DYN_EXPR_STRING;
+    if (!constant && !ssa_constant_literal(ir, (DynExprId)(x - ir->expressions), depth + 1)) return false;
+  }
+  return true;
+}
 static void ssa_assign(Ssa *s, const DynIrStmt *st) {
   const DynIrProgram *ir = s->ir;
   if (st->kind == DYN_STMT_ASSIGN && st->local_id == UINT32_MAX && st->target == DYN_NO_EXPR) {
@@ -2029,6 +1982,12 @@ static void ssa_assign(Ssa *s, const DynIrStmt *st) {
     uint32_t size, alignment;
     if (!layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
     int32_t address = ssa_address(s, st->target, 0);
+    /* A literal of constants, such as #init's T{}, is built in place: it
+       reads no memory the stores could change, so no temporary is needed. */
+    if (ssa_constant_literal(ir, st->expression, 0)) {
+      ssa_initialize(s, address, type, st->expression, 0);
+      return;
+    }
     int32_t source = ssa_expr(s, st->expression, NULL, 0);
     ssa_copy_aggregate(s, address, source, size, alignment);
     return;
@@ -3426,10 +3385,6 @@ static uint32_t ssa_operands(Ssa *s, uint32_t id, int32_t **slots, uint32_t capa
     for (uint32_t i = 0; i < v->count && n < capacity; ++i) slots[n++] = (int32_t *)&s->lists[v->list + i];
     return n;
   }
-  if (v->op == SO_FIND) {
-    for (uint32_t i = 0; i < v->count && n < capacity; ++i) slots[n++] = (int32_t *)&s->lists[v->list + i];
-    return n;
-  }
   if (v->op == SO_CALL) {
     for (uint32_t i = 0; i < v->count && n < capacity; ++i) slots[n++] = (int32_t *)&s->lists[v->list + 3 * i];
     return n;
@@ -3791,7 +3746,7 @@ static bool ssa_unswitch(Ssa *s, const uint32_t *order, uint32_t n) {
         s->values[copy] = s->values[id];
         s->values[copy].block = block_map[b];
         SsaValue *v = &s->values[copy];
-        uint32_t words = v->op == SO_PHI || v->op == SO_FIND ? v->count : v->op == SO_CALL ? 3 * v->count : 0;
+        uint32_t words = v->op == SO_PHI ? v->count : v->op == SO_CALL ? 3 * v->count : 0;
         if (words) {
           int32_t *items = ssa_temp(s, words * sizeof(int32_t));
           if (!items) { ssa_out_of_memory(s); break; }
@@ -4874,7 +4829,7 @@ static void ssa_classify_regions(Ssa *s, const uint32_t *order, uint32_t n, uint
                                       ssa_access_size(v), &at, &inside);
         if (!memory || !inside) {
           state[r] |= REGION_ESCAPED;
-          if (((v->op == SO_FIND_BYTE || v->op == SO_JSON_ASCII_PREFIX || v->op == SO_BYTE_COUNT || v->op == SO_SUM || v->op == SO_AXPY) && address) || (v->op == SO_FIND && (j == 0 || j == 2)) ||
+          if (((v->op == SO_BYTE_COUNT || v->op == SO_SUM || v->op == SO_AXPY) && address) ||
               (v->op == SO_COPYN && source)) state[r] |= REGION_READ;
           continue;
         }
@@ -6134,7 +6089,7 @@ static bool ssa_self_inline(Ssa *s, const uint32_t *order, uint32_t n) {
     for (uint32_t k = 0; k < block->values.count; ++k) {
       int32_t id = (int32_t)block->values.items[k];
       SsaValue *v = &s->values[id];
-      if (v->op == SO_PARAM || v->op == SO_FIND || v->op == SO_FRAME) return false;
+      if (v->op == SO_PARAM || v->op == SO_FRAME) return false;
       if (v->op == SO_CALL) {
         if (call >= 0 || v->aux2 || (unsigned)v->aux != self || v->cond || v->abi_group_count || v->x87 || v->al_count) return false;
         call = id; call_block = order[i];
@@ -6282,25 +6237,6 @@ static bool ssa_self_inline(Ssa *s, const uint32_t *order, uint32_t n) {
   if (!s->failed && s->ctx->optimization_remarks)
     fprintf(stderr, "remark: %s: recursive call inlined %u levels deep\n", s->f->name, depth);
   return !s->failed;
-}
-/* std/mem's zero_bytes_fast, once folding has made its length constant, as
-   in each mem.push: one fixed fill instead of a call. x86-64 and AArch64
-   store unaligned; the call stays on RISC-V. */
-static void ssa_zero_calls(Ssa *s, const uint32_t *order, uint32_t n) {
-  BackendContext *ctx = s->ctx;
-  if (!ctx->zero_symbol || ctx->rv64 || ctx->rv32 || ctx->t32) return;
-  for (uint32_t i = 0; i < n; ++i) {
-    SsaBlock *block = &s->blocks[order[i]];
-    for (uint32_t k = 0; k < block->values.count; ++k) {
-      SsaValue *v = &s->values[block->values.items[k]];
-      if (v->dead || v->op != SO_CALL || v->aux2 || (unsigned)v->aux != ctx->zero_symbol || v->count != 2 || v->cond) continue;
-      int32_t pointer = (int32_t)s->lists[v->list], length = ssa_resolve(s, (int32_t)s->lists[v->list + 3]);
-      if (length < 0 || s->values[length].op != SO_CONST || (uint64_t)s->values[length].aux > 256) continue;
-      int64_t bytes = s->values[length].aux;
-      v->op = SO_ZEROMEM; v->cls = SC_NONE; v->a = pointer; v->b = v->c = -1;
-      v->aux = bytes; v->aux2 = 0; v->count = 0; v->list = 0;
-    }
-  }
 }
 /* ---- Unroll and jam ----
 
@@ -7562,15 +7498,9 @@ static uint64_t ssa_clobbers(Ssa *s, const SsaValue *v) {
   case SO_COPYMEM: return v->aux > 64 ? (UINT64_C(1) << X_RCX | UINT64_C(1) << X_RSI | UINT64_C(1) << X_RDI) : UINT64_C(1) << X_RCX;
   case SO_ZEROMEM: return v->aux > 256 ? (UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDI) : 0;
   case SO_FILLMEM: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDI;
-  case SO_FIND: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDX |
-                       UINT64_C(1) << X_R8 | UINT64_C(1) << X_R9 | UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
-  case SO_JSON_ASCII_PREFIX: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDX |
-                                  UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
   case SO_SUM:
   case SO_AXPY:
   case SO_BYTE_COUNT: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDX |
-                            UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
-  case SO_FIND_BYTE: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX |
                             UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
   case SO_COPYN: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RSI | UINT64_C(1) << X_RDI |
                         UINT64_C(1) << X_R11;
@@ -7863,9 +7793,6 @@ static void ssa_hints(SsaAlloc *a) {
         v->hint = -2 - ssa_location_register(s->ctx, (int)v->aux);
         break;
       case SO_RESULT: if (v->aux < X_X87) v->hint = -2 - ssa_result_register(s->ctx, v->aux); break;
-      case SO_FIND:
-      case SO_FIND_BYTE:
-      case SO_JSON_ASCII_PREFIX:
       case SO_DIV: v->hint = -2 - X_RAX; break;
       case SO_MULH: v->hint = -2 - X_RDX; break;
       case SO_REM: v->hint = -2 - X_RDX; break;
@@ -9614,61 +9541,6 @@ static void ssa_sum_emit(SsaEmit *e, SsaValue *v) {
   if (!wide) { if (sign) CODE(0x48,0x63,0xc9); else CODE(0x89,0xc9); }
   ssa_put(e, v, X_RCX);
 }
-static void ssa_json_ascii_prefix(SsaEmit *e, SsaValue *v) {
-  BackendContext *ctx = e->ctx;
-  SsaMove moves[2] = {ssa_source(e, v->a), ssa_source(e, v->b)};
-  moves[0].dst_kind = moves[1].dst_kind = L_REG;
-  moves[0].dst = X_R10; moves[1].dst = X_R11;
-  moves[0].cls = moves[1].cls = SC_INT;
-  ssa_parallel(e, moves, 2);
-  CODE(0x31,0xc9,0x49,0x83,0xfb,0x10); /* index=0; remaining>=16 */
-  size_t tail = isa_branch(ctx, CC_B);
-  size_t loop = ctx->text.n;
-  x86_mem_op(ctx, 0xf3, false, OP2(0x0f,0x6f), SSA_XS1 - X_XMM0, (SsaMemory){X_R10,X_RCX,1,0}, false);
-  /* Signed 32 > byte detects controls and all high-bit bytes. */
-  CODE(0xb8); word(ctx, UINT32_C(0x20202020));
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x6e), SSA_XS2 - X_XMM0, X_RAX, false);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x70), SSA_XS2 - X_XMM0, SSA_XS2 - X_XMM0, false); byte(ctx, 0);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x64), SSA_XS2 - X_XMM0, SSA_XS1 - X_XMM0, false);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0xd7), X_RDX, SSA_XS2 - X_XMM0, false);
-  const uint32_t patterns[2] = {UINT32_C(0x22222222), UINT32_C(0x5c5c5c5c)};
-  for (unsigned i = 0; i < 2; ++i) {
-    CODE(0xb8); word(ctx, patterns[i]);
-    x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x6e), SSA_XS3 - X_XMM0, X_RAX, false);
-    x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x70), SSA_XS3 - X_XMM0, SSA_XS3 - X_XMM0, false); byte(ctx, 0);
-    x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x74), SSA_XS3 - X_XMM0, SSA_XS1 - X_XMM0, false);
-    x86_reg_op(ctx, 0x66, false, OP2(0x0f,0xd7), X_RAX, SSA_XS3 - X_XMM0, false);
-    CODE(0x09,0xc2); /* edx |= eax */
-  }
-  CODE(0x85,0xd2);
-  size_t vector_found = isa_branch(ctx, CC_NE);
-  CODE(0x48,0x83,0xc1,0x10,0x49,0x83,0xeb,0x10,0x49,0x83,0xfb,0x10);
-  isa_patch(ctx, isa_branch(ctx, CC_AE), loop);
-  isa_patch(ctx, tail, ctx->text.n);
-  CODE(0x4d,0x85,0xdb);
-  size_t empty = isa_branch(ctx, CC_E);
-  size_t scalar = ctx->text.n;
-  x86_mem_op(ctx, -1, false, OP2(0x0f,0xb6), X_RAX, (SsaMemory){X_R10,X_RCX,1,0}, false);
-  CODE(0x83,0xf8,0x20);
-  size_t control = isa_branch(ctx, CC_B);
-  CODE(0x3d); word(ctx, 128);
-  size_t high = isa_branch(ctx, CC_AE);
-  CODE(0x83,0xf8,0x22);
-  size_t quote = isa_branch(ctx, CC_E);
-  CODE(0x83,0xf8,0x5c);
-  size_t slash = isa_branch(ctx, CC_E);
-  CODE(0x48,0xff,0xc1,0x49,0xff,0xcb);
-  isa_patch(ctx, isa_branch(ctx, CC_NE), scalar);
-  isa_patch(ctx, empty, ctx->text.n);
-  isa_patch(ctx, control, ctx->text.n); isa_patch(ctx, high, ctx->text.n);
-  isa_patch(ctx, quote, ctx->text.n); isa_patch(ctx, slash, ctx->text.n);
-  CODE(0x48,0x89,0xc8);
-  size_t done = isa_branch(ctx, -1);
-  isa_patch(ctx, vector_found, ctx->text.n);
-  CODE(0x0f,0xbc,0xc2,0x48,0x01,0xc8); /* bsf eax,edx; add index */
-  isa_patch(ctx, done, ctx->text.n);
-  ssa_put(e, v, X_RAX);
-}
 /* SO_COPYN: c bytes from b to a with the result of a forward byte loop,
    overlap included. rep movsb from 32 bytes. Below that, disjoint ranges
    copy 8 or 4 bytes at a time, the last move overlapping the one before;
@@ -9714,138 +9586,6 @@ static void ssa_copy_bytes(SsaEmit *e, SsaValue *v) {
   patch_word(ctx, done_bytes, (uint32_t)(ctx->text.n - done_bytes - 4));
   patch_word(ctx, done_tail, (uint32_t)(ctx->text.n - done_tail - 4));
   if (ctx->win64) CODE(0x5f, 0x5e);
-}
-static void ssa_find_byte(SsaEmit *e, SsaValue *v) {
-  BackendContext *ctx = e->ctx;
-  SsaMove moves[3];
-  int32_t operands[3] = {v->a, v->b, v->c};
-  unsigned targets[3] = {X_R10, X_R11, X_RAX};
-  for (unsigned i = 0; i < 3; ++i) {
-    moves[i] = ssa_source(e, operands[i]);
-    moves[i].dst_kind = L_REG; moves[i].dst = targets[i]; moves[i].cls = SC_INT;
-  }
-  ssa_parallel(e, moves, 3);
-  CODE(0x0f,0xb6,0xc0,0x69,0xc0); word(ctx, UINT32_C(0x01010101)); /* broadcast al into eax */
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x6e), SSA_XS1 - X_XMM0, X_RAX, false);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x70), SSA_XS1 - X_XMM0, SSA_XS1 - X_XMM0, false); byte(ctx, 0);
-  CODE(0x31,0xc9,0x49,0x83,0xfb,0x10); /* index = 0; remaining >= 16 */
-  size_t tail = isa_branch(ctx, CC_B);
-  size_t loop = ctx->text.n;
-  x86_mem_op(ctx, 0xf3, false, OP2(0x0f,0x6f), SSA_XS2 - X_XMM0, (SsaMemory){X_R10,X_RCX,1,0}, false);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x74), SSA_XS2 - X_XMM0, SSA_XS1 - X_XMM0, false);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0xd7), X_RAX, SSA_XS2 - X_XMM0, false);
-  CODE(0x85,0xc0);
-  size_t vector_found = isa_branch(ctx, CC_NE);
-  CODE(0x48,0x83,0xc1,0x10,0x49,0x83,0xeb,0x10,0x49,0x83,0xfb,0x10);
-  isa_patch(ctx, isa_branch(ctx, CC_AE), loop);
-  isa_patch(ctx, tail, ctx->text.n);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x7e), SSA_XS1 - X_XMM0, X_RAX, false); /* recover needle */
-  CODE(0x4d,0x85,0xdb);
-  size_t empty = isa_branch(ctx, CC_E);
-  size_t scalar = ctx->text.n;
-  x86_mem_op(ctx, -1, false, OP1(0x38), X_RAX, (SsaMemory){X_R10,X_RCX,1,0}, false);
-  size_t scalar_found = isa_branch(ctx, CC_E);
-  CODE(0x48,0xff,0xc1,0x49,0xff,0xcb);
-  isa_patch(ctx, isa_branch(ctx, CC_NE), scalar);
-  isa_patch(ctx, empty, ctx->text.n);
-  isa_patch(ctx, scalar_found, ctx->text.n);
-  CODE(0x48,0x89,0xc8); /* scalar match or exhausted: index */
-  size_t done = isa_branch(ctx, -1);
-  isa_patch(ctx, vector_found, ctx->text.n);
-  CODE(0x0f,0xbc,0xc0,0x48,0x01,0xc8); /* first matching lane + index */
-  isa_patch(ctx, done, ctx->text.n);
-  ssa_put(e, v, X_RAX);
-}
-/* Filter candidate first and final bytes with SSE2, then compare the prefix bytewise.
-   Advancing by one after a rejected candidate preserves overlapping matches.
-   R9 is the prefix length; XMM scratch 3 saves the original miss sentinel. */
-static void ssa_find(SsaEmit *e, SsaValue *v) {
-  BackendContext *ctx = e->ctx;
-  if (v->count != 4) { ctx->text.failed = true; return; }
-  /* Capture all four original locations before assigning overlapping fixed
-     registers. SSA slots and rematerialized frame addresses are RBP based. */
-  for (unsigned i = 0; i < 4; ++i) {
-    unsigned reg = ssa_get(e, (int32_t)e->s->lists[v->list + i], X_R11);
-    x86_rex(ctx, false, 0, 0, reg, false); byte(ctx, 0x50 | (reg & 7));
-  }
-  CODE(0x41,0x59,0x41,0x58,0x5a,0x41,0x5a); /* pop r9,r8,rdx,r10 */
-  x86_mov(ctx, SSA_XS3, X_RDX);
-  CODE(0x4d,0x85,0xc9);
-  size_t empty = isa_branch(ctx, CC_E);
-  CODE(0x49,0x39,0xd1); /* needle length > hay length */
-  size_t too_long = isa_branch(ctx, CC_A);
-  CODE(0x49,0xff,0xc9,0x4d,0x01,0xca); /* prefix length; final-byte base */
-  x86_mem_op(ctx, -1, false, OP2(0x0f,0xb6), X_RAX, (SsaMemory){X_R8,X_R9,1,0}, false);
-  CODE(0x69,0xc0); word(ctx, UINT32_C(0x01010101));
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x6e), SSA_XS1 - X_XMM0, X_RAX, false);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x70), SSA_XS1 - X_XMM0, SSA_XS1 - X_XMM0, false); byte(ctx, 0);
-  /* XS3 low qword keeps the miss sentinel; its high dwords hold first and
-     final byte patterns. Use register comparisons after MOVDQU so odd slices
-     never depend on alignment requirements of legacy SSE memory operands. */
-  x86_mem_op(ctx, -1, false, OP2(0x0f,0xb6), X_RAX, (SsaMemory){X_R8,-1,1,0}, false);
-  CODE(0x69,0xc0); word(ctx, UINT32_C(0x01010101));
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x6e), SSA_XS2 - X_XMM0, X_RAX, false);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x62), SSA_XS2 - X_XMM0, SSA_XS1 - X_XMM0, false); /* punpckldq: first,last */
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x6c), SSA_XS3 - X_XMM0, SSA_XS2 - X_XMM0, false); /* punpcklqdq: length,patterns */
-  CODE(0x31,0xc9,0x49,0x89,0xd3,0x4d,0x29,0xcb); /* index=0; candidates=hay-prefix */
-  size_t search = ctx->text.n;
-  CODE(0x49,0x83,0xfb,0x10);
-  size_t tail = isa_branch(ctx, CC_B);
-  size_t vector = ctx->text.n;
-  x86_mem_op(ctx, 0xf3, false, OP2(0x0f,0x6f), SSA_XS2 - X_XMM0, (SsaMemory){X_R10,X_RCX,1,0}, false);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x74), SSA_XS2 - X_XMM0, SSA_XS1 - X_XMM0, false);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0xd7), X_RAX, SSA_XS2 - X_XMM0, false);
-  /* Remaining candidates >=16 bounds both final and first-position loads. */
-  CODE(0x4c,0x89,0xd2,0x4c,0x29,0xca); /* rdx=final base-prefix length */
-  x86_mem_op(ctx, 0xf3, false, OP2(0x0f,0x6f), SSA_XS2 - X_XMM0, (SsaMemory){X_RDX,X_RCX,1,0}, false);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x70), SSA_XS1 - X_XMM0, SSA_XS3 - X_XMM0, false); byte(ctx, 0xaa);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x74), SSA_XS2 - X_XMM0, SSA_XS1 - X_XMM0, false);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0xd7), X_RDX, SSA_XS2 - X_XMM0, false);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x70), SSA_XS1 - X_XMM0, SSA_XS3 - X_XMM0, false); byte(ctx, 0xff);
-  CODE(0x21,0xd0,0x85,0xc0); /* retain lanes matching both ends */
-  size_t vector_found = isa_branch(ctx, CC_NE);
-  CODE(0x48,0x83,0xc1,0x10,0x49,0x83,0xeb,0x10,0x49,0x83,0xfb,0x10);
-  isa_patch(ctx, isa_branch(ctx, CC_AE), vector);
-  isa_patch(ctx, tail, ctx->text.n);
-  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x7e), SSA_XS1 - X_XMM0, X_RAX, false);
-  CODE(0x4d,0x85,0xdb);
-  size_t exhausted = isa_branch(ctx, CC_E);
-  size_t scalar = ctx->text.n;
-  x86_mem_op(ctx, -1, false, OP1(0x38), X_RAX, (SsaMemory){X_R10,X_RCX,1,0}, false);
-  size_t scalar_found = isa_branch(ctx, CC_E);
-  CODE(0x48,0xff,0xc1,0x49,0xff,0xcb);
-  isa_patch(ctx, isa_branch(ctx, CC_NE), scalar);
-  size_t scalar_exhausted = isa_branch(ctx, -1);
-  isa_patch(ctx, vector_found, ctx->text.n);
-  CODE(0x0f,0xbc,0xc0,0x48,0x01,0xc1); /* first lane + candidate index */
-  isa_patch(ctx, scalar_found, ctx->text.n);
-  CODE(0x49,0x8d,0x14,0x0a,0x4c,0x29,0xca,0x45,0x31,0xdb); /* prefix base; prefix index=0 */
-  size_t prefix = ctx->text.n;
-  CODE(0x4d,0x39,0xcb);
-  size_t matched = isa_branch(ctx, CC_AE);
-  x86_mem_op(ctx, -1, false, OP2(0x0f,0xb6), X_RAX, (SsaMemory){X_R8,X_R11,1,0}, false);
-  x86_mem_op(ctx, -1, false, OP1(0x38), X_RAX, (SsaMemory){X_RDX,X_R11,1,0}, false);
-  size_t mismatch = isa_branch(ctx, CC_NE);
-  CODE(0x49,0xff,0xc3);
-  isa_patch(ctx, isa_branch(ctx, -1), prefix);
-  isa_patch(ctx, mismatch, ctx->text.n);
-  CODE(0x48,0xff,0xc1);
-  x86_mov(ctx, X_R11, SSA_XS3);
-  CODE(0x4d,0x29,0xcb,0x49,0x29,0xcb);
-  isa_patch(ctx, isa_branch(ctx, -1), search);
-  isa_patch(ctx, too_long, ctx->text.n);
-  isa_patch(ctx, exhausted, ctx->text.n);
-  isa_patch(ctx, scalar_exhausted, ctx->text.n);
-  x86_mov(ctx, X_RAX, SSA_XS3);
-  size_t miss_done = isa_branch(ctx, -1);
-  isa_patch(ctx, matched, ctx->text.n);
-  CODE(0x48,0x89,0xc8);
-  size_t found_done = isa_branch(ctx, -1);
-  isa_patch(ctx, empty, ctx->text.n);
-  CODE(0x31,0xc0);
-  isa_patch(ctx, miss_done, ctx->text.n);
-  isa_patch(ctx, found_done, ctx->text.n);
-  ssa_put(e, v, X_RAX);
 }
 static void a64s_store_outgoing(SsaEmit *e, int32_t value, uint32_t offset, unsigned width);
 /* The name dyn_check_failed reports: the function, and in debug builds
@@ -10526,14 +10266,11 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_COPYMEM: ssa_copy_memory(e, v); return;
   case SO_ZEROMEM: ssa_zero_memory(e, v); return;
   case SO_FILLMEM: ssa_fill_memory(e, v); return;
-  case SO_FIND_BYTE: ssa_find_byte(e, v); return;
   case SO_BYTE_COUNT: ssa_byte_count_emit(e, v); return;
   case SO_SUM: ssa_sum_emit(e, v); return;
   case SO_COPYN: ssa_copy_bytes(e, v); return;
   case SO_AXPY: ssa_axpy_emit(e, v); return;
   case SO_VLOOP: ssa_vloop_emit(e, v); return;
-  case SO_JSON_ASCII_PREFIX: ssa_json_ascii_prefix(e, v); return;
-  case SO_FIND: ssa_find(e, v); return;
   case SO_CALL:
     if (v->cond == 2) {
       ssa_call_emit(e, block, k);
@@ -11907,6 +11644,12 @@ typedef struct SsaPrepared {
   double build_ms, optimize_ms, allocate_ms;
   struct SsaEmitted *emitted; /* emitted by a worker into its shard */
 } SsaPrepared;
+/* DYN_SKIP=hoist,fold turns those optional SSA passes off, and with them
+   the IR optimizer's "inline" and "propagate". tools/bisect-passes.py uses
+   it to find the pass behind a release build that differs from debug. */
+static bool ssa_pass_on(const char *name) {
+  return dyn_optimization_pass_on(name);
+}
 static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *source, const DynIrProgram *ir,
                         const DynIrFunction *f, bool defer_literals, SsaPool *pool) {
   p->s = (Ssa){.ctx = ctx, .ir = ir, .f = f, .current = UINT32_MAX, .defer_literals = defer_literals, .pool = pool};
@@ -11963,11 +11706,11 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     }
     bool changed = false;
     switch (pass) {
-    case 0: changed = ssa_forward(s, order, n); break;
-    case 1: changed = ssa_fold(s, order, n); break;
-    case 2: changed = ssa_cse(s, order, n); break;
-    case 3: changed = ssa_reuse_loads(s, order, n); break;
-    default: changed = ssa_prove(s, order, n); break;
+    case 0: changed = ssa_pass_on("forward") && ssa_forward(s, order, n); break;
+    case 1: changed = ssa_pass_on("fold") && ssa_fold(s, order, n); break;
+    case 2: changed = ssa_pass_on("cse") && ssa_cse(s, order, n); break;
+    case 3: changed = ssa_pass_on("reuse_loads") && ssa_reuse_loads(s, order, n); break;
+    default: changed = ssa_pass_on("prove") && ssa_prove(s, order, n); break;
     }
     /* A pass that changed nothing left every operand resolved. */
     if (changed && pass != 4) ssa_resolve_all(s);
@@ -11975,13 +11718,12 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
   }
   order = ssa_order(s, &n);
   if (!order || s->failed) goto done;
-  ssa_zero_calls(s, order, n);
-  if (ssa_accumulate(s, order, n)) {
+  if (ssa_pass_on("accumulate") && ssa_accumulate(s, order, n)) {
     ssa_resolve_all(s);
     order = ssa_order(s, &n);
     if (!order || s->failed) goto done;
     ssa_dominators(s, order, n);
-    if (ssa_self_inline(s, order, n)) {
+    if (ssa_pass_on("self_inline") && ssa_self_inline(s, order, n)) {
       ssa_resolve_all(s);
       order = ssa_order(s, &n);
       if (!order || s->failed) goto done;
@@ -11992,16 +11734,16 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     SsaBlock *block = &s->blocks[order[i]];
     for (uint32_t k = 0; k < block->values.count; ++k) s->values[block->values.items[k]].block = order[i];
   }
-  if (ssa_jam(s, order, n)) ssa_resolve_all(s);
+  if (ssa_pass_on("jam") && ssa_jam(s, order, n)) ssa_resolve_all(s);
   ssa_divisions(s, order, n);
   ssa_resolve_all(s);
-  if (ssa_hoist(s, order, n)) {
+  if (ssa_pass_on("hoist") && ssa_hoist(s, order, n)) {
     /* Hoisted copies of one computation meet in the same preheader. */
     ssa_dominators(s, order, n);
     ssa_cse(s, order, n);
     ssa_resolve_all(s);
   }
-  if (ssa_unswitch(s, order, n)) {
+  if (ssa_pass_on("unswitch") && ssa_unswitch(s, order, n)) {
     order = ssa_order(s, &n);
     if (!order || s->failed) goto done;
     /* The copy's untaken side is unreachable now; a phi that lost its
@@ -12022,9 +11764,9 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
       for (uint32_t k = 0; k < block->values.count; ++k) s->values[block->values.items[k]].block = order[i];
     }
   }
-  if (ssa_strength(s, order, n)) ssa_resolve_all(s);
-  if (ssa_thread_conditions(s, order, n)) ssa_resolve_all(s);
-  if (ssa_selects(s, order, n)) ssa_resolve_all(s);
+  if (ssa_pass_on("strength") && ssa_strength(s, order, n)) ssa_resolve_all(s);
+  if (ssa_pass_on("thread_conditions") && ssa_thread_conditions(s, order, n)) ssa_resolve_all(s);
+  if (ssa_pass_on("selects") && ssa_selects(s, order, n)) ssa_resolve_all(s);
   if (s->failed) goto done;
   ssa_split_edges(s);
   order = ssa_order(s, &n);
@@ -12033,7 +11775,7 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
   ssa_addressing(s, order, n);
   ssa_dce(s, order, n);
   /* After dce: dead frame stores no longer stand between load and use. */
-  if (!ctx->rv32 && !ctx->t32 && ssa_float_loads(s, order, n)) {
+  if (!ctx->rv32 && !ctx->t32 && ssa_pass_on("float_loads") && ssa_float_loads(s, order, n)) {
     ssa_resolve_all(s);
     ssa_dce(s, order, n);
   }
@@ -12042,20 +11784,20 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     p->ready = true;
     goto done;
   }
-  if (ssa_vloops(s, order, n)) ssa_dce(s, order, n);
+  if (ssa_pass_on("vloops") && ssa_vloops(s, order, n)) ssa_dce(s, order, n);
 allocate:
-  if (ctx->vectorize && !ctx->rv64 && ssa_pairs(s, order, n)) {
+  if (ctx->vectorize && !ctx->rv64 && ssa_pass_on("pairs") && ssa_pairs(s, order, n)) {
     ssa_resolve_all(s);
     /* Two trees may load the same pair. */
     if (ssa_reuse_loads(s, order, n)) ssa_resolve_all(s);
     ssa_dce(s, order, n);
   }
-  ssa_combine_loads(s, order, n);
-  ssa_combine_stores(s, order, n);
+  if (ssa_pass_on("combine_loads")) ssa_combine_loads(s, order, n);
+  if (ssa_pass_on("combine_stores")) ssa_combine_stores(s, order, n);
   if (!ctx->rv64 && !ctx->rv32 && !ctx->t32) {
-    ssa_narrow32(s, order, n);
-    ssa_rotate64(s, order, n);
-    ssa_late_lea(s, order, n);
+    if (ssa_pass_on("narrow32")) ssa_narrow32(s, order, n);
+    if (ssa_pass_on("rotate64")) ssa_rotate64(s, order, n);
+    if (ssa_pass_on("late_lea")) ssa_late_lea(s, order, n);
   }
   ssa_fuse(s, order, n);
   ssa_loop_depths(s, order, n);

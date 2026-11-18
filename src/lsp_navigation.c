@@ -101,6 +101,13 @@ const char *lsp_builtin_hover(const char *text, size_t line, size_t character) {
                "the type, for this target's usize and isize."},
       {"#typeof", "#typeof(type_or_value) -> TypeInfo\nReturns reflection "
                   "metadata for a type or value."},
+      {"#sqrt", "#sqrt(x: f64) -> f64\nCorrectly rounded square root: one instruction "
+                "where the target has it."},
+      {"#floor", "#floor(x: f64) -> f64\nRounds toward negative infinity."},
+      {"#ceil", "#ceil(x: f64) -> f64\nRounds toward positive infinity."},
+      {"#trunc", "#trunc(x: f64) -> f64\nRounds toward zero."},
+      {"#round", "#round(x: f64) -> f64\nRounds to the nearest integer, halves away from zero."},
+      {"#fma", "#fma(x, y, z) -> T\nx * y + z with one rounding, for f32 or f64."},
       {"#syscall",
        "#syscall(number, arguments...) -> isize\nPerforms a target system call "
        "with at most six integer or pointer arguments."},

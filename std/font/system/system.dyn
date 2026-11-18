@@ -212,7 +212,7 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
     } else if font_file(item.name) && walk.count < #len(walk.entries) {
       file := fs.open(path)
       if !io.failed(file.failure) {
-        handle := fs.take(&file.value)
+        handle := file.value
         mapped := fs.map(&handle)
         fs.close(&handle)
         if !io.failed(mapped.failure) {
@@ -356,7 +356,7 @@ pub fn covering(entries: []const Entry, codepoint: u32, regular_only: bool) *con
     if regular_only && (entry.italic || entry.weight != 400) { continue }
     file := fs.open(entry.path)
     if io.failed(file.failure) { continue }
-    handle := fs.take(&file.value)
+    handle := file.value
     mapped := fs.map(&handle)
     fs.close(&handle)
     if io.failed(mapped.failure) { continue }

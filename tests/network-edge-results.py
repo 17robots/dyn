@@ -23,10 +23,10 @@ fn metadata(kind: parse.Kind, offset: usize, expected: parse.Kind, at: usize) {
 fn head(result: http.HttpHead, offset: usize) {
   metadata(result.failure.kind, result.offset, parse.Kind.Syntax, offset)
 }
-fn handler(response: *http.Response, request: *const http.Request) http.Result {
+struct Trace { calls: usize, native: isize }
+fn typed_handler(response: *http.Response, request: *const http.Request, state: *Trace) http.Result {
   return http.Result{}
 }
-struct Trace { calls: usize, native: isize }
 fn read(raw: rawptr, dest: []u8) io.Transfer {
   trace := #cast(*Trace, raw)
   trace.calls += 1
@@ -100,16 +100,15 @@ fn main() {
   if errors.failed(zero.failure) || zero.failure.native != 0 || zero.offset != 0 || zero.detail != http.ErrorKind.None { #panic("zero HTTP result") }
   ws_zero := ws.Result{}
   if errors.failed(ws_zero.failure) || ws_zero.failure.native != 0 || ws_zero.offset != 0 { #panic("zero WS result") }
-  connection := http.Connection{}
-  http.close(&connection)
-  routes: [1]http.Route
-  router := http.router(routes[..], nil)
-  route := http.route(&router, "GET", "/", nil)
+  routes: [1]http.TypedRoute(Trace)
+  route_state := Trace{}
+  router := http.typed_routes(routes[..], &route_state)
+  route := http.add(&router, "GET", "/", nil)
   if route.failure.kind != errors.Kind.InvalidInput || route.offset != 0 { #panic("metadata") }
   if route.detail != http.ErrorKind.Invalid || router.count != 0 { #panic("invalid route result") }
-  route = http.route(&router, "GET", "/", handler)
+  route = http.add(&router, "GET", "/", typed_handler)
   if io.failed(route.failure) || errors.failed(route.failure) || route.failure.native != 0 || route.offset != 0 || router.count != 1 { #panic("route success result") }
-  route = http.route(&router, "GET", "/other", handler)
+  route = http.add(&router, "GET", "/other", typed_handler)
   if route.failure.kind != errors.Kind.Capacity || route.offset != 0 { #panic("metadata") }
   if route.detail != http.ErrorKind.Capacity || router.count != 1 { #panic("route capacity result") }
 

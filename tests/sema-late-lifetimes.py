@@ -31,8 +31,7 @@ SHAPES = {
     'warnings-and-errors': {10: ARENA, 250: LIFETIME, 260: ARENA, 400: TYPE},
     'reset': {77: RESET, 300: TYPE},
 }
-EXPECTED = {'lifetimes': 'borrows function-local', 'lifetime-then-type': 'borrows function-local',
-            'warnings': 'copying an arena', 'reset': 'after arena_reset'}
+EXPECTED = {'lifetimes': 'borrows function-local', 'lifetime-then-type': 'borrows function-local'}
 with tempfile.TemporaryDirectory(prefix='dyn-sema-late-') as temporary:
     for shape, special in SHAPES.items():
         project = Path(temporary) / shape

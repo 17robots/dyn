@@ -16,7 +16,7 @@ Use ordinary DOM JSON APIs for all implementations. Dyn uses std/encoding/json; 
 
 ## HTTP application (Dyn, Go, Node, Python)
 
-Bind loopback port0 and print `port N` to stdout, flushed. Four client connections are used in the concurrent workload; every request carries Connection: close. Native server implementations use standard HTTP parsers/servers; Dyn four concurrent workers, Python ThreadingHTTPServer, Go net/http, Node http. Pin server to one common CPU; client runs elsewhere. This measures the chosen std server designs, not identical schedulers.
+Bind loopback port0 and print `port N` to stdout, flushed. Four client connections are used in the concurrent workload; every request carries Connection: close. Native server implementations use standard HTTP parsers/servers; Dyn evented with four workers, Python ThreadingHTTPServer, Go net/http, Node http. Pin server to one common CPU; client runs elsewhere. This measures the chosen std server designs, not identical schedulers.
 
 GET /health returns 200 `ok\n`. POST /summarize parses a JSON array of objects using the same schema and aggregation as report, returning the same summary JSON and application/json. Malformed JSON/schema returns400. Unknown GET/POST route returns404. Other methods are not compared. The corpus uses valid UTF-8 and duplicate-free object members; invalid-UTF-8 and duplicate-key policies differ between JSON libraries and are not ranked. Content-Length body limits are 1MiB; benchmark payloads much smaller. POST /quit sends200 and shuts down cleanly. No TLS, compression, database, or persistence. The load runner validates every status/body; client errors/timeouts are failures, never discarded samples.
 

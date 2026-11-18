@@ -128,6 +128,21 @@ Compiler process counts have bounded headroom relative to the host UID, not a cg
 budget. These controls reduce exposure; kernel vulnerabilities and aggregate hostile
 traffic remain outside this implementation's guarantee.
 
+## Finding miscompiles
+
+Debug and release builds of a program must print the same. Three tools check
+that:
+
+- `tests/release-parity.py` builds every runnable test and example both ways.
+- `tools/fuzz-parity.py --count N` generates well-typed random programs and
+  builds each in debug, release, `--opt-level 3` and on the tree code
+  generator (`DYN_NO_SSA=1`). A program whose builds differ is saved under
+  `build/fuzz-parity/`.
+- `tools/bisect-passes.py PROJECT` names the optimization pass behind a
+  release build that differs from debug. It rebuilds with `DYN_SKIP=<pass>`,
+  which turns named optional passes off (`DYN_SKIP=hoist,inline`);
+  `tests/optional-passes.py` checks that each of them really is optional.
+
 ## Benchmarks
 
 `just bench-scale` measures cold `check`, debug and release builds on generated

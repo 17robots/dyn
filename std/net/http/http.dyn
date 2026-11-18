@@ -7,22 +7,6 @@ use "std/fmt" format
 use "std/net/url" urls
 use "std/time" clock
 
-pub type StreamReader = io.Reader
-pub type StreamWriter = io.Writer
-pub type StreamResult = io.Transfer
-pub type Listener = network.Listener
-pub type Connection = network.Connection
-
-pub type AcceptResult = io.Result(Connection)
-
-pub fn accept(listener: *Listener) AcceptResult {
-  accepted := network.listener_accept(listener)
-  return AcceptResult{ value: accepted.value, failure: io.Failure{ kind: accepted.failure.kind, native: accepted.failure.native } }
-}
-pub fn close(connection: *Connection) {
-  network.connection_close(connection)
-}
-
 pub enum Framing { None, Length, Chunked, Close }
 // Parser offsets are byte positions in the supplied input; zero also denotes an
 // unavailable position for semantic URL/upgrade validation without a source cursor.
@@ -844,7 +828,7 @@ pub struct Request {
   body: []const u8,
   header_length: usize,
   keep_alive: bool,
-  // Borrowed application state given to serve_stream_context and friends; nil otherwise.
+  // Borrowed application state given to serve_stream or an evented start; nil otherwise.
   context: rawptr,
   // Path parameters captured by a Routes pattern such as /users/:id. Read
   // them with param.
@@ -924,18 +908,6 @@ pub struct BodyResult { detail: ErrorKind, body: Body, result: Result, failure: 
 
 pub type Handler = fn(*Response, *const Request) Result
 
-pub struct Route {
-  method: []const u8,
-  target: []const u8,
-  handler: Handler,
-}
-
-pub struct Router {
-  routes: []Route,
-  count: usize,
-  fallback: Handler,
-}
-
 pub struct ClientResponse {
   raw: []u8,
   body: []u8,
@@ -945,40 +917,9 @@ pub struct ClientResponse {
   failure: io.Failure,
 }
 
-
 // A GET route also answers HEAD; the response then sends its head only.
 fn method_matches(route: []const u8, method: []const u8) bool {
   return bytes.equal(route, method) || (bytes.equal(route, "GET") && bytes.equal(method, "HEAD"))
-}
-
-// Router storage is supplied by the caller. Route strings are borrowed.
-pub fn router(storage: []Route, fallback: Handler) Router {
-  return Router{ routes: storage, fallback: fallback }
-}
-
-pub fn route(state: *Router, method: []const u8, target: []const u8, handler: Handler) Result {
-  if handler == nil {
-    return Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
-  if state.count >= #len(state.routes) {
-    return Result{ detail: ErrorKind.Capacity, failure: io.Failure{ kind: io.Kind.Capacity } }
-  }
-  state.routes[state.count] = Route{ method: method, target: target, handler: handler }
-  state.count += 1
-  return Result{}
-}
-
-pub fn dispatch(state: *Router, response: *Response, request: *const Request) Result {
-  i: usize = 0
-  for i < state.count {
-    candidate := state.routes[i]
-    if method_matches(candidate.method, request.method) && bytes.equal(candidate.target, request.path) {
-      return candidate.handler(response, request)
-    }
-    i += 1
-  }
-  if state.fallback != nil { return state.fallback(response, request) }
-  return respond(response, "not found\n", ResponseOptions{ status: StatusNotFound, content_type: "text/plain; charset=utf-8" })
 }
 
 // Typed application state. A server stores one Handler and one rawptr; bind
@@ -1042,13 +983,21 @@ fn routes_dispatch(T: type, response: *Response, request: *const Request) Result
 // Runs the matching route. Use it from a Typed handler that wraps routing
 // with its own work, such as counting or authentication.
 pub fn serve_routes(router: *Routes($T), response: *Response, request: *const Request) Result {
-  matched := request.*
+  captures: [MaxParams]Header
   allow_storage: [128]u8
   allow_used: usize = 0
   for i in 0..router.count {
     candidate := &router.routes[i]
-    if !match_path(candidate.pattern, request.path, &matched) { continue }
+    count := match_captures(candidate.pattern, request.path, captures[..])
+    if count < 0 { continue }
     if method_matches(candidate.method, request.method) {
+      if count == 0 { return candidate.handler(response, request, router.state) }
+      // Only a pattern with :name segments pays for a Request copy.
+      matched := request.*
+      for k in 0..#cast(usize, count) {
+        matched.params[k] = captures[k]
+      }
+      matched.param_count = #cast(usize, count)
       return candidate.handler(response, &matched, router.state)
     }
     if allow_used > 0 {
@@ -1083,25 +1032,42 @@ fn pattern_params(pattern: []const u8) usize {
 // Matches path against pattern segment by segment, capturing :name segments
 // into request.params. Captures borrow path.
 pub fn match_path(pattern: []const u8, path: []const u8, request: *Request) bool {
-  request.param_count = 0
+  count := match_captures(pattern, path, request.params[..])
+  if count < 0 {
+    request.param_count = 0
+    return false
+  }
+  request.param_count = #cast(usize, count)
+  return true
+}
+
+// The number of :name captures written to captures, or -1 for no match.
+fn match_captures(pattern: []const u8, path: []const u8, captures: []Header) isize {
+  count: usize = 0
   p: usize = 0
   q: usize = 0
   for p < #len(pattern) && q < #len(path) {
-    if pattern[p] == ':' && p > 0 && pattern[p - 1] == '/' {
-      name_end := p + bytes.find_byte(pattern[p..], '/')
-      value_end := q + bytes.find_byte(path[q..], '/')
-      if value_end == q || request.param_count >= MaxParams { return false }
-      request.params[request.param_count] = Header{ name: pattern[p + 1..name_end], value: path[q..value_end] }
-      request.param_count += 1
-      p = name_end
-      q = value_end
+    if pattern[p] == path[q] && pattern[p] != ':' {
+      p += 1
+      q += 1
       continue
     }
-    if pattern[p] != path[q] { return false }
-    p += 1
-    q += 1
+    if pattern[p] != ':' || p == 0 || pattern[p - 1] != '/' {
+      if pattern[p] != path[q] { return -1 }
+      p += 1
+      q += 1
+      continue
+    }
+    name_end := p + bytes.find_byte(pattern[p..], '/')
+    value_end := q + bytes.find_byte(path[q..], '/')
+    if value_end == q || count >= #len(captures) { return -1 }
+    captures[count] = Header{ name: pattern[p + 1..name_end], value: path[q..value_end] }
+    count += 1
+    p = name_end
+    q = value_end
   }
-  return p == #len(pattern) && q == #len(path)
+  if p != #len(pattern) || q != #len(path) { return -1 }
+  return #cast(isize, count)
 }
 
 // Path parameter captured by a Routes pattern, still percent-encoded.
@@ -1116,10 +1082,6 @@ pub fn param(request: *const Request, name: []const u8) HttpHeader {
 
 pub fn server(input: io.Reader, output: io.Writer, storage: []u8) Server {
   return Server{ input: input, output: output, storage: storage }
-}
-
-pub fn connection_server(input: io.Reader, output: io.Writer, storage: []u8) Server {
-  return server(input, output, storage)
 }
 
 fn shift_consumed(state: *Server) {
@@ -2093,27 +2055,16 @@ pub fn body_abort(body: *Body) Result {
   return Result{ detail: ErrorKind.None }
 }
 
-pub fn serve_connection(connection: *network.Connection, storage: []u8, handler: Handler) Result {
-  return serve_connection_context(connection, storage, handler, nil)
-}
-
-// Like serve_connection; every Request carries context for the handler.
-pub fn serve_connection_context(connection: *network.Connection, storage: []u8, handler: Handler, context: rawptr) Result {
-  return serve_stream_context(network.connection_reader(connection), network.connection_writer(connection), storage, handler, context)
-}
-
-// Stream seam shared by plain TCP, TLS, tests, and embedded transports.
-pub fn serve_stream(input: io.Reader, output: io.Writer, storage: []u8, handler: Handler) Result {
-  return serve_stream_context(input, output, storage, handler, nil)
-}
-
-// Like serve_stream; every Request carries context, borrowed application state
-// the handler casts back to its own type. The caller keeps it alive.
-pub fn serve_stream_context(input: io.Reader, output: io.Writer, storage: []u8, handler: Handler, context: rawptr) Result {
+// Serves HTTP/1.1 on one stream until the client closes or a request fails,
+// one request at a time on the calling thread. For a single-threaded or
+// embedded server, and for tests; evented is the multi-connection server.
+// Every Request carries context, borrowed application state the handler casts
+// back to its own type (http.bind does that cast). The caller keeps it alive.
+pub fn serve_stream(input: io.Reader, output: io.Writer, storage: []u8, handler: Handler, context: rawptr) Result {
   if handler == nil || #len(storage) == 0 {
     return Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
-  state := connection_server(input, output, storage)
+  state := server(input, output, storage)
   state.context = context
   for true {
     received := receive(&state)

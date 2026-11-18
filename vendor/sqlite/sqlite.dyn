@@ -46,7 +46,7 @@ pub fn open_with_options(name: []const u8, buffer: []u8, options: OpenOptions) O
 // any other code.
 fn code_failure(code: i32) io.Failure {
   if code == 0 { return io.Failure{} }
-  return io.Failure{ kind: io.Kind.System, native: #cast(isize, code) }
+  return io.Failure{ kind: io.Kind.System, native: code }
 }
 pub fn close(database: Database) io.Failure {
   if database == nil { return io.Failure{} }

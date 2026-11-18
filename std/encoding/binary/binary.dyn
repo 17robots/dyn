@@ -50,7 +50,7 @@ pub fn store_u16_le(destination: []u8, value: u16) {
     #panic("binary destination too small")
   }
   destination[0] = #cast(u8, value)
-  destination[1] = #cast(u8, (value >> 8))
+  destination[1] = (value >> 8)
 }
 pub fn store_u32_le(destination: []u8, value: u32) {
   if #len(destination) < 4 {
@@ -59,7 +59,7 @@ pub fn store_u32_le(destination: []u8, value: u32) {
   destination[0] = #cast(u8, value)
   destination[1] = #cast(u8, (value >> 8))
   destination[2] = #cast(u8, (value >> 16))
-  destination[3] = #cast(u8, (value >> 24))
+  destination[3] = (value >> 24)
 }
 pub fn store_u64_le(destination: []u8, value: u64) {
   if #len(destination) < 8 {
@@ -74,20 +74,20 @@ pub fn store_u64_le(destination: []u8, value: u64) {
   destination[4] = #cast(u8, value >> 32)
   destination[5] = #cast(u8, value >> 40)
   destination[6] = #cast(u8, value >> 48)
-  destination[7] = #cast(u8, value >> 56)
+  destination[7] = value >> 56
 }
 pub fn store_u16_be(destination: []u8, value: u16) {
   if #len(destination) < 2 {
     #panic("binary destination too small")
   }
-  destination[0] = #cast(u8, (value >> 8))
+  destination[0] = (value >> 8)
   destination[1] = #cast(u8, value)
 }
 pub fn store_u32_be(destination: []u8, value: u32) {
   if #len(destination) < 4 {
     #panic("binary destination too small")
   }
-  destination[0] = #cast(u8, (value >> 24))
+  destination[0] = (value >> 24)
   destination[1] = #cast(u8, (value >> 16))
   destination[2] = #cast(u8, (value >> 8))
   destination[3] = #cast(u8, value)
@@ -96,7 +96,7 @@ pub fn store_u64_be(destination: []u8, value: u64) {
   if #len(destination) < 8 {
     #panic("binary destination too small")
   }
-  store_u32_be(destination[..4], #cast(u32, (value >> 32)))
+  store_u32_be(destination[..4], (value >> 32))
   store_u32_be(destination[4..8], #cast(u32, value))
 }
 

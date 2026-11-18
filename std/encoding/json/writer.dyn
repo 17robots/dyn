@@ -237,14 +237,14 @@ pub fn field(target: *Writer, name: []const u8, value: any) {
     i32 v => { integer(target, v) }
     i16 v => { integer(target, v) }
     i8 v => { integer(target, v) }
-    isize v => { integer(target, #cast(i64, v)) }
+    isize v => { integer(target, v) }
     u64 v => { unsigned(target, v) }
     u32 v => { unsigned(target, v) }
     u16 v => { unsigned(target, v) }
     u8 v => { unsigned(target, v) }
-    usize v => { unsigned(target, #cast(u64, v)) }
+    usize v => { unsigned(target, v) }
     f64 v => { float(target, v) }
-    f32 v => { float(target, #cast(f64, v)) }
+    f32 v => { float(target, v) }
     bool v => { boolean(target, v) }
     _ => { target.invalid = true }
   }
@@ -293,9 +293,9 @@ fn write_member(target: *Writer, at: usize, type_id: u64) {
   } else if type_id == #typeof(u32).id {
     unsigned(target, #cast(*const u32, at).*)
   } else if type_id == #typeof(usize).id {
-    unsigned(target, #cast(u64, #cast(*const usize, at).*))
+    unsigned(target, #cast(*const usize, at).*)
   } else if type_id == #typeof(isize).id {
-    integer(target, #cast(i64, #cast(*const isize, at).*))
+    integer(target, #cast(*const isize, at).*)
   } else if type_id == #typeof(i16).id {
     integer(target, #cast(*const i16, at).*)
   } else if type_id == #typeof(u16).id {
@@ -307,7 +307,7 @@ fn write_member(target: *Writer, at: usize, type_id: u64) {
   } else if type_id == #typeof(f64).id {
     float(target, #cast(*const f64, at).*)
   } else if type_id == #typeof(f32).id {
-    float(target, #cast(f64, #cast(*const f32, at).*))
+    float(target, #cast(*const f32, at).*)
   } else {
     target.invalid = true
   }

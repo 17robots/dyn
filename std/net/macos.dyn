@@ -43,8 +43,18 @@ fn native_connect(descriptor: isize, address: *const u8, length: usize) isize {
 fn native_bind(descriptor: isize, address: *const u8, length: usize) isize {
   return #syscall(sys.Bind, descriptor, address, length)
 }
-fn native_accept(descriptor: isize, address: *u8, length: *u32) isize {
+fn accept_blocking(descriptor: isize, address: *u8, length: *u32) isize {
   return #syscall(sys.Accept, descriptor, address, length)
+}
+fn native_accept(descriptor: isize, address: *u8, length: *u32, nonblocking: bool) isize {
+  accepted := accept_blocking(descriptor, address, length)
+  if accepted < 0 || !nonblocking { return accepted }
+  set := native_nonblocking(accepted, true)
+  if set < 0 {
+    _ = native_close(accepted)
+    return set
+  }
+  return accepted
 }
 fn native_local(descriptor: isize, address: *u8, length: *u32) isize {
   return #syscall(sys.Getsockname, descriptor, address, length)

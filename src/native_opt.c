@@ -344,7 +344,7 @@ typedef struct {
   uint32_t *loop_low, *loop_span;
   unsigned expansions, constants, budget, resource_budget, reserved_growth, reserved_resources;
   unsigned *costs;
-  bool failed, leaf_only, byte_fast, uniform_params;
+  bool failed, leaf_only, uniform_params;
   bool *active;
   /* Locals whose address is taken anywhere; a call may change them. */
   bool *addressed;
@@ -905,12 +905,9 @@ static bool inline_admits(const Inline *b, const InlineScope *scope, uint64_t id
       f->local_count > 128 || count != f->param_count ||
       (uint64_t)f->param_start + f->param_count > b->in->param_count)
     return false;
-  /* Preserve the call for target byte-scan lowering; other targets retain
-     their existing scalar inlining decisions. Math the backend lowers to
-     one instruction (sqrt, fma, rounding) stays a call too: its body is the
-     software fallback. */
-  if ((b->byte_fast && f->byte_intrinsic != DYN_BYTE_INTRINSIC_NONE) ||
-      f->math_intrinsic != DYN_MATH_INTRINSIC_NONE)
+  /* Math the backend lowers to one instruction (sqrt, fma, rounding)
+     stays a call: its body is the software fallback. */
+  if (f->math_intrinsic != DYN_MATH_INTRINSIC_NONE)
     return false;
   if (b->leaf_only && (!scope->in_loop || !inline_leaf(b->in, f)))
     return false;
@@ -1308,8 +1305,7 @@ static bool inline_reserve_hot(Inline *b, uint32_t start, uint32_t count,
             !b->active[call->integer]) {
           const DynIrFunction *f = &b->in->functions[call->integer];
           unsigned cost = b->costs[call->integer];
-          bool byte = b->byte_fast && f->byte_intrinsic != DYN_BYTE_INTRINSIC_NONE;
-          if (!f->foreign && !f->generic && !f->variadic && !f->is_main && !byte &&
+          if (!f->foreign && !f->generic && !f->variadic && !f->is_main &&
               f->local_count <= 128 && cost <= 16 && call->item_count == f->param_count &&
               (uint64_t)call->item_start + call->item_count <= b->in->item_count &&
               (uint64_t)f->param_start + f->param_count <= b->in->param_count) {
@@ -1401,7 +1397,6 @@ static bool inline_plan_fits(const Inline *b, uint32_t node) {
   const DynIrExpr *call = &b->in->expressions[x->site];
   if (f->foreign || f->generic || f->variadic || f->is_main || f->local_count > 128 ||
       call->item_count != f->param_count || (uint64_t)f->param_start + f->param_count > b->in->param_count ||
-      (b->byte_fast && f->byte_intrinsic != DYN_BYTE_INTRINSIC_NONE) ||
       f->math_intrinsic != DYN_MATH_INTRINSIC_NONE)
     return false;
   /* A repeating site may be twice the size, like LLVM's bonus for loops,
@@ -1745,10 +1740,9 @@ static bool inline_dense_loops(DynIrProgram *ir) {
   return true;
 }
 /* budget: growth allowed per caller, in cost units; see inline_admits. */
-static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool byte_fast, unsigned budget) {
+static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool uniform_params, unsigned budget) {
   Inline b = {.view = o->ir, .out = o->ir, .loop_stride = 1,
-              .leaf_only = leaf_only, .byte_fast = byte_fast,
-              .uniform_params = byte_fast};
+              .leaf_only = leaf_only, .uniform_params = uniform_params};
   b.in = &b.view;
   b.expressions_cap = o->ir.expression_count;
   b.statements_cap = o->ir.statement_count;
@@ -2079,7 +2073,8 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
     if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_ADDRESS && e->left < input->expression_count)
       addressed[e->left] = true;
   }
-  for (size_t i = 0; i < input->expression_count; ++i) {
+  bool propagate = dyn_optimization_pass_on("propagate");
+  for (size_t i = 0; propagate && i < input->expression_count; ++i) {
     if (input->live.expressions && !input->live.expressions[i]) continue;
     const DynIrExpr *e = &input->expressions[i];
     if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_BOOL ||
@@ -2140,8 +2135,9 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
     owned->expressions = NULL; owned->statements = NULL;
   }
   const char *no_ssa = getenv("DYN_NO_SSA");
-  bool byte_fast = allow_ssa_intrinsics && !strcmp(dyn_context_target(&source->context)->arch, "x86_64") &&
-                  (!no_ssa || !*no_ssa || !strcmp(no_ssa, "0"));
+  /* Uniform-parameter inlining serves the x86-64 SSA backend. */
+  bool uniform_params = allow_ssa_intrinsics && !strcmp(dyn_context_target(&source->context)->arch, "x86_64") &&
+                        (!no_ssa || !*no_ssa || !strcmp(no_ssa, "0"));
   /* O2 and O3 share the ranked inliner; O2, which plain --release uses,
      grows each caller by about a third as much. At 128, a quarter, mem.push
      inlined but the arena fast path inside it no longer fit, so every push
@@ -2153,8 +2149,8 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
   /* DYN_NO_INLINE=1 keeps every call, for tests that inspect one function's
      code or remarks. */
   const char *no_inline = getenv("DYN_NO_INLINE");
-  bool inline_calls = !no_inline || !*no_inline || !strcmp(no_inline, "0");
-  if (level >= 2 && inline_calls && !inline_program_within(o, false, byte_fast, level == 2 ? 176 : 512)) {
+  bool inline_calls = (!no_inline || !*no_inline || !strcmp(no_inline, "0")) && dyn_optimization_pass_on("inline");
+  if (level >= 2 && inline_calls && !inline_program_within(o, false, uniform_params, level == 2 ? 176 : 512)) {
     free(samples);
     dyn_native_optimization_free(o);
     return false;

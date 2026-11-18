@@ -4,185 +4,37 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Keep SDK candidate order in sync with module.c's resolve_std, without a
-   frontend-only link dependency on the module resolver. Missing paths or OOM
-   simply leave this optional optimization unrecognized. */
-extern char *realpath(const char *, char *);
-static char *sdk_source_path(const char *path, bool strict_configured) {
-  const char *configured = getenv("DYN_SDK");
-  if (configured && *configured) {
-    char *root = realpath(configured, NULL);
-    if (root) {
-      char *candidate = dyn_path_join(root, path);
-      if (!candidate) { free(root); return NULL; }
-      char *resolved = realpath(candidate, NULL);
-      free(candidate);
-      size_t n = strlen(root);
-      bool within = resolved && !strncmp(root, resolved, n) &&
-                    (resolved[n] == 0 || resolved[n] == '/');
-      free(root);
-      if (within) return resolved;
-      free(resolved);
-    }
-    if (strict_configured) return NULL;
-  }
-  char executable[4096], candidate[4096];
-  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
-  if (n < 0) return NULL;
-  executable[n] = 0;
-  char *slash = strrchr(executable, '/');
-  if (!slash) return NULL;
-  *slash = 0;
-  const char *formats[] = {"%s/../compiler/%s", "%s/../%s", "%s/../share/dyn/%s"};
-  for (size_t i = 0; i < sizeof(formats) / sizeof(*formats); ++i) {
-    int length = snprintf(candidate, sizeof(candidate), formats[i], executable,
-                          i == 2 ? path + 4 : path);
-    if (length < 0 || (size_t)length >= sizeof(candidate)) continue;
-    char *resolved = realpath(candidate, NULL);
-    if (resolved) return resolved;
-  }
-  return NULL;
-}
-/* Functions of one file share its path; resolve it once. */
-typedef struct {
-  const char *path;
-  char *canonical;
-} CanonicalPath;
-static const char *canonical_path(CanonicalPath *cache, const char *path) {
-  if (!cache->path || (cache->path != path && strcmp(cache->path, path))) {
-    free(cache->canonical);
-    cache->canonical = realpath(path, NULL);
-    cache->path = path;
-  }
-  return cache->canonical;
-}
-static DynMathIntrinsic math_identity(const DynSource *source, CanonicalPath *paths,
-                                     const char *source_path, const char *sdk,
-                                     const DynIrProgram *ir, const DynIrFunction *fn) {
-  if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic ||
-      !fn->is_public || (fn->return_type != DYN_TYPE_F32 && fn->return_type != DYN_TYPE_F64))
+/* The compiler prelude's math builtins, which #sqrt(x) and the others call,
+   carry their instruction's identity: the code generator emits the
+   instruction where the target has one and calls the body elsewhere. */
+static DynMathIntrinsic math_identity(const DynSource *source, const DynIrProgram *ir, const DynIrFunction *fn) {
+  if (!source->map_count || fn->source_offset >= source->maps[0].start || fn->foreign || fn->variadic ||
+      (fn->return_type != DYN_TYPE_F32 && fn->return_type != DYN_TYPE_F64))
     return DYN_MATH_INTRINSIC_NONE;
-  const char *canonical = canonical_path(paths, source_path);
-  bool trusted = canonical && !strcmp(canonical, sdk);
-  if (!trusted) return DYN_MATH_INTRINSIC_NONE;
   const char *original, *ignored_path;
   size_t length, offset;
   dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
   size_t end = offset;
-  while (end < length && ((original[end] >= 'a' && original[end] <= 'z') ||
-         (original[end] >= 'A' && original[end] <= 'Z') ||
-         (original[end] >= '0' && original[end] <= '9') || original[end] == '_')) ++end;
-  const char *names[] = {"sqrt64", "floor64", "ceil64", "trunc64", "round64", "copysign64", "fma64", "fma"};
-  for (size_t i = 0; i < sizeof(names) / sizeof(*names); ++i) {
-    if (end - offset != strlen(names[i]) || memcmp(original + offset, names[i], end - offset)) continue;
-    bool generic_fma = i == 7;
-    if (fn->instance != generic_fma || (!generic_fma && fn->return_type != DYN_TYPE_F64)) break;
-    uint32_t count = i >= 6 ? 3 : i == 5 ? 2 : 1;
-    if (fn->param_count != count || fn->param_start > ir->param_count ||
-        count > ir->param_count - fn->param_start) break;
+  while (end < length && ((original[end] >= 'a' && original[end] <= 'z') || original[end] == '_')) ++end;
+  static const struct { const char *name; DynMathIntrinsic kind; uint32_t count; } builtins[] = {
+    {"dyn_builtin_sqrt", DYN_MATH_INTRINSIC_SQRT, 1}, {"dyn_builtin_floor", DYN_MATH_INTRINSIC_FLOOR, 1},
+    {"dyn_builtin_ceil", DYN_MATH_INTRINSIC_CEIL, 1}, {"dyn_builtin_trunc", DYN_MATH_INTRINSIC_TRUNC, 1},
+    {"dyn_builtin_round", DYN_MATH_INTRINSIC_ROUND, 1}, {"dyn_builtin_fma", DYN_MATH_INTRINSIC_FMA, 3},
+  };
+  for (size_t i = 0; i < sizeof(builtins) / sizeof(*builtins); ++i) {
+    if (end - offset != strlen(builtins[i].name) || memcmp(original + offset, builtins[i].name, end - offset)) continue;
+    /* fma is generic over f32 and f64; the others take f64. */
+    bool generic = builtins[i].kind == DYN_MATH_INTRINSIC_FMA;
+    if (fn->instance != generic || (!generic && fn->return_type != DYN_TYPE_F64)) break;
+    uint32_t count = builtins[i].count;
+    if (fn->param_count != count || fn->param_start > ir->param_count || count > ir->param_count - fn->param_start) break;
     for (uint32_t j = 0; j < count; ++j)
       if (ir->params[fn->param_start + j].type != fn->return_type) return DYN_MATH_INTRINSIC_NONE;
-    return generic_fma ? DYN_MATH_INTRINSIC_FMA : (DynMathIntrinsic)(DYN_MATH_INTRINSIC_SQRT + i);
+    return builtins[i].kind;
   }
   return DYN_MATH_INTRINSIC_NONE;
 }
 
-static bool byte_const_slice(const DynAstProgram *a, DynType type) {
-  return dyn_type_is_slice(type) && type - DYN_TYPE_SLICE_BASE < a->slice_count &&
-         a->slices[type - DYN_TYPE_SLICE_BASE].is_const &&
-         a->slices[type - DYN_TYPE_SLICE_BASE].element == DYN_TYPE_U8;
-}
-/* Only the current SDK's original ordinary declaration can gain this identity.
-   Read AST slice metadata: IR slice entries are populated after functions. */
-static DynByteIntrinsic byte_identity(const DynSource *source, CanonicalPath *paths,
-                                     const char *source_path, const char *sdk,
-                                     const DynAstProgram *a, const DynIrProgram *ir,
-                                     const DynIrFunction *fn) {
-  if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic ||
-      fn->instance || !fn->is_public || fn->return_type != DYN_TYPE_USIZE ||
-      fn->param_count != 2 || fn->param_start > ir->param_count ||
-      2 > ir->param_count - fn->param_start ||
-      !byte_const_slice(a, ir->params[fn->param_start].type))
-    return DYN_BYTE_INTRINSIC_NONE;
-  const char *canonical = canonical_path(paths, source_path);
-  bool trusted = canonical && !strcmp(canonical, sdk);
-  if (!trusted) return DYN_BYTE_INTRINSIC_NONE;
-  const char *original, *ignored_path;
-  size_t length, offset;
-  dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
-  if (offset > length) return DYN_BYTE_INTRINSIC_NONE;
-  size_t end = offset;
-  while (end < length && ((original[end] >= 'a' && original[end] <= 'z') ||
-         (original[end] >= 'A' && original[end] <= 'Z') ||
-         (original[end] >= '0' && original[end] <= '9') || original[end] == '_')) ++end;
-  DynType needle = ir->params[fn->param_start + 1].type;
-  if (end - offset == 9 && !memcmp(original + offset, "find_byte", 9) && needle == DYN_TYPE_U8)
-    return DYN_BYTE_INTRINSIC_FIND_BYTE;
-  if (end - offset == 4 && !memcmp(original + offset, "find", 4) && byte_const_slice(a, needle))
-    return DYN_BYTE_INTRINSIC_FIND;
-  return DYN_BYTE_INTRINSIC_NONE;
-}
-
-/* The private JSON scanner has a scalar body on every target. Only its exact
-   SDK declaration may use the bounded x86 implementation. */
-static DynByteIntrinsic json_byte_identity(const DynSource *source, CanonicalPath *paths,
-                                          const char *source_path, const char *sdk,
-                                          const char *mutable_sdk,
-                                          const DynAstProgram *a, const DynIrProgram *ir,
-                                          const DynIrFunction *fn) {
-  if ((!sdk && !mutable_sdk) || !source_path || fn->foreign || fn->variadic ||
-      fn->generic || fn->instance || fn->is_public ||
-      fn->return_type != DYN_TYPE_USIZE || fn->param_count != 1 ||
-      fn->param_start >= ir->param_count ||
-      !byte_const_slice(a, ir->params[fn->param_start].type)) return DYN_BYTE_INTRINSIC_NONE;
-  const char *canonical = canonical_path(paths, source_path);
-  bool trusted = canonical && ((sdk && !strcmp(canonical, sdk)) ||
-                               (mutable_sdk && !strcmp(canonical, mutable_sdk)));
-  if (!trusted) return DYN_BYTE_INTRINSIC_NONE;
-  const char *original, *ignored_path;
-  size_t length, offset;
-  dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
-  const char name[] = "ascii_string_prefix";
-  size_t n = sizeof(name) - 1;
-  if (offset > length || n > length - offset || memcmp(original + offset, name, n))
-    return DYN_BYTE_INTRINSIC_NONE;
-  if (offset + n < length) {
-    unsigned char c = (unsigned char)original[offset + n];
-    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-        (c >= '0' && c <= '9') || c == '_') return DYN_BYTE_INTRINSIC_NONE;
-  }
-  return DYN_BYTE_INTRINSIC_JSON_ASCII_PREFIX;
-}
-
-/* std/mem's private zero_bytes_fast(items: []u8): the SSA backend writes a
-   constant-length call as one fixed-size fill, such as the zeroing of each
-   mem.push. Only the exact SDK declaration has this identity. */
-static DynByteIntrinsic zero_identity(const DynSource *source, CanonicalPath *paths,
-                                      const char *source_path, const char *sdk,
-                                      const DynAstProgram *a, const DynIrProgram *ir,
-                                      const DynIrFunction *fn) {
-  if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic || fn->instance || fn->is_public ||
-      fn->return_type != DYN_TYPE_VOID || fn->param_count != 1 || fn->param_start >= ir->param_count)
-    return DYN_BYTE_INTRINSIC_NONE;
-  DynType items = ir->params[fn->param_start].type;
-  if (!dyn_type_is_slice(items) || items - DYN_TYPE_SLICE_BASE >= a->slice_count ||
-      a->slices[items - DYN_TYPE_SLICE_BASE].is_const || a->slices[items - DYN_TYPE_SLICE_BASE].element != DYN_TYPE_U8)
-    return DYN_BYTE_INTRINSIC_NONE;
-  const char *canonical = canonical_path(paths, source_path);
-  if (!canonical || strcmp(canonical, sdk)) return DYN_BYTE_INTRINSIC_NONE;
-  const char *original, *ignored_path;
-  size_t length, offset;
-  dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
-  const char name[] = "zero_bytes_fast";
-  size_t n = sizeof(name) - 1;
-  if (offset > length || n > length - offset || memcmp(original + offset, name, n)) return DYN_BYTE_INTRINSIC_NONE;
-  if (offset + n < length) {
-    unsigned char c = (unsigned char)original[offset + n];
-    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')
-      return DYN_BYTE_INTRINSIC_NONE;
-  }
-  return DYN_BYTE_INTRINSIC_ZERO;
-}
 
 static bool allocate(void **out, size_t count, size_t size) {
   if (!count) {
@@ -431,7 +283,7 @@ static bool ir_wraps(const DynSource *source, DynSpan span) {
   const char *path, *text;
   size_t length, at;
   dyn_source_position(source, span.start_byte, &path, &text, &length, &at);
-  return path && (strstr(path, "/std/") || strstr(path, "/vendor/") || strstr(path, "/share/dyn/"));
+  return dyn_path_in_library(path);
 }
 
 /* A case on text: `case name { "a" => {...} _ => {...} }`. Sema left the
@@ -942,23 +794,11 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
      of memory, lookup retains its unindexed fallback. */
   (void)dyn_location_build(&ir->locations, source);
   DynLocationIndex locations = ir->locations;
-  CanonicalPath paths = {0};
-  char *math_sdk = proofs ? sdk_source_path("std/math/float.dyn", false) : NULL;
-  char *bytes_sdk = proofs ? sdk_source_path("std/bytes/bytes.dyn", true) : NULL;
-  char *json_sdk = proofs ? sdk_source_path("std/encoding/json/read/read.dyn", true) : NULL;
-  char *mutable_json_sdk = proofs ? sdk_source_path("std/encoding/json/json.dyn", true) : NULL;
-  char *mem_sdk = proofs ? sdk_source_path("std/mem/mem.dyn", true) : NULL;
   for (size_t i = 0; i < a->function_count; ++i) {
     size_t n = a->functions[i].name.end_byte - a->functions[i].name.start_byte;
     /* Instances share the generic's name; the suffix hashes the type arguments, so it stays stable when other code changes. */
     ir->functions[i].name = malloc(n + 20);
     if (!ir->functions[i].name) {
-      free(mem_sdk);
-      free(mutable_json_sdk);
-      free(json_sdk);
-      free(bytes_sdk);
-      free(math_sdk);
-      free(paths.canonical);
       dyn_ir_free(ir);
       return false;
     }
@@ -990,12 +830,6 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     size_t link_length = a->functions[i].link_name.end_byte - a->functions[i].link_name.start_byte;
     ir->functions[i].link_name = malloc(link_length + 1);
     if (!ir->functions[i].link_name) {
-      free(mem_sdk);
-      free(mutable_json_sdk);
-      free(json_sdk);
-      free(bytes_sdk);
-      free(math_sdk);
-      free(paths.canonical);
       dyn_ir_free(ir);
       return false;
     }
@@ -1019,19 +853,8 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->functions[i].is_public = a->functions[i].is_public;
     ir->functions[i].module_owner = a->functions[i].module_owner;
     ir->functions[i].variadic_type = lower_type(a, a->functions[i].variadic_type);
-    ir->functions[i].math_intrinsic = math_identity(source, &paths, source_path, math_sdk, ir, &ir->functions[i]);
-    ir->functions[i].byte_intrinsic = byte_identity(source, &paths, source_path, bytes_sdk, a, ir, &ir->functions[i]);
-    if (ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_NONE)
-      ir->functions[i].byte_intrinsic = json_byte_identity(source, &paths, source_path, json_sdk, mutable_json_sdk, a, ir, &ir->functions[i]);
-    if (ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_NONE)
-      ir->functions[i].byte_intrinsic = zero_identity(source, &paths, source_path, mem_sdk, a, ir, &ir->functions[i]);
+    ir->functions[i].math_intrinsic = proofs ? math_identity(source, ir, &ir->functions[i]) : DYN_MATH_INTRINSIC_NONE;
   }
-  free(mem_sdk);
-  free(mutable_json_sdk);
-  free(json_sdk);
-  free(bytes_sdk);
-  free(math_sdk);
-  free(paths.canonical);
   for (size_t i = 0; i < a->global_count; ++i) {
     size_t n = a->globals[i].name.end_byte - a->globals[i].name.start_byte;
     ir->globals[i].name = malloc(n + 1);

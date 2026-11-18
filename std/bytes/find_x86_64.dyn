@@ -1,0 +1,9 @@
+#target(arch: x86_64)
+
+// find_byte runs the runtime's SSE2 routine, sixteen bytes at a time.
+extern fn native_find_byte "dyn_find_byte"(data: *const u8, length: usize, byte: u8) usize
+
+fn find_byte_target(value: []const u8, byte: u8) usize {
+  if #len(value) == 0 { return 0 }
+  return native_find_byte(&value[0], #len(value), byte)
+}

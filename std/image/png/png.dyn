@@ -44,7 +44,7 @@ fn u32be(source: []const u8, at: usize) u32 {
 }
 
 fn put_u32be(destination: []u8, at: usize, value: u32) {
-  destination[at] = #cast(u8, (value >> 24))
+  destination[at] = (value >> 24)
   destination[at + 1] = #cast(u8, (value >> 16))
   destination[at + 2] = #cast(u8, (value >> 8))
   destination[at + 3] = #cast(u8, value)

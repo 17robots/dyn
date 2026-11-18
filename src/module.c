@@ -178,109 +178,15 @@ static bool within(const char *root, const char *path) {
   size_t n = strlen(root);
   return !strncmp(root, path, n) && (path[n] == 0 || path[n] == '/');
 }
-static char *resolve_configured_sdk(const char *path, bool *oom) {
-  const char *configured = getenv("DYN_SDK");
-  if (!configured || !*configured)
-    return NULL;
-  char *root = realpath(configured, NULL);
-  if (!root)
-    return NULL;
-  char *candidate = dyn_path_join(root, path);
-  if (!candidate)
-    *oom = true;
-  char *result = candidate ? realpath(candidate, NULL) : NULL;
-  free(candidate);
-  if (!result || !within(root, result)) {
-    free(result);
-    result = NULL;
-  }
-  free(root);
-  return result;
-}
-static char *resolve_std(const char *path, bool *oom) {
-  char *configured = resolve_configured_sdk(path, oom);
-  if (configured)
-    return configured;
-  char executable[4096];
-  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
-  if (n < 0)
-    return NULL;
-  executable[n] = 0;
-  char *slash = strrchr(executable, '/');
-  if (!slash)
-    return NULL;
-  *slash = 0;
-  char relative[4096];
-  if (snprintf(relative, sizeof(relative), "%s/../compiler/%s", executable,
-               path) < (int)sizeof(relative)) {
-    char *found = realpath(relative, NULL);
-    if (found)
-      return found;
-  }
-  if (snprintf(relative, sizeof(relative), "%s/../%s", executable, path) <
-      (int)sizeof(relative)) {
-    char *found = realpath(relative, NULL);
-    if (found)
-      return found;
-  }
-  if (snprintf(relative, sizeof(relative), "%s/../share/dyn/%s", executable,
-               path + 4) < (int)sizeof(relative))
-    return realpath(relative, NULL);
-  return NULL;
-}
-static char *resolve_vendor(const char *path, bool *oom) {
-  char *configured = resolve_configured_sdk(path, oom);
-  if (configured)
-    return configured;
-  char executable[4096];
-  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
-  if (n < 0)
-    return NULL;
-  executable[n] = 0;
-  char *slash = strrchr(executable, '/');
-  if (!slash)
-    return NULL;
-  *slash = 0;
-  char relative[4096];
-  if (snprintf(relative, sizeof(relative), "%s/../compiler/%s", executable,
-               path) < (int)sizeof(relative)) {
-    char *found = realpath(relative, NULL);
-    if (found)
-      return found;
-  }
-  if (snprintf(relative, sizeof(relative), "%s/../sdk/%s", executable, path) <
-      (int)sizeof(relative)) {
-    char *found = realpath(relative, NULL);
-    if (found)
-      return found;
-  }
-  if (snprintf(relative, sizeof(relative), "%s/../%s", executable, path) <
-      (int)sizeof(relative)) {
-    char *found = realpath(relative, NULL);
-    if (found)
-      return found;
-  }
-  if (snprintf(relative, sizeof(relative), "%s/../share/dyn/%s", executable,
-               path) < (int)sizeof(relative))
-    return realpath(relative, NULL);
-  return NULL;
-}
-char *dyn_module_resolve_sdk(const char *path) {
-  bool oom = false;
-  if (!path) return NULL;
-  if (!strncmp(path, "std/", 4)) return resolve_std(path, &oom);
-  if (!strncmp(path, "vendor/", 7)) return resolve_vendor(path, &oom);
-  return NULL;
-}
 /* Sets *oom when an allocation fails, as opposed to an unresolved path. */
 static char *resolve_checked(Resolver *r, const char *current, const char *path,
                              bool *oom) {
   if (!path || !*path)
     return NULL;
   if (!strncmp(path, "std/", 4))
-    return resolve_std(path, oom);
+    return dyn_sdk_resolve(path, oom);
   if (!strncmp(path, "vendor/", 7))
-    return resolve_vendor(path, oom);
+    return dyn_sdk_resolve(path, oom);
   const char *slash = strchr(path, '/');
   size_t first = slash ? (size_t)(slash - path) : strlen(path);
   for (size_t i = 0; i < r->dependency_count; ++i) {
@@ -542,6 +448,46 @@ static bool decl_named(Resolver *r, const char *directory, const char *name,
   *is_public = interface->decls[low].is_public;
   return true;
 }
+/* Edit distance between two names, giving up past limit. */
+static size_t member_distance(const char *a, const char *b, size_t limit) {
+  size_t n = strlen(a), m = strlen(b);
+  if (n > 63 || m > 63 || (n > m ? n - m : m - n) > limit) return limit + 1;
+  size_t row[64];
+  for (size_t j = 0; j <= m; ++j) row[j] = j;
+  for (size_t i = 1; i <= n; ++i) {
+    size_t diagonal = row[0], smallest = row[0] = i;
+    for (size_t j = 1; j <= m; ++j) {
+      size_t above = row[j];
+      size_t best = diagonal + (a[i - 1] != b[j - 1]);
+      if (above + 1 < best) best = above + 1;
+      if (row[j - 1] + 1 < best) best = row[j - 1] + 1;
+      row[j] = best;
+      diagonal = above;
+      if (best < smallest) smallest = best;
+    }
+    if (smallest > limit) return limit + 1;
+  }
+  return row[m];
+}
+/* The module's public name closest to member, within about a third of its
+   length, or NULL. */
+static const char *closest_member(Resolver *r, const char *directory, const char *member) {
+  ModuleInterface *interface = find_interface(r, directory);
+  if (!interface) return NULL;
+  size_t limit = strlen(member) / 3;
+  if (limit < 2) limit = 2;
+  const char *best = NULL;
+  size_t best_distance = limit + 1;
+  for (size_t i = 0; i < interface->decl_count; ++i) {
+    if (!interface->decls[i].is_public) continue;
+    size_t distance = member_distance(member, interface->decls[i].name, limit);
+    if (distance < best_distance) {
+      best_distance = distance;
+      best = interface->decls[i].name;
+    }
+  }
+  return best;
+}
 static size_t alias_index(char **aliases, size_t count, const char *name) {
   for (size_t i = 0; i < count; ++i)
     if (!strcmp(aliases[i], name))
@@ -577,10 +523,17 @@ static int validate_member_at(Resolver *r, uint32_t start, uint32_t end, const D
       snprintf(message, sizeof(message),
                "module '%s' has no source file for target %s; '%s.%s' is unavailable there",
                module, dyn_context_target(&s->context)->name, qualifier, member);
-    } else
-      snprintf(message, sizeof(message),
-               "imported member '%s.%s' is missing or not pub", qualifier,
-               member);
+    } else if (decl_named(r, targets[found], member, &pub))
+      snprintf(message, sizeof(message), "'%s.%s' is not pub; only pub declarations can be used from another module",
+               qualifier, member);
+    else {
+      const char *closest = closest_member(r, targets[found], member);
+      if (closest)
+        snprintf(message, sizeof(message), "'%s' has no pub member '%s'; did you mean '%s.%s'?", qualifier, member,
+                 qualifier, closest);
+      else
+        snprintf(message, sizeof(message), "'%s' has no pub member '%s'", qualifier, member);
+    }
     dyn_diagnostic_source("error", s, start, end, message);
     return 1;
   }
@@ -722,9 +675,9 @@ static int visit(Resolver *r, const char *directory,
         } else {
           const char *vet_path, *vet_text; size_t vet_length, vet_at;
           dyn_source_position(s, item.start, &vet_path, &vet_text, &vet_length, &vet_at);
-          bool own = vet_path && !strstr(vet_path, "/std/") && !strstr(vet_path, "/share/dyn/") &&
-                     !strstr(vet_path, "/vendor/");
-          if (s->context.vet && own && has(file_targets, file_target_count, target)) {
+          /* Only vet asks whether this is the program's own code. */
+          if (s->context.vet && vet_path && !dyn_path_in_library(vet_path) &&
+              has(file_targets, file_target_count, target)) {
             char message[512];
             snprintf(
                 message, sizeof(message),

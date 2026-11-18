@@ -16,12 +16,12 @@ fn event_put_u32(bytes: []u8, value: u32) {
   bytes[0] = #cast(u8, value)
   bytes[1] = #cast(u8, (value >> 8))
   bytes[2] = #cast(u8, (value >> 16))
-  bytes[3] = #cast(u8, (value >> 24))
+  bytes[3] = (value >> 24)
 }
 
 fn event_put_u64(bytes: []u8, value: u64) {
   event_put_u32(bytes[..4], #cast(u32, value))
-  event_put_u32(bytes[4..8], #cast(u32, (value >> 32)))
+  event_put_u32(bytes[4..8], (value >> 32))
 }
 
 pub fn event(events: u32, data: u64) Event {

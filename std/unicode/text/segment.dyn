@@ -131,11 +131,11 @@ fn decode_values(text: []const u8, values: []u32, starts: []usize) {
 }
 
 fn word_class(value: u32) u8 {
-  return #cast(u8, value & 31)
+  return value & 31
 }
 
 fn line_class(value: u32) u8 {
-  return #cast(u8, (value >> 5) & 63)
+  return (value >> 5) & 63
 }
 
 fn letter(class: u8) bool {

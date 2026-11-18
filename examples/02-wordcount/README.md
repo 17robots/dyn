@@ -17,10 +17,9 @@ dyn run examples/02-wordcount < examples/02-wordcount/poem.txt
 - **Results.** `fs.open(name)` returns `{value, failure}`. Check it with
   `io.failed(opened.failure)`; `failure.kind` is a portable category such as
   `io.Kind.NotFound`. The value is safe to read even on failure.
-- **Owning a handle.** A `fs.File` is an OS resource with one owner.
-  `fs.take(&opened.value)` moves it out of the result, and `defer
+- **Closing a handle once.** A `fs.File` is a plain value naming an OS
+  resource. `file := opened.value` copies it out of the result, and `defer
   fs.close(&file)` closes it when the loop iteration ends, however it ends.
-  `dyn vet` warns about copying a handle instead.
 - **Streaming through a seam.** `count_reader` takes an `io.Reader`, so the
   same code reads a file (`fs.reader(&file)`) and standard input
   (`io.stdin()`). It reads 64 KiB at a time into one stack buffer, so a file

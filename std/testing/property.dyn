@@ -17,7 +17,7 @@ pub fn check_property(options: PropertyOptions, work: []u8,
   for iteration < options.cases {
     length := random_below(&generator, capacity + 1)
     for i in 0..length {
-      sample[i] = #cast(u8, (random_next(&generator) & 255))
+      sample[i] = (random_next(&generator) & 255)
     }
     if !predicate(context, sample[..length]) {
       shrunk := shrink(sample, trial, length, options.shrink_checks, predicate, context)

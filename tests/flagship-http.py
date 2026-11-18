@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Flagship HTTP service: concurrent notes server driven by real clients."""
+"""Flagship HTTP service: evented notes server driven by real clients."""
 import http.client
 import os
 from pathlib import Path
@@ -12,7 +12,7 @@ import threading
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 if sys.platform != 'linux':
-    print('SKIP flagship HTTP server requires Linux worker threads')
+    print('SKIP flagship HTTP server test runs on Linux')
     raise SystemExit(0)
 
 

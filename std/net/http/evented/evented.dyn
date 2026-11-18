@@ -127,6 +127,10 @@ pub struct Config {
   // When set, one line per answered request: client, method, path, status
   // and microseconds in the handler (and its finish, for run and later).
   access_log: *log.Logger,
+  // When nonzero, a warning line for every handler that runs at least this
+  // many microseconds, a sign of blocking work on the event loop (move it to
+  // run). It goes to access_log, or to standard error without one.
+  slow_handler_microseconds: u64,
   // gzip level (1-9) for respond_compressed; each worker keeps one encoder
   // workspace (about 300 KiB). Zero sends bodies uncompressed.
   compress_level: u8,
@@ -422,9 +426,10 @@ pub struct Worker {
 const ListenerToken: u64 = 0
 const WakerToken: u64 = 0xffffffffffffffff
 
-// A clock reading for the access log, or 0 when there is none.
+// A clock reading for the access log and the slow-handler warning, or 0
+// when neither is on.
 fn log_start(worker: *const Worker) i64 {
-  if worker.config.access_log == nil { return 0 }
+  if worker.config.access_log == nil && worker.config.slow_handler_microseconds == 0 { return 0 }
   now := clock.monotonic_now()
   if io.failed(now.failure) { return 0 }
   return now.value.seconds * 1000000 + now.value.nanoseconds / 1000
@@ -432,13 +437,17 @@ fn log_start(worker: *const Worker) i64 {
 
 fn log_request(worker: *const Worker, remote: *const network.Address, request: *const http.Request,
   response: *const http.Response, started: i64) {
-  if worker.config.access_log == nil || response.status == 0 { return }
+  if started == 0 { return }
   elapsed := log_start(worker) - started
+  if worker.config.slow_handler_microseconds > 0 && elapsed >= #cast(i64, worker.config.slow_handler_microseconds) {
+    log_slow(worker, request, elapsed)
+  }
+  if worker.config.access_log == nil || response.status == 0 { return }
   address: [64]u8
   status: [8]u8
   micros: [24]u8
   status_text := format.buffer(status[..])
-  format.write_u64(&status_text, #cast(u64, response.status))
+  format.write_u64(&status_text, response.status)
   micros_text := format.buffer(micros[..])
   format.write_i64(&micros_text, elapsed)
   fields: [5]log.Field = [
@@ -449,6 +458,21 @@ fn log_request(worker: *const Worker, remote: *const network.Address, request: *
     log.Field{ name: "us", value: format.bytes(&micros_text) },
   ]
   _ = log.write(worker.config.access_log, log.Level.Info, "request", fields[..])
+}
+
+fn log_slow(worker: *const Worker, request: *const http.Request, elapsed: i64) {
+  micros: [24]u8
+  micros_text := format.buffer(micros[..])
+  format.write_i64(&micros_text, elapsed)
+  fields: [3]log.Field = [
+    log.Field{ name: "method", value: request.method },
+    log.Field{ name: "path", value: request.path },
+    log.Field{ name: "us", value: format.bytes(&micros_text) },
+  ]
+  standard := log.logger(io.stderr(), log.Level.Warning)
+  destination := worker.config.access_log
+  if destination == nil { destination = &standard }
+  _ = log.write(destination, log.Level.Warning, "slow handler", fields[..])
 }
 
 fn now_milliseconds() i64 {
@@ -1106,17 +1130,13 @@ fn on_accept(worker: *Worker) {
       return
     }
     remote := network.Address{}
-    accepted := network.accept_address(worker.listener.descriptor, &remote)
+    accepted := network.accept_address(worker.listener.descriptor, &remote, true)
     if io.failed(accepted.failure) {
       // Would-block: another worker won the race. Other errors (EMFILE,
       // ECONNABORTED) are per-connection; keep serving.
       return
     }
     descriptor := accepted.value
-    if io.failed(network.nonblocking(descriptor, true).failure) {
-      network.close(descriptor)
-      continue
-    }
     _ = network.no_delay(descriptor, true)
     worker.accepted += 1
     // Only now, with a client waiting, make room for it.
@@ -1442,7 +1462,7 @@ pub fn start(arena: *mem.Arena, workers: []Worker, listener: *network.Listener, 
 // so the kernel spreads new connections across workers instead of waking all
 // of them. Port 0 picks one free port shared by all; read it back with
 // local_port. join closes the listeners. Linux only: elsewhere the result
-// fails with Unsupported; use start there.
+// fails with Unsupported; use start there, or serve, which does.
 pub fn start_shared(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address, backlog: usize,
   config: Config, handler: http.Handler, context: rawptr) Result {
   invalid := valid_start(workers, config, handler)
@@ -1454,7 +1474,7 @@ pub fn start_shared(arena: *mem.Arena, workers: []Worker, address: network.Ipv4A
     worker := &workers[i]
     listened := network.tcp_listen_ipv4_shared(&address, backlog)
     if io.failed(listened.failure) { return abandon(workers, i, listened.failure) }
-    worker.own_listener = network.listener_take(&listened.value)
+    worker.own_listener = listened.value
     worker.listener = &worker.own_listener
     if i == 0 {
       // Pin a kernel-chosen port so later listeners join the same group.
@@ -1787,12 +1807,14 @@ pub fn arena(response: *http.Response) *mem.Arena {
 pub fn worker_index(response: *http.Response) usize {
   connection := connection_of(response)
   if connection == nil { return 0 }
-  return #cast(usize, connection.worker.id)
+  return connection.worker.id
 }
 
 // Runs the server until SIGINT or SIGTERM: watches the signals first (before
 // any thread starts, as std/process/signal requires), starts workers with
 // start_shared on address, waits for a signal, then stops and joins them.
+// Where the kernel cannot balance SO_REUSEPORT listeners (macOS, Windows),
+// the workers share one listener through start instead.
 // arena must hold storage_size(config, #len(workers)).
 pub fn serve(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address, config: Config, handler: http.Handler,
   context: rawptr) Result {
@@ -1800,7 +1822,15 @@ pub fn serve(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address,
   if io.failed(watched.failure) { return Result{ failure: watched.failure } }
   signals := watched.value
   defer signal.close(&signals)
+  listener := network.Listener{}
+  defer network.listener_close(&listener)
   started := start_shared(arena, workers, address, 1024, config, handler, context)
+  if started.failure.kind == io.Kind.Unsupported {
+    listened := network.tcp_listen_ipv4(&address, 1024)
+    if io.failed(listened.failure) { return Result{ failure: listened.failure } }
+    listener = listened.value
+    started = start(arena, workers, &listener, config, handler, context)
+  }
   if io.failed(started.failure) { return started }
   _ = signal.wait(&signals)
   stop(workers)
@@ -1810,10 +1840,14 @@ pub fn serve(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address,
 // ---------------------------------------------------------------- run
 
 // Job storage for run, zeroed, in the connection's job arena: copy what the
-// work needs into it. nil when response is not an evented response, a job is
-// already running, or T does not fit Config.job_size.
+// work needs into it. nil when response is not an evented response or a job
+// is already running. Panics when T is larger than Config.job_size, which no
+// request could change.
 pub fn job(T: type, response: *http.Response) *T {
   connection := connection_of(response)
+  if connection != nil && #sizeof(T) > connection.worker.config.job_size {
+    job_too_large(#typeof(T).name, #sizeof(T), connection.worker.config.job_size)
+  }
   if connection != nil && connection.h2 != nil {
     jobs := h2_job(connection)
     if jobs == nil { return nil }
@@ -1826,6 +1860,13 @@ pub fn job(T: type, response: *http.Response) *T {
   if connection.mode != Mode.Http && !large_head { return nil }
   mem.arena_reset(connection.jobs)
   return mem.try_push(T, connection.jobs)
+}
+
+fn job_too_large(name: []const u8, size: usize, limit: usize) {
+  storage: [192]u8
+  message := format.buffer(storage[..])
+  format.print(&message, "evented.job: {} needs {} bytes, but Config.job_size is {}; raise job_size", name, size, limit)
+  #panic(format.bytes(&message))
 }
 
 // Hands the request to Config.pool: work(data) runs on a pool thread, then

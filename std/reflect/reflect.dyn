@@ -18,6 +18,18 @@ fn reflection_prelude_anchor() TypeInfo {
   return #typeof(u8)
 }
 
+// The address of the value an any holds. #typeof(value) describes it.
+pub fn address(value: any) usize {
+  return #cast(*const usize, #cast(usize, &value) + 8).*
+}
+
+// Makes target an any for the value of type type_id at address, borrowed,
+// not copied. type_id is a TypeInfo id, such as a TypeMember's type_id.
+pub fn point(target: *any, type_id: u64, address: usize) {
+  #cast(*u64, target).* = type_id
+  #cast(*usize, #cast(usize, target) + 8).* = address
+}
+
 // Bridge existing compiler metadata into public reflection vocabulary.
 pub fn category(info: TypeInfo) Kind {
   case info.kind {

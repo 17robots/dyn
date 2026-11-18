@@ -1,0 +1,36 @@
+// Per-worker copies of shared data. Writers call changed after changing the
+// data; each worker keeps a Copy stamped with the version it was built from
+// and rebuilds when stale says so. Nothing locks: a copy may lag a write by
+// the reads already under way, never longer.
+//
+//   seen := cache.stale(&worker.posts, &app.posts)
+//   if seen != 0 {
+//     ... rebuild the worker's copy ...
+//     cache.rebuilt(&worker.posts, seen)
+//   }
+use "std/sync" sync
+
+// The shared side: one per piece of shared data.
+pub struct Shared { version: sync.AtomicU64 }
+
+// One worker's side. A zeroed Copy is stale.
+pub struct Copy { built: u64 }
+
+// Marks every worker's copy stale. Call it after the write is visible.
+pub fn changed(shared: *Shared) {
+  _ = sync.fetch_add_u64(&shared.version, 1)
+}
+
+// Zero when copy is current; otherwise the version to hand to rebuilt once
+// the copy is rebuilt. Call it before rebuilding, so a write that lands
+// during the rebuild leaves the copy stale.
+pub fn stale(copy: *const Copy, shared: *Shared) u64 {
+  version := sync.load_u64(&shared.version) + 1
+  if copy.built == version { return 0 }
+  return version
+}
+
+// Stamps copy with the version stale returned before the rebuild.
+pub fn rebuilt(copy: *Copy, version: u64) {
+  copy.built = version
+}

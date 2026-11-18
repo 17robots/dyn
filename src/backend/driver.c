@@ -109,8 +109,6 @@ typedef struct {
      address up in a table of function ranges and pc-to-line rows, which
      the object carries in its constants (see trace_table_write). main hands
      the table's header to dyn_trace_start; nothing runs per call. */
-  /* The symbol of std/mem's zero_bytes_fast, or 0; see ssa_zero_calls. */
-  unsigned zero_symbol;
   bool trace_table;
   uint32_t trace_header; /* constants offset of {text start, table} */
   unsigned trace_base_symbol; uint32_t trace_base_offset; /* the first traced function */
@@ -2050,6 +2048,16 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
   if (e->kind == DYN_EXPR_UNARY) {
     if (e->op==DYN_OP_ADDRESS) {
       if (e->left<ir->expression_count && ir->expressions[e->left].kind==DYN_EXPR_FUNCTION) return expression(ctx, ir,f,e->left,depth+1);
+      /* &T{...} may be written through: the literal's own frame slot, never
+         the shared read-only copy of a constant literal. */
+      if (e->left<ir->expression_count && ir->expressions[e->left].kind==DYN_EXPR_STRUCT) {
+        if (!ctx->temporary_offsets[e->left]) return false;
+        isa_lea(ctx, R_A, ctx->temporary_offsets[e->left]);
+        if (!initialize(ctx, ir,f,ir->expressions[e->left].type,e->left,depth+1)) return false;
+        /* initialize leaves its source in R_A; the result is the slot. */
+        isa_lea(ctx, R_A, ctx->temporary_offsets[e->left]);
+        return !ctx->text.failed;
+      }
       return address(ctx, ir,f,e->left,depth+1);
     }
     if (e->op==DYN_OP_DEREF) {
@@ -3504,9 +3512,6 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     symbols[ctx->initializer_flag_symbol]=(Elf64_Sym){.st_name=(Elf64_Word)names,.st_info=ELF64_ST_INFO(STB_LOCAL,STT_OBJECT),.st_shndx=8,.st_value=at,.st_size=1};
     memcpy(strings+names,flag,length); names+=length;
   }
-  for (size_t i = 0; i < ir->function_count; ++i)
-    if (ctx->function_live[i] && ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_ZERO)
-      ctx->zero_symbol = ctx->function_symbols[i];
   ssa_pipeline_start(ctx, source, ir);
   for (size_t i = 0; i < ir->function_count; ++i) {
     const DynIrFunction *f = &ir->functions[i];

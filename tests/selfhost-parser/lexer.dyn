@@ -83,9 +83,7 @@ fn space(c: u8) bool {
 }
 
 fn fail(p: *Parser, offset: u32, message: []const u8) {
-  if p.tree.failed {
-    return
-  }
+  if p.tree.failed { return }
   p.tree.failed = true
   p.tree.error = message
   p.tree.error_offset = offset
@@ -107,9 +105,7 @@ fn propagate_error(p: *Parser, from: *const Tree) {
 }
 
 fn charge(p: *Parser, units: u64, offset: u32) bool {
-  if p.tree.failed {
-    return false
-  }
+  if p.tree.failed { return false }
   if units > p.work_remaining.* {
     p.work_remaining.* = 0
     fail(p, offset, "parse work limit exceeded")
@@ -120,21 +116,15 @@ fn charge(p: *Parser, units: u64, offset: u32) bool {
 }
 
 fn scan_byte(p: *Parser, offset: u32) bool {
-  if offset < 1024 || #cast(u64, offset) < p.scan_next {
-    return true
-  }
+  if offset < 1024 || #cast(u64, offset) < p.scan_next { return true }
   p.scan_next = #cast(u64, offset) + 1024
   return charge(p, 1024, offset)
 }
 
 fn at(p: *const Parser, offset: u32, s: []const u8) bool {
-  if offset > p.length {
-    return false
-  }
+  if offset > p.length { return false }
   n := #len(s)
-  if n > #cast(usize, p.length - offset) {
-    return false
-  }
+  if n > #cast(usize, p.length - offset) { return false }
   return bytes.equal(p.text[offset..#cast(usize, offset) + n], s)
 }
 
@@ -147,18 +137,14 @@ fn byte_at(p: *const Parser, offset: u32) u8 {
 }
 
 fn escape(p: *Parser, i: *u32) bool {
-  if i.* == p.length {
-    return false
-  }
+  if i.* == p.length { return false }
   c := byte_at(p, i.*)
   i.* += 1
   if c == 'n' || c == 'r' || c == 't' || c == '0' || c == '\\' || c == '"' || c == '\'' {
     return true
   }
   if c == 'x' {
-    if p.length - i.* < 2 || !hex(byte_at(p, i.*)) || !hex(byte_at(p, i.* + 1)) {
-      return false
-    }
+    if p.length - i.* < 2 || !hex(byte_at(p, i.*)) || !hex(byte_at(p, i.* + 1)) { return false }
     i.* += 2
     return true
   }
@@ -168,9 +154,7 @@ fn escape(p: *Parser, i: *u32) bool {
     for i.* < p.length && i.* - start <= 6 && hex(byte_at(p, i.*)) {
       i.* += 1
     }
-    if i.* == start || i.* - start > 6 || i.* == p.length || byte_at(p, i.*) != '}' {
-      return false
-    }
+    if i.* == start || i.* - start > 6 || i.* == p.length || byte_at(p, i.*) != '}' { return false }
     i.* += 1
     return true
   }
@@ -180,9 +164,7 @@ fn escape(p: *Parser, i: *u32) bool {
 // Skips identifier bytes; false means the work budget ran out.
 fn skip_word(p: *Parser, i: *u32) bool {
   for i.* < p.length && (alpha(byte_at(p, i.*)) || digit(byte_at(p, i.*))) {
-    if !scan_byte(p, i.*) {
-      return false
-    }
+    if !scan_byte(p, i.*) { return false }
     i.* += 1
   }
   return true
@@ -190,50 +172,30 @@ fn skip_word(p: *Parser, i: *u32) bool {
 
 fn skip_digits(p: *Parser, i: *u32) bool {
   for i.* < p.length && (digit(byte_at(p, i.*)) || byte_at(p, i.*) == '_') {
-    if !scan_byte(p, i.*) {
-      return false
-    }
+    if !scan_byte(p, i.*) { return false }
     i.* += 1
   }
   return true
 }
 
 fn base_digit(c: u8, base: u8) bool {
-  if c == '_' {
-    return true
-  }
-  if base == 'x' {
-    return hex(c)
-  }
-  if base == 'b' {
-    return c >= '0' && c <= '1'
-  }
+  if c == '_' { return true }
+  if base == 'x' { return hex(c) }
+  if base == 'b' { return c >= '0' && c <= '1' }
   return c >= '0' && c <= '7'
 }
 
 fn utf8_extra(c: u8) u32 {
-  if c < 0x80 {
-    return 0
-  }
-  if c >= 0xC2 && c <= 0xDF {
-    return 1
-  }
-  if c >= 0xE0 && c <= 0xEF {
-    return 2
-  }
-  if c >= 0xF0 && c <= 0xF4 {
-    return 3
-  }
+  if c < 0x80 { return 0 }
+  if c >= 0xC2 && c <= 0xDF { return 1 }
+  if c >= 0xE0 && c <= 0xEF { return 2 }
+  if c >= 0xF0 && c <= 0xF4 { return 3 }
   return 4
 }
 
 fn pair_operator(c: u8, next: u8) bool {
-  if c == '.' && (next == '.' || next == '*') {
-    return true
-  }
-  if (c == '<' || c == '>' || c == '&' || c == '|') && next == c {
-    return true
-  }
+  if c == '.' && (next == '.' || next == '*') { return true }
+  if (c == '<' || c == '>' || c == '&' || c == '|') && next == c { return true }
   if next == '=' {
     case c {
       ':', '+', '-', '*', '/', '%', '&', '|', '^', '!', '<', '>', '=' => {
@@ -266,9 +228,7 @@ fn lex(p: *Parser) {
   external_space := true
   for {
     for i < p.length && space(byte_at(p, i)) {
-      if !scan_byte(p, i) {
-        return
-      }
+      if !scan_byte(p, i) { return }
       if byte_at(p, i) == 0x0B {
         external_space = false
       }
@@ -277,9 +237,7 @@ fn lex(p: *Parser) {
     if at(p, i, "//") {
       i += 2
       for i < p.length && byte_at(p, i) != '\n' {
-        if !scan_byte(p, i) {
-          return
-        }
+        if !scan_byte(p, i) { return }
         i += 1
       }
       external_space = true
@@ -287,9 +245,7 @@ fn lex(p: *Parser) {
       comment := i
       i += 2
       for i < p.length && !at(p, i, "*/") {
-        if !scan_byte(p, i) {
-          return
-        }
+        if !scan_byte(p, i) { return }
         i += 1
       }
       if i == p.length {
@@ -309,9 +265,7 @@ fn lex(p: *Parser) {
   } else if alpha(byte_at(p, i)) {
     kind = TokenKind.Name
     i += 1
-    if !skip_word(p, &i) {
-      return
-    }
+    if !skip_word(p, &i) { return }
   } else if digit(byte_at(p, i)) || (byte_at(p, i) == '.' && i + 1 < p.length && digit(byte_at(p, i + 1))) {
     kind = TokenKind.Number
     if at(p, i, "0x") || at(p, i, "0b") || at(p, i, "0o") {
@@ -319,9 +273,7 @@ fn lex(p: *Parser) {
       i += 2
       digits := i
       for i < p.length && base_digit(byte_at(p, i), base) {
-        if !scan_byte(p, i) {
-          return
-        }
+        if !scan_byte(p, i) { return }
         i += 1
       }
       if i == digits {
@@ -332,9 +284,7 @@ fn lex(p: *Parser) {
       if leading_dot {
         i += 1
       }
-      if !skip_digits(p, &i) {
-        return
-      }
+      if !skip_digits(p, &i) { return }
       trailing_dot := false
       if !leading_dot && i < p.length && byte_at(p, i) == '.' && !at(p, i, "..") {
         i += 1
@@ -342,9 +292,7 @@ fn lex(p: *Parser) {
         // The grammar requires a digit immediately after a decimal point.
         if i < p.length && digit(byte_at(p, i)) {
           i += 1
-          if !skip_digits(p, &i) {
-            return
-          }
+          if !skip_digits(p, &i) { return }
         }
         trailing_dot = fraction == i
         if trailing_dot && !external_space {
@@ -361,9 +309,7 @@ fn lex(p: *Parser) {
           i = exponent
         } else {
           i += 1
-          if !skip_digits(p, &i) {
-            return
-          }
+          if !skip_digits(p, &i) { return }
         }
       }
     }
@@ -376,9 +322,7 @@ fn lex(p: *Parser) {
     }
     characters: u32
     for i < p.length && byte_at(p, i) != quote && byte_at(p, i) != '\n' {
-      if !scan_byte(p, i) {
-        return
-      }
+      if !scan_byte(p, i) { return }
       characters += 1
       if byte_at(p, i) == '\\' {
         i += 1
@@ -425,14 +369,10 @@ fn lex(p: *Parser) {
       if i == p.length || !alpha(byte_at(p, i)) {
         fail(p, start, "expected type parameter")
       }
-      if !skip_word(p, &i) {
-        return
-      }
+      if !skip_word(p, &i) { return }
     } else if c == '#' {
       for i < p.length && alpha(byte_at(p, i)) {
-        if !scan_byte(p, i) {
-          return
-        }
+        if !scan_byte(p, i) { return }
         i += 1
       }
     } else {
@@ -456,16 +396,12 @@ fn lex(p: *Parser) {
 }
 
 fn take(p: *Parser, s: []const u8) bool {
-  if !token_is(p, s) {
-    return false
-  }
+  if !token_is(p, s) { return false }
   lex(p)
   return true
 }
 
 fn expect(p: *Parser, s: []const u8) {
-  if take(p, s) || p.tree.failed {
-    return
-  }
+  if take(p, s) || p.tree.failed { return }
   fail(p, p.token.start, "unexpected token")
 }

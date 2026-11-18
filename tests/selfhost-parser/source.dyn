@@ -40,16 +40,12 @@ const SrcQualifier: u16 = 1037
 const SrcReverse: u16 = 1038
 
 fn src_end(p: *const Parser, id: u32, fallback: u32) u32 {
-  if id == None {
-    return fallback
-  }
+  if id == None { return fallback }
   return node_end(p, id)
 }
 
 fn src_peek(p: *Parser) Token {
-  if p.tree.failed {
-    return Token{ start: p.offset, end: p.offset, kind: TokenKind.End }
-  }
+  if p.tree.failed { return Token{ start: p.offset, end: p.offset, kind: TokenKind.End } }
   probe := p.*
   scratch := Tree{}
   probe.tree = &scratch
@@ -95,13 +91,9 @@ fn src_qualifier(p: *Parser) u32 {
 }
 
 fn src_dots(p: *Parser) bool {
-  if take(p, "...") {
-    return true
-  }
+  if take(p, "...") { return true }
   start := p.token.start
-  if !take(p, "..") {
-    return false
-  }
+  if !take(p, "..") { return false }
   if p.token.start != start + 2 {
     fail(p, start, "variadic marker must be contiguous")
   }
@@ -173,9 +165,7 @@ fn src_condition(p: *Parser) u32 {
     return value
   }
   stop := p.token.start
-  if resource_error(p) {
-    return None
-  }
+  if resource_error(p) { return None }
   restore(p, &saved, count)
   probe := p.*
   scratch := Tree{}
@@ -191,23 +181,17 @@ fn src_condition(p: *Parser) u32 {
       }
       braces += 1
     } else if token_is(&probe, "}") {
-      if braces == 0 {
-        break
-      }
+      if braces == 0 { break }
       braces -= 1
     } else if token_is(&probe, "(") {
       parens += 1
     } else if token_is(&probe, ")") {
-      if parens == 0 {
-        break
-      }
+      if parens == 0 { break }
       parens -= 1
     } else if token_is(&probe, "[") {
       brackets += 1
     } else if token_is(&probe, "]") {
-      if brackets == 0 {
-        break
-      }
+      if brackets == 0 { break }
       brackets -= 1
     }
     lex(&probe)
@@ -229,9 +213,7 @@ fn src_range(p: *Parser, condition: bool) u32 {
   } else {
     first = expression(p, 0)
   }
-  if first == None || (!token_is(p, "..") && !token_is(p, "..=")) {
-    return first
-  }
+  if first == None || (!token_is(p, "..") && !token_is(p, "..=")) { return first }
   operator := p.token
   lex(p)
   last := None
@@ -240,9 +222,7 @@ fn src_range(p: *Parser, condition: bool) u32 {
   } else {
     last = expression(p, 0)
   }
-  if last == None {
-    return None
-  }
+  if last == None { return None }
   p.tree.nodes[first].next = last
   flags: u16
   if operator.end - operator.start == 3 {
@@ -340,9 +320,7 @@ fn src_for(p: *Parser) u32 {
         chain(p, &condition_first, &condition_last, src_range(p, true))
       }
     } else {
-      if resource_error(p) {
-        return None
-      }
+      if resource_error(p) { return None }
       restore(p, &saved, count)
       chain(p, &condition_first, &condition_last, src_condition(p))
     }
@@ -381,13 +359,9 @@ fn src_case(p: *Parser) u32 {
       if !wildcard {
         for {
           pattern := src_range(p, false)
-          if pattern == None {
-            break
-          }
+          if pattern == None { break }
           chain(p, &arm_first, &arm_last, add_node(p, SrcCasePattern, p.tree.nodes[pattern].start, node_end(p, pattern), pattern))
-          if !take(p, ",") || p.tree.failed {
-            break
-          }
+          if !take(p, ",") || p.tree.failed { break }
         }
       }
       if p.token.kind == TokenKind.Name {
@@ -411,24 +385,18 @@ fn src_case(p: *Parser) u32 {
 }
 
 fn src_expression_start(p: *Parser) bool {
-  if src_distinct(p) {
-    return false
-  }
+  if src_distinct(p) { return false }
   keywords: [9][]const u8 = ["return", "break", "continue", "const", "if", "case", "for", "defer", "type"]
   for keyword in keywords {
-    if token_is(p, keyword) {
-      return false
-    }
+    if token_is(p, keyword) { return false }
   }
   kind := p.token.kind
   if kind == TokenKind.Name || kind == TokenKind.Number || kind == TokenKind.Text || kind == TokenKind.Character {
     return true
   }
-  starts: [22][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#sizeof", "#alignof", "#offsetof", "#typeof", "#max", "#min", "#len", "#init", "#instance", "#slice", "#offset", "#load", "#syscall"]
+  starts: [28][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#sizeof", "#alignof", "#offsetof", "#typeof", "#max", "#min", "#len", "#init", "#instance", "#slice", "#offset", "#load", "#syscall", "#sqrt", "#floor", "#ceil", "#trunc", "#round", "#fma"]
   for candidate in starts {
-    if token_is(p, candidate) {
-      return true
-    }
+    if token_is(p, candidate) { return true }
   }
   return false
 }
@@ -446,9 +414,7 @@ fn src_panic(p: *Parser) u32 {
 fn src_assignment_operator(p: *const Parser) bool {
   operators: [11][]const u8 = ["=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="]
   for candidate in operators {
-    if token_is(p, candidate) {
-      return true
-    }
+    if token_is(p, candidate) { return true }
   }
   return false
 }
@@ -462,34 +428,16 @@ fn src_deferrable(kind: u16) bool {
 }
 
 fn src_statement_body(p: *Parser) u32 {
-  if p.tree.failed {
-    return None
-  }
+  if p.tree.failed { return None }
   start := p.token.start
-  if token_is(p, "{") {
-    return src_block(p)
-  }
-  if token_is(p, "if") {
-    return src_if(p)
-  }
-  if token_is(p, "case") {
-    return src_case(p)
-  }
-  if token_is(p, "for") {
-    return src_for(p)
-  }
-  if token_is(p, "const") {
-    return src_const(p)
-  }
-  if token_is(p, "type") || src_distinct(p) {
-    return src_alias(p)
-  }
-  if token_is(p, "#panic") {
-    return src_panic(p)
-  }
-  if token_is(p, "#assert") {
-    return src_assert(p)
-  }
+  if token_is(p, "{") { return src_block(p) }
+  if token_is(p, "if") { return src_if(p) }
+  if token_is(p, "case") { return src_case(p) }
+  if token_is(p, "for") { return src_for(p) }
+  if token_is(p, "const") { return src_const(p) }
+  if token_is(p, "type") || src_distinct(p) { return src_alias(p) }
+  if token_is(p, "#panic") { return src_panic(p) }
+  if token_is(p, "#assert") { return src_assert(p) }
   if token_is(p, "defer") {
     lex(p)
     child := None
@@ -525,9 +473,7 @@ fn src_statement_body(p: *Parser) u32 {
       count := p.tree.count
       child = expression(p, 0)
       if p.tree.failed {
-        if resource_error(p) {
-          return None
-        }
+        if resource_error(p) { return None }
         restore(p, &saved, count)
         child = None
       }
@@ -544,15 +490,11 @@ fn src_statement_body(p: *Parser) u32 {
       propagate_error(p, &scratch)
       return None
     }
-    if colon && token_is(&probe, "for") {
-      return src_for(p)
-    }
+    if colon && token_is(&probe, "for") { return src_for(p) }
     return src_variable(p)
   }
   value := expression(p, 0)
-  if value == None {
-    return None
-  }
+  if value == None { return None }
   if src_assignment_operator(p) {
     if !src_primary_kind(p.tree.nodes[value].kind) {
       fail(p, start, "assignment target must be primary")
@@ -560,9 +502,7 @@ fn src_statement_body(p: *Parser) u32 {
     }
     lex(p)
     right := expression(p, 0)
-    if right == None {
-      return None
-    }
+    if right == None { return None }
     p.tree.nodes[value].next = right
     return add_node(p, SrcAssignment, start, node_end(p, right), value)
   }
@@ -575,9 +515,7 @@ fn src_statement_body(p: *Parser) u32 {
 }
 
 fn src_statement(p: *Parser) u32 {
-  if p.tree.failed {
-    return None
-  }
+  if p.tree.failed { return None }
   p.depth += 1
   if p.depth > MaxDepth {
     p.depth -= 1
@@ -587,6 +525,18 @@ fn src_statement(p: *Parser) u32 {
   value := src_statement_body(p)
   p.depth -= 1
   return value
+}
+
+// `[3]i32{1, 2, 3}` written as in other languages: an element type name
+// right after `]`, then `{`.
+fn src_typed_array_literal(p: *Parser) bool {
+  at := p.token.start
+  for at > 0 && (p.text[at - 1] == ' ' || p.text[at - 1] == '\t') {
+    at -= 1
+  }
+  if at == 0 || p.text[at - 1] != ']' || p.token.kind != TokenKind.Name { return false }
+  next := src_peek(p)
+  return next.kind != TokenKind.End && #cast(usize, next.start) < #len(p.text) && p.text[next.start] == '{'
 }
 
 fn src_block(p: *Parser) u32 {
@@ -601,6 +551,8 @@ fn src_block(p: *Parser) u32 {
       variant := src_bare_variant(p, statement_start)
       if variant != None {
         fail(p, variant, "an enum variant needs its type: write Enum.Variant, not .Variant")
+      } else if src_typed_array_literal(p) {
+        fail(p, p.token.start, "write an array literal as [a, b, c] and give the type to the name: values: [3]i32 = [1, 2, 3]")
       } else {
         fail(p, p.token.start, "each statement must start on its own line")
       }
@@ -627,9 +579,7 @@ fn src_bare_variant(p: *Parser, from: u32) u32 {
       if c == '=' || c == '(' || c == ',' || c == '!' || c == '<' || c == '>' || c == ':' || c == '{' {
         return i
       }
-      if before < i && (c == '|' || c == '&' || c == 'n') {
-        return i
-      }
+      if before < i && (c == '|' || c == '&' || c == 'n') { return i }
     }
     i += 1
   }
@@ -690,9 +640,7 @@ fn src_function(p: *Parser, external: bool) u32 {
       break
     }
     chain(p, &first, &last, src_param(p, !external))
-    if !take(p, ",") {
-      break
-    }
+    if !take(p, ",") { break }
   }
   end := p.token.end
   expect(p, ")")
@@ -716,9 +664,7 @@ fn src_function(p: *Parser, external: bool) u32 {
 }
 
 fn src_type_parameters(p: *Parser, first: *u32, last: *u32) {
-  if !take(p, "(") {
-    return
-  }
+  if !take(p, "(") { return }
   // Bare names: every name in a declaration's parentheses is a type.
   for !token_is(p, ")") && !p.tree.failed {
     token := p.token
@@ -736,9 +682,7 @@ fn src_type_parameters(p: *Parser, first: *u32, last: *u32) {
       fail(p, p.token.start, "write `T`, not `T: type`; a struct or enum's parameters are all types")
       break
     }
-    if !take(p, ",") {
-      break
-    }
+    if !take(p, ",") { break }
   }
   expect(p, ")")
 }
@@ -769,9 +713,7 @@ fn src_struct(p: *Parser) u32 {
       chain(p, &member_first, &member_last, expression(p, 0))
     }
     chain(p, &first, &last, add_node(p, SrcStructMember, begin, src_end(p, member_last, begin), member_first))
-    if !take(p, ",") {
-      break
-    }
+    if !take(p, ",") { break }
   }
   end := p.token.end
   expect(p, "}")
@@ -809,9 +751,7 @@ fn src_enum(p: *Parser) u32 {
       chain(p, &member_first, &member_last, expression(p, 0))
     }
     chain(p, &first, &last, add_node(p, SrcEnumMember, begin, src_end(p, member_last, begin), member_first))
-    if !take(p, ",") {
-      break
-    }
+    if !take(p, ",") { break }
   }
   end := p.token.end
   expect(p, "}")
@@ -819,14 +759,10 @@ fn src_enum(p: *Parser) u32 {
 }
 
 fn src_declaration_keyword(p: *Parser) bool {
-  if src_distinct(p) || src_packed(p) {
-    return true
-  }
+  if src_distinct(p) || src_packed(p) { return true }
   keywords: [8][]const u8 = ["fn", "pub", "const", "extern", "struct", "enum", "type", "use"]
   for keyword in keywords {
-    if token_is(p, keyword) {
-      return true
-    }
+    if token_is(p, keyword) { return true }
   }
   return false
 }
@@ -848,9 +784,7 @@ fn src_use(p: *Parser) u32 {
       end = src_end(p, alias, end)
     }
     chain(p, &first, &last, add_node(p, SrcImport, begin, end, path))
-    if !take(p, ",") || p.tree.failed {
-      break
-    }
+    if !take(p, ",") || p.tree.failed { break }
   }
   return add_node(p, SrcUse, start, src_end(p, last, start), first)
 }
@@ -890,9 +824,7 @@ fn src_directive(p: *Parser) u32 {
         chain(p, &condition_first, &condition_last, parse_name(p))
       }
       chain(p, &first, &last, add_node(p, SrcTargetCondition, begin, src_end(p, condition_last, begin), condition_first))
-      if !take(p, ",") || p.tree.failed {
-        break
-      }
+      if !take(p, ",") || p.tree.failed { break }
     }
   } else {
     chain(p, &first, &last, src_literal(p, TokenKind.Text, ExpString))
@@ -907,9 +839,7 @@ fn src_directive(p: *Parser) u32 {
 }
 
 fn src_declaration(p: *Parser) u32 {
-  if token_is(p, "#target") || token_is(p, "#link") {
-    return src_directive(p)
-  }
+  if token_is(p, "#target") || token_is(p, "#link") { return src_directive(p) }
   start := p.token.start
   child := None
   public := take(p, "pub")
@@ -942,6 +872,9 @@ fn src_declaration(p: *Parser) u32 {
     child = src_use(p)
   } else if !public && token_is(p, "#assert") {
     child = src_assert(p)
+  } else if !public && (token_is(p, "import") || token_is(p, "package")) &&
+    (src_peek(p).kind == TokenKind.Name || src_peek(p).kind == TokenKind.Text) {
+    fail(p, p.token.start, "Dyn imports a module with use, as in use \"std/io\"")
   } else if p.token.kind == TokenKind.Name && src_peek(p).kind == TokenKind.End {
     // A dangling declaration name is the offending token, not the empty
     // position after its trailing newline. Editors need a visible range.
@@ -961,14 +894,10 @@ fn finish_tree(p: *Parser, root: u32) bool {
   id := root
   p.tree.nodes[root].parent = None
   for {
-    if !charge(p, 1, p.tree.nodes[id].start) {
-      return false
-    }
+    if !charge(p, 1, p.tree.nodes[id].start) { return false }
     child := p.tree.nodes[id].first
     for child != None {
-      if !charge(p, 1, p.tree.nodes[child].start) {
-        return false
-      }
+      if !charge(p, 1, p.tree.nodes[child].start) { return false }
       p.tree.nodes[child].parent = id
       child = p.tree.nodes[child].next
     }
@@ -977,14 +906,10 @@ fn finish_tree(p: *Parser, root: u32) bool {
       continue
     }
     for id != root && p.tree.nodes[id].next == None {
-      if !charge(p, 1, p.tree.nodes[id].start) {
-        return false
-      }
+      if !charge(p, 1, p.tree.nodes[id].start) { return false }
       id = p.tree.nodes[id].parent
     }
-    if id == root {
-      break
-    }
+    if id == root { break }
     id = p.tree.nodes[id].next
   }
   return true
@@ -1002,9 +927,7 @@ fn parse_source(source: []const u8, tree: *Tree, arena: *mem.Arena) u32 {
   length := #cast(u32, #len(source))
   work_remaining := #cast(u64, length) * 128 + 1024
   p := Parser{ text: source, length: length, work_remaining: &work_remaining, tree: tree, arena: arena }
-  if !charge(&p, #cast(u64, length), 0) {
-    return None
-  }
+  if !charge(&p, #cast(u64, length), 0) { return None }
   // Sources are text: NUL is never valid, even in comments or literals.
   nul := bytes.find_byte(source, 0)
   if nul < #len(source) {
@@ -1022,22 +945,14 @@ fn parse_source(source: []const u8, tree: *Tree, arena: *mem.Arena) u32 {
     }
   }
   p.scan_next = 0
-  if tree.failed {
-    return None
-  }
+  if tree.failed { return None }
   start: u32
   for start < length && space(source[start]) {
-    if !scan_byte(&p, start) {
-      return None
-    }
+    if !scan_byte(&p, start) { return None }
     start += 1
   }
   root := add_node(&p, SrcFile, start, length, first)
-  if tree.failed {
-    return None
-  }
-  if !finish_tree(&p, root) {
-    return None
-  }
+  if tree.failed { return None }
+  if !finish_tree(&p, root) { return None }
   return root
 }

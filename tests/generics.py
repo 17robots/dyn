@@ -127,7 +127,6 @@ fn main() {
 '''
 STD_EXPECTED = '0 7 0 0 5\n3 1 false 0\n3 4 10 4 200\n-20 19 5 27 true'
 STD_ERRORS = {
-    'use of storage after arena_reset': '  b: [64]u8\n  a := mem.arena_from_buffer(b[..])\n  n := mem.push(Node, a)\n  mem.arena_reset(a)\n  _ = n.value',
     'in instance min(Node) required here': '  _ = math.min(Node{}, Node{})',
 }
 

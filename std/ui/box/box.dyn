@@ -242,7 +242,7 @@ pub fn key_bytes(seed: u64, identity: []const u8) u64 {
 pub fn key_number(seed: u64, number: u64) u64 {
   encoded: [8]u8
   for i in 0..8 {
-    encoded[i] = #cast(u8, (number >> (i * 8)) & 255)
+    encoded[i] = (number >> (i * 8)) & 255
   }
   return key_bytes(seed, encoded[..])
 }

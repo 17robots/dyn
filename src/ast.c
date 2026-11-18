@@ -531,6 +531,34 @@ static DynSpan unqualified_span(DynSpan name, const DynSource *s) {
     }
   return name;
 }
+/* The compiler's reflection types precede a merged module's files. */
+bool dyn_reflection_prelude_span(DynSpan span, const DynSource *s) {
+  return s->map_count && span.end_byte <= s->maps[0].start;
+}
+/* Names the compiler's prelude declares, reserved in every module so a name
+   means the same thing everywhere: TypeInfo, TypeMember and TypeKind, which
+   #typeof returns, and the dyn_builtin_ (and DynBuiltin) names behind the
+   math builtins. */
+static bool report_reserved_name(DynSpan name, const DynSource *s, unsigned *errors) {
+  if (dyn_reflection_prelude_span(name, s)) return false;
+  const char *text = s->text + name.start_byte;
+  size_t n = name.end_byte - name.start_byte;
+  /* Module-owned names carry a dyn_m<16 hex>_ prefix. */
+  if (n > 22 && !memcmp(text, "dyn_m", 5) && text[21] == '_') { text += 22; n -= 22; }
+  char message[160];
+  static const char *types[] = {"TypeInfo", "TypeMember", "TypeKind"};
+  for (size_t i = 0; i < sizeof(types) / sizeof(*types); ++i)
+    if (n == strlen(types[i]) && !memcmp(text, types[i], n)) {
+      snprintf(message, sizeof(message), "%s is a builtin type, used by #typeof; choose another name", types[i]);
+      diagnostic_span(name, s, errors, message);
+      return true;
+    }
+  if ((n >= 12 && !memcmp(text, "dyn_builtin_", 12)) || (n >= 10 && !memcmp(text, "DynBuiltin", 10))) {
+    diagnostic_span(name, s, errors, "names starting with dyn_builtin_ or DynBuiltin belong to the compiler; choose another name");
+    return true;
+  }
+  return false;
+}
 static uint32_t find_struct(DynAstProgram *a, DynSpan name,
                             const DynSource *s) {
   name = unqualified_span(name, s);

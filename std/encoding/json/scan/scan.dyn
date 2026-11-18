@@ -1,0 +1,17 @@
+// The JSON string scanners' fast path, shared by std/encoding/json and
+// std/encoding/json/read: x86-64 runs an SSE2 routine in the runtime, other
+// targets the loop below.
+
+// How many bytes start source before the first one a JSON string scanner
+// must look at: a byte below 32, at or above 128, '"' or '\\'.
+pub fn text_prefix(source: []const u8) usize {
+  return text_prefix_target(source)
+}
+
+fn text_prefix_bytes(source: []const u8) usize {
+  for i in 0..#len(source) {
+    byte := source[i]
+    if byte < 32 || byte >= 128 || byte == '"' || byte == '\\' { return i }
+  }
+  return #len(source)
+}

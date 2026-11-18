@@ -19,7 +19,7 @@ struct Integer { value: usize, consumed: usize, ok: bool }
 fn read_integer(block: []const u8, prefix: u8) Integer {
   if #len(block) == 0 { return Integer{} }
   mask := (#cast(usize, 1) << #cast(usize, prefix)) - 1
-  value := #cast(usize, block[0]) & mask
+  value := block[0] & mask
   if value < mask { return Integer{ value: value, consumed: 1, ok: true } }
   shift: usize = 0
   at: usize = 1
@@ -58,12 +58,12 @@ fn read_string(block: []const u8, prefix: u8, destination: []u8) Text {
 
 fn static_name(index: usize) []const u8 {
   start := #cast(usize, StaticNameStart[index])
-  return StaticText[start..start + #cast(usize, StaticNameLength[index])]
+  return StaticText[start..start + StaticNameLength[index]]
 }
 
 fn static_value(index: usize) []const u8 {
   start := #cast(usize, StaticValueStart[index])
-  return StaticText[start..start + #cast(usize, StaticValueLength[index])]
+  return StaticText[start..start + StaticValueLength[index]]
 }
 
 fn failed(kind: parse.Kind, offset: usize) Field {

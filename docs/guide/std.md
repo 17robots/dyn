@@ -3,6 +3,8 @@
 Every std package is ordinary Dyn source shipped with the SDK. The source is the
 API reference: `dyn docs std/strings` prints a module's public declarations and
 their contracts, and `dyn docs std/strings --json` gives the same as JSON.
+[The std index](std-index.md) lists every public declaration in one page, one line each, so a
+search for a word finds the function that does it.
 
 ## Conventions
 
@@ -112,6 +114,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/process/signal` | Interrupt, terminate and hangup signals as queued events, read with `poll` or `wait` |
 | `std/thread`, `std/sync` | Arena-backed thread handles; caller or owned stacks; portable synchronization |
 | `std/thread/pool` | Fixed worker pool over a bounded arena queue, and wait groups |
+| `std/cache` | Per-worker copies of shared data: writers call `changed`, each worker rebuilds when `stale` says so |
 | `std/time` | Monotonic and realtime clocks, durations, deadlines, calendar dates and UTC ISO-8601 |
 | `std/time/zone` | Time zones from TZif files, POSIX rules or the Windows zone; local time, strftime-style formatting and RFC 3339 |
 | `std/terminal` | Raw mode, terminal size and key decoding |
@@ -137,7 +140,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/event` | Portable level-triggered readiness queues: epoll, kqueue and WSAPoll |
 | `std/net` | IPv4, IPv6 and Unix streams, IPv4 UDP multicast, polling and event queues |
 | `std/net/dns` | DNS queries into caller storage |
-| `std/net/http`, `http/concurrent`, `http/evented`, `http/session` | HTTP/1 client, server and router, cookies, static assets, pages, multipart, SSE and rate limits; a thread-per-connection worker pool; an event-loop server (epoll/kqueue) with thread-pool jobs, streams, WebSockets, HTTP/2 and HTTP/3; and cookie sessions with a per-worker cache. See [web apps](web-apps.md) |
+| `std/net/http`, `http/evented`, `http/session` | HTTP/1 client, protocol core, typed router, cookies, static assets, pages, multipart, SSE and rate limits; the event-loop server (epoll/kqueue) with thread-pool jobs, streams, WebSockets, HTTP/2 and HTTP/3; and cookie sessions with a per-worker cache. See [web apps](web-apps.md) |
 | `std/net/websocket` | RFC 6455 handshake and frame codec |
 | `std/net/url` | URL parsing and component encoding |
 | `std/net/tls` | Verified TLS client and server through OpenSSL; link it explicitly |

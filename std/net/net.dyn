@@ -25,6 +25,8 @@ pub struct Address { bytes: [128]u8, length: usize }
 // `error` keeps the native code; `kind` is its portable category.
 pub type Result = io.Result(isize)
 // `active` makes zeroed storage a closed handle; descriptor 0 is a valid descriptor.
+// Connections and listeners are plain values, like files: copy them freely
+// and close them once.
 pub struct Connection { descriptor: isize, active: bool }
 pub struct Listener { descriptor: isize, active: bool }
 
@@ -79,7 +81,7 @@ pub fn ipv4_address(destination: []u8, a: u8, b: u8, c: u8, d: u8, port: u16) []
     destination[i] = 0
   }
   address_family(destination, 16, 2)
-  destination[2] = #cast(u8, (port >> 8))
+  destination[2] = (port >> 8)
   destination[3] = #cast(u8, port)
   destination[4] = a
   destination[5] = b
@@ -97,7 +99,7 @@ pub fn ipv4(a: u8, b: u8, c: u8, d: u8, port: u16) Ipv4Address {
 pub fn ipv6(bytes: [16]u8, port: u16, scope: u32) Ipv6Address {
   value: Ipv6Address = Ipv6Address{}
   address_family(value.bytes[..], 28, AddressFamilyIpv6)
-  value.bytes[2] = #cast(u8, (port >> 8))
+  value.bytes[2] = (port >> 8)
   value.bytes[3] = #cast(u8, port)
   for i in 0..16 {
     value.bytes[8 + i] = bytes[i]
@@ -105,7 +107,7 @@ pub fn ipv6(bytes: [16]u8, port: u16, scope: u32) Ipv6Address {
   value.bytes[24] = #cast(u8, scope)
   value.bytes[25] = #cast(u8, (scope >> 8))
   value.bytes[26] = #cast(u8, (scope >> 16))
-  value.bytes[27] = #cast(u8, (scope >> 24))
+  value.bytes[27] = (scope >> 24)
   return value
 }
 
@@ -166,7 +168,7 @@ pub fn bind(descriptor: isize, address: []const u8) Result {
 }
 
 pub fn accept(descriptor: isize) Result {
-  return result(native_accept(descriptor, nil, nil))
+  return result(native_accept(descriptor, nil, nil, false))
 }
 
 fn stream_listen(family: usize, address: []const u8, backlog: usize, shared: bool) ListenerResult {
@@ -295,20 +297,6 @@ pub fn listener_accept(listener: *Listener) ConnectionResult {
   return ConnectionResult{ value: connection_from_descriptor(result_value(&accepted)) }
 }
 
-// Moves the listener out, leaving the source closed so only the result owns it.
-pub fn listener_take(listener: *Listener) Listener {
-  result := listener.*
-  listener.* = Listener{}
-  return result
-}
-
-// Moves the connection out, leaving the source closed so only the result owns it.
-pub fn connection_take(connection: *Connection) Connection {
-  result := connection.*
-  connection.* = Connection{}
-  return result
-}
-
 pub fn listener_close(listener: *Listener) {
   if !listener.active { return }
   descriptor := listener.descriptor
@@ -382,9 +370,11 @@ pub fn connection_writer(connection: *Connection) io.Writer {
   return io.Writer{ data: connection, write: connection_writer_write }
 }
 
-pub fn accept_address(descriptor: isize, address: *Address) Result {
+// Accepts one connection and records its peer address. nonblocking sets the
+// new socket nonblocking in the same step where the platform allows it.
+pub fn accept_address(descriptor: isize, address: *Address, nonblocking: bool) Result {
   length: u32 = 128
-  outcome := result(native_accept(descriptor, &address.bytes[0], &length))
+  outcome := result(native_accept(descriptor, &address.bytes[0], &length, nonblocking))
   if !io.failed(outcome.failure) {
     address.length = length
   }
@@ -626,7 +616,7 @@ pub fn ip_text(destination: []u8, ip: Ip) []u8 {
         destination[at] = '.'
         at += 1
       }
-      at = put_decimal(destination, at, #cast(u32, ip.bytes[i]))
+      at = put_decimal(destination, at, ip.bytes[i])
     }
     return destination[..at]
   }
