@@ -26,6 +26,11 @@ The compiler generates machine code directly for every target, in debug and
 release builds. There is no LLVM backend; `--backend llvm` reports an error.
 See the [independent toolchain guide](independent-toolchain.md).
 
+`dyn check` and `dyn vet` check the body of every function in your own code,
+and of each std or vendor function your program can reach; the rest of a
+library module is checked for its declarations only. Checking a library module
+itself, as in `dyn check std/fs`, checks all of it.
+
 The compiler reports errors only. `dyn vet` runs extra checks on valid code: it
 flags copying an arena (the copies would hand out overlapping memory) and
 importing one module under two names, locals that are never used, and a

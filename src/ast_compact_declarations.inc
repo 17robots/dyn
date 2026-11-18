@@ -1097,10 +1097,77 @@ static bool compact_create_instances_parallel(const BodyJob *jobs, size_t count,
   return ok;
 #endif
 }
+/* Which functions a program can reach, for lazy library checking. Roots are
+   the functions outside the library (the program's own code and the
+   prelude) and every declaration that is not a function. A reachable body,
+   generic templates included, is scanned for words; a word that names a
+   function makes it reachable. Merged sources spell cross-module names in
+   full, so the lookup is exact; a word that is only a local or a field can
+   only add functions, never lose one. */
+static bool lazy_text_in_library(const DynSource *s, DynSpan span) {
+  const char *path, *text;
+  size_t length, at;
+  dyn_source_position(s, span.start_byte, &path, &text, &length, &at);
+  return path && dyn_path_in_library(path);
+}
+static void lazy_scan(const DynSource *s, DynAstProgram *a, DynNameIndex *index, DynSpan span,
+                      bool *reachable, uint32_t *queue, size_t *count) {
+  size_t i = span.start_byte;
+  while (i < span.end_byte) {
+    unsigned char c = (unsigned char)s->text[i];
+    if (!(c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
+      ++i;
+      continue;
+    }
+    size_t start = i;
+    while (i < span.end_byte) {
+      c = (unsigned char)s->text[i];
+      if (!(c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) break;
+      ++i;
+    }
+    uint32_t id = find_function(index, a, (DynSpan){.start_byte = (uint32_t)start, .end_byte = (uint32_t)i}, s);
+    if (id != UINT32_MAX && !reachable[id]) {
+      reachable[id] = true;
+      queue[(*count)++] = id;
+    }
+  }
+}
+static bool *lazy_reachable(const DynSource *s, DynAstProgram *a, DynNameIndex *index) {
+  bool *reachable = calloc(a->function_count ? a->function_count : 1, sizeof(bool));
+  uint32_t *queue = malloc((a->function_count ? a->function_count : 1) * sizeof(uint32_t));
+  DynSpan *body = calloc(a->function_count ? a->function_count : 1, sizeof(DynSpan));
+  if (!reachable || !queue || !body) {
+    free(reachable); free(queue); free(body);
+    return NULL;
+  }
+  size_t count = 0;
+  for (uint32_t i = 0; i < a->compact_declaration_count; ++i) {
+    CompactNode d = compact_first(compact_declaration(a, i));
+    DynSpan span = compact_span(d);
+    if (compact_kind(d) != SRC_FN && compact_kind(d) != SRC_EXTERN_FN) {
+      lazy_scan(s, a, index, span, reachable, queue, &count);
+      continue;
+    }
+    uint32_t id = find_function(index, a, compact_span(compact_field(d, EXP_ROLE_NAME)), s);
+    if (id == UINT32_MAX) continue;
+    body[id] = span;
+    if (!lazy_text_in_library(s, span) && !reachable[id]) {
+      reachable[id] = true;
+      queue[count++] = id;
+    }
+  }
+  for (size_t next = 0; next < count; ++next)
+    if (body[queue[next]].end_byte)
+      lazy_scan(s, a, index, body[queue[next]], reachable, queue, &count);
+  free(queue);
+  free(body);
+  return reachable;
+}
 static void compact_lower_function_bodies(const DynSource *s,
                                   DynAstProgram *a, unsigned *errors,
-                                  const char *owner_key, DynNameIndex *index) {
+                                  const char *owner_key, DynNameIndex *index, bool lazy) {
   uint64_t wanted = owner_key_value(owner_key);
+  bool *reachable = lazy && !owner_key ? lazy_reachable(s, a, index) : NULL;
   BodyJob *jobs = calloc(a->compact_declaration_count ? a->compact_declaration_count : 1, sizeof(*jobs));
   if (!jobs) {
     a->allocation_failed = true;
@@ -1117,7 +1184,7 @@ static void compact_lower_function_bodies(const DynSource *s,
       continue;
     if (a->functions[id].foreign || a->functions[id].is_generic)
       continue;
-    if (owner_key && a->functions[id].module_owner != wanted) {
+    if ((owner_key && a->functions[id].module_owner != wanted) || (reachable && !reachable[id])) {
       a->functions[id].interface_only = true;
       continue;
     }
@@ -1152,6 +1219,7 @@ static void compact_lower_function_bodies(const DynSource *s,
     }
   }
   free(jobs);
+  free(reachable);
 }
 
 #undef compact_report
