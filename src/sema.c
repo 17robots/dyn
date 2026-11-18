@@ -5887,6 +5887,46 @@ static void vet_unread_state(const DynAstProgram *a, const DynSource *s) {
              (int)(state_name.end_byte - state_name.start_byte), s->text + state_name.start_byte);
     sema_vet_note(s, e->span, false, message);
   }
+  /* Reset before read: `status = fail.Status{}` (or any new value) while what
+     calls recorded in it since it was last read was never looked at. */
+  for (size_t i = 0; i < a->statement_count; ++i) {
+    const DynAstStmt *st = &a->statements[i];
+    /* A local's own assignment names it in local_id, with no target. */
+    if (st->kind != DYN_STMT_ASSIGN || st->assignment_op != DYN_OP_NONE || st->target != DYN_NO_EXPR ||
+        st->local_id >= a->local_count) continue;
+    uint32_t state = st->local_id;
+    if (!zero_declared[state] || !passed[state]) continue;
+    size_t at = st->span.start_byte;
+    /* The last call given &state before the reset, and any read since. */
+    size_t last_pass = 0;
+    bool any_pass = false;
+    for (size_t j = 0; j < a->expression_count; ++j) {
+      uint32_t local;
+      if (!passed_name[j] || !vet_local_name(a, (DynExprId)j, &local) || local != state) continue;
+      size_t where = a->expressions[j].span.start_byte;
+      if (where < at && (!any_pass || where > last_pass)) {
+        last_pass = where;
+        any_pass = true;
+      }
+    }
+    if (!any_pass) continue;
+    bool read_since = false;
+    for (size_t j = 0; j < a->expression_count && !read_since; ++j) {
+      uint32_t local;
+      if (passed_name[j] || !vet_local_name(a, (DynExprId)j, &local) || local != state) continue;
+      size_t where = a->expressions[j].span.start_byte;
+      read_since = where > last_pass && where < at;
+    }
+    if (read_since) continue;
+    DynSpan name = a->locals[state].name;
+    int length = (int)(name.end_byte - name.start_byte);
+    char message[320];
+    snprintf(message, sizeof(message),
+             "'%.*s' gets a new value before what the calls recorded in it is read, so that is lost; "
+             "read it first, or write `_ = %.*s` to drop it on purpose",
+             length, s->text + name.start_byte, length, s->text + name.start_byte);
+    sema_vet_note(s, st->span, false, message);
+  }
 done:
   free(zero_declared);
   free(passed);
