@@ -38,6 +38,7 @@ const SrcPanic: u16 = 1035
 const SrcRange: u16 = 1036
 const SrcQualifier: u16 = 1037
 const SrcReverse: u16 = 1038
+const SrcStep: u16 = 1039
 
 fn src_end(p: *const Parser, id: u32, fallback: u32) u32 {
   if id == None { return fallback }
@@ -252,14 +253,25 @@ fn src_if(p: *Parser) u32 {
   return add_node(p, SrcIf, start, src_end(p, last, start), first)
 }
 
+// #step(first..last, n)
+fn src_step(p: *Parser) u32 {
+  start := p.token.start
+  lex(p)
+  expect(p, "(")
+  range := src_range(p, false)
+  expect(p, ",")
+  step := expression(p, 0)
+  end := p.token.end
+  expect(p, ")")
+  if range == None || step == None || p.tree.failed { return None }
+  p.tree.nodes[range].next = step
+  return add_node(p, SrcStep, start, end, range)
+}
+
 fn src_for(p: *Parser) u32 {
   start := p.token.start
   first := None
   last := None
-  if !token_is(p, "for") {
-    chain(p, &first, &last, parse_name(p))
-    expect(p, ":")
-  }
   expect(p, "for")
   if !token_is(p, "{") {
     begin := p.token.start
@@ -268,7 +280,10 @@ fn src_for(p: *Parser) u32 {
     saved := p.*
     count := p.tree.count
     pointer := take(p, "*")
-    constant := pointer && take(p, "const")
+    if pointer && token_is(p, "const") {
+      fail(p, p.token.start, "write `for *value in`: the pointer is const when the collection is")
+      return None
+    }
     flags: u16
     binding := None
     if p.token.kind == TokenKind.Name {
@@ -298,9 +313,6 @@ fn src_for(p: *Parser) u32 {
       if pointer {
         flags |= FlagPointerBinding
       }
-      if constant {
-        flags |= FlagConst
-      }
       chain(p, &condition_first, &condition_last, binding)
       if index != None {
         chain(p, &condition_first, &condition_last, index)
@@ -312,10 +324,17 @@ fn src_for(p: *Parser) u32 {
         reverse_start := p.token.start
         lex(p)
         expect(p, "(")
-        value := src_range(p, false)
+        value := None
+        if token_is(p, "#step") {
+          value = src_step(p)
+        } else {
+          value = src_range(p, false)
+        }
         end := p.token.end
         expect(p, ")")
         chain(p, &condition_first, &condition_last, add_node(p, SrcReverse, reverse_start, end, value))
+      } else if token_is(p, "#step") {
+        chain(p, &condition_first, &condition_last, src_step(p))
       } else {
         chain(p, &condition_first, &condition_last, src_range(p, true))
       }
@@ -394,7 +413,7 @@ fn src_expression_start(p: *Parser) bool {
   if kind == TokenKind.Name || kind == TokenKind.Number || kind == TokenKind.Text || kind == TokenKind.Character {
     return true
   }
-  starts: [28][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#sizeof", "#alignof", "#offsetof", "#typeof", "#max", "#min", "#len", "#init", "#instance", "#slice", "#offset", "#load", "#syscall", "#sqrt", "#floor", "#ceil", "#trunc", "#round", "#fma"]
+  starts: [29][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#wrapping", "#sizeof", "#alignof", "#offsetof", "#typeof", "#max", "#min", "#len", "#init", "#instance", "#slice", "#offset", "#load", "#syscall", "#sqrt", "#floor", "#ceil", "#trunc", "#round", "#fma"]
   for candidate in starts {
     if token_is(p, candidate) { return true }
   }
@@ -458,11 +477,11 @@ fn src_statement_body(p: *Parser) u32 {
     }
     end := p.token.end
     lex(p)
-    child := None
-    if take(p, ":") {
-      child = parse_name(p)
+    if token_is(p, ":") {
+      fail(p, start, "loops have no labels: break and continue act on the innermost loop")
+      return None
     }
-    return add_node(p, kind, start, src_end(p, child, end), child)
+    return add_node(p, kind, start, end, None)
   }
   if token_is(p, "return") {
     end := p.token.end
@@ -490,7 +509,10 @@ fn src_statement_body(p: *Parser) u32 {
       propagate_error(p, &scratch)
       return None
     }
-    if colon && token_is(&probe, "for") { return src_for(p) }
+    if colon && token_is(&probe, "for") {
+      fail(p, start, "loops have no labels: use a flag variable, or move the inner loop into a function and return")
+      return None
+    }
     return src_variable(p)
   }
   value := expression(p, 0)

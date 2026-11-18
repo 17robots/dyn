@@ -7,12 +7,14 @@ const tzif_limit: usize = 1048576
 
 fn read_zone(arena: *mem.Arena, name: []const u8, path: []const u8) ZoneResult {
   mark := mem.arena_mark(arena)
-  file := fs.read_all(arena, path, tzif_limit)
-  if io.failed(file.failure) {
+  zone_file := fs.open(path)
+  data := fs.read_contents(arena, &zone_file, tzif_limit)
+  fs.close(&zone_file)
+  if zone_file.failed {
     mem.arena_rewind(arena, mark)
-    return ZoneResult{ failure: io.Failure{ kind: file.failure.kind, native: file.failure.native } }
+    return ZoneResult{ failure: io.Failure{ kind: zone_file.failure.kind, native: zone_file.failure.native } }
   }
-  parsed := parse_tzif(arena, name, file.value)
+  parsed := parse_tzif(arena, name, data)
   if io.failed(parsed.failure) {
     mem.arena_rewind(arena, mark)
   }

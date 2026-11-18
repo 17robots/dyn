@@ -22,10 +22,12 @@ fn main() {
  defer { mem.arena_release(arena) }
  args := process.arguments(arena)
  if io.failed(args.failure) || #len(args.value) != 3 { #panic("arguments") }
- source := fs.read_all(arena,args.value[1],16777216)
- if io.failed(source.failure) { #panic("read") }
+ source_file := fs.open(args.value[1])
+ source := fs.read_contents(arena, &source_file, 16777216)
+ fs.close(&source_file)
+ if source_file.failed { #panic("read") }
  mark := mem.arena_mark(arena)
- parsed := toml.parse(arena,source.value)
+ parsed := toml.parse(arena,source)
  if parse.failed(parsed.failure) {
   if mem.arena_mark(arena) != mark { #panic("rollback") }
   io.println("ERR {}",parsed.offset)
@@ -33,7 +35,7 @@ fn main() {
  }
  encoded := toml.encode(arena,parsed.root)
  if parse.failed(encoded.failure) { #panic("encode") }
- if io.failed(fs.write_all(args.value[2],encoded.value).failure) { #panic("write") }
+ if !fs.write_all(args.value[2],encoded.value) { #panic("write") }
  io.println("OK")
 }
 '''

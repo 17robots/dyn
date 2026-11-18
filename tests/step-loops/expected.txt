@@ -1,0 +1,9 @@
+0..10 by 2: 0 2 4 6 8
+0..=10 by 5: 0 5 10
+rev 0..10 by 3: 9 6 3 0
+empty:
+signed: -7 0 7
+u8 edge: 250 252 254
+u8 full: 256
+continue: 0 2 6
+runtime: 0 3 6

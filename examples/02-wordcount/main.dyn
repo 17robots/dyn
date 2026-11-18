@@ -125,14 +125,14 @@ fn main() i32 {
     // A fallible call returns {value, failure}. The value is always safe
     // to read; on failure it is a closed File.
     opened := fs.open(name)
-    if io.failed(opened.failure) {
+    if opened.failed {
       io.eprintln("wordcount: {}: {}", name, describe(opened.failure.kind))
       status = 1
       continue
     }
     // A File is an OS handle, so it must have exactly one owner. take moves
     // it out of the result instead of copying it; dyn vet flags a copy.
-    file := opened.value
+    file := opened
     // defer runs when this loop iteration's block ends, however it ends.
     defer fs.close(&file)
 

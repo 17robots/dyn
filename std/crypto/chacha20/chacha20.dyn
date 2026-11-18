@@ -1,9 +1,9 @@
 // Std code wraps on overflow in every build mode, so + and << are mod 2^32.
 fn add(a: u32, b: u32) u32 {
-  return a + b
+  return #wrapping(a + b)
 }
 fn rotate(value: u32, amount: u32) u32 {
-  return (value << amount) | (value >> (32 - amount))
+  return #wrapping(value << amount) | (value >> (32 - amount))
 }
 fn load32(input: []const u8, at: usize) u32 {
   return #cast(u32, input[at]) | (#cast(u32, input[at + 1]) << 8) |

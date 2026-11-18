@@ -122,14 +122,15 @@ fn max(a: $T, b: $T) T {
 one instance, and the compiler checks each instance's body as ordinary code: a body that is invalid
 for a type is an error at the call that created the instance. There are no constraints, traits,
 interfaces, operator overloading or compile-time execution, and types are inferred only from
-arguments, never from the expected result. The
+arguments, never from the expected result, with one exception below. The
 [generics design](../internals/generics-design.md) records the rules and what is deliberately left
 out.
 
-`#instance(f, T, ...)` names an instance as a function value, with one type per type parameter
-in the order they are declared: `hash := #instance(key_hash, u32)` has type `fn(u64, u32) u64`
-when `key_hash` is `fn(seed: u64, key: $K) u64`, and `#instance(mem.push, Node)` has type
-`fn(*Arena) *Node`. A call `f(...)` always runs the function.
+A generic function used as a value, where a function type is expected, takes its type arguments
+from that type: with `key_hash` declared as `fn(seed: u64, key: $K) u64`,
+`hash: fn(u64, u32) u64 = key_hash` is the `u32` instance, and passing `key_hash` to a parameter of
+type `fn(u64, u32) u64` does the same. A function with a `T: type` parameter shows no `T` in its
+signature, so name its instance with `#instance(f, T)`. A call `f(...)` always runs the function.
 
 `#assert` also works in a function body, where it is checked when the body is: in a generic
 function, once per instance. With `#typeof`, whose scalar fields (`kind`, `size`, `id`,
@@ -221,8 +222,8 @@ written order, not declaration order.
 `if` and condition-form `for` require `bool`. Bare `for {}` is an infinite loop. `break` and
 `continue` require an enclosing loop. Block locals are inaccessible after block exit. `for value in
 collection` accepts arrays and slices, evaluates the collection once, and copies each element into
-the loop-local binding. `for *value` binds a mutable pointer to each source element; mutable binding
-rejects const slices and requires assignable arrays. `for *const value` binds a const pointer.
+the loop-local binding. `for *value` binds a pointer to each source element. The pointer is `*const` when the collection is
+a const slice, so writing through it is an error there; arrays must be assignable.
 `for value, i in values` (and `for *value, i`) also binds the element's index as a `usize`; with
 `#reverse` the index still names the element's position. A range loop's variable is already its
 index, so a range takes no second name.
@@ -238,9 +239,15 @@ bindings are rejected. Inclusive ranges may end at the type's maximum without ov
 2, 1, 0 and `#reverse(1..=3)` gives 3, 2, 1. A descending range stays empty with or without
 `#reverse`. `for value in #reverse(values)` and `for *value in #reverse(values)` visit array or
 slice elements from last to first. `#reverse` is valid only as a `for` iterable and never wraps an
-unsigned bound.
-Loops may be labeled as `name: for`; `break: name` and `continue: name` target any active enclosing
-loop with that label. Active labels cannot duplicate. Transfers run defers for every exited scope.
+unsigned bound. `for i in #step(first..last, n)` visits `first`, `first + n`, and so on while the value
+is in the range: `#step(0..10, 3)` gives 0, 3, 6, 9 and `#step(0..=10, 5)` gives 0, 5, 10. The step
+has the range's type and must be positive; a constant zero or negative step is an error, and a
+zero step at run time divides by zero. Bounds and step evaluate once, in order, and the counter
+never passes the type's limit, so `#step(250..=255, 2)` on a `u8` stops at 254. `continue` moves
+to the next value. `#reverse(#step(0..10, 3))` visits the same values from the last: 9, 6, 3, 0.
+`break` and `continue` act on the innermost loop; loops have no labels. To leave nested loops, set a
+flag and break again, or move the inner loop into a function and return. Transfers run defers for
+every exited scope.
 
 Struct field order determines layout. Packed structs preserve order, remove inter-field padding,
 and have alignment 1. Construction gives every field its default (zero when it declares none), then
@@ -293,8 +300,8 @@ Enums remain single-choice values.
 Pointers are thin and zero-initialize to `nil`. `&value` requires assignable storage; `pointer.*`
 dereferences it. Struct fields automatically dereference struct pointers. Dereference checks nil
 and pointee alignment, then panics on failure. Pointers support equality with compatible pointers or `nil`, and ordering with `<`, `<=`, `>` and
-`>=`. `#offset(pointer, count)` moves a pointer by whole elements, and a negative count moves back.
-A pointer from `#offset` has no bounds check; its dereference keeps the nil and alignment checks. Mutable pointers implicitly widen to
+`>=`. There is no pointer arithmetic: `#slice(pointer, count)` makes a slice you vouch for, and
+indexing it is bounds checked against that count. Mutable pointers implicitly widen to
 `*const T`, never back to mutable. Shallow const forbids replacing fields through the const pointer,
 while a mutable pointer stored in such a field still permits mutation of its own pointee:
 
@@ -396,15 +403,14 @@ function.
 
 `defer` runs at enclosing-block exit in LIFO order. Direct-call arguments evaluate at defer
 site. Deferred blocks observe captured storage at execution. Deferred statements exclude
-`return`, `break`, `continue`, declarations, and nested `defer`. Double panic aborts cleanup.
+`return`, `break`, `continue`, declarations, and nested `defer`.
 
-Panic runs active defers through caller frames. Cleanup uses fixed stack records and performs no
-allocation. A panic raised by a defer aborts remaining cleanup. There is no recovery mechanism:
-a panic is a bug, and expected failures are values. `std/panic` installs one process handler,
-`panic.set_handler(report)`, that runs once after cleanups and before the panic reports and exits,
-for logging, crash reports or flushing; it cannot resume the program. A panic that
-crosses foreign frames runs Dyn defers but skips cleanup in the C frames between them; see
-[FFI](ffi.md).
+A panic does not run defers. It runs the handler that `std/panic` installs with
+`panic.set_handler(report)`, prints the message and a stack trace, and exits with status 101. The
+handler runs once, for work the operating system will not do at exit, such as restoring a
+terminal's mode, logging or flushing a crash report; it cannot resume the program. The operating
+system frees memory and closes files when the process ends. There is no recovery mechanism: a
+panic is a bug, and expected failures are values.
 
 ## Numeric rules
 
@@ -417,10 +423,12 @@ minimum divided by `-1` panics. `std/math` has `add_overflows`, `sub_overflows`,
 saturating arithmetic for code that wants them.
 
 Integer arithmetic wraps in debug and release builds alike. `--check-overflow`, in either mode,
-makes `+`, `-`, `*`, `<<`, unary negation and their compound assignments in the program's own
-modules panic with `overflow.ok` instead of wrapping. The SDK's `std` and `vendor` code keeps
-wrapping. Write `math.wrapping_add`, `wrapping_sub` or `wrapping_mul` where a program means to
-wrap, so a checked build does not stop there. The checks find overflow bugs; they do not change
+makes `+`, `-`, `*`, `<<`, unary negation and their compound assignments panic with
+`overflow.ok` instead of wrapping, in every module, std and vendor included. Write
+`#wrapping(expr)` where code means to wrap, such as a hash or a rotation: its integer arithmetic
+wraps even in a checked build, and it compiles to the same instructions as without it. Calls
+inside it keep their own rules. `math.wrapping_add`, `wrapping_sub` and `wrapping_mul` do the same
+as functions. The checks find overflow bugs; they do not change
 the meaning of a correct program.
 
 Untyped integer constants are evaluated exactly for the implemented constant-expression operators,
@@ -430,12 +438,20 @@ target, counting `usize` and `isize` as anywhere from 32 to 64 bits: `usize` wid
 `u32` to `usize` implicitly, while `u64` to `usize` needs `#cast`. The same rule joins
 the operands of a binary operator: when one operand's type widens to the other's without loss,
 the operator works in the wider type, so `count_u32 * size_u64` is a `u64` and `index_u32 < limit_i64`
-compares as `i64`. Each operand is computed in its own type first, so `a_u32 * b_u32 + c_u64`
-multiplies in `u32`. `u64` against `i64` has no lossless meeting type and needs a cast. `x += y`
-widens `y` to `x`'s type the same way. Shifts keep their rule: the result has the left operand's
-type. Two operators show their result's range in the code, so they narrow without a cast where
-a smaller integer type is expected and the range fits it: `x & M` with a constant `M` (`b: u8 =
-word & 0xff`), and an unsigned `x >> k` with a constant `k` (`top: u8 = x_u64 >> 56`). Nothing
+compares as `i64`. Arithmetic is target-typed: where the value goes into a wider number type (a
+typed variable, an assignment, a field, an argument or a result), the operators compute in that
+type, so `total: u64 = a_u32 * b_u32` multiplies in `u64` and cannot wrap at 32 bits. Integers
+widen only to integers and floats only to floats; `#cast` and `:=` give no target, so
+`n := a_u32 * b_u32` is a `u32`. Write the narrow type explicitly where wrapping is meant, as in
+`hashed: u32 = value * 2654435761`. `x += y` widens `y` to `x`'s type the same way. Shifts keep
+their rule: the result has the left operand's type, or the target's when that is wider.
+A comparison of a signed and an unsigned integer compares their values: `-1 < len` is true for a
+`usize` `len`, and `i64` against `u64` needs no cast. One operand is read twice, so at least one
+side must contain no calls; otherwise store a value in a name first. Arithmetic between `u64` and
+`i64` still has no lossless meeting type and needs a cast. Three operators show their result's
+range in the code, so they narrow without a cast where a smaller integer type is expected and the
+range fits it: `x & M` with a constant `M` (`b: u8 = word & 0xff`), an unsigned `x >> k` with a
+constant `k` (`top: u8 = x_u64 >> 56`) and an unsigned `x % M` with a constant `M`. Nothing
 else narrows implicitly; a range known only from a condition, as in `if x < 256 { ... }`, still
 needs `#cast`. `#cast` permits
 intentional narrowing and uses destination-width two's-complement/modulo representation for integers.
@@ -495,12 +511,13 @@ mean that the operation runs at compile time. Allocation, I/O, formatting,
 collections, and ordinary algorithms belong in libraries.
 
 - Conversion: `#cast(Type, value)` and `#bitcast(Type, value)`.
+- Arithmetic that wraps on purpose: `#wrapping(expr)`.
 - Layout and reflection: `#sizeof`, `#alignof`, `#offsetof`, and `#typeof`.
 - Integer limits: `#max` and `#min`.
-- Representation and pointers: `#len`, `#slice` and `#offset`.
+- Representation and pointers: `#len`, `#slice` and `#init`.
 - Validation and termination: compile-time `#assert` and runtime `#panic`.
 - Build input and OS boundary: `#load` and `#syscall`.
-- Iteration: `#reverse`, valid only in a `for` iterable.
+- Iteration: `#reverse` and `#step`, valid only in a `for` iterable.
 - Floating-point operations the hardware has: `#sqrt`, `#floor`, `#ceil`, `#trunc`, `#round` and `#fma`.
 - Module directives: `#target` and `#link`, documented with platform and FFI rules.
 

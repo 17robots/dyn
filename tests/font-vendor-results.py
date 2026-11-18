@@ -25,7 +25,7 @@ fn save(arena: *mem.Arena, glyphs: []const hb.Glyph, path: []const u8){
  for i in 0..#len(glyphs){glyph := glyphs[i]
  values: [6]u32 = [glyph.index,glyph.cluster,#cast(u32,glyph.x_advance),#cast(u32,glyph.y_advance),#cast(u32,glyph.x_offset),#cast(u32,glyph.y_offset)]
  for j in 0..6 {binary.store_u32_le(output[4+i*24+j*4..8+i*24+j*4],values[j])}}
- check(!errors.failed(fs.write_all(path,output).failure))
+ check(fs.write_all(path,output))
 }
 empty_face: rawptr
 empty_face_destroyed: u32
@@ -56,12 +56,14 @@ fn main(){
  defer {_ = dynlib.close(&library.value)}
  ft_loaded := ft.load(library.value)
  check(!errors.failed(ft_loaded.failure) && errors.failed(ft.load(nil).failure))
- font_bytes := fs.read_all(arena,"font.ttf",10000000)
- check(!errors.failed(font_bytes.failure))
+ font_bytes_file := fs.open("font.ttf")
+ font_bytes := fs.read_contents(arena, &font_bytes_file, 10000000)
+ fs.close(&font_bytes_file)
+ check(!font_bytes_file.failed)
  font := ft.Font{}
- check(!errors.failed(ft.open(&font,ft_loaded.api,font_bytes.value,0,32).failure))
+ check(!errors.failed(ft.open(&font,ft_loaded.api,font_bytes,0,32).failure))
  defer {ft.close(&font)}
- check(ft.open(&font,ft_loaded.api,font_bytes.value,0,32).kind == errors.Kind.InvalidState)
+ check(ft.open(&font,ft_loaded.api,font_bytes,0,32).kind == errors.Kind.InvalidState)
  index := ft_loaded.api.char_index(font.face,65)
  check(index != 0 && ft_loaded.api.load_glyph(font.face,index,ft.LoadRender) == 0)
  bitmap := ft.bitmap(font.face)
@@ -71,27 +73,27 @@ fn main(){
  fields: [6]u32 = [#cast(u32,value.width),#cast(u32,value.height),#cast(u32,value.left),#cast(u32,value.top),#cast(u32,value.advance_x),#cast(u32,value.advance_y)]
  for i in 0..6 {binary.store_u32_le(output[i*4..i*4+4],fields[i])}
  for row in 0..value.height {for x in 0..value.width {output[24+#cast(usize,row*value.width+x)] = value.pixels[#cast(usize,row)*value.stride+#cast(usize,x)]}}
- check(!errors.failed(fs.write_all("ft-actual.bin",output).failure))
+ check(fs.write_all("ft-actual.bin",output))
  metrics:=ft.face_metrics(font.face)
  check(!errors.failed(metrics.failure) && ft.face_metrics(nil).kind==errors.Kind.InvalidInput)
  values:=metrics.value
  metric_fields:[7]u32=[#cast(u32,values.units_per_em),#cast(u32,#cast(i32,values.ascent)),#cast(u32,#cast(i32,values.descent)),#cast(u32,#cast(i32,values.height)),values.glyph_count,values.face_count,values.face_index]
  metric_bytes:[28]u8
  for i in 0..7 {binary.store_u32_le(metric_bytes[i*4..i*4+4],metric_fields[i])}
- check(!errors.failed(fs.write_all("metrics-actual.bin",metric_bytes[..]).failure))
+ check(fs.write_all("metrics-actual.bin",metric_bytes[..]))
  shaping := dynlib.open("HB_LIBRARY",dynlib.Now)
  check(!errors.failed(shaping.failure))
  defer {_ = dynlib.close(&shaping.value)}
  loaded := hb.load(shaping.value)
  check(!errors.failed(loaded.failure) && errors.failed(hb.load(nil).failure))
- created := hb.font_owned(&loaded.api,font_bytes.value,0)
+ created := hb.font_owned(&loaded.api,font_bytes,0)
  check(!errors.failed(created.failure))
  empty_font = loaded.api.font_get_empty()
  oom_api := loaded.api
  oom_api.font_create = empty_create
  oom_api.font_destroy = count_empty_destroy
  oom_api.ot_font_set_funcs = reject_empty_configuration
- failed_font := hb.font_owned(&oom_api,font_bytes.value,0)
+ failed_font := hb.font_owned(&oom_api,font_bytes,0)
  check(errors.failed(failed_font.failure) && failed_font.kind == errors.Kind.System && failed_font.value == nil && empty_destroyed == 1)
  empty_face = loaded.api.face_get_empty()
  real_blob_destroy = loaded.api.blob_destroy
@@ -100,7 +102,7 @@ fn main(){
  face_oom.face_destroy = count_empty_face_destroy
  face_oom.blob_destroy = count_blob_destroy
  face_oom.face_glyph_count = reject_empty_glyph_count
- failed_face := hb.font_owned(&face_oom,font_bytes.value,0)
+ failed_face := hb.font_owned(&face_oom,font_bytes,0)
  check(errors.failed(failed_face.failure) && failed_face.kind == errors.Kind.System && failed_face.value == nil && empty_face_destroyed == 1 && blob_destroyed == 1)
  defer {loaded.api.font_destroy(created.value)}
  loaded.api.font_set_scale(created.value,2048,2048)

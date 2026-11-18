@@ -39,7 +39,7 @@ only when every target agrees, so `#cast(i32, descriptor)` stays when
 Editors flag unused parameters except those named with a leading `_`, such as
 `_signal` in a callback that ignores it.
 Editors leave the cast check to `dyn vet`, since it checks every target.
-`dyn vet --unsafe` also lists every `#slice`, `#offset`, `#syscall` and pointer cast in your
+`dyn vet --unsafe` also lists every `#slice`, `#syscall` and pointer cast in your
 code, so a review can see new unsafe sites. Language servers show the same findings
 as warnings. Run `dyn vet` in CI next to `dyn fmt --check`.
 Editor packages for VS Code, Zed, Neovim, Helix and Sublime live in the

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exact bounds/address facts also prove checks lowered through cleanup edges."""
+"""Exact bounds/address facts prove checks in functions with pending defers."""
 from pathlib import Path
 import os
 import platform
@@ -174,7 +174,8 @@ size_t foreign_alignment(void) { return (uintptr_t)&foreign_byte & 7; }
      assert re.search(r'remark: '+function+r': SSA code generation,',built.stderr),built.stderr
     if mode=='tree':assert 'SSA code generation' not in built.stderr,built.stderr
     result=run([binary])
-    assert result.stdout=='D'*cleanups+('' if panic else 'OK\n'),(mode,name,result)
+    # A failed check does not run defers.
+    assert result.stdout==('' if panic else 'D'*cleanups+'OK\n'),(mode,name,result)
     assert (result.returncode!=0)==panic,(mode,name,result)
     if panic:
      diagnostic={'null':'pointer.nonnull.ok','misaligned':'pointer.aligned.ok','foreign_guard':'pointer.aligned.ok'}.get(name,'index.ok')

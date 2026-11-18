@@ -280,11 +280,11 @@ fn dyn_builtin_multiply(dyn_builtin_a, dyn_builtin_b: u64, dyn_builtin_high_out:
 
 fn dyn_builtin_shift_left(dyn_builtin_high_word: *u64, dyn_builtin_low_word: *u64, dyn_builtin_shift: i32) {
   if dyn_builtin_shift >= 64 {
-    dyn_builtin_high_word.* = dyn_builtin_low_word.* << #cast(u64, dyn_builtin_shift - 64)
+    dyn_builtin_high_word.* = #wrapping(dyn_builtin_low_word.* << #cast(u64, dyn_builtin_shift - 64))
     dyn_builtin_low_word.* = 0
   } else if dyn_builtin_shift > 0 {
-    dyn_builtin_high_word.* = (dyn_builtin_high_word.* << #cast(u64, dyn_builtin_shift)) | (dyn_builtin_low_word.* >> #cast(u64, 64 - dyn_builtin_shift))
-    dyn_builtin_low_word.* = dyn_builtin_low_word.* << #cast(u64, dyn_builtin_shift)
+    dyn_builtin_high_word.* = #wrapping(dyn_builtin_high_word.* << #cast(u64, dyn_builtin_shift)) | (dyn_builtin_low_word.* >> #cast(u64, 64 - dyn_builtin_shift))
+    dyn_builtin_low_word.* = #wrapping(dyn_builtin_low_word.* << #cast(u64, dyn_builtin_shift))
   }
 }
 

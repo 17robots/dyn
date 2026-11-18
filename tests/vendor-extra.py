@@ -359,11 +359,13 @@ fn main() {
   }
   args := linux.process_arguments(backing)
   if #len(args) == 2 {
-    file := fs.read_all(backing, args[1], 1024 * 1024)
-    if io.failed(file.failure) {
+    file_file := fs.open(args[1])
+    file := fs.read_contents(backing, &file_file, 1024 * 1024)
+    fs.close(&file_file)
+    if file_file.failed {
       #panic("GLB read")
     }
-    binary := cgltf.parse_owned(file.value)
+    binary := cgltf.parse_owned(file)
     if io.failed(binary.failure) {
       #panic("GLB parse")
     }
@@ -631,15 +633,17 @@ fn main() {
   if #len(args) != 2 {
     #panic("WAV path required")
   }
-  bytes := fs.read_all(storage, args[1], 1024 * 1024)
-  if io.failed(bytes.failure) {
+  bytes_file := fs.open(args[1])
+  bytes := fs.read_contents(storage, &bytes_file, 1024 * 1024)
+  fs.close(&bytes_file)
+  if bytes_file.failed {
     #panic("WAV read")
   }
   mark := mem.arena_mark(storage)
   if !io.failed(audio.decoder_create(storage, "invalid").failure) || mem.arena_mark(storage) != mark {
     #panic("invalid decoder rollback")
   }
-  decoder := audio.decoder_create(storage, bytes.value)
+  decoder := audio.decoder_create(storage, bytes)
   if io.failed(decoder.failure) {
     #panic("decoder")
   }
@@ -718,7 +722,7 @@ fn main() {
     #panic("WAV path required")
   }
   bytes := fs.read_all(storage, args[1], 1024 * 1024)
-  if io.failed(bytes.failure) {
+  if #len(bytes) == 0 {
     #panic("WAV read")
   }
   if !mixer.init() {
@@ -730,7 +734,7 @@ fn main() {
     #panic("mixer create")
   }
   defer mixer.destroy_owned(engine)
-  audio := mixer.decode_owned(engine, bytes.value)
+  audio := mixer.decode_owned(engine, bytes)
   if audio == nil {
     #panic("mixer decode")
   }

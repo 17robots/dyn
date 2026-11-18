@@ -33,8 +33,10 @@ fn main() i32 {
     return 2
   }
   path := program.args[1]
-  file := fs.read_all(arena, path, 16 << 20)
-  if io.failed(file.failure) {
+  file_file := fs.open(path)
+  file := fs.read_contents(arena, &file_file, 16 << 20)
+  fs.close(&file_file)
+  if file_file.failed {
     io.eprintln("ledger: cannot read {}", path)
     return 1
   }
@@ -50,7 +52,7 @@ fn main() i32 {
   // buffer it is given, and a record's fields must all stay readable.
   storage: [Columns][128]u8
   fields: [Columns][]const u8
-  scan := csv.scanner(file.value)
+  scan := csv.scanner(file)
   line: u32 = 0
   ended := false
   for !ended {

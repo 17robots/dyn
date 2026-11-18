@@ -56,14 +56,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-debug-panics-') as directory:
         assert lines[0] == f'runtime check failed (index.ok) in get at {main}:6: index 9, length 4', (tree, lines)
         assert lines[1:5] == ['stack trace:', f'  at get ({main}:6)', f'  at middle ({main}:11)',
                               f'  at main ({main}:25)'], (tree, lines)
-        # With cleanup pending, SSA code still reports the values.
+        # A pending defer does not run on a failed check, and the report
+        # still carries the values.
         result = subprocess.run([str(output), 'x'], capture_output=True, text=True, timeout=30)
-        expected = f'runtime check failed (index.ok) in cleaned at {main}:16'
-        if tree == '0':
-            expected += ': index 6, length 4'
-        assert result.stdout == 'cleanup\n' and result.stderr.splitlines()[0] == expected, (tree, result)
-        # The trace was walked before the cleanup ran, and the inline cleanup
-        # code does not take over the failing statement's line.
+        expected = f'runtime check failed (index.ok) in cleaned at {main}:16: index 6, length 4'
+        assert result.stdout == '' and result.stderr.splitlines()[0] == expected, (tree, result)
         assert result.stderr.splitlines()[1:4] == ['stack trace:', f'  at cleaned ({main}:16)',
                                                    f'  at main ({main}:23)'], (tree, result)
 # A deep stack keeps its 48 innermost and 16 outermost frames and counts the

@@ -156,16 +156,10 @@ fn run_panic_hook(message: *const u8, length: u64) {
     hook(message, length)
   }
 }
+// A panic does not run defers: it runs the handler set with
+// panic.set_handler and returns, and dyn_panic reports and exits.
 pub fn dyn_unwind_begin(message: *const u8, length: u64) {
-  slot := unwind_slot(true)
-  if slot == nil || slot.unwinding != 0 || slot.top == nil {
-    run_panic_hook(message, length)
-    return
-  }
-  unwind_store_message(slot, message, length)
-  frame := slot.top
-  slot.top = frame.previous
-  jump(frame)
+  run_panic_hook(message, length)
 }
 // Marks the slot as unwinding and keeps a copy of the message, which may live
 // in a frame the unwind discards.

@@ -893,15 +893,15 @@ module's full declarations and comments.
 
 - `struct Face { data: []const u8, cmap: []const u8, glyf: []const u8, loca: []const u8, hmtx: []const u8, units_per_em: u16, glyphs: u16, metrics: u16, long_loca: bool, ascent: i16, descent: i16, line_gap: i16, kern: []const u8, }`: A face borrows immutable font bytes.
 - `struct FaceResult { value: Face, offset: usize, failure: parse.Failure }`
-- `struct Bitmap { pixels: []u8, width: i32, height: i32, x_offset: i32, y_offset: i32, advance: i32 }`
+- `struct Bitmap { pixels: []u8, width: usize, height: usize, x_offset: i32, y_offset: i32, advance: i32 }`
 - `struct BitmapResult { value: Bitmap, offset: usize, failure: parse.Failure }`
 - `fn open(data: []const u8) FaceResult`
 - `fn glyph_index(face: *const Face, codepoint: u32) u16`: Zero is the font's missing-glyph slot.
 - `fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u16) BitmapResult`: Unhinted 4x4 supersampling for simple and composite glyf outlines.
-- `struct AtlasGlyph { codepoint: u32, x: i32, y: i32, width: i32, height: i32, x_offset: i32, y_offset: i32, advance: i32 }`
-- `struct Atlas { pixels: []u8, width: i32, height: i32, line_height: i32, glyphs: []AtlasGlyph }`: Glyphs are sorted by codepoint.
+- `struct AtlasGlyph { codepoint: u32, x: usize, y: usize, width: usize, height: usize, x_offset: i32, y_offset: i32, advance: i32 }`
+- `struct Atlas { pixels: []u8, width: usize, height: usize, line_height: i32, glyphs: []AtlasGlyph }`: Glyphs are sorted by codepoint.
 - `struct AtlasResult { value: Atlas, offset: usize, failure: parse.Failure }`
-- `fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: i32) AtlasResult`: Shelf packing with one transparent padding pixel.
+- `fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: usize) AtlasResult`: Shelf packing with one transparent padding pixel.
 - `nil_glyph: AtlasGlyph`
 - `fn atlas_glyph(value: *const Atlas, codepoint: u32) *const AtlasGlyph`
 - `fn kerning(face: *const Face, left, right: u16, pixels_per_em: u16) f64`: Pixel adjustment added between left and right glyphs.
@@ -929,29 +929,28 @@ module's full declarations and comments.
 
 ## std/fs
 
-- `struct File { descriptor: isize, active: bool }`: A file handle is a plain value: copy it freely, and close it once.
-- `type FileResult = io.Result(File)`
+- `struct File { descriptor: isize, active: bool, failed: bool, ended: bool, failure: io.Failure }`: A file handle is a plain value: copy it freely, and close it once.
 - `struct Result { transferred: usize, failure: io.Failure }`
 - `type OffsetResult = io.Count`
-- `type ReadAllResult = io.Bytes`
 - `fn is_open(file: *const File) bool`
 - `fn adopt_handle(handle: isize) File`: A File for a native handle opened elsewhere;
-- `fn open(path: []const u8) FileResult`
-- `fn create(path: []const u8) FileResult`
-- `fn append(path: []const u8) FileResult`
-- `fn create_exclusive(path: []const u8) FileResult`
+- `fn open(path: []const u8) File`: Opens path for reading.
+- `fn create(path: []const u8) File`
+- `fn append(path: []const u8) File`
+- `fn create_exclusive(path: []const u8) File`
 - `fn close(file: *File)`
-- `fn read(file: *File, destination: []u8) Result`: Destination borrows caller storage.
-- `fn write(file: *File, source: []const u8) Result`
+- `fn read(file: *File, destination: []u8) usize`: Reads into destination and returns the byte count.
+- `fn write(file: *File, source: []const u8) usize`: Writes all of source and returns the bytes written, fewer on a failure.
 - `fn reader(file: *File) io.Reader`: Adapters borrow the File itself: keep it alive and unmoved until I/O completes.
 - `fn writer(file: *File) io.Writer`
-- `fn seek(file: *File, offset: isize, origin: usize) OffsetResult`: origin: 0 start, 1 current, 2 end.
-- `fn sync(file: *File) Result`
+- `fn seek(file: *File, offset: isize, origin: usize) usize`: Moves the file position and returns it;
+- `fn sync(file: *File)`: Makes written data durable.
 - `type Mapping = io.Result([]const u8)`: A read-only view of a whole file, owned by the caller until unmap.
 - `fn map(file: *const File) Mapping`: Maps the whole file.
 - `fn unmap(mapping: *Mapping) Result`: Releases a mapping and clears it.
-- `fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllResult`: Reads one complete file into arena storage, bounded by maximum.
-- `fn write_all(path: []const u8, source: []const u8) Result`: A failed close is not reported.
+- `fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) []u8`: Reads one complete file into arena storage, bounded by maximum.
+- `fn read_contents(arena: *memory.Arena, file: *File, maximum: usize) []u8`: Reads the rest of file into arena storage, bounded by maximum.
+- `fn write_all(path: []const u8, source: []const u8) bool`: Creates or replaces path with source;
 - `struct Metadata { size: u64, inode: u64, device: u64, mode: u16, failure: io.Failure }`
 - `type PathResult = io.Bytes`
 - `enum AppDirectory { Home, Config, Cache, Data, Runtime }`
@@ -1074,19 +1073,19 @@ module's full declarations and comments.
 ## std/image
 
 - `enum Format { Unknown, Gray8, GrayAlpha8, Rgb8, Rgba8 }`
-- `struct View { pixels: []u8, width: u32, height: u32, stride: usize, format: Format, }`
+- `struct View { pixels: []u8, width: usize, height: usize, stride: usize, format: Format, }`
 - `fn bytes_per_pixel(format: Format) usize`
-- `fn view(pixels: []u8, width: u32, height: u32, stride: usize, format: Format) View`
+- `fn view(pixels: []u8, width: usize, height: usize, stride: usize, format: Format) View`
 - `fn row(source: *View, y: u32) []u8`
 
 ## std/image/bmp
 
-- `struct Info { width: u32, height: u32, channels: u8 }`: Windows DIB headers, uncompressed indexed/BGR and contiguous bitfields.
+- `struct Info { width: usize, height: usize, channels: u8 }`: Windows DIB headers, uncompressed indexed/BGR and contiguous bitfields.
 - `struct Image { info: Info, pixels: []u8 }`
 - `struct Result { value: Image, offset: usize, failure: parse.Failure }`
 - `type EncodeResult = parse.Bytes`
 - `fn decode(arena: *mem.Arena, source: []const u8) Result`: Ownership: pixels borrow arena backing;
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channels: u8) EncodeResult`: RGB is written as a 24-bit Windows DIB.
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width, height: usize, channels: u8) EncodeResult`: RGB is written as a 24-bit Windows DIB.
 
 ## std/image/color
 
@@ -1097,61 +1096,61 @@ module's full declarations and comments.
 
 ## std/image/gif
 
-- `struct Info { width: u32, height: u32, channels: u8 }`: Decodes the first composited GIF87a/89a image, including interlace and transparency.
+- `struct Info { width: usize, height: usize, channels: u8 }`: Decodes the first composited GIF87a/89a image, including interlace and transparency.
 - `struct Image { info: Info, pixels: []u8 }`
 - `struct Result { value: Image, consumed: usize, offset: usize, failure: parse.Failure }`
 - `fn decode(arena: *mem.Arena, source: []const u8) Result`: Ownership: pixels borrow arena backing;
 
 ## std/image/jpeg
 
-- `struct Info { width: u32, height: u32, channels: u8 }`: ITU-T T.81 baseline sequential Huffman JPEG, 8-bit gray/RGB/YCbCr.
+- `struct Info { width: usize, height: usize, channels: u8 }`: ITU-T T.81 baseline sequential Huffman JPEG, 8-bit gray/RGB/YCbCr.
 - `struct Image { info: Info, pixels: []u8 }`
 - `struct Result { value: Image, offset: usize, failure: parse.Failure }`
 - `fn decode(arena: *mem.Arena, source: []const u8) Result`: Ownership: pixels borrow arena backing;
 
 ## std/image/png
 
-- `struct Info { width: u32, height: u32, channels: u8, valid: bool }`
+- `struct Info { width: usize, height: usize, channels: u8, valid: bool }`
 - `struct Image { info: Info, pixels: []u8 }`: Result.ok / InfoResult.ok are authoritative.
 - `struct Result { value: Image, offset: usize, failure: parse.Failure }`
 - `struct InfoResult { value: Info, offset: usize, failure: parse.Failure }`
 - `struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }`
 - `fn inspect(source: []const u8) InfoResult`
 - `fn decode(arena: *mem.Arena, source: []const u8) Result`
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8) EncodeResult`
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8) EncodeResult`
 
 ## std/image/pnm
 
-- `struct Info { width: u32, height: u32, channels: u8 }`: consumed permits concatenated raw images.
+- `struct Info { width: usize, height: usize, channels: u8 }`: consumed permits concatenated raw images.
 - `struct Image { info: Info, pixels: []u8 }`
 - `struct Result { value: Image, consumed: usize, offset: usize, failure: parse.Failure }`
 - `type EncodeResult = parse.Bytes`
 - `fn decode(arena: *mem.Arena, source: []const u8) Result`
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8) EncodeResult`: Emit binary P5 (one channel) or P6 (three channels) with Maxval 255.
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8) EncodeResult`: Emit binary P5 (one channel) or P6 (three channels) with Maxval 255.
 
 ## std/image/qoi
 
-- `struct Info { width: u32, height: u32, channels: u8, srgb: bool, valid: bool }`
+- `struct Info { width: usize, height: usize, channels: u8, srgb: bool, valid: bool }`
 - `struct Image { info: Info, pixels: []u8 }`: Result.ok / InfoResult.ok are authoritative.
 - `struct Result { value: Image, offset: usize, failure: parse.Failure }`
 - `struct InfoResult { value: Info, offset: usize, failure: parse.Failure }`
 - `struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }`
 - `fn inspect(source: []const u8) InfoResult`
 - `fn decode(arena: *mem.Arena, source: []const u8) Result`
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeResult`
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) EncodeResult`
 
 ## std/image/tga
 
-- `struct Info { width: u32, height: u32, channels: u8 }`: True-color and gray TGA, including RLE and all origin directions.
+- `struct Info { width: usize, height: usize, channels: u8 }`: True-color and gray TGA, including RLE and all origin directions.
 - `struct Image { info: Info, pixels: []u8 }`
 - `struct Result { value: Image, offset: usize, failure: parse.Failure }`
 - `type EncodeResult = parse.Bytes`
 - `fn decode(arena: *mem.Arena, source: []const u8) Result`: Ownership: pixels borrow arena backing;
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channels: u8) EncodeResult`: Ownership: encoded bytes borrow arena backing;
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width, height: usize, channels: u8) EncodeResult`: Ownership: encoded bytes borrow arena backing;
 
 ## std/io
 
-- `struct Failure { kind: Kind, native: isize }`: Portable categories accompany (and never replace) the original native code.
+- `struct Failure { kind: Kind, native: isize, operation: []const u8, path: []const u8 }`: Why an operation failed: a portable kind, the native code when the system gave one, and what was being done, such as operation "open" on ...
 - `struct Result(T) { value: T, failure: Failure }`: A value and how getting it went.
 - `type Bytes = Result([]u8)`
 - `type Count = Result(usize)`
@@ -1166,6 +1165,8 @@ module's full declarations and comments.
 - `fn windows(code: isize) Kind`
 - `fn wasi(code: isize) Kind`
 - `fn darwin(code: isize) Kind`
+- `fn kind_text(kind: Kind) []const u8`: A short description of kind: "not found", "permission denied".
+- `fn describe(storage: []u8, failure: Failure) []u8`: "operation path: kind" in storage, such as "open /etc/app.conf: not found";
 - `enum Status { Complete, End }`: A transfer either completed or reached the end.
 - `struct Transfer { transferred: usize, failure: Failure, status: Status, }`
 - `struct Reader { data: rawptr, read: fn(rawptr, []u8) Transfer, }`
@@ -1292,7 +1293,7 @@ module's full declarations and comments.
 - `fn add_overflows(a, b: $T) bool`: Whether a + b, a - b or a * b leaves T's range.
 - `fn sub_overflows(a, b: $T) bool`
 - `fn mul_overflows(a, b: $T) bool`
-- `fn wrapping_add(a, b: $T) T`: Arithmetic that wraps on overflow, as + - * do by default.
+- `fn wrapping_add(a, b: $T) T`: Arithmetic that wraps on overflow, even under --check-overflow, for code that means to wrap, such as hashes.
 - `fn wrapping_sub(a, b: $T) T`
 - `fn wrapping_mul(a, b: $T) T`
 - `fn saturating_add(a, b: $T) T`: Arithmetic that stops at T's limits instead of overflowing.
@@ -2180,6 +2181,7 @@ module's full declarations and comments.
 ## std/panic
 
 - `fn set_handler(callback: fn(message: []const u8))`: Installs the handler, replacing any earlier one.
+- `fn assert(condition: bool, message: []const u8)`: Panics with message when condition is false: a check for a bug that is part of the program, in every build.
 
 ## std/parse
 

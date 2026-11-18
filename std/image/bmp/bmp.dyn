@@ -3,7 +3,7 @@ use "std/mem" mem
 use "std/encoding/binary" binary
 // Windows DIB headers, uncompressed indexed/BGR and contiguous bitfields.
 // RLE, embedded JPEG/PNG and OS/2 DIB variants return Unsupported.
-pub struct Info { width: u32, height: u32, channels: u8 }
+pub struct Info { width: usize, height: usize, channels: u8 }
 pub struct Image { info: Info, pixels: []u8 }
 pub struct Result { value: Image, offset: usize, failure: parse.Failure }
 pub type EncodeResult = parse.Bytes
@@ -185,7 +185,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
 // RGB is written as a 24-bit Windows DIB. RGBA uses V4 bitfields, preserving alpha.
 // Ownership: encoded bytes borrow arena backing; pixels are not retained.
 // Inputs must not borrow unused backing of the output arena.
-pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channels: u8) EncodeResult {
+pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: usize, channels: u8) EncodeResult {
   if width == 0 || height == 0 || width > 2147483647 || height > 2147483647 || (channels != 3 && channels != 4) {
     return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
@@ -208,8 +208,8 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channel
   binary.store_u32_le(output[2..], #cast(u32, size))
   binary.store_u32_le(output[10..], #cast(u32, header))
   binary.store_u32_le(output[14..], dib)
-  binary.store_u32_le(output[18..], width)
-  binary.store_u32_le(output[22..], height)
+  binary.store_u32_le(output[18..], #cast(u32, width))
+  binary.store_u32_le(output[22..], #cast(u32, height))
   binary.store_u16_le(output[26..], 1)
   binary.store_u16_le(output[28..], #cast(u16, channels) * 8)
   binary.store_u32_le(output[34..], #cast(u32, (row * height)))

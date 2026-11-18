@@ -137,19 +137,27 @@ fn main() {
  owner := mem.arena_alloc(16000000)
  defer { mem.arena_release(owner) }
  arena := owner
- raw := fs.read_all(arena, "DIRECTORY/raw", 6000000)
- encoded := fs.read_all(arena, "DIRECTORY/encoded", 2000000)
- concatenated := fs.read_all(arena, "DIRECTORY/concatenated", 4000000)
- unknown := fs.read_all(arena, "DIRECTORY/unknown", 2000000)
- if io.failed(raw.failure) || io.failed(encoded.failure) || io.failed(concatenated.failure) || io.failed(unknown.failure) { #panic("fixtures") }
+ raw_file := fs.open("DIRECTORY/raw")
+ raw := fs.read_contents(arena, &raw_file, 6000000)
+ fs.close(&raw_file)
+ encoded_file := fs.open("DIRECTORY/encoded")
+ encoded := fs.read_contents(arena, &encoded_file, 2000000)
+ fs.close(&encoded_file)
+ concatenated_file := fs.open("DIRECTORY/concatenated")
+ concatenated := fs.read_contents(arena, &concatenated_file, 4000000)
+ fs.close(&concatenated_file)
+ unknown_file := fs.open("DIRECTORY/unknown")
+ unknown := fs.read_contents(arena, &unknown_file, 2000000)
+ fs.close(&unknown_file)
+ if raw_file.failed || encoded_file.failed || concatenated_file.failed || unknown_file.failed { #panic("fixtures") }
  workspace := #slice(mem.arena_push_uninit(arena, z.decoder_workspace_size(21), 8), z.decoder_workspace_size(21))
- results(arena, encoded.value, unknown.value, workspace)
- verify(raw.value, unknown.value, workspace, 13, 21, false, 1)
- verify(raw.value, encoded.value, workspace, 1, 21, false, 1)
- verify(raw.value, encoded.value, workspace, 113, 21, false, 1)
- verify(raw.value, concatenated.value, workspace, 79, 21, false, 2)
- verify(raw.value, encoded.value[..#len(encoded.value)-1], workspace, 113, 21, true, 1)
- verify(raw.value, encoded.value, workspace[..1], 113, 21, true, 1)
+ results(arena, encoded, unknown, workspace)
+ verify(raw, unknown, workspace, 13, 21, false, 1)
+ verify(raw, encoded, workspace, 1, 21, false, 1)
+ verify(raw, encoded, workspace, 113, 21, false, 1)
+ verify(raw, concatenated, workspace, 79, 21, false, 2)
+ verify(raw, encoded[..#len(encoded)-1], workspace, 113, 21, true, 1)
+ verify(raw, encoded, workspace[..1], 113, 21, true, 1)
 }
 '''
 

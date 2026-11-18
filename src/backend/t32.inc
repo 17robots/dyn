@@ -645,9 +645,6 @@ static size_t t32_once(BackendContext *c) {
   t32_li(c,T32_T1,1); t32_mem(c,T32_STRB,T32_T1,0,0);
   return done;
 }
-static void t32_test32(BackendContext *c) {
-  t32_shift_imm(c,T32_ASR,T32_T1,0,31); t32_li(c,T32_T2,0); t32_compare_regs(c,0,T32_T1,T32_T2,T32_T2);
-}
 static void t32_compare_top(BackendContext *c) {
   t32_mem(c,T32_LDR,T32_T1,T32_SP,0); t32_to_s2(c,T32_LOW_A,0,T32_T1);
   t32_mem(c,T32_LDR,T32_T1,T32_SP,4); t32_to_s2(c,T32_HIGH_A,4,T32_T1);

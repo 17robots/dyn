@@ -2,7 +2,7 @@ use "std/parse" parse
 use "std/mem" mem
 use "std/compress/deflate" deflate
 
-pub struct Info { width: u32, height: u32, channels: u8, valid: bool }
+pub struct Info { width: usize, height: usize, channels: u8, valid: bool }
 // Result.ok / InfoResult.ok are authoritative. Info.ok is legacy parser state:
 // true inside successful values, false in the zero failure value.
 // On failure value is zero. error is zero: codec details are not native errors.
@@ -248,8 +248,8 @@ fn append_chunk(destination: []u8, at: usize, kind: []const u8, payload: []const
 
 // Encodes tightly packed 8-bit grayscale, grayscale-alpha, RGB, or RGBA pixels.
 fn encode_into(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []const u8,
-  width: u32, height: u32, channels: u8) EncodeWork {
-  if width == 0 || height == 0 || channels < 1 || channels > 4 { return EncodeWork{ error: -22 } }
+  width: usize, height: usize, channels: u8) EncodeWork {
+  if width == 0 || height == 0 || width > 2147483647 || height > 2147483647 || channels < 1 || channels > 4 { return EncodeWork{ error: -22 } }
   row_size := #cast(usize, width) * #cast(usize, channels)
   pixel_size := row_size * height
   scanline_size := (row_size + 1) * height
@@ -278,8 +278,8 @@ fn encode_into(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []c
     i += 1
   }
   ihdr: [13]u8
-  put_u32be(ihdr[..], 0, width)
-  put_u32be(ihdr[..], 4, height)
+  put_u32be(ihdr[..], 0, #cast(u32, width))
+  put_u32be(ihdr[..], 4, #cast(u32, height))
   ihdr[8] = 8
   if channels == 1 {
     ihdr[9] = 0
@@ -319,7 +319,7 @@ fn decode_work(arena: *mem.Arena, source: []const u8) DecodeWork {
 
 // Encodes tightly packed 8-bit grayscale, grayscale-alpha, RGB, or RGBA pixels
 // into arena.
-fn encode_work(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8) EncodeWork {
+fn encode_work(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8) EncodeWork {
   scanline_size := (#cast(usize, width) * #cast(usize, channels) + 1) * #cast(usize, height)
   compressed_size := scanline_size + (scanline_size / 65535 + 1) * 5 + 6
   mark := mem.arena_mark(arena)
@@ -338,7 +338,7 @@ fn encode_work(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, c
 }
 
 // Checked before allocation; no hidden allocator and failures preserve the arena mark.
-fn pixel_count(width: u32, height: u32, channels: u8) usize {
+fn pixel_count(width: usize, height: usize, channels: u8) usize {
   limit := #max(usize)
   w := #cast(usize, width)
   h := #cast(usize, height)
@@ -363,7 +363,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   return decode_result(decode_work(arena, source))
 }
 
-pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8) EncodeResult {
+pub fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8) EncodeResult {
   if width == 0 || height == 0 || channels < 1 || channels > 4 {
     return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }

@@ -17,23 +17,23 @@ fn main() {
   for i in 0..#len(content) {
     content[i] = #cast(u8, (i * 7) & 255)
   }
-  check(!errors.failed(fs.write_all("map-fixture.bin", content[..]).failure))
+  check(fs.write_all("map-fixture.bin", content[..]))
   opened := fs.open("map-fixture.bin")
-  check(!errors.failed(opened.failure))
-  file := opened.value
+  check(!opened.failed)
+  file := opened
   head: [3]u8
-  check(!errors.failed(fs.read(&file, head[..]).failure))
+  check(fs.read(&file, head[..]) != 0 && !file.failed)
   mapping := fs.map(&file)
   check(!errors.failed(mapping.failure) && bytes.equal(mapping.value, content[..]))
-  check(fs.seek(&file, 0, 1).value == 3)
+  check(fs.seek(&file, 0, 1) == 3)
   fs.close(&file)
   // The view stays valid after its file closes.
   check(mapping.value[4999] == content[4999])
   check(!errors.failed(fs.unmap(&mapping).failure) && #len(mapping.value) == 0 && !errors.failed(mapping.failure))
-  check(!errors.failed(fs.write_all("map-empty.bin", "").failure))
+  check(fs.write_all("map-empty.bin", ""))
   empty_file := fs.open("map-empty.bin")
-  check(!errors.failed(empty_file.failure))
-  empty_handle := empty_file.value
+  check(!empty_file.failed)
+  empty_handle := empty_file
   empty := fs.map(&empty_handle)
   check(!errors.failed(empty.failure) && #len(empty.value) == 0)
   check(!errors.failed(fs.unmap(&empty).failure))

@@ -102,7 +102,7 @@ def build_adapter(work):
         if path.name not in ('driver.c', 'ssa.inc', 'compiler.c'):
             (work/path.name).symlink_to(path)
     source = (ROOT/'src/backend/ssa.inc').read_text()
-    anchor = 'int32_t panic = ssa_emit(s, SO_PANIC, SC_NONE, data, length, -1, 0, 0);'
+    anchor = 'ssa_emit(s, SO_PANIC, SC_NONE, data, length, -1, 0, 0);'
     source = soft.replace_once(source, anchor,
         'if (!strcmp(s->f->name,"wide")) length = ssa_load_value(s, ssa_local_address(s, 0), DYN_TYPE_U64, NULL);\n    '+anchor)
     (work/'ssa.inc').write_text(source)

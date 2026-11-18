@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Inspect ELF and compare normal and panic execution with the production compiler."""
+import re
 import ctypes
 import itertools
 import math
@@ -158,11 +159,18 @@ return i }
 pub fn loop_label(n:u64) u64 {
   i:u64 = 0
   total:u64 = 0
-  outer: for i < n { i += 1
-    for { if i == 2 { continue:outer }
-    if i > 5 { break:outer }
-    total += i
-    break }
+  done := false
+  for !done && i < n {
+    i += 1
+    for {
+      if i == 2 { break }
+      if i > 5 {
+        done = true
+        break
+      }
+      total += i
+      break
+    }
   }
   return total
 }
@@ -300,9 +308,18 @@ return total }
 pub fn range_nested(a:u64,b:u64) u64 { total:u64 = 0
 lo:u64 = 0
 hi:u64 = 3
-outer: for i in a..b { for j in lo..hi { if i == 2 { continue:outer }
-if i == 5 { break:outer }
-total += i+j } }
+stop := false
+for i in a..b {
+for j in lo..hi {
+if i == 2 { break }
+if i == 5 {
+stop = true
+break
+}
+total += i+j
+}
+if stop { break }
+}
 return total }
 pub fn range_bound_panic(a:u64,b:u64) u64 { total:u64 = 0
 for i in (a/b)..(a+1) { total += i }
@@ -492,17 +509,21 @@ def inspect(path, debug):
                for offset in range(table[4], table[4] + table[5], table[9])]
     assert all(s[1] >> 4 == 0 for s in symbols[:table[7]])
     assert all(s[1] >> 4 == 1 for s in symbols[table[7]:])
-    # Table-based unwinding needs continue, but no set/link/unlink calls. Debug
-    # builds generate this program's functions through SSA as release does, so
-    # they unwind by table too; their stack traces walk frame pointers, with no
-    # hook in each function. Both modes retain the local .text section symbol
-    # used by the unwind-table relocation.
-    runtime_symbols = {b'dyn_panic', b'dyn_unwind_continue', b'fmod', b'fmodf', b'dyn_check_failed'}
-    # Three generic templates produce five concrete instances. Fixed symbols:
-    # null, .rodata, .text, literals, initializer, and initialized flag.
-    concrete_functions = SOURCE.count('pub fn ') - 3 + 5
-    assert len(symbols) == concrete_functions + SOURCE.count('extern fn ') + GLOBAL_COUNT + 6 + len(runtime_symbols)
-    assert symbols[2][1] == 3 and symbols[2][3] == 1  # STT_SECTION for .text
+    # A panic reports and exits; there is no unwinding, so no unwind runtime.
+    runtime_symbols = {b'dyn_panic', b'fmod', b'fmodf', b'dyn_check_failed'}
+    # Three generic templates; each instance a caller still calls keeps a
+    # symbol (`name__g...`); small ones inlined at every use keep none. Fixed
+    # symbols: null, the .rodata section, literals, initializer and initialized
+    # flag.
+    strtab = sections[b'.strtab']
+    symbol_names = [data[strtab[4] + s[0]:strtab[4] + strtab[5]].split(b'\0')[0] for s in symbols]
+    instances = sum(1 for name in symbol_names if re.match(rb'generic_(min|count|add)__g', name))
+    assert 1 <= instances <= 5, instances
+    concrete_functions = SOURCE.count('pub fn ') - 3 + instances
+    expected_count = concrete_functions + SOURCE.count('extern fn ') + GLOBAL_COUNT + 5 + len(runtime_symbols)
+    assert len(symbols) == expected_count, (len(symbols), expected_count)
+    # STT_SECTION for .rodata; with no unwind tables, .text needs no section symbol.
+    assert any(s[1] == 3 and s[3] == 2 for s in symbols[:table[7]])
     names = headers[table[6]]
     names = data[names[4]:names[4] + names[5]]
     undefined = {names[s[0]:].split(b'\0')[0] for s in symbols[2:] if s[3] == 0}
@@ -1258,12 +1279,14 @@ return munmap(area,(size_t)page*2)!=0; }
                 count+=1
             assert configure(lib,'defer_float',ctypes.c_double,1)(0.25)==47.75
             count+=1
+        # A panic runs no defers, so nothing deferred prints before it ends
+        # the process; native and production builds report it the same way.
         for name,args,output in [
-            ('panic_owned',(0,),'5'), ('panic_replace',(0,),''),
-            ('array_panic',(3,),'4'), ('array_panic',((1<<64)-1,),'4'),
-            ('defer_panic_call',(0,),'21'), ('defer_panic_guard',(0,),'21'),
-            ('defer_panic_capture',(0,),'1'), ('defer_panic_cleanup',(0,),''),
-            ('defer_panic_recursive',(3,),'0123'), ('defer_panic_parent',(0,),'218')]:
+            ('panic_owned',(0,),''), ('panic_replace',(0,),''),
+            ('array_panic',(3,),''), ('array_panic',((1<<64)-1,),''),
+            ('defer_panic_call',(0,),''), ('defer_panic_guard',(0,),''),
+            ('defer_panic_capture',(0,),''), ('defer_panic_cleanup',(0,),''),
+            ('defer_panic_recursive',(3,),''), ('defer_panic_parent',(0,),'')]:
             results=[]
             code="import ctypes,sys; l=ctypes.CDLL(sys.argv[1]); f=getattr(l,sys.argv[2]); f.argtypes=[ctypes.c_uint64]; f.restype=ctypes.c_uint64; f(int(sys.argv[3]))"
             for library in (native,production_path):

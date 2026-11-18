@@ -288,7 +288,7 @@ typedef enum {
 } DynStmtKind;
 typedef struct {
   DynStmtKind kind;
-  DynSpan span, name, label, control_label;
+  DynSpan span, name, label;
   DynType declared_type;
   DynExprId expression, target;
   DynOperator assignment_op;
@@ -296,11 +296,14 @@ typedef struct {
   uint32_t body_start, body_count, else_start, else_count, loop_depth, loop_id,
       target_loop_id, case_arm_start, case_arm_count;
   /* Range for-in stores the first bound in target and the last in expression. */
-  bool defer_block, for_pointer, for_const, is_const, for_range, for_inclusive, for_reverse;
+  bool defer_block, for_pointer, is_const, for_range, for_inclusive, for_reverse;
   /* for x, i in xs: the index local is local_id + 1. */
   bool for_index;
   /* `{ ... }` as a statement: an if on literal true that ends when its body does. */
   bool bare_block;
+  /* for i in #step(range, n): step holds n until sema rewrites the loop. */
+  bool for_step;
+  DynExprId step;
   DynSpan index_name;
 } DynAstStmt;
 /* A text case with more string patterns than this dispatches through integer

@@ -81,7 +81,7 @@ pub fn i64_decimal(text: []const u8) Result(i64) {
     if magnitude.value > 9223372036854775808 {
       return Result(i64){ failure: Failure{ kind: Kind.Overflow, offset: start, message: "number below i64 minimum" } }
     }
-    return Result(i64){ value: #cast(i64, 0 - magnitude.value) }
+    return Result(i64){ value: #cast(i64, #wrapping(0 - magnitude.value)) }
   }
   if magnitude.value > 9223372036854775807 {
     return Result(i64){ failure: Failure{ kind: Kind.Overflow, offset: start, message: "number exceeds i64" } }

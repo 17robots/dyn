@@ -66,10 +66,10 @@ const WsU64Word: u64 = 65536
 const WsU64High: u64 = 16777216
 // Std code wraps on overflow in every build mode, so + and << are mod 2^32.
 fn ws_add32(left: u32, right: u32) u32 {
-  return left + right
+  return #wrapping(left + right)
 }
 fn ws_rol(value: u32, count: u32) u32 {
-  return (value << count) | (value >> (32 - count))
+  return #wrapping(value << count) | (value >> (32 - count))
 }
 fn ws_sha1_block(state: []u32, block: []const u8) {
   words: [80]u32
@@ -250,7 +250,7 @@ fn ws_put64(output: []u8, at: usize, value: usize) {
   remaining := value
   for i > 0 {
     i -= 1
-    output[at + i] = #cast(u8, (remaining % Ws256))
+    output[at + i] = remaining % Ws256
     remaining /= Ws256
   }
 }

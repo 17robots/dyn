@@ -274,16 +274,15 @@ static bool validate_ir(const DynIrProgram *ir) {
     if ((size_t)ir->case_arms[i].pattern_start + ir->case_arms[i].pattern_count > ir->pattern_count || (size_t)ir->case_arms[i].body_start + ir->case_arms[i].body_count > ir->child_count) return false;
   return true;
 }
-/* Whether integer arithmetic written at span wraps. It always does, except
-   with --check-overflow in the program's own modules: std and vendor code
-   relies on wrapping (hashes, checksums), so it keeps it. */
+/* Whether integer arithmetic wraps: always, except under --check-overflow,
+   which checks every module alike. #wrapping(...) marks arithmetic that
+   wraps on purpose, such as hashes. */
 static bool ir_wraps(const DynSource *source, DynSpan span) {
+  /* The prelude implements builtins such as #sqrt in software; like the
+     instructions it stands in for, its arithmetic wraps. */
+  if (source && dyn_reflection_prelude_span(span, source)) return true;
   const DynOptimization *o = source ? source->context.optimization : NULL;
-  if (!o || !o->check_overflow) return true;
-  const char *path, *text;
-  size_t length, at;
-  dyn_source_position(source, span.start_byte, &path, &text, &length, &at);
-  return dyn_path_in_library(path);
+  return !o || !o->check_overflow;
 }
 
 /* A case on text: `case name { "a" => {...} _ => {...} }`. Sema left the
@@ -904,7 +903,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->statements[i] = (DynIrStmt){.kind = from->kind, .expression = from->expression, .target = from->target, .assignment_op = from->assignment_op,
                                     .local_id = from->local_id, .body_start = from->body_start, .body_count = from->body_count, .else_start = from->else_start, .else_count = from->else_count,
                                     .loop_id = from->loop_id, .target_loop_id = from->target_loop_id, .case_arm_start = from->case_arm_start, .case_arm_count = from->case_arm_count,
-                                    .defer_block = from->defer_block, .for_pointer = from->for_pointer, .for_const = from->for_const, .for_range = from->for_range, .for_inclusive = from->for_inclusive, .for_reverse = from->for_reverse, .for_index = from->for_index, .span = from->span};
+                                    .defer_block = from->defer_block, .for_pointer = from->for_pointer, .for_range = from->for_range, .for_inclusive = from->for_inclusive, .for_reverse = from->for_reverse, .for_index = from->for_index, .span = from->span};
   }
   for (size_t i = 0; i < a->pattern_count; ++i)
     ir->patterns[i] = (DynIrPattern){a->patterns[i].first_value, a->patterns[i].last_value, lower_type(a, a->patterns[i].type), a->patterns[i].variant, a->patterns[i].is_enum, a->patterns[i].is_signed, a->patterns[i].is_type};

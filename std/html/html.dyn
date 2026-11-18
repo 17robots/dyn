@@ -106,7 +106,7 @@ pub fn output(source: *const Writer) Trusted {
 // Nonzero when a byte of word is zero (the high bit of the first such byte is
 // set; bits above it may be wrong).
 fn zero_byte(word: u64) u64 {
-  return (word - 0x0101010101010101) & ~word & 0x8080808080808080
+  return #wrapping(word - 0x0101010101010101) & ~word & 0x8080808080808080
 }
 
 // Nonzero when a byte of word needs escaping: x | 1 is ' for & and ', and

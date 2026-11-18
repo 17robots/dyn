@@ -157,15 +157,28 @@ static uint32_t src_if(Parser *p) {
   }
   return src_node(p, SRC_IF, start, src_end(p, last, start), first);
 }
+/* #step(first..last, n) */
+static uint32_t src_step(Parser *p) {
+  uint32_t start = p->token.start; lex(p); expect(p, "(");
+  uint32_t range = src_range(p, false);
+  expect(p, ",");
+  uint32_t step = expression(p, 0), end = p->token.end;
+  expect(p, ")");
+  if (range == NONE || step == NONE || p->tree->error) return NONE;
+  p->tree->nodes[range].next = step;
+  return src_node(p, SRC_STEP, start, end, range);
+}
 static uint32_t src_for(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
-  if (!is(p, "for")) { append(p, &first, &last, name(p)); expect(p, ":"); }
   expect(p, "for");
   if (!is(p, "{")) {
     uint32_t begin = p->token.start, cf = NONE, cl = NONE;
     Parser saved = *p; uint32_t count = p->tree->count;
     bool pointer = take(p, "*");
-    bool constant = pointer && take(p, "const");
+    if (pointer && is(p, "const")) {
+      fail(p, p->token.start, "write `for *value in`: the pointer is const when the collection is");
+      return NONE;
+    }
     unsigned flags = 0;
     uint32_t binding = p->token.kind == NAME ? name(p) : NONE;
     uint32_t bound_type = NONE, index = NONE;
@@ -176,16 +189,17 @@ static uint32_t src_for(Parser *p) {
     }
     if (binding != NONE && index == NONE && !pointer && take(p, ":")) bound_type = type(p);
     if (binding != NONE && take(p, "in")) {
-      flags = EXP_ITERATION | (pointer ? EXP_POINTER_BINDING : 0) | (constant ? EXP_CONST : 0) |
+      flags = EXP_ITERATION | (pointer ? EXP_POINTER_BINDING : 0) |
               (index != NONE ? EXP_INDEXED : 0);
       append(p, &cf, &cl, binding);
       if (index != NONE) append(p, &cf, &cl, index);
       if (bound_type != NONE) append(p, &cf, &cl, bound_type);
       if (is(p, "#reverse")) {
         uint32_t reverse_start = p->token.start; lex(p); expect(p, "(");
-        uint32_t value = src_range(p, false), end = p->token.end; expect(p, ")");
+        uint32_t value = is(p, "#step") ? src_step(p) : src_range(p, false), end = p->token.end; expect(p, ")");
         append(p, &cf, &cl, src_node(p, SRC_REVERSE, reverse_start, end, value));
-      } else append(p, &cf, &cl, src_range(p, true));
+      } else if (is(p, "#step")) append(p, &cf, &cl, src_step(p));
+      else append(p, &cf, &cl, src_range(p, true));
     } else {
       if (!src_restore(p, saved, count)) return NONE;
       append(p, &cf, &cl, src_condition(p));
@@ -233,7 +247,7 @@ static bool src_expression_start(Parser *p) {
   return p->token.kind == NAME || p->token.kind == NUMBER || p->token.kind == STRING ||
       p->token.kind == CHARACTER || is(p, "(") || is(p, "[") || is(p, ".") ||
       is(p, "-") || is(p, "&") || is(p, "!") || is(p, "~") ||
-      is(p, "#cast") || is(p, "#bitcast") || is(p, "#sizeof") ||
+      is(p, "#cast") || is(p, "#bitcast") || is(p, "#wrapping") || is(p, "#sizeof") ||
       is(p, "#alignof") || is(p, "#offsetof") || is(p, "#typeof") || is(p, "#max") || is(p, "#min") ||
       is(p, "#len") || is(p, "#init") || is(p, "#instance") || is(p, "#slice") || is(p, "#offset") || is(p, "#load") || is(p, "#syscall") ||
       is(p, "#sqrt") || is(p, "#floor") || is(p, "#ceil") || is(p, "#trunc") || is(p, "#round") || is(p, "#fma");
@@ -278,8 +292,11 @@ static uint32_t src_statement_body(Parser *p) {
   if (is(p, "break") || is(p, "continue")) {
     unsigned kind = is(p, "break") ? SRC_BREAK : SRC_CONTINUE;
     uint32_t end = p->token.end; lex(p);
-    uint32_t child = take(p, ":") ? name(p) : NONE;
-    return src_node(p, kind, start, src_end(p, child, end), child);
+    if (is(p, ":")) {
+      fail(p, start, "loops have no labels: break and continue act on the innermost loop");
+      return NONE;
+    }
+    return src_node(p, kind, start, end, NONE);
   }
   if (is(p, "return")) {
     uint32_t end = p->token.end; lex(p);
@@ -299,7 +316,10 @@ static uint32_t src_statement_body(Parser *p) {
     Parser probe = *p; ExpTree scratch = {0}; probe.tree = &scratch;
     lex(&probe); bool colon = take(&probe, ":");
     if (scratch.error) { propagate_error(p, &scratch); return NONE; }
-    if (colon && is(&probe, "for")) return src_for(p);
+    if (colon && is(&probe, "for")) {
+      fail(p, start, "loops have no labels: use a flag variable, or move the inner loop into a function and return");
+      return NONE;
+    }
     return src_variable(p);
   }
   uint32_t value = expression(p, 0);

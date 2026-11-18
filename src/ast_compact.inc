@@ -301,8 +301,30 @@ static DynExprId compact_argument(CompactNode n, const DynSource *s, DynAstProgr
     .span = compact_span(n), .left = DYN_NO_EXPR, .right = DYN_NO_EXPR};
   return (DynExprId)a->expression_count++;
 }
+static DynExprId compact_expr_node(CompactNode node, const DynSource *s, DynAstProgram *a,
+                                 unsigned *errors);
+/* Marks the integer arithmetic of a #wrapping(...) operand to wrap. Calls
+   inside it keep their own rules. */
+static void compact_mark_wrapping(DynAstProgram *a, DynExprId id, unsigned depth) {
+  if (id == DYN_NO_EXPR || id >= a->expression_count || depth > 4096) return;
+  DynAstExpr *e = &a->expressions[id];
+  if (e->kind == DYN_EXPR_CALL || e->kind == DYN_EXPR_INDIRECT_CALL) return;
+  if (e->kind == DYN_EXPR_BINARY || e->kind == DYN_EXPR_UNARY) e->wrap = true;
+  DynExprId left = e->left, right = e->right;
+  compact_mark_wrapping(a, left, depth + 1);
+  compact_mark_wrapping(a, right, depth + 1);
+}
 static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgram *a,
                             unsigned *errors) {
+  bool wrapping = false;
+  for (CompactNode n = node; compact_kind(n) == EXP_GROUP; n = compact_first(n))
+    wrapping = wrapping || compact_flag(n, EXP_WRAPPING);
+  DynExprId id = compact_expr_node(node, s, a, errors);
+  if (wrapping) compact_mark_wrapping(a, id, 0);
+  return id;
+}
+static DynExprId compact_expr_node(CompactNode node, const DynSource *s, DynAstProgram *a,
+                                 unsigned *errors) {
   if (!dyn_work_step(&s->context, 1)) return DYN_NO_EXPR;
   node = compact_unwrap(node);
   if (!reserve_expr(a)) {
@@ -488,10 +510,10 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
       if (!compact_null(compact_unwrap(high))) e.integer = compact_expr(high, s, a, errors);
     }
   } else if (k == EXP_POINTER_OP) {
-    /* #slice(p, n) is a pointer slice; #offset(p, n) resolves in sema. */
+    /* #slice(p, n) is a pointer slice. */
     e.kind = DYN_EXPR_SLICE;
     e.boolean = true;
-    e.op = compact_flag(node, EXP_CONST) ? DYN_OP_ADD : DYN_OP_NONE;
+    e.op = DYN_OP_NONE;
     e.left = compact_expr(compact_child(node, 0), s, a, errors);
     e.right = DYN_NO_EXPR;
     e.integer = compact_expr(compact_child(node, 1), s, a, errors);
@@ -856,10 +878,6 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
     CompactNode last = compact_last(n);
     for (uint32_t z = 0; z + 1 < count; ++z) {
       CompactNode c = compact_child(n, z);
-      if (!(compact_kind(c) != EXP_NAME)) {
-        st.label = compact_span(c);
-        continue;
-      }
       if (!(compact_kind(c) != SRC_FOR_CONDITION)) {
         uint32_t cc = compact_count(c);
         if (cc == 1)
@@ -867,7 +885,6 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
         else {
           CompactNode binder = compact_child(c, 0);
           st.for_pointer = compact_flag(c, EXP_POINTER_BINDING);
-          st.for_const = compact_flag(c, EXP_CONST);
           st.name = compact_span(binder);
           st.for_index = compact_flag(c, EXP_INDEXED);
           if (st.for_index)
@@ -886,6 +903,13 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
             st.for_reverse = true;
             iterable = compact_child(iterable, 0);
           }
+          if (compact_kind(iterable) == SRC_STEP) {
+            st.for_step = true;
+            st.step = compact_expr(compact_child(iterable, 1), s, a, errors);
+            iterable = compact_child(iterable, 0);
+            if (compact_kind(iterable) != SRC_RANGE)
+              compact_diagnostic(c, s, errors, "#step takes a range, as in #step(0..10, 2)");
+          }
           if (!(compact_kind(iterable) != SRC_RANGE)) {
             st.for_range = true;
             st.for_inclusive = compact_flag(iterable, EXP_INCLUSIVE);
@@ -901,12 +925,8 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
                 &st.body_count);
   } else if (!(k != SRC_BREAK)) {
     st.kind = DYN_STMT_BREAK;
-    if (compact_count(n))
-      st.control_label = compact_span(compact_child(n, 0));
   } else if (!(k != SRC_CONTINUE)) {
     st.kind = DYN_STMT_CONTINUE;
-    if (compact_count(n))
-      st.control_label = compact_span(compact_child(n, 0));
   } else if (!(k != SRC_DEFER)) {
     st.kind = DYN_STMT_DEFER;
     CompactNode action = compact_child(n, 0);

@@ -168,7 +168,7 @@ pub fn huffman_encode(source: []const u8, destination: []u8) usize {
   written: usize = 0
   for byte in source {
     length := #cast(usize, HuffmanLengths[byte])
-    pending = (pending << #cast(u64, length)) | HuffmanCodes[byte]
+    pending = #wrapping(pending << #cast(u64, length)) | HuffmanCodes[byte]
     bits += length
     for bits >= 8 {
       bits -= 8
@@ -178,7 +178,7 @@ pub fn huffman_encode(source: []const u8, destination: []u8) usize {
   }
   if bits > 0 {
     // Pad with the most significant bits of EOS: ones.
-    destination[written] = #cast(u8, (pending << #cast(u64, 8 - bits)) | ((#cast(u64, 1) << #cast(u64, 8 - bits)) - 1))
+    destination[written] = #cast(u8, #wrapping(pending << #cast(u64, 8 - bits)) | ((#cast(u64, 1) << #cast(u64, 8 - bits)) - 1))
     written += 1
   }
   return written

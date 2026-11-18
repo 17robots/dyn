@@ -111,7 +111,7 @@ fn main() {
     #panic("UI demo render")
   }
   encoded := png.encode(output, pixels, 480, 240, 4)
-  if parse.failed(encoded.failure) || io.failed(fs.write_all("ui-demo.png", encoded.value).failure) {
+  if parse.failed(encoded.failure) || !fs.write_all("ui-demo.png", encoded.value) {
     #panic("UI demo output")
   }
 }

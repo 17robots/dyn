@@ -247,22 +247,6 @@ static void rvs_zero_memory(SsaEmit *e, SsaValue *v) {
   rv_i(ctx, 0x13, R_S3, R_S3, 1, 0); rv_i(ctx, 0x13, R_S2, R_S2, -1, 0);
   word(ctx, rvs_b_type(R_S2, 0, 1, (int32_t)((int64_t)loop - (int64_t)ctx->text.n))); /* bne count, x0, loop */
 }
-static void rvs_frame_argument(SsaEmit *e, uint32_t offset) { rvs_add_immediate(e->ctx, 10, 8, (int32_t)offset); }
-static void rvs_protect_begin(SsaEmit *e, SsaBlock *block) {
-  BackendContext *ctx = e->ctx;
-  rvs_frame_argument(e, e->s->unwind_offset); runtime_call(ctx, 3);
-  e->rv_a = 10; e->rv_b = 0;
-  ssa_jump_to(e, CC_NE, block->succ[1]);
-  rvs_frame_argument(e, e->s->unwind_offset); runtime_call(ctx, 4);
-}
-static void rvs_protect_end(SsaEmit *e) {
-  BackendContext *ctx = e->ctx;
-  int32_t at = (int32_t)e->s->results_offset;
-  static const unsigned char saved[] = {10, 11, X_XMM0 + 10, X_XMM0 + 11};
-  for (unsigned i = 0; i < 4; ++i) rvs_slot_access(ctx, true, saved[i], (SsaMemory){8, -1, 1, at + 8 * (int32_t)i});
-  rvs_frame_argument(e, e->s->unwind_offset); runtime_call(ctx, 5);
-  for (unsigned i = 0; i < 4; ++i) rvs_slot_access(ctx, false, saved[i], (SsaMemory){8, -1, 1, at + 8 * (int32_t)i});
-}
 static void rvs_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
   uint32_t id = block->values.items[*k];
@@ -454,17 +438,11 @@ static void rvs_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_TRAP: isa_trap(ctx); return;
   case SO_COPYMEM: rvs_copy_memory(e, v); return;
   case SO_ZEROMEM: rvs_zero_memory(e, v); return;
-  case SO_CALL:
-    if (v->cond) { rvs_protect_begin(e, block); ssa_call_emit(e, block, k); rvs_protect_end(e); }
-    else ssa_call_emit(e, block, k);
-    return;
-  case SO_FAIL: ssa_fail_after_cleanup(e, v); return;
-  case SO_CONTINUE: runtime_call(ctx, 6); isa_trap(ctx); return;
+  case SO_CALL: ssa_call_emit(e, block, k); return;
   case SO_PANIC: {
     SsaMove moves[2] = {ssa_source(e, v->a), ssa_source(e, v->b)};
     moves[0].dst_kind = moves[1].dst_kind = L_REG; moves[0].dst = 10; moves[1].dst = 11;
     moves[0].cls = moves[1].cls = SC_INT;
-    if (v->cond) rvs_protect_begin(e, block);
     ssa_parallel(e, moves, 2);
     runtime_call(ctx, 0);
     isa_trap(ctx);

@@ -5,14 +5,14 @@ use "std/math" math
 // Interleaved and separate scans, restart markers, 1..4 sampling factors.
 // No progressive/arithmetic/lossless, CMYK, DNL or color-profile processing.
 // Chroma uses nearest-neighbor upsampling. IDCT is a portable f64 reference.
-pub struct Info { width: u32, height: u32, channels: u8 }
+pub struct Info { width: usize, height: usize, channels: u8 }
 pub struct Image { info: Info, pixels: []u8 }
 pub struct Result { value: Image, offset: usize, failure: parse.Failure }
 struct Huffman { counts: [16]u16, first: [16]u32, offsets: [16]u16, values: [256]u8, valid: bool }
 struct Component { id: u8, h: u8, v: u8, quant: u8, dc_table: u8, ac_table: u8, prediction: i32, stride: usize, rows: usize, pixels: []u8, decoded: bool }
 struct Decoder {
   source: []const u8, at: usize, kind: parse.Kind,
-  width: u32, height: u32, count: usize, hmax: u8, vmax: u8,
+  width: usize, height: usize, count: usize, hmax: u8, vmax: u8,
   components: [3]Component, quant: [4][64]u16, quant_valid: [4]bool,
   dc: [4]Huffman, ac: [4]Huffman, basis: [64]f64, restart: usize,
   has_adobe: bool,
@@ -42,7 +42,7 @@ fn take(bits: *Bits, count: u8) u32 {
       }
       bits.at += 1
     }
-    bits.buffer = (bits.buffer << 8) | value
+    bits.buffer = #wrapping(bits.buffer << 8) | value
     bits.count += 8
   }
   bits.count -= count
@@ -353,7 +353,7 @@ fn scan(decoder: *Decoder, payload: []const u8) bool {
   }
   return true
 }
-fn channel(decoder: *const Decoder, index: usize, x, y: u32) i32 {
+fn channel(decoder: *const Decoder, index: usize, x, y: usize) i32 {
   component := &decoder.components[index]
   sx := #cast(usize, x) * #cast(usize, component.h) / #cast(usize, decoder.hmax)
   sy := #cast(usize, y) * #cast(usize, component.v) / #cast(usize, decoder.vmax)

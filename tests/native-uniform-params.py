@@ -202,15 +202,17 @@ with tempfile.TemporaryDirectory(prefix='dyn-uniform-params-') as temporary:
     for flags in [['--debug'],['--release'],['--release','--opt-level','3']]:
         executable=root/'typed';build(project,executable,*flags);run(executable)
     # A uniform zero must still fail in the callee, after argument effects,
-    # without moving observations or deferred cleanup.
+    # without moving observations; the panic handler reads them.
     source.write_text('''use "std/io" io
+use "std/panic" panic
 state:u64=0
 fn next()u64{state+=1
 return state}
 fn divide_loop(value,radix:u64)u64{ remaining:=value
 for remaining>0{ remaining/=radix }
 return remaining }
-fn main(){ defer{io.println("cleanup {}",state)}
+fn report(message:[]const u8){ io.println("cleanup {}",state) }
+fn main(){ panic.set_handler(report)
 _ = divide_loop(next(),0) }
 ''')
     for flags in [['--debug'],['--release'],['--release','--opt-level','3']]:
@@ -218,13 +220,15 @@ _ = divide_loop(next(),0) }
         assert result.stdout=='cleanup 1\n',result
         assert re.match(r'^runtime check failed \(divide.ok\) in divide_loop(?:\n| at )',result.stderr),result
     source.write_text('''use "std/io" io
+use "std/panic" panic
 state:u64=0
 fn next_min()i64{state+=1
 return -9223372036854775807 - 1}
 fn signed_loop(value,divisor:i64)i64{ result:i64=0
 for i in 0..1 { result=value/divisor }
 return result }
-fn main(){defer{io.println("cleanup {}",state)}
+fn report(message:[]const u8){ io.println("cleanup {}",state) }
+fn main(){panic.set_handler(report)
 _ = signed_loop(next_min(),-1) }
 ''')
     for flags in [['--debug'],['--release'],['--release','--opt-level','3']]:

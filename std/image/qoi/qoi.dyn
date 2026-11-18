@@ -1,6 +1,6 @@
 use "std/parse" parse
 use "std/mem" mem
-pub struct Info { width: u32, height: u32, channels: u8, srgb: bool, valid: bool }
+pub struct Info { width: usize, height: usize, channels: u8, srgb: bool, valid: bool }
 // Result.ok / InfoResult.ok are authoritative. Info.ok is legacy parser state:
 // true inside successful values, false in the zero failure value.
 // On failure value is zero. error is zero: codec details are not native errors.
@@ -177,7 +177,7 @@ fn delta(current: u8, previous: u8) i16 {
   return difference
 }
 
-fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeWork {
+fn encode_into(destination: []u8, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) EncodeWork {
   if width == 0 || height == 0 || (channels != 3 && channels != 4) {
     return EncodeWork{ error: -22 }
   }
@@ -190,8 +190,8 @@ fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, c
   destination[1] = 'o'
   destination[2] = 'i'
   destination[3] = 'f'
-  put_u32be(destination, 4, width)
-  put_u32be(destination, 8, height)
+  put_u32be(destination, 4, #cast(u32, width))
+  put_u32be(destination, 8, #cast(u32, height))
   destination[12] = channels
   destination[13] = 1
   if srgb {
@@ -295,7 +295,7 @@ fn decode_work(arena: *mem.Arena, source: []const u8) DecodeWork {
 }
 
 // Encodes tightly packed RGB8 or RGBA8 pixels into arena.
-fn encode_work(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeWork {
+fn encode_work(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) EncodeWork {
   bound := #cast(usize, width) * #cast(usize, height) * (#cast(usize, channels) + 1) + 22
   mark := mem.arena_mark(arena)
   result := encode_into(mem.push_bytes_uninit(arena, bound), pixels, width, height, channels, srgb)
@@ -308,7 +308,7 @@ fn encode_work(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, c
 }
 
 // Checked before allocation; no hidden allocator and failures preserve the arena mark.
-fn pixel_count(width: u32, height: u32, channels: u8) usize {
+fn pixel_count(width: usize, height: usize, channels: u8) usize {
   limit := #max(usize)
   w := #cast(usize, width)
   h := #cast(usize, height)
@@ -326,8 +326,8 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   return decode_result(decode_work(arena, source))
 }
 
-pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeResult {
-  if width == 0 || height == 0 || (channels != 3 && channels != 4) {
+pub fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) EncodeResult {
+  if width == 0 || height == 0 || width > 0xffffffff || height > 0xffffffff || (channels != 3 && channels != 4) {
     return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   size := pixel_count(width, height, channels)

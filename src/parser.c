@@ -520,6 +520,14 @@ static uint32_t parse(Parser *p, int minimum) {
   } else if (take(p, "(")) {
     uint32_t child = expression(p, 0); uint32_t end = p->token.end;
     expect(p, ")"); left = node(p, EXP_GROUP, token.start, end, child, (Token){0}); primary = true;
+  } else if (is(p, "#wrapping")) {
+    /* #wrapping(expr): its integer arithmetic wraps, even under --check-overflow. */
+    lex(p); expect(p, "("); uint32_t child = expression(p, 0); uint32_t end = p->token.end;
+    expect(p, ")");
+    if (child != NONE && !p->tree->error) {
+      left = mark(p, node(p, EXP_GROUP, token.start, end, child, (Token){0}), EXP_WRAPPING);
+      primary = true;
+    }
   } else if (is(p, "-") || is(p, "&") || is(p, "!") || is(p, "~")) {
     lex(p); uint32_t child = expression(p, 12);
     if (child != NONE) left = node(p, EXP_PREFIX, token.start, p->tree->nodes[child].end, child, token);
@@ -575,8 +583,11 @@ static uint32_t parse(Parser *p, int minimum) {
     }
     uint32_t end = p->token.end; expect(p, ")");
     left = node(p, load ? EXP_LOAD : EXP_SYSCALL, token.start, end, first, (Token){0});
-  } else if (is(p, "#slice") || is(p, "#offset")) {
-    unsigned flags = is(p, "#offset") ? EXP_CONST : 0;
+  } else if (is(p, "#offset")) {
+    fail(p, token.start, "#offset was removed: index a pointer range with #slice(pointer, count)[i]");
+    return NONE;
+  } else if (is(p, "#slice")) {
+    unsigned flags = 0;
     lex(p); expect(p, "("); uint32_t child = expression(p, 0); expect(p, ",");
     uint32_t count = expression(p, 0); uint32_t end = p->token.end; expect(p, ")");
     if (child != NONE && !p->tree->error) p->tree->nodes[child].next = count;

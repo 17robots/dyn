@@ -183,14 +183,14 @@ fn divide_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32, quotient:
   divisor := mem.push_array(u32, arena, n)
   dividend := mem.push_array(u32, arena, #len(a) + 1)
   for i in 0..n {
-    value := b[i] << shift
+    value := #wrapping(b[i] << shift)
     if shift != 0 && i != 0 {
       value |= b[i - 1] >> (32 - shift)
     }
     divisor[i] = value
   }
   for i in 0..#len(a) {
-    value := a[i] << shift
+    value := #wrapping(a[i] << shift)
     if shift != 0 && i != 0 {
       value |= a[i - 1] >> (32 - shift)
     }
@@ -235,14 +235,14 @@ fn divide_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32, quotient:
         sum = #cast(u64, dividend[i + j]) + #cast(u64, divisor[i]) + (sum >> 32)
         dividend[i + j] = sum & 0xffffffff
       }
-      dividend[j + n] = (dividend[j + n] + (sum >> 32)) & 0xffffffff
+      dividend[j + n] = #wrapping(dividend[j + n] + (sum >> 32)) & 0xffffffff
     }
     quotient[j] = #cast(u32, estimate)
   }
   for i in 0..n {
     value := dividend[i] >> shift
     if shift != 0 {
-      value |= dividend[i + 1] << (32 - shift)
+      value |= #wrapping(dividend[i + 1] << (32 - shift))
     }
     remainder[i] = value
   }
@@ -282,7 +282,7 @@ pub fn shift_left(arena: *mem.Arena, value: Int, bits: usize) Int {
   result := mem.push_array(u32, arena, #len(value.limbs) + words + 1)
   for i in 0..#len(value.limbs) {
     limb := value.limbs[i]
-    result[i + words] |= limb << shift
+    result[i + words] |= #wrapping(limb << shift)
     if shift != 0 {
       result[i + words + 1] = limb >> (32 - shift)
     }
@@ -300,7 +300,7 @@ pub fn shift_right(arena: *mem.Arena, value: Int, bits: usize) Int {
   for i in 0..count {
     limb := value.limbs[i + words] >> shift
     if shift != 0 && i + words + 1 < #len(value.limbs) {
-      limb |= value.limbs[i + words + 1] << (32 - shift)
+      limb |= #wrapping(value.limbs[i + words + 1] << (32 - shift))
     }
     result[i] = limb
   }

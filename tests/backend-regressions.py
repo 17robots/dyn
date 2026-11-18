@@ -124,15 +124,20 @@ fn main() {
 # A terminating cleanup replaces each exit and prevents older cleanups from
 # being emitted after its LLVM terminator.
 for name, body in {
-    'panic': 'defer { #panic("older") }\ndefer { #panic("cleanup") }\n#panic("original")',
     'return': 'defer { #panic("older") }\ndefer { #panic("cleanup") }\nreturn 0',
     'fallthrough': 'if true { defer { #panic("older") }\ndefer { #panic("cleanup") } }\nreturn 0',
-    'guard': 'defer { #panic("older") }\ndefer { #panic("cleanup") }\nreturn 1/a',
     'break': 'for i in 0..1 { defer { #panic("older") }\ndefer { #panic("cleanup") }\nbreak }\nreturn 0',
     'continue': 'for i in 0..1 { defer { #panic("older") }\ndefer { #panic("cleanup") }\ncontinue }\nreturn 0',
 }.items():
     CASES['cleanup_' + name] = (
         'fn fail(a:u64) u64 {' + body + '}\nfn main() { _=fail(0) }\n', 'cleanup')
+# A panic, or a failed check, skips pending defers entirely.
+for name, body in {
+    'panic': 'defer { #panic("older") }\ndefer { #panic("cleanup") }\n#panic("original")',
+    'guard': 'defer { #panic("older") }\ndefer { #panic("cleanup") }\nreturn 1/a',
+}.items():
+    CASES['skipped_' + name] = (
+        'fn fail(a:u64) u64 {' + body + '}\nfn main() { _=fail(0) }\n', 'original' if name == 'panic' else 'divide')
 
 
 CASES['array_rvalue_index'] = ("""order:u64=0
@@ -236,6 +241,8 @@ int main(int argc, char **argv) {
                     name, release, result.returncode, diagnostic)
             else:
                 assert result.returncode == 0, (name, release, diagnostic)
+            if name.startswith('skipped_'):
+                assert result.returncode == 101 and 'cleanup' not in diagnostic and 'older' not in diagnostic, (name, diagnostic)
             if name.startswith('cleanup_'):
                 assert result.returncode == 101, (name, release, diagnostic)
                 assert result.stderr.splitlines()[0] == 'cleanup', (name, release, diagnostic)

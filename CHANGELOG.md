@@ -14,6 +14,54 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+Language (2026-11-16 cleanup; see `docs/guide/rules.md`):
+
+- Loops have no labels: `name: for`, `break: name` and `continue: name` are
+  errors. Set a flag and break again, or move the inner loop into a function.
+- `for *const value` is gone: `for *value` over a const slice already binds a
+  `*const` pointer.
+- `#offset` is gone: index a pointer range with `#slice(pointer, count)[i]`.
+- An integer or text `case` always needs a `_` arm; covering every value with
+  ranges no longer counts as exhaustive.
+- A panic, or a failed run-time check, no longer runs defers. It runs the
+  `panic.set_handler` handler, prints the message and trace, and exits with
+  status 101. Move cleanup that must happen at a crash, such as restoring a
+  terminal, into the handler.
+- Arithmetic is target-typed: `total: u64 = a_u32 * b_u32` multiplies in
+  `u64`. Write the narrow type where wrapping is meant
+  (`hashed: u32 = value * 2654435761`).
+- Signed and unsigned integers compare by value: `-1 < len` is true for a
+  `usize` len, and `i64` against `u64` needs no cast.
+- An unsigned `x % M` with a constant `M` narrows without `#cast`.
+- `--check-overflow` checks every module, std and vendor included. Write
+  `#wrapping(expr)` where arithmetic means to wrap (hashes, rotations, SWAR);
+  std's own wrapping code is marked this way and runs clean with checks on.
+- `for i in #step(first..last, n)` visits every n-th value;
+  `#reverse(#step(...))` goes from the last.
+- A generic `$T` bound to `u32` by one argument and `u64` by another is `u64`.
+- A generic function used where a function type is expected takes its types
+  from it: `hash: fn(u64, u32) u64 = key_hash`, or `key_hash` passed to such a
+  parameter. `#instance(f, T)` remains only for functions whose `T: type`
+  parameters the signature does not show.
+
+Standard library:
+
+- Files keep their failure. `fs.open`, `fs.create`, `fs.append` and
+  `fs.create_exclusive` return an `fs.File`; when opening fails, the file is
+  failed and every operation on it does nothing. `fs.read` and `fs.write`
+  return byte counts, `fs.seek` the position, `fs.sync` nothing: check
+  `file.failed` (and `file.ended` for reads) once, where it matters.
+  `io.Failure` gains `operation` and `path`, and `io.describe(storage, failure)`
+  gives "open /etc/app.conf: not found".
+- `fs.read_all(arena, path, maximum)` returns the bytes, empty on failure, and
+  `fs.write_all(path, bytes)` returns whether it worked. To learn why, open the
+  file and use `fs.read_contents(arena, &file, maximum)` or `fs.write`.
+- `panic.assert(condition, message)` checks a condition in every build.
+- Image `width` and `height` (`image.View`, every encoder) and font sizes
+  (`font.Bitmap`, `font.Atlas`, `font.AtlasGlyph`, `font.atlas`) are `usize`.
+- Stack traces and runtime check failures name functions without the module
+  prefix.
+
 Servers:
 
 - One server and one router. `std/net/http/concurrent` (the blocking worker

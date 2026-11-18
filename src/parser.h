@@ -24,6 +24,8 @@ typedef enum {
   SRC_CASE, SRC_CASE_ARM, SRC_CASE_PATTERN, SRC_TYPE_PATTERN, SRC_FOR,
   SRC_FOR_CONDITION, SRC_DEFER, SRC_ASSIGNMENT, SRC_ASSERT, SRC_PANIC,
   SRC_RANGE, SRC_QUALIFIER, SRC_REVERSE,
+  /* #step(range, n): child 0 is the range, its next the step. */
+  SRC_STEP,
   /* Recovering parses replace a failed statement or declaration with this leaf. */
   SRC_ERROR
 } ExpSourceKind;
@@ -33,6 +35,7 @@ typedef enum {
   EXP_POINTER_BINDING = 16, EXP_INCLUSIVE = 32, EXP_ITERATION = 64,
   EXP_PRIMARY = 128, EXP_BITCAST = 256, EXP_WILDCARD = 512,
   EXP_INSTANCE = 2048, /* #instance(f, T): names a generic instance */
+  EXP_WRAPPING = 8192, /* #wrapping(expr): a group whose arithmetic wraps */
   EXP_INDEXED = 4096 /* for x, i in xs: the condition holds an index name */
 } ExpFlag;
 typedef enum {

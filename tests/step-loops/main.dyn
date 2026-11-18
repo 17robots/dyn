@@ -1,0 +1,43 @@
+use "std/io"
+
+fn show(label: []const u8) {
+  io.print("{}:", label)
+}
+
+fn main() {
+  show("0..10 by 2")
+  for i in #step(0..10, 2) { io.print(" {}", i) }
+  io.println("")
+  show("0..=10 by 5")
+  for i in #step(0..=10, 5) { io.print(" {}", i) }
+  io.println("")
+  show("rev 0..10 by 3")
+  for i in #reverse(#step(0..10, 3)) { io.print(" {}", i) }
+  io.println("")
+  show("empty")
+  for i in #step(5..5, 2) { io.print(" {}", i) }
+  for i in #step(6..5, 2) { io.print(" {}", i) }
+  io.println("")
+  show("signed")
+  for i: i32 in #step(-7..=7, 7) { io.print(" {}", i) }
+  io.println("")
+  show("u8 edge")
+  for b: u8 in #step(250..=255, 2) { io.print(" {}", b) }
+  io.println("")
+  show("u8 full")
+  n := 0
+  for b: u8 in #step(0..=255, 1) { n += 1 }
+  io.println(" {}", n)
+  show("continue")
+  for i in #step(0..10, 2) {
+    if i == 4 { continue }
+    if i == 8 { break }
+    io.print(" {}", i)
+  }
+  io.println("")
+  w: usize = 7
+  s: usize = 3
+  show("runtime")
+  for x in #step(0..w, s) { io.print(" {}", x) }
+  io.println("")
+}

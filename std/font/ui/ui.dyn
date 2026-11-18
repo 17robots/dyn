@@ -20,7 +20,8 @@ fn glyph(raw: rawptr, codepoint: u32) software.Glyph {
   scale := #cast(f64, state.pixels_per_em) / #cast(f64, state.face.units_per_em)
   ascent := #cast(i32, math.ceil64(state.face.ascent * scale))
   value := bitmap.value
-  return software.Glyph{ pixels: value.pixels, width: value.width, height: value.height, stride: #cast(usize, value.width),
+  // UI coordinates are signed; glyph sizes fit in i32.
+  return software.Glyph{ pixels: value.pixels, width: #cast(i32, value.width), height: #cast(i32, value.height), stride: value.width,
     x_offset: value.x_offset, y_offset: value.y_offset + ascent, advance: value.advance }
 }
 pub fn renderer(state: *Adapter) software.Font {
@@ -44,10 +45,10 @@ fn atlas_glyph(raw: rawptr, codepoint: u32) software.Glyph {
   glyph := font.atlas_glyph(atlas, codepoint)
   pixels: []const u8
   if glyph.width > 0 && glyph.height > 0 {
-    offset := #cast(usize, glyph.y) * #cast(usize, atlas.width) + #cast(usize, glyph.x)
+    offset := glyph.y * atlas.width + glyph.x
     pixels = atlas.pixels[offset..]
   }
-  return software.Glyph{ pixels: pixels, width: glyph.width, height: glyph.height, stride: #cast(usize, atlas.width),
+  return software.Glyph{ pixels: pixels, width: #cast(i32, glyph.width), height: #cast(i32, glyph.height), stride: atlas.width,
     x_offset: glyph.x_offset, y_offset: glyph.y_offset, advance: glyph.advance }
 }
 // No allocation or rerasterization. Keep the atlas descriptor at a stable address

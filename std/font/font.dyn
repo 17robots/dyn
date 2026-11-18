@@ -11,7 +11,7 @@ pub struct Face {
   kern: []const u8,
 }
 pub struct FaceResult { value: Face, offset: usize, failure: parse.Failure }
-pub struct Bitmap { pixels: []u8, width: i32, height: i32, x_offset: i32, y_offset: i32, advance: i32 }
+pub struct Bitmap { pixels: []u8, width: usize, height: usize, x_offset: i32, y_offset: i32, advance: i32 }
 pub struct BitmapResult { value: Bitmap, offset: usize, failure: parse.Failure }
 struct Table { value: []const u8, offset: usize, ok: bool }
 fn u16be(bytes: []const u8, at: usize) u16 {
@@ -224,7 +224,8 @@ pub fn glyph_index(face: *const Face, codepoint: u32) u16 {
       value = u16be(sub, at + range + skip)
       if value == 0 { return 0 }
     }
-    value = value + delta
+    // idDelta is modulo 65536.
+    value = #wrapping(value + delta)
     if value >= face.glyphs { return 0 }
     return value
   }
@@ -271,8 +272,8 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   top := math.floor64(0.0 - y1 * scale)
   bitmap.x_offset = #cast(i32, left)
   bitmap.y_offset = #cast(i32, top)
-  bitmap.width = #cast(i32, math.ceil64((x1 - metric_base.x) * scale) - left)
-  bitmap.height = #cast(i32, math.ceil64(0.0 - y0 * scale) - top)
+  bitmap.width = #cast(usize, math.ceil64((x1 - metric_base.x) * scale) - left)
+  bitmap.height = #cast(usize, math.ceil64(0.0 - y0 * scale) - top)
   width := #cast(usize, bitmap.width)
   height := #cast(usize, bitmap.height)
   if width > 4096 || height > 4096 || (width != 0 && height > 1048576 / width) {
@@ -313,8 +314,8 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   top = math.floor64((outline.origin.y - y1) * scale)
   bitmap.x_offset = #cast(i32, left)
   bitmap.y_offset = #cast(i32, top)
-  bitmap.width = #cast(i32, math.ceil64((x1 - outline.origin.x) * scale) - left)
-  bitmap.height = #cast(i32, math.ceil64((outline.origin.y - y0) * scale) - top)
+  bitmap.width = #cast(usize, math.ceil64((x1 - outline.origin.x) * scale) - left)
+  bitmap.height = #cast(usize, math.ceil64((outline.origin.y - y0) * scale) - top)
   width = #cast(usize, bitmap.width)
   height = #cast(usize, bitmap.height)
   if width > 4096 || height > 4096 || (width != 0 && height > 1048576 / width) {
@@ -416,15 +417,15 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   return BitmapResult{ value: bitmap }
 }
 
-pub struct AtlasGlyph { codepoint: u32, x: i32, y: i32, width: i32, height: i32, x_offset: i32, y_offset: i32, advance: i32 }
+pub struct AtlasGlyph { codepoint: u32, x: usize, y: usize, width: usize, height: usize, x_offset: i32, y_offset: i32, advance: i32 }
 // Glyphs are sorted by codepoint. The final entry is glyph zero, used on a miss.
-pub struct Atlas { pixels: []u8, width: i32, height: i32, line_height: i32, glyphs: []AtlasGlyph }
+pub struct Atlas { pixels: []u8, width: usize, height: usize, line_height: i32, glyphs: []AtlasGlyph }
 pub struct AtlasResult { value: Atlas, offset: usize, failure: parse.Failure }
 // Shelf packing with one transparent padding pixel. Requested codepoints must
 // be strictly increasing Unicode scalars. Caller chooses dimensions, 1..4096.
 // Entire output belongs to arena. A failure rewinds all allocations from this call.
-pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: i32) AtlasResult {
-  if width <= 0 || height <= 0 || width > 4096 || height > 4096 || face.units_per_em == 0 || pixels_per_em == 0 || pixels_per_em > 256 || #len(codepoints) > 65536 {
+pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: usize) AtlasResult {
+  if width == 0 || height == 0 || width > 4096 || height > 4096 || face.units_per_em == 0 || pixels_per_em == 0 || pixels_per_em > 256 || #len(codepoints) > 65536 {
     return AtlasResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   for i in 0..#len(codepoints) {
@@ -444,12 +445,12 @@ pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixe
     }
   }
   value := Atlas{ width: width, height: height, line_height: #cast(i32, math.ceil64(line * scale)),
-    pixels: mem.push_array(u8, arena, #cast(usize, width) * #cast(usize, height)),
+    pixels: mem.push_array(u8, arena, width * height),
     glyphs: mem.push_array(AtlasGlyph, arena, #len(codepoints) + 1) }
   scratch := mem.arena_mark(arena)
-  x: i32 = 0
-  y: i32 = 0
-  row: i32 = 0
+  x: usize = 0
+  y: usize = 0
+  row: usize = 0
   for i in 0..#len(value.glyphs) {
     cp: u32 = 0
     index: u16 = 0
@@ -465,8 +466,8 @@ pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixe
     if glyph.width > width || glyph.height > height {
       return AtlasResult{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
     }
-    place_x: i32 = 0
-    place_y: i32 = 0
+    place_x: usize = 0
+    place_y: usize = 0
     if glyph.width > 0 && glyph.height > 0 {
       if x > width - glyph.width {
         x = 0
@@ -481,7 +482,7 @@ pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixe
     }
     for gy in 0..glyph.height {
       for gx in 0..glyph.width {
-        value.pixels[#cast(usize, (place_y + gy)) * #cast(usize, width) + #cast(usize, (place_x + gx))] = glyph.pixels[#cast(usize, gy) * #cast(usize, glyph.width) + #cast(usize, gx)]
+        value.pixels[(place_y + gy) * width + place_x + gx] = glyph.pixels[gy * glyph.width + gx]
       }
     }
     value.glyphs[i] = AtlasGlyph{ codepoint: cp, x: place_x, y: place_y, width: glyph.width, height: glyph.height,

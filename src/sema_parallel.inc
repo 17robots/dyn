@@ -160,6 +160,7 @@ static void sema_range_block(SemaRanges *r, const DynAstProgram *a, uint32_t sta
     const DynAstStmt *st = &a->statements[id];
     sema_range_expr(r, a, st->expression, depth + 1);
     sema_range_expr(r, a, st->target, depth + 1);
+    if (st->for_step) sema_range_expr(r, a, st->step, depth + 1);
     sema_range_block(r, a, st->body_start, st->body_count, depth + 1);
     sema_range_block(r, a, st->else_start, st->else_count, depth + 1);
     if ((uint64_t)st->case_arm_start + st->case_arm_count > a->case_arm_count) { r->failed = true; return; }

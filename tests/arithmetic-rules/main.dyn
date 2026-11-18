@@ -1,0 +1,74 @@
+use "std/io"
+
+struct Totals {
+  bytes: u64,
+}
+
+fn product(a: u32, b: u32) u64 {
+  return a * b
+}
+
+fn take(x: u64) u64 {
+  return x
+}
+
+fn count() i32 {
+  return -1
+}
+
+fn main() {
+  a: u32 = 100000
+  b: u32 = 100000
+  total: u64 = a * b
+  io.println("decl {}", total)
+  total = a * b + 1
+  io.println("assign {}", total)
+  io.println("return {}", product(a, b))
+  io.println("arg {}", take(a * b))
+  t := Totals{ bytes: a * b }
+  io.println("field {}", t.bytes)
+  shifted: u64 = a << 20
+  io.println("shift {}", shifted)
+  narrow := a * 2
+  io.println("plain u32 {}", narrow)
+  i: i32 = -1
+  n: usize = 3
+  io.println("i32<usize {} {}", i < n, n > i)
+  big: u64 = 18446744073709551615
+  neg: i64 = -5
+  io.println("i64<u64 {} {} {} {}", neg < big, neg == big, big >= neg, neg != big)
+  io.println("call side {}", count() < n)
+  low: u8 = a % 200
+  io.println("rem {}", low)
+  bounds()
+  small: u32 = 4000000000
+  large: u64 = 5000000000
+  io.println("generic join {} {}", bigger(small, large), bigger(large, small))
+  byte: u8 = 200
+  sum: usize = byte + 257
+  flipped: usize = 300 + byte
+  io.println("literal target {} {}", sum, flipped)
+}
+
+fn bigger(a, b: $T) T {
+  if a > b { return a }
+  return b
+}
+
+fn bounds() {
+  // i32 against usize compares values: -2 and -1 are below 2.
+  calls: i32 = 0
+  limit: usize = 2
+  for i: i32 in -2..3 {
+    if i < limit && i >= -1 {
+      calls += 1
+    }
+  }
+  io.println("bounds {}", calls)
+  maximum: u64 = 18446744073709551615
+  least: i64 = -9223372036854775807 - 1
+  io.println("extremes {} {} {}", least < maximum, maximum > least, least == maximum)
+  wide: u64 = 9223372036854775808
+  top: i64 = 9223372036854775807
+  io.println("edge {} {} {}", top < wide, top >= wide, top == wide)
+}

@@ -186,18 +186,23 @@ def run(work):
             source = '''use "std/mem" mem
 use "std/observe"
 use "std/io"
+use "std/panic"
+failure_backing:[mem.ArenaBufferOverhead+16]u8
+failure_arena:*mem.Arena
+failure_events:[4]observe.Event
+failure_log:observe.Log
+fn report(message:[]const u8) { cleanup(failure_arena,&failure_log) }
 fn cleanup(arena:*mem.Arena, log:*observe.Log) {
  if arena.offset!=mem.arena_start(arena)+3 || arena.allocation_failures!=FAILURES || log.count!=EVENTS { #panic("typed array failure state") }
  io.println("FAILURE STATE PASS")
 }
 fn main() {
- backing:[mem.ArenaBufferOverhead+16]u8
- arena:=mem.arena_from_buffer(backing[..])
- events:[4]observe.Event
- log:=observe.log(events[..])
- arena.events=&log
+ arena:=mem.arena_from_buffer(failure_backing[..])
+ failure_log=observe.log(failure_events[..])
+ arena.events=&failure_log
  _=mem.push_bytes_uninit(arena,3)
- defer cleanup(arena,&log)
+ failure_arena=arena
+ panic.set_handler(report)
  count:usize=COUNT
  _=CALL
 }

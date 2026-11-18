@@ -25,8 +25,8 @@ use "std/bytes" bytes
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn create(path: []const u8) {
   opened := fs.create(path)
-  require(!io.failed(opened.failure), "create file")
-  fs.close(&opened.value)
+  require(!opened.failed, "create file")
+  fs.close(&opened)
 }
 fn malformed(storage: []u8, used: usize) {
   // Buffered records are the public seam; this never reads or owns descriptor 0.

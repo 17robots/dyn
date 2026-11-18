@@ -74,7 +74,7 @@ the board.
 | Exit | Returning from `main` exits with status 0 through the SiFive test device at `0x100000`. | Arm semihosting (`SYS_EXIT_EXTENDED`); QEMU needs `-semihosting-config enable=on,target=native`. |
 
 On both boards `io.stdin()` reports end of input, and arenas take memory in
-last-in first-out order. A panic runs defers, prints the message (and a stack
+last-in first-out order. A panic runs the panic handler, prints the message (and a stack
 trace in debug builds) to the UART, then exits with status 101. Any trap or
 fault prints `unexpected trap` and exits with status 102. Generated Dyn code
 checks stack space before allocating frames and outgoing argument storage.

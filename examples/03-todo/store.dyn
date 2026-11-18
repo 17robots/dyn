@@ -19,12 +19,14 @@ struct Loaded {
 }
 
 fn load(tasks: *array.Array(Task), arena: *mem.Arena, path: []const u8) Loaded {
-  read := fs.read_all(arena, path, MaxFileBytes)
-  if read.failure.kind == io.Kind.NotFound { return Loaded{} }
-  if io.failed(read.failure) { return Loaded{ failure: read.failure } }
+  read_file := fs.open(path)
+  read := fs.read_contents(arena, &read_file, MaxFileBytes)
+  fs.close(&read_file)
+  if read_file.failure.kind == io.Kind.NotFound { return Loaded{} }
+  if read_file.failed { return Loaded{ failure: read_file.failure } }
   line_number: usize = 0
   start: usize = 0
-  scan := strings.scanner(read.value)
+  scan := strings.scanner(read)
   for {
     start = scan.offset
     line := strings.scan_line(&scan)
@@ -54,7 +56,10 @@ fn save(tasks: []const Task, arena: *mem.Arena, path: []const u8) io.Failure {
     array.push(&text, '\n')
   }
   temporary := strings.format(arena, "{}.tmp", path)
-  written := fs.write_all(temporary, text.items)
-  if io.failed(written.failure) { return written.failure }
+  // Write a temporary file, then rename it over the list in one step.
+  file := fs.create(temporary)
+  _ = fs.write(&file, text.items)
+  fs.close(&file)
+  if file.failed { return file.failure }
   return fs.rename(temporary, path).failure
 }

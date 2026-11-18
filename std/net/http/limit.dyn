@@ -45,7 +45,7 @@ pub fn allow(limiter: *Limiter, key: u64) bool {
 // allow with an explicit monotonic time in milliseconds, for tests.
 pub fn allow_at(limiter: *Limiter, key: u64, now: i64) bool {
   if #len(limiter.buckets) == 0 || limiter.period_milliseconds <= 0 { return true }
-  mixed := key * 0x9e3779b97f4a7c15
+  mixed := #wrapping(key * 0x9e3779b97f4a7c15)
   set := #cast(usize, (mixed >> 32) % (#len(limiter.buckets) / SetSize)) * SetSize
   sync.lock(&limiter.lock)
   defer sync.unlock(&limiter.lock)
@@ -83,7 +83,7 @@ pub fn allow_at(limiter: *Limiter, key: u64, now: i64) bool {
 pub fn ip_key(ip: []const u8, purpose: u64) u64 {
   value: u64 = 0xcbf29ce484222325 ^ purpose
   for byte in ip {
-    value = (value ^ byte) * 0x100000001b3
+    value = #wrapping((value ^ byte) * 0x100000001b3)
   }
   return value
 }

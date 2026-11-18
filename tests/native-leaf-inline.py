@@ -76,9 +76,11 @@ fn main() {
         assert len(literal_sizes) == 2 and literal_sizes[1] <= literal_sizes[0], literal_sizes
     (module / 'main.dyn').write_text('''
 use "std/io"
+use "std/panic"
 fn add(a: i8, b: i8) i8 { return a / b }
+fn report(message: []const u8) { io.println("cleanup") }
 fn main() {
-  defer { io.println("cleanup") }
+  panic.set_handler(report)
   for i in 0..1 { value := add(127, 0)
   _ = value }
 }

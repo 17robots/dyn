@@ -218,11 +218,13 @@ fn main() {
     io.println("usage: archive-example ARCHIVE")
     return
   }
-  loaded := fs.read_all(storage, args[1], 8 * 1024 * 1024)
-  if io.failed(loaded.failure) {
+  loaded_file := fs.open(args[1])
+  loaded := fs.read_contents(storage, &loaded_file, 8 * 1024 * 1024)
+  fs.close(&loaded_file)
+  if loaded_file.failed {
     #panic("read archive")
   }
-  opened := archive.open_memory_owned(loaded.value)
+  opened := archive.open_memory_owned(loaded)
   if io.failed(opened.failure) {
     #panic("open archive")
   }
@@ -304,11 +306,13 @@ fn main() {
     #panic("image load")
   }
   defer sdl3.surface_destroy_owned(surface.value)
-  bytes := fs.read_all(storage, args[1], 8 * 1024 * 1024)
-  if io.failed(bytes.failure) {
+  bytes_file := fs.open(args[1])
+  bytes := fs.read_contents(storage, &bytes_file, 8 * 1024 * 1024)
+  fs.close(&bytes_file)
+  if bytes_file.failed {
     #panic("image read")
   }
-  decoded := image.decode_owned(bytes.value)
+  decoded := image.decode_owned(bytes)
   if io.failed(decoded.failure) {
     #panic("image decode")
   }

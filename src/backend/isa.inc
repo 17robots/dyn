@@ -566,14 +566,6 @@ static Reg isa_argument(BackendContext *ctx, unsigned n) {
   if (ctx->rv64 || ctx->rv32 || ctx->t32) { return n?R_D:R_A; }
   return ctx->a64 ? (n ? R_D : R_A) : ctx->win64 ? (n ? R_D : R_C) : (n ? R_SI : R_DI);
 }
-/* Flags from the 32-bit integer result in A. */
-static void isa_test32(BackendContext *ctx) {
-  if (ctx->t32) { t32_test32(ctx); return; }
-  if (ctx->rv32) { r32_test32(ctx); return; }
-  if (ctx->rv64) { rv_i(ctx,0x1b,6,10,0,0);rv_compare(ctx,6,0); return; }
-  if (ctx->a64) { a64_word(ctx, 0x7100001f); return; } /* cmp w0, #0 */
-  CODE(0x85,0xc0);
-}
 /* Bytes per pushed expression-stack slot. */
 static unsigned isa_slot(BackendContext *ctx) {
   if (ctx->rv64 || ctx->rv32 || ctx->t32) { return 16; } return ctx->a64 ? 16 : 8; }

@@ -10,10 +10,10 @@ fn resident_kib() u64 {
   defer mem.arena_release(arena)
   text := fs.read_all(arena, "/proc/self/statm", 4096)
   space: usize = 0
-  for space < #len(text.value) && text.value[space] != ' ' {
+  for space < #len(text) && text[space] != ' ' {
     space += 1
   }
-  rest := text.value[space + 1..]
+  rest := text[space + 1..]
   end: usize = 0
   for end < #len(rest) && rest[end] != ' ' {
     end += 1

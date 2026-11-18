@@ -92,14 +92,14 @@ pub fn next(state: *Watcher) EventResult {
   if state.offset == state.used {
     if !state.active { return event_failure(state, -9) }
     file := fs.adopt_handle(state.descriptor)
-    result := fs.read(&file, state.storage)
-    if io.failed(result.failure) {
-      if result.failure.native == -11 { return EventResult{ status: Status.Empty } }
-      return event_error(state, result.failure.kind, result.failure.native)
+    count := fs.read(&file, state.storage)
+    if file.failed {
+      if file.failure.native == -11 { return EventResult{ status: Status.Empty } }
+      return event_error(state, file.failure.kind, file.failure.native)
     }
-    if result.transferred == 0 { return event_failure(state, -5) }
+    if count == 0 { return event_failure(state, -5) }
     state.offset = 0
-    state.used = result.transferred
+    state.used = count
   }
   at := state.offset
   if at > state.used || state.used - at < 16 { return event_failure(state, -74) }

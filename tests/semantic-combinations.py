@@ -61,14 +61,14 @@ fn main() {{
             r=subprocess.run([DYN,command,str(root),'--quiet','--no-cache','--output',str(root/'run')],capture_output=True,text=True,timeout=30)
             assert r.returncode==1 and 'error:' in r.stderr,(source,r.stderr)
     # A foreign call may invoke a Dyn callback that panics. The Dyn caller's
-    # defer must run even though the intervening C function has no cleanup hook.
+    # A panic through a C frame ends the program; the caller's defer does not run.
     (root/'provider.c').write_text('void invoke(void (*callback)(void)) { callback(); }\n')
     subprocess.run(['cc','-fno-stack-protector','-c',str(root/'provider.c'),'-o',str(root/'provider.o')],check=True)
     (root/'main.dyn').write_text('use "std/io"\nextern fn invoke "invoke"(callback: fn())\nfn fails() { #panic("callback failure") }\nfn main() { defer { io.println("caller cleanup") }\ninvoke(fails) }\n')
     for release in (False,True):
         subprocess.run([DYN,'build',str(root),'--quiet','--no-cache','--link',str(root/'provider.o'),'--output',str(root/'run')]+(['--release'] if release else []),check=True)
         r=subprocess.run([str(root/'run')],capture_output=True,text=True,timeout=5)
-        assert r.returncode==101 and 'caller cleanup' in r.stdout and 'callback failure' in r.stderr,(r.returncode,r.stdout,r.stderr)
+        assert r.returncode==101 and 'caller cleanup' not in r.stdout and 'callback failure' in r.stderr,(r.returncode,r.stdout,r.stderr)
 (ROOT/'build/readiness').mkdir(parents=True,exist_ok=True)
 (ROOT/'build/readiness/semantic-combinations.json').write_text(json.dumps(rows,indent=2)+'\n')
 print(f'PASS {len(rows)} semantic combinations, eight negative check/build cases, forward constants, rejected field defaults, foreign callback panic/defer debug/release')

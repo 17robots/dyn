@@ -1,5 +1,5 @@
 // BLAKE2b (RFC 7693): digests of 1-64 bytes, optionally keyed (up to 64 key
-// bytes). Std code wraps, so + is addition mod 2^64.
+// bytes). + is addition mod 2^64, written inside #wrapping.
 use "std/encoding/binary" binary
 
 const Iv: [8]u64 = [
@@ -34,17 +34,17 @@ pub struct State {
 }
 
 fn rotate(value: u64, amount: u64) u64 {
-  return (value >> amount) | (value << (64 - amount))
+  return (value >> amount) | #wrapping(value << (64 - amount))
 }
 
 fn mix(v: *[16]u64, a: usize, b: usize, c: usize, d: usize, x: u64, y: u64) {
-  v.*[a] = v.*[a] + v.*[b] + x
+  v.*[a] = #wrapping(v.*[a] + v.*[b] + x)
   v.*[d] = rotate(v.*[d] ^ v.*[a], 32)
-  v.*[c] = v.*[c] + v.*[d]
+  v.*[c] = #wrapping(v.*[c] + v.*[d])
   v.*[b] = rotate(v.*[b] ^ v.*[c], 24)
-  v.*[a] = v.*[a] + v.*[b] + y
+  v.*[a] = #wrapping(v.*[a] + v.*[b] + y)
   v.*[d] = rotate(v.*[d] ^ v.*[a], 16)
-  v.*[c] = v.*[c] + v.*[d]
+  v.*[c] = #wrapping(v.*[c] + v.*[d])
   v.*[b] = rotate(v.*[b] ^ v.*[c], 63)
 }
 
@@ -101,7 +101,7 @@ pub fn init(length: usize, key: []const u8) State {
 }
 
 fn advance(state: *State, count: u64) {
-  state.low += count
+  state.low = #wrapping(state.low + count)
   if state.low < count {
     state.high += 1
   }

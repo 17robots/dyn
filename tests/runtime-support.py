@@ -44,7 +44,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-runtime-support-') as directory:
                     str(work/'test.c'), str(BUILD/'dynrt_support.o'), str(BUILD/'dynrt_shared.o'),
                     '-ldl','-o',str(work/'test')],check=True)
     subprocess.run([str(work/'test')],check=True,timeout=30)
-    # A C callback may initiate a panic without a message; cleanup still runs.
+    # A C callback may initiate a panic without a message; defers do not run.
     module=work/'module'
     module.mkdir()
     (module/'main.dyn').write_text('use "std/io"\nextern fn fail "null_panic"()\nfn main() { defer { io.println("cleanup") }\nfail() }\n')
@@ -56,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-runtime-support-') as directory:
         subprocess.run([str(compiler),'build',str(module),'--backend','native',
                         '--link',str(work/'callback.o'),'--output',str(work/'panic'),*flags],check=True)
         result=subprocess.run([str(work/'panic')],capture_output=True,text=True,timeout=10)
-        assert result.returncode != 0 and result.stdout == 'cleanup\n', (result.returncode,result.stdout,result.stderr)
+        assert result.returncode != 0 and result.stdout == '', (result.returncode,result.stdout,result.stderr)
     # libc_nonshared's atexit wrapper needs CRT DSO storage even without crtbegin.
     (module/'main.dyn').write_text('#link("c")\nextern fn register "register_cleanup"() i32\nfn main() { if register() != 0 { #panic("atexit") } }\n')
     (work/'atexit.c').write_text('#include <stdlib.h>\n#include <stdio.h>\nextern void *__dso_handle; static void done(void) { puts("atexit cleanup"); } int register_cleanup(void) { if (__dso_handle != 0) return 1; return atexit(done); }\n')
@@ -144,4 +144,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-runtime-support-') as directory:
                     '--link',str(work/'value.o'),'--link',str(work/'private/libfixture.so'),'--link','--version-script='+str(work/'local.map'),
                     '--output',str(work/'invalid')],capture_output=True,text=True)
     assert result.returncode != 0 and 'unsupported version script' in result.stderr, result.stderr
-print('PASS independent runtime exact fmod/fmodf (30,000 pairs) null-message panic cleanup, libc atexit, sparse heap layouts, RUNPATH, symbol visibility lazy interposers and pthread TLS')
+print('PASS independent runtime exact fmod/fmodf (30,000 pairs) null-message panic, libc atexit, sparse heap layouts, RUNPATH, symbol visibility lazy interposers and pthread TLS')

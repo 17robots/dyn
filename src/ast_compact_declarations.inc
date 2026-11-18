@@ -854,6 +854,7 @@ static bool body_merge(DynAstProgram *a, BodyRun *r, const BodyBase *b) {
     DynAstStmt st = w->statements[b->statements + k];
     st.expression = BODY_SHIFT(st.expression, be, de);
     st.target = BODY_SHIFT(st.target, be, de);
+    if (st.for_step) st.step = BODY_SHIFT(st.step, be, de);
     st.declared_type = body_type(&m, st.declared_type);
     st.body_start = BODY_SHIFT(st.body_start, bc, dc);
     st.else_start = BODY_SHIFT(st.else_start, bc, dc);

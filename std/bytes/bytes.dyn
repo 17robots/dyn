@@ -43,7 +43,7 @@ fn find_byte_words(value: []const u8, byte: u8) usize {
   at: usize = 0
   for #len(value) - at >= 8 {
     word := binary.load_u64_le(value[at..at + 8]) ^ pattern
-    if ((word - 0x0101010101010101) & ~word & 0x8080808080808080) != 0 { break }
+    if (#wrapping(word - 0x0101010101010101) & ~word & 0x8080808080808080) != 0 { break }
     at += 8
   }
   for at < #len(value) {

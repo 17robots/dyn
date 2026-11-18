@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-peer-widening-') as temporary:
         assert result.returncode == 0 and result.stdout.replace('\r\n', '\n') == EXPECTED, (name, result)
     project = Path(temporary) / 'bad'
     project.mkdir()
-    (project / 'main.dyn').write_text('fn main() {\n  a: u64 = 1\n  b: i64 = 2\n  _ = a < b\n}\n')
+    (project / 'main.dyn').write_text('fn main() {\n  a: u64 = 1\n  b: i64 = 2\n  _ = a + b\n}\n')
     bad = subprocess.run([DYN, 'check', str(project)], capture_output=True, text=True, timeout=60)
     assert bad.returncode != 0 and 'mismatched types u64 and i64' in bad.stderr, bad
 print('PASS peer widening of mixed number operands')
