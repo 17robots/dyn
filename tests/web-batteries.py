@@ -12,7 +12,7 @@ EXPECTED = '''[{"id":1,"author":"ann","body":"hi \\"there\\"","created":99,"ok":
 {"id":-2,"author":"bo","body":"x\\n","created":0,"ok":false,"score":-0.25,"small":0,"count":0}
 nested fails true
 <p id="42" class="x&quot;y">&lt;b&gt; true <i>a&amp;b</i></p><style>p { color: red }</style>-7 [<br>] {?}
-start true 64 32 sid=
+start true 64 32 sid
 cold false
 remembered true hit true user 7 data ann csrf true false
 expired false

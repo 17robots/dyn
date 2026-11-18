@@ -168,6 +168,12 @@ def exercise(port):
     status, headers, body = c.response(stream)
     assert (status, body, headers['content-length']) == (200, b'', '3'), headers
     assert not any(f[0] == DATA and f[2] == stream for f in c.frames), 'HEAD sends no DATA'
+    # A failing handler gets 500 on its stream; the connection goes on.
+    status, _, body = c.response(c.request('GET', '/fail'))
+    assert (status, body) == (500, b'internal server error\n'), (status, body)
+    status, headers, body = c.response(c.request('GET', '/cookies?debug'))
+    assert (status, body, headers.get('set-cookie')) == (200, b'debug\n', 'theme=dark; Path=/'), headers
+    assert c.response(c.request('GET', '/health'))[2] == b'ok\n'
     status, _, body = c.response(c.request('POST', '/upload', b'small'))
     assert body == b'5 %d' % sum(b'small'), body
     blob = bytes((i * 7) % 251 for i in range(700 * 1024))

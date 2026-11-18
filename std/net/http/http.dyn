@@ -848,6 +848,9 @@ pub struct Response {
   alt_svc: []const u8,
   // The status sent, once the head is written; 0 before.
   status: u16,
+  // Set by a server that closes the connection after this response: the
+  // head then says Connection: close whatever the options say.
+  closing: bool,
 }
 
 pub struct Header { name: []const u8, value: []const u8 }
@@ -863,6 +866,9 @@ pub struct ResponseOptions {
   // must not hold CR, LF or NUL; otherwise respond fails with Invalid before
   // writing anything, so request data cannot inject headers.
   headers: []const Header,
+  // Set-Cookie headers, written from each Cookie (see set_cookie for what
+  // is refused). A bad cookie fails respond before anything is written.
+  cookies: []const Cookie,
 }
 
 // After a failure the stream position is lost, so the server stays failed:
@@ -1544,7 +1550,14 @@ fn head_write(writer: *HeadWriter, options: ResponseOptions, status: u16, reason
     head_emit(writer, ": ")
     head_emit(writer, item.value)
   }
-  if options.close_connection {
+  for item in options.cookies {
+    // Checked in response_begin, so formatting succeeds here.
+    storage: [CookieLength]u8
+    formatting: fail.Status
+    head_emit(writer, "\r\nSet-Cookie: ")
+    head_emit(writer, set_cookie(&formatting, storage[..], item))
+  }
+  if options.close_connection || writer.response.closing {
     head_emit(writer, "\r\nConnection: close\r\n\r\n")
   } else {
     head_emit(writer, "\r\nConnection: keep-alive\r\n\r\n")
@@ -1557,7 +1570,7 @@ fn head_write(writer: *HeadWriter, options: ResponseOptions, status: u16, reason
 fn response_begin(status: *fail.Status, response: *Response, options: ResponseOptions, body_length: usize, chunked: bool, body: []const u8, buffered: bool) {
   if status.failed { return }
   if response.started || response.finished || response.output.write == nil {
-    response_state(status, "the response has already been written")
+    response_state(status, "already responded")
     return
   }
   if !buffered { response.reserved = response.reserved[..0] }
@@ -1588,6 +1601,11 @@ fn response_begin(status: *fail.Status, response: *Response, options: ResponseOp
       response_invalid(status, "a header name is not a token or its value holds CR, LF or NUL")
       return
     }
+  }
+  for item in options.cookies {
+    storage: [CookieLength]u8
+    _ = set_cookie(status, storage[..], item)
+    if status.failed { return }
   }
   response.status = code
   date_storage: [DateLength]u8
@@ -1710,6 +1728,9 @@ pub enum SameSite { Default, Lax, Strict, None }
 // A Set-Cookie value. max_age 0 leaves Max-Age out (a session cookie);
 // negative writes Max-Age=0, which deletes the cookie. expires 0 leaves
 // Expires out, otherwise it is unix seconds. SameSite None requires secure.
+// The longest Set-Cookie value respond writes from a Cookie.
+pub const CookieLength: usize = 1024
+
 pub struct Cookie {
   name: []const u8,
   value: []const u8,
@@ -1899,6 +1920,12 @@ pub fn form_field(form: []const u8, name: []const u8) HttpHeader {
   return HttpHeader{}
 }
 
+// Whether the query has a parameter called name, with or without a value
+// ("?debug" and "?debug=1" both have debug).
+pub fn query_has(request: *const Request, name: []const u8) bool {
+  return form_field(request.query, name).found
+}
+
 // Decoded query parameter name into destination. found is false when absent.
 pub fn query_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) FieldValue {
   field := form_field(request.query, name)
@@ -2042,7 +2069,8 @@ pub fn body_abort(body: *Body) {
 // embedded server, and for tests; evented is the multi-connection server.
 // Every Request carries context, borrowed application state the handler casts
 // back to its own type (http.bind does that cast). The caller keeps it alive.
-// A handler's failure ends serving, with that failure in status.
+// A handler's failure ends serving, with that failure in status; when the
+// handler had not responded, the client gets 500 first.
 pub fn serve_stream(status: *fail.Status, input: io.Reader, output: io.Writer, storage: []u8, handler: Handler, context: rawptr) {
   if status.failed { return }
   if handler == nil || #len(storage) == 0 {
@@ -2072,6 +2100,12 @@ pub fn serve_stream(status: *fail.Status, input: io.Reader, output: io.Writer, s
       return
     }
     handler(status, &received.response, &received.request)
+    if status.failed && !received.response.started {
+      received.response.closing = true
+      answering: fail.Status
+      respond(&answering, &received.response, "internal server error\n", ResponseOptions{ status: StatusInternalServerError,
+        content_type: "text/plain; charset=utf-8" })
+    }
     if !received.request.keep_alive { return }
   }
 }

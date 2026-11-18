@@ -1083,9 +1083,26 @@ fn send_answer(worker: *Worker, index: usize, stream_index: usize, status: u16, 
   stream := &h2.streams[stream_index]
   stream.phase = Phase.Answering
   response := h2_response(worker, connection, stream_index)
-  // Best effort: finish_stream resets a stream left unanswered.
-  answered: fail.Status
-  http.respond(&answered, &response, body, http.ResponseOptions{ status: status, content_type: "text/plain; charset=utf-8" })
+  handler: http.Handler = nil
+  if status == http.StatusPayloadTooLarge {
+    handler = worker.config.on_too_large
+  } else if status == http.StatusServiceUnavailable {
+    handler = worker.config.on_busy
+  }
+  if handler != nil {
+    request := stream_request(worker, stream)
+    request.body = request.body[..0]
+    answering: fail.Status
+    handler(&answering, &response, &request)
+    if answering.failed {
+      log_failure(worker, &request, &answering.failure)
+    }
+  }
+  if !response.started {
+    // Best effort: finish_stream resets a stream left unanswered.
+    answered: fail.Status
+    http.respond(&answered, &response, body, http.ResponseOptions{ status: status, content_type: "text/plain; charset=utf-8" })
+  }
   finish_stream(worker, index, stream_index)
 }
 
@@ -1226,7 +1243,7 @@ fn dispatch(worker: *Worker, index: usize, stream_index: usize) {
   worker.requests += 1
   started := log_start(worker)
   worker.handler(&worker.request, &response, &request)
-  _ = handled(worker)
+  _ = handled(worker, &request, &response, h2.streams[stream_index].phase == Phase.Answering)
   log_request(worker, &connection.remote, &request, &response, started)
   stream = &h2.streams[stream_index]
   if stream.phase == Phase.Deferred || stream.phase == Phase.Free { return }
@@ -1683,7 +1700,7 @@ fn h2_job_done(worker: *Worker, slot_index: usize) {
   response := h2_response(worker, connection, stream_index)
   started := log_start(worker)
   slot.job_finish(&worker.request, &response, &request, slot.job_data)
-  _ = handled(worker)
+  _ = handled(worker, &request, &response, connection.h2.streams[stream_index].phase == Phase.Answering)
   log_request(worker, &connection.remote, &request, &response, started)
   stream = &connection.h2.streams[stream_index]
   if stream.phase == Phase.Answering {
@@ -1784,7 +1801,7 @@ fn large_begin(worker: *Worker, index: usize, stream_index: usize) {
   response := h2_response(worker, connection, stream_index)
   worker.requests += 1
   worker.config.on_large_body(&worker.request, &response, &request)
-  _ = handled(worker)
+  _ = handled(worker, &request, &response, connection.h2.streams[stream_index].phase == Phase.LargeHead)
   stream = &connection.h2.streams[stream_index]
   if stream.phase == Phase.Large {
     // Bytes that came before the decision go first.
@@ -1838,7 +1855,7 @@ fn large_end(worker: *Worker, connection: *Connection, stream_index: usize, outc
   }
   response := h2_response(worker, connection, stream_index)
   done(&worker.request, &response, &request, slot.body_data, outcome)
-  _ = handled(worker)
+  _ = handled(worker, &request, &response, outcome != BodyEnd.Closed && connection.h2.streams[stream_index].phase == Phase.Answering)
   stream = &connection.h2.streams[stream_index]
   if stream.phase == Phase.Deferred { return }
   if outcome == BodyEnd.Closed {

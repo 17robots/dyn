@@ -14,34 +14,27 @@ pub fn json(status: *fail.Status, response: *Response, code: u16, body: []const 
   respond(status, response, body, ResponseOptions{ status: code, content_type: "application/json", headers: cache[..] })
 }
 
-// 303 See Other to location, with a Set-Cookie when set_cookie is not empty
-// (see set_cookie): the answer to a form post.
-pub fn redirect(status: *fail.Status, response: *Response, location: []const u8, set_cookie: []const u8) {
-  headers: [2]Header = [Header{ name: "Location", value: location }, Header{ name: "Set-Cookie", value: set_cookie }]
-  count: usize = 1
-  if #len(set_cookie) > 0 {
-    count = 2
-  }
-  respond(status, response, "", ResponseOptions{ status: StatusSeeOther, headers: headers[..count] })
+// 303 See Other to location, setting cookies (none is fine): the answer to a
+// form post.
+pub fn redirect(status: *fail.Status, response: *Response, location: []const u8, cookies: []const Cookie) {
+  headers: [1]Header = [Header{ name: "Location", value: location }]
+  respond(status, response, "", ResponseOptions{ status: StatusSeeOther, headers: headers[..], cookies: cookies })
 }
 
 // A Writer for an HTML page (see page): over the response's send buffer when
-// it is free, so the page goes out without a copy, else over fallback. Give it
-// its own rendering status, so page can answer 500 when it did not fit.
-pub fn page_writer(rendering: *fail.Status, response: *Response, fallback: []u8) html.Writer {
+// it is free, so the page goes out without a copy, else over fallback. A page
+// that does not fit fails status with Capacity; the server then answers 500.
+pub fn page_writer(status: *fail.Status, response: *Response, fallback: []u8) html.Writer {
   storage := body_buffer(response, #len(fallback))
-  if #len(storage) == 0 { return html.writer(rendering, fallback) }
-  return html.writer(rendering, storage)
+  if #len(storage) == 0 { return html.writer(status, fallback) }
+  return html.writer(status, storage)
 }
 
 // Sends the page from page_writer with code as text/html, not cached, with
 // Content-Security-Policy default-src 'self' and X-Content-Type-Options
-// nosniff. 500 when its rendering status failed (the page did not fit).
+// nosniff.
 pub fn page(status: *fail.Status, response: *Response, code: u16, rendered: *const html.Writer) {
-  if rendered.buffer.status == nil || rendered.buffer.status.failed {
-    text(status, response, 500, "page too large")
-    return
-  }
+  if status.failed { return }
   headers: [3]Header = [
     Header{ name: "Content-Security-Policy", value: "default-src 'self'" },
     Header{ name: "X-Content-Type-Options", value: "nosniff" },

@@ -231,6 +231,22 @@ Standard library:
   - `observe.record` and `progress` `advance`/`end` return nothing (drops
     are counted). `bytes.Builder` is removed; use `std/bytes/builder`.
   - Fixed: cgltf reported a missing file as out of memory.
+- HTTP:
+  - A handler that fails before responding gets `500 internal server error`
+    from the server (evented over HTTP/1.1, HTTP/2 and HTTP/3, and
+    `serve_stream`), and the failure is logged to `Config.access_log`. So a
+    handler passes its status to every call and never answers its own
+    failures.
+  - Responding twice fails with `InvalidState` "already responded".
+  - `Config.on_too_large` and `Config.on_busy` replace the server's own 413
+    and 503 replies with your handlers.
+  - `http.query_has(request, name)`.
+  - `ResponseOptions.cookies` takes `http.Cookie` values and writes the
+    `Set-Cookie` headers itself. `http.redirect(status, response, location,
+    cookies)` takes cookies instead of formatted text, and `sessions.start`
+    and `sessions.forget` return an `http.Cookie`.
+  - `http.page_writer(&status, response, storage)` takes the handler's status
+    again: a page that does not fit fails it, and the server answers 500.
 
 Tools:
 

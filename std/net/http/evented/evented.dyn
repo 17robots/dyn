@@ -107,6 +107,16 @@ pub struct Config {
   // receive_size): called with the head only, it answers, or reads the body
   // in pieces with receive_body. nil answers 413.
   on_large_body: http.Handler,
+  // Requests too large for the server that on_large_body does not take,
+  // called with what was read of the request (the head when it fit). It
+  // answers like any handler; the connection closes after. nil, or no
+  // answer, sends 413.
+  on_too_large: http.Handler,
+  // Clients turned away for lack of room (Overflow.Reject, or no upload slot),
+  // called with an empty request before anything is read. It answers like any
+  // handler; the connection closes after. nil, or no answer, sends 503 with
+  // Retry-After.
+  on_busy: http.Handler,
   // HTTP/2: prior-knowledge cleartext clients, and TLS clients whose ALPN
   // chose "h2" (Transport.protocol). Needs receive_size of at least 17 KiB.
   // http2_connections state blocks (about 21 KiB each) bound the HTTP/2
@@ -497,11 +507,35 @@ fn io_failed(worker: *Worker) bool {
 }
 
 // Whether the handler call just made failed; clears the request status for
-// the next call. The failure closes the connection after the response.
-fn handled(worker: *Worker) bool {
+// the next call. A failed handler is logged to Config.access_log, and when it
+// had not responded and still can (answerable: the request was not handed to
+// a job, a body reader or a WebSocket), the server answers 500 for it. The
+// failure closes the connection after the response.
+fn handled(worker: *Worker, request: *const http.Request, response: *http.Response, answerable: bool) bool {
   if !worker.request.failed { return false }
+  failure := worker.request.failure
   worker.request = fail.Status{}
+  log_failure(worker, request, &failure)
+  if answerable && !response.started {
+    response.closing = true
+    answering: fail.Status
+    http.respond(&answering, response, "internal server error\n", http.ResponseOptions{ status: http.StatusInternalServerError,
+      content_type: "text/plain; charset=utf-8" })
+  }
   return true
+}
+
+fn log_failure(worker: *const Worker, request: *const http.Request, failure: *const fail.Failure) {
+  if worker.config.access_log == nil { return }
+  storage: [512]u8
+  fields: [3]log.Field = [
+    log.Field{ name: "method", value: request.method },
+    log.Field{ name: "path", value: request.path },
+    log.Field{ name: "error", value: fail.describe(storage[..], failure.*) },
+  ]
+  // A failed log write does not fail the request.
+  logged: fail.Status
+  log.write(&logged, worker.config.access_log, log.Level.Error, "handler failed", fields[..])
 }
 
 fn connection_read(connection: *Connection, destination: []u8) TransportIo {
@@ -689,8 +723,34 @@ fn new_response(connection: *Connection) http.Response {
     reserve_body: reserve_body, commit_body: commit_body, date: connection.worker.date[..], alt_svc: alt_svc(connection.worker) }
 }
 
-fn reject(connection: *Connection, status: u16, body: []const u8) {
-  response := http.Response{ output: io.Writer{ data: connection, write: output_write }, date: connection.worker.date[..] }
+// Answers status and closes the connection: through Config.on_too_large
+// (413) or on_busy (503) when set, else with body as text.
+fn reject(connection: *Connection, status: u16, body: []const u8, input: []const u8) {
+  worker := connection.worker
+  response := http.Response{ output: io.Writer{ data: connection, write: output_write }, date: worker.date[..], closing: true }
+  connection.close_after = true
+  connection.rejected = true
+  handler: http.Handler = nil
+  if status == http.StatusPayloadTooLarge {
+    handler = worker.config.on_too_large
+  } else if status == http.StatusServiceUnavailable {
+    handler = worker.config.on_busy
+  }
+  if handler != nil {
+    // What was read of the request: its head when the head fit.
+    request := http.Request{}
+    head := http.frame_request_head(input, #len(input) + 1)
+    if head.status == http.FrameStatus.Ready {
+      request = head.request
+    }
+    request.context = worker.context
+    answering: fail.Status
+    handler(&answering, &response, &request)
+    if answering.failed {
+      log_failure(worker, &request, &answering.failure)
+    }
+    if response.started { return }
+  }
   retry: [1]http.Header = [http.Header{ name: "Retry-After", value: "1" }]
   options := http.ResponseOptions{ status: status, content_type: "text/plain; charset=utf-8", close_connection: true }
   if status == http.StatusServiceUnavailable {
@@ -699,8 +759,6 @@ fn reject(connection: *Connection, status: u16, body: []const u8) {
   // Best effort: the connection closes either way.
   rejected: fail.Status
   http.respond(&rejected, &response, body, options)
-  connection.close_after = true
-  connection.rejected = true
 }
 
 fn close_connection(worker: *Worker, index: usize) {
@@ -815,7 +873,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
     }
     if framed.status == http.FrameStatus.Invalid {
       worker.rejected += 1
-      reject(connection, http.StatusBadRequest, "bad request\n")
+      reject(connection, http.StatusBadRequest, "bad request\n", "")
       break
     }
     if framed.status == http.FrameStatus.Capacity {
@@ -827,7 +885,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
         }
       }
       worker.rejected += 1
-      reject(connection, http.StatusPayloadTooLarge, "request too large\n")
+      reject(connection, http.StatusPayloadTooLarge, "request too large\n", connection.input[consumed..connection.used])
       break
     }
     connection.continue_sent = false
@@ -838,7 +896,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
     worker.requests += 1
     started := log_start(worker)
     worker.handler(&worker.request, &response, &request)
-    handler_failed := handled(worker)
+    handler_failed := handled(worker, &request, &response, connection.mode == Mode.Http)
     log_request(worker, &connection.remote, &request, &response, started)
     consumed += framed.consumed
     if connection.mode == Mode.Deferred {
@@ -862,7 +920,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
     !grow_input(connection, wanted) {
     if wanted <= capacity {
       worker.rejected += 1
-      reject(connection, http.StatusServiceUnavailable, "upload slots busy\n")
+      reject(connection, http.StatusServiceUnavailable, "upload slots busy\n", connection.input[..connection.used])
     } else {
       // No block could ever hold it (a chunked body with no upload pool).
       if worker.config.on_large_body != nil {
@@ -870,7 +928,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
         if head.status == http.FrameStatus.Ready { return body_begin(worker, index, head) }
       }
       worker.rejected += 1
-      reject(connection, http.StatusPayloadTooLarge, "request too large\n")
+      reject(connection, http.StatusPayloadTooLarge, "request too large\n", connection.input[..connection.used])
     }
   }
   if connection.mode == Mode.WebSocket && !connection.writing && !connection.close_after {
@@ -1214,7 +1272,7 @@ fn on_accept(worker: *Worker) {
       close_connection(worker, index)
       continue
     }
-    reject(connection, http.StatusServiceUnavailable, "server busy\n")
+    reject(connection, http.StatusServiceUnavailable, "server busy\n", "")
     settle(worker, index)
   }
 }
@@ -2016,7 +2074,7 @@ fn job_done(worker: *Worker, index: usize) {
   response.head_only = bytes.equal(request.method, "HEAD")
   started := log_start(worker)
   connection.job_finish(&worker.request, &response, &request, connection.job_data)
-  finish_failed := handled(worker)
+  finish_failed := handled(worker, &request, &response, connection.mode == Mode.Http)
   log_request(worker, &connection.remote, &request, &response, started)
   if finish_failed || !response.finished || !request.keep_alive {
     connection.close_after = true
@@ -2092,7 +2150,7 @@ fn body_begin(worker: *Worker, index: usize, head: http.FrameResult) bool {
   response.head_only = bytes.equal(request.method, "HEAD")
   worker.requests += 1
   worker.config.on_large_body(&worker.request, &response, &request)
-  _ = handled(worker)
+  _ = handled(worker, &request, &response, !connection.body_started && connection.mode != Mode.Deferred)
   if connection.body_started {
     if !body_feed(worker, index) { return false }
     return !connection.active || settle_body(worker, index)
@@ -2191,12 +2249,12 @@ fn body_end(worker: *Worker, index: usize, outcome: BodyEnd) bool {
   connection.continue_sent = false
   if outcome == BodyEnd.Closed {
     done(&worker.request, &response, &request, data, outcome)
-    _ = handled(worker)
+    _ = handled(worker, &request, &response, false)
     return false
   }
   connection.mode = Mode.Http
   done(&worker.request, &response, &request, data, outcome)
-  done_failed := handled(worker)
+  done_failed := handled(worker, &request, &response, connection.mode == Mode.Http)
   head := connection.body_head
   connection.body_head = 0
   if connection.mode == Mode.Deferred {
