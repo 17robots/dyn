@@ -63,7 +63,8 @@ fn pad_right(line: *fmt.Buffer, text: []const u8, width: usize) {
 
 fn pad_left_cents(line: *fmt.Buffer, amount: Cents, width: usize) {
   storage: [32]u8
-  cell := fmt.buffer(storage[..])
+  // The cell records into the line's status, so one check covers both.
+  cell := fmt.buffer(line.status, storage[..])
   write_cents(&cell, amount)
   text := fmt.bytes(&cell)
   if #len(text) < width {
@@ -74,7 +75,8 @@ fn pad_left_cents(line: *fmt.Buffer, amount: Cents, width: usize) {
 
 fn print_table(title: []const u8, table: []const Row) {
   storage: [256]u8
-  line := fmt.buffer(storage[..])
+  rendering: fail.Status
+  line := fmt.buffer(&rendering, storage[..])
   pad_right(&line, title, 16)
   fmt.write(&line, "  count      amount")
   io.println("{}", fmt.bytes(&line))
@@ -93,7 +95,7 @@ fn print_table(title: []const u8, table: []const Row) {
   fmt.write_u64_width(&line, everything.count, 7, ' ')
   pad_left_cents(&line, everything.amount, 12)
   // One check for every write above.
-  if line.failed {
+  if rendering.failed {
     #panic("a table line is longer than its buffer")
   }
   io.println("{}", fmt.bytes(&line))

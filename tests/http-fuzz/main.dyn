@@ -120,7 +120,8 @@ fn header_injection(context: rawptr, input: []const u8) bool {
 fn escaping(context: rawptr, input: []const u8) bool {
   storage: [8 * 256]u8
   if #len(input) > 256 { return true }
-  page := html.writer(storage[..])
+  page_status: fail.Status
+  page := html.writer(&page_status, storage[..])
   html.text(&page, input)
   output := html.output(&page).bytes
   expected: usize = 0
@@ -145,7 +146,8 @@ fn run(name: []const u8, cases: usize, corpus: []const []const u8, predicate: fn
   if !result.passed {
     io.eprintln("fuzz failure in {}", name)
     storage: [8 * 1024]u8
-    quoted := fmt.buffer(storage[..])
+    quoted_status: fail.Status
+    quoted := fmt.buffer(&quoted_status, storage[..])
     fmt.write_quoted(&quoted, result.example)
     io.eprintln("example: {}", fmt.bytes(&quoted))
     #panic("fuzz property failed")

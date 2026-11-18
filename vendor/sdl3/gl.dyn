@@ -1,22 +1,39 @@
-use "std/io"
 // OpenGL context lifecycle. Create a WindowOpenGL window after setting attributes.
 // Context and loaded procedure addresses are thread/context-affine.
 pub const WindowOpenGL: u64 = 2
 pub type GlContext = rawptr
-pub fn gl_request_core(major: i32, minor: i32) bool {
-  if major < 3 || minor < 0 { return false }
-  return native_gl_attribute(17, major) && native_gl_attribute(18, minor) && native_gl_attribute(20, 1)
+pub struct PixelSize { width: i32, height: i32 }
+// Asks for an OpenGL core profile of at least major.minor (3.0 or later).
+pub fn gl_request_core(status: *fail.Status, major: i32, minor: i32) {
+  if status.failed { return }
+  if major < 3 || minor < 0 {
+    fail.invalid(status, "request OpenGL", "", "core profiles start at 3.0")
+    return
+  }
+  checked(status, "request OpenGL", native_gl_attribute(17, major) && native_gl_attribute(18, minor) && native_gl_attribute(20, 1))
 }
-pub fn gl_create_owned(window: Window) GlContext {
-  if window == nil { return nil }
-  return native_gl_create(window)
+pub fn gl_create_owned(status: *fail.Status, window: Window) GlContext {
+  if status.failed { return nil }
+  if window == nil {
+    fail.invalid(status, "create OpenGL context", "", "no window")
+    return nil
+  }
+  value := native_gl_create(window)
+  checked(status, "create OpenGL context", value != nil)
+  return value
 }
-pub fn gl_destroy_owned(context: GlContext) bool {
-  if context == nil { return true }
-  return native_gl_destroy(context)
+pub fn gl_destroy_owned(context: GlContext) {
+  if context != nil {
+    _ = native_gl_destroy(context)
+  }
 }
-pub fn gl_make_current(window: Window, context: GlContext) bool {
-  return window != nil && context != nil && native_gl_current(window, context)
+pub fn gl_make_current(status: *fail.Status, window: Window, context: GlContext) {
+  if status.failed { return }
+  if window == nil || context == nil {
+    fail.invalid(status, "make OpenGL current", "", "no window or context")
+    return
+  }
+  checked(status, "make OpenGL current", native_gl_current(window, context))
 }
 // Name must be NUL-terminated; call with current context. Can supply directly to
 // vendor/opengl.load. This function does not allocate or cache addresses.
@@ -24,14 +41,28 @@ pub fn gl_proc(name: *const u8) rawptr {
   if name == nil { return nil }
   return native_gl_proc(name)
 }
-pub fn gl_swap(window: Window) bool {
-  return window != nil && native_gl_swap(window)
+pub fn gl_swap(status: *fail.Status, window: Window) {
+  if status.failed { return }
+  if window == nil {
+    fail.invalid(status, "swap OpenGL buffers", "", "no window")
+    return
+  }
+  checked(status, "swap OpenGL buffers", native_gl_swap(window))
 }
-pub fn gl_swap_interval(interval: i32) bool {
-  return native_gl_interval(interval)
+pub fn gl_swap_interval(status: *fail.Status, interval: i32) {
+  if status.failed { return }
+  checked(status, "set swap interval", native_gl_interval(interval))
 }
-pub fn window_pixel_size(window: Window, width: *i32, height: *i32) bool {
-  return window != nil && width != nil && height != nil && native_pixel_size(window, width, height)
+pub fn window_pixel_size(status: *fail.Status, window: Window) PixelSize {
+  if status.failed { return PixelSize{} }
+  if window == nil {
+    fail.invalid(status, "window pixel size", "", "no window")
+    return PixelSize{}
+  }
+  size: PixelSize
+  checked(status, "window pixel size", native_pixel_size(window, &size.width, &size.height))
+  if status.failed { return PixelSize{} }
+  return size
 }
 extern fn native_gl_attribute "SDL_GL_SetAttribute"(attribute: i32, value: i32) bool
 extern fn native_gl_create "SDL_GL_CreateContext"(window: Window) GlContext

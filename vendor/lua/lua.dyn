@@ -3,8 +3,13 @@ use "std/fail"
 // Lua 5.4 default ABI (64-bit integers, double numbers). State is provider-owned.
 // No standard libraries are opened automatically. This is not a sandbox.
 pub type State = rawptr
-pub fn create_owned() State {
-  return native_new()
+pub fn create_owned(status: *fail.Status) State {
+  if status.failed { return nil }
+  state := native_new()
+  if state == nil {
+    fail.set(status, fail.make(fail.Kind.Capacity, "create Lua state", "", "out of memory"))
+  }
+  return state
 }
 pub fn destroy_owned(state: State) {
   if state != nil {
@@ -15,11 +20,15 @@ pub fn stack_size(state: State) i32 {
   if state == nil { return 0 }
   return native_top(state)
 }
-// Only remove values; never grow the stack through this API.
-pub fn pop(state: State, count: i32) bool {
-  if state == nil || count < 0 || count > native_top(state) { return false }
+// Only remove values; never grow the stack through this API. Popping more
+// than the stack holds fails with InvalidInput and changes nothing.
+pub fn pop(status: *fail.Status, state: State, count: i32) {
+  if status.failed { return }
+  if state == nil || count < 0 || count > native_top(state) {
+    fail.invalid(status, "pop Lua stack", "", "no state, or more values than the stack holds")
+    return
+  }
   native_settop(state, native_top(state) - count)
-  return true
 }
 // Text-only protected execution. On success leaves exactly one result (nil if
 // chunk returns none); on failure leaves one error. Earlier stack values survive.

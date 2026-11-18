@@ -19,11 +19,13 @@ pub const EventWindowDestroyed: u32 = 537
 pub struct Event { words: [16]u64 }
 
 
-pub fn init_video() bool {
-  return native_init(InitVideo)
+pub fn init_video(status: *fail.Status) {
+  if status.failed { return }
+  checked(status, "start SDL video", native_init(InitVideo))
 }
-pub fn init_audio() bool {
-  return native_init(InitAudio)
+pub fn init_audio(status: *fail.Status) {
+  if status.failed { return }
+  checked(status, "start SDL audio", native_init(InitAudio))
 }
 pub fn quit() {
   native_quit()
@@ -32,6 +34,13 @@ pub fn quit() {
 pub fn record_error(status: *fail.Status, operation: []const u8) {
   fail.set(status, fail.make(fail.Kind.System, operation, "", last_error(160)))
 }
+// Records SDL's last error for operation when the SDL call returned false.
+fn checked(status: *fail.Status, operation: []const u8, ok: bool) {
+  if !ok {
+    record_error(status, operation)
+  }
+}
+
 // Handles below are nil after a failure, which carries SDL's message.
 pub fn window_create(status: *fail.Status, title: []const u8, title_buffer: []u8, width: i32, height: i32, flags: u64) Window {
   if status.failed { return nil }
@@ -69,11 +78,21 @@ pub fn renderer_destroy_owned(renderer: Renderer) {
     native_destroy_renderer(renderer)
   }
 }
-pub fn clear(renderer: Renderer, red: u8, green: u8, blue: u8, alpha: u8) bool {
-  return renderer != nil && native_set_draw_color(renderer, red, green, blue, alpha) && native_clear(renderer)
+pub fn clear(status: *fail.Status, renderer: Renderer, red: u8, green: u8, blue: u8, alpha: u8) {
+  if status.failed { return }
+  if renderer == nil {
+    fail.invalid(status, "clear", "", "no renderer")
+    return
+  }
+  checked(status, "clear", native_set_draw_color(renderer, red, green, blue, alpha) && native_clear(renderer))
 }
-pub fn present(renderer: Renderer) bool {
-  return renderer != nil && native_present(renderer)
+pub fn present(status: *fail.Status, renderer: Renderer) {
+  if status.failed { return }
+  if renderer == nil {
+    fail.invalid(status, "present", "", "no renderer")
+    return
+  }
+  checked(status, "present", native_present(renderer))
 }
 pub fn event_type(event: *const Event) u32 {
   if event == nil { return 0 }
@@ -82,8 +101,14 @@ pub fn event_type(event: *const Event) u32 {
 pub fn poll_event(event: *Event) bool {
   return event != nil && native_poll_event(#cast(rawptr, event))
 }
-pub fn wait_event(event: *Event) bool {
-  return event != nil && native_wait_event(#cast(rawptr, event))
+// Blocks until an event arrives and stores it in event.
+pub fn wait_event(status: *fail.Status, event: *Event) {
+  if status.failed { return }
+  if event == nil {
+    fail.invalid(status, "wait for event", "", "no event storage")
+    return
+  }
+  checked(status, "wait for event", native_wait_event(#cast(rawptr, event)))
 }
 pub fn event_requests_close(event: *const Event) bool {
   kind := event_type(event)
@@ -131,29 +156,72 @@ pub fn stream_open_playback_callback_owned(status: *fail.Status, spec: *const Au
   return value
 }
 // SDL copies source before return; source stays caller-owned.
-pub fn stream_put(stream: AudioStream, source: []const u8) bool {
-  if stream == nil || #len(source) > 2147483647 { return false }
-  if #len(source) == 0 { return true }
-  return native_put_audio(stream, #cast(rawptr, &source[0]), #cast(i32, #len(source)))
+pub fn stream_put(status: *fail.Status, stream: AudioStream, source: []const u8) {
+  if status.failed { return }
+  if stream == nil || #len(source) > 2147483647 {
+    fail.invalid(status, "queue audio", "", "no stream, or more than 2 GiB")
+    return
+  }
+  if #len(source) == 0 { return }
+  checked(status, "queue audio", native_put_audio(stream, #cast(rawptr, &source[0]), #cast(i32, #len(source))))
 }
-pub fn stream_resume(stream: AudioStream) bool {
-  return stream != nil && native_resume_audio(stream)
+pub fn stream_resume(status: *fail.Status, stream: AudioStream) {
+  if status.failed { return }
+  if stream == nil {
+    fail.invalid(status, "resume audio", "", "no stream")
+    return
+  }
+  checked(status, "resume audio", native_resume_audio(stream))
 }
-pub fn stream_pause(stream: AudioStream) bool {
-  return stream != nil && native_pause_audio(stream)
+pub fn stream_pause(status: *fail.Status, stream: AudioStream) {
+  if status.failed { return }
+  if stream == nil {
+    fail.invalid(status, "pause audio", "", "no stream")
+    return
+  }
+  checked(status, "pause audio", native_pause_audio(stream))
 }
-pub fn stream_available(stream: AudioStream) i32 {
-  if stream == nil { return -1 }
-  return native_audio_available(stream)
+// Bytes queued and not yet played.
+pub fn stream_available(status: *fail.Status, stream: AudioStream) usize {
+  if status.failed { return 0 }
+  if stream == nil {
+    fail.invalid(status, "queued audio", "", "no stream")
+    return 0
+  }
+  count := native_audio_available(stream)
+  if count < 0 {
+    record_error(status, "queued audio")
+    return 0
+  }
+  return #cast(usize, count)
 }
-pub fn stream_flush(stream: AudioStream) bool {
-  return stream != nil && native_flush_audio(stream)
+pub fn stream_flush(status: *fail.Status, stream: AudioStream) {
+  if status.failed { return }
+  if stream == nil {
+    fail.invalid(status, "flush audio", "", "no stream")
+    return
+  }
+  checked(status, "flush audio", native_flush_audio(stream))
 }
-pub fn stream_clear(stream: AudioStream) bool {
-  return stream != nil && native_clear_audio(stream)
+pub fn stream_clear(status: *fail.Status, stream: AudioStream) {
+  if status.failed { return }
+  if stream == nil {
+    fail.invalid(status, "clear audio", "", "no stream")
+    return
+  }
+  checked(status, "clear audio", native_clear_audio(stream))
 }
-pub fn stream_format(stream: AudioStream, source: *AudioSpec, destination: *AudioSpec) bool {
-  return stream != nil && source != nil && destination != nil && native_audio_format(stream, source, destination)
+pub struct AudioFormats { source: AudioSpec, destination: AudioSpec }
+pub fn stream_format(status: *fail.Status, stream: AudioStream) AudioFormats {
+  if status.failed { return AudioFormats{} }
+  if stream == nil {
+    fail.invalid(status, "audio format", "", "no stream")
+    return AudioFormats{}
+  }
+  formats: AudioFormats
+  checked(status, "audio format", native_audio_format(stream, &formats.source, &formats.destination))
+  if status.failed { return AudioFormats{} }
+  return formats
 }
 pub fn stream_destroy_owned(stream: AudioStream) {
   if stream != nil {
@@ -210,55 +278,90 @@ pub fn gpu_destroy_owned(device: GpuDevice) {
     native_gpu_destroy(device)
   }
 }
-pub fn gpu_claim_window(device: GpuDevice, window: Window) bool {
-  return device != nil && window != nil && native_gpu_claim_window(device, window)
+pub fn gpu_claim_window(status: *fail.Status, device: GpuDevice, window: Window) {
+  if status.failed { return }
+  if device == nil || window == nil {
+    fail.invalid(status, "claim window", "", "no device or window")
+    return
+  }
+  checked(status, "claim window", native_gpu_claim_window(device, window))
 }
 pub fn gpu_release_window(device: GpuDevice, window: Window) {
   if device != nil && window != nil {
     native_gpu_release_window(device, window)
   }
 }
-pub fn gpu_commands(device: GpuDevice) GpuCommandBuffer {
-  if device == nil { return nil }
-  return native_gpu_acquire(device)
+pub fn gpu_commands(status: *fail.Status, device: GpuDevice) GpuCommandBuffer {
+  if status.failed { return nil }
+  if device == nil {
+    fail.invalid(status, "acquire commands", "", "no device")
+    return nil
+  }
+  value := native_gpu_acquire(device)
+  checked(status, "acquire commands", value != nil)
+  return value
 }
 pub fn gpu_wait_swapchain(status: *fail.Status, commands: GpuCommandBuffer, window: Window) GpuSwapchain {
   if status.failed { return GpuSwapchain{} }
   texture: GpuTexture = nil
   width: u32 = 0
   height: u32 = 0
-  ok := commands != nil && window != nil && native_gpu_swapchain(commands, window, &texture, &width, &height)
-  if !ok {
-    record_error(status, "acquire swapchain")
+  if commands == nil || window == nil {
+    fail.invalid(status, "acquire swapchain", "", "no commands or window")
     return GpuSwapchain{}
   }
+  checked(status, "acquire swapchain", native_gpu_swapchain(commands, window, &texture, &width, &height))
+  if status.failed { return GpuSwapchain{} }
   return GpuSwapchain{ texture: texture, width: width, height: height }
 }
 // Submission consumes the command buffer regardless of success.
-pub fn gpu_submit(commands: GpuCommandBuffer) bool {
-  return commands != nil && native_gpu_submit(commands)
+pub fn gpu_submit(status: *fail.Status, commands: GpuCommandBuffer) {
+  if status.failed { return }
+  if commands == nil {
+    fail.invalid(status, "submit commands", "", "no commands")
+    return
+  }
+  checked(status, "submit commands", native_gpu_submit(commands))
 }
-pub fn gpu_shader_create_owned(device: GpuDevice, info: *const GpuShaderInfo) GpuShader {
-  if device == nil || info == nil { return nil }
-  return native_gpu_shader_create(device, info)
+pub fn gpu_shader_create_owned(status: *fail.Status, device: GpuDevice, info: *const GpuShaderInfo) GpuShader {
+  if status.failed { return nil }
+  if device == nil || info == nil {
+    fail.invalid(status, "create shader", "", "no device or shader info")
+    return nil
+  }
+  value := native_gpu_shader_create(device, info)
+  checked(status, "create shader", value != nil)
+  return value
 }
 pub fn gpu_shader_release_owned(device: GpuDevice, shader: GpuShader) {
   if device != nil && shader != nil {
     native_gpu_shader_release(device, shader)
   }
 }
-pub fn gpu_texture_create_owned(device: GpuDevice, info: *const GpuTextureInfo) GpuTexture {
-  if device == nil || info == nil { return nil }
-  return native_gpu_texture_create(device, info)
+pub fn gpu_texture_create_owned(status: *fail.Status, device: GpuDevice, info: *const GpuTextureInfo) GpuTexture {
+  if status.failed { return nil }
+  if device == nil || info == nil {
+    fail.invalid(status, "create texture", "", "no device or texture info")
+    return nil
+  }
+  value := native_gpu_texture_create(device, info)
+  checked(status, "create texture", value != nil)
+  return value
 }
 pub fn gpu_texture_release_owned(device: GpuDevice, texture: GpuTexture) {
   if device != nil && texture != nil {
     native_gpu_texture_release(device, texture)
   }
 }
-pub fn gpu_buffer_create_owned(device: GpuDevice, info: *const GpuBufferInfo) GpuBuffer {
-  if device == nil || info == nil { return nil }
-  return native_gpu_buffer_create(device, info)
+pub fn gpu_buffer_create_owned(status: *fail.Status, device: GpuDevice, info: *const GpuBufferInfo) GpuBuffer {
+  if status.failed { return nil }
+  if device == nil || info == nil {
+    fail.invalid(status, "create buffer", "", "no device or buffer info")
+    return nil
+  }
+  value := native_gpu_buffer_create(device, info)
+  checked(status, "create buffer", value != nil)
+  return value
 }
 pub fn gpu_buffer_release_owned(device: GpuDevice, buffer: GpuBuffer) {
   if device != nil && buffer != nil {
@@ -268,14 +371,15 @@ pub fn gpu_buffer_release_owned(device: GpuDevice, buffer: GpuBuffer) {
 
 // Clears and presents one swapchain frame, consuming commands on success.
 // A minimized window may have no texture; submit the empty buffer successfully.
-pub fn gpu_clear_swapchain(commands: GpuCommandBuffer, window: Window, color: FColor) bool {
-  status: fail.Status
-  acquired := gpu_wait_swapchain(&status, commands, window)
-  if status.failed { return false }
-  if acquired.texture == nil { return gpu_submit(commands) }
-  target := GpuColorTargetInfo{ texture: acquired.texture, clear_color: color, load_op: 1, store_op: 0 }
-  render_pass := native_gpu_begin_render(commands, &target, 1, nil)
-  if render_pass == nil { return false }
-  native_gpu_end_render(render_pass)
-  return gpu_submit(commands)
+pub fn gpu_clear_swapchain(status: *fail.Status, commands: GpuCommandBuffer, window: Window, color: FColor) {
+  acquired := gpu_wait_swapchain(status, commands, window)
+  if status.failed { return }
+  if acquired.texture != nil {
+    target := GpuColorTargetInfo{ texture: acquired.texture, clear_color: color, load_op: 1, store_op: 0 }
+    render_pass := native_gpu_begin_render(commands, &target, 1, nil)
+    checked(status, "begin render pass", render_pass != nil)
+    if status.failed { return }
+    native_gpu_end_render(render_pass)
+  }
+  gpu_submit(status, commands)
 }

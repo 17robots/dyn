@@ -14,7 +14,28 @@ use "std/crypto/kdf" kdf
 use "std/crypto/password" password
 use "std/crypto/chacha20" chacha
 use "std/bytes" bytes
+use "std/fail"
 fn check(ok: bool) { if !ok { #panic("KDF contract") } }
+fn hkdf_ok(destination: []u8, salt: []const u8, material: []const u8, info: []const u8, scratch: []u8) bool {
+ status: fail.Status
+ kdf.hkdf(&status, destination, salt, material, info, scratch)
+ return !status.failed
+}
+fn expand_ok(destination: []u8, key: []const u8, info: []const u8, scratch: []u8) bool {
+ status: fail.Status
+ kdf.hkdf_expand(&status, destination, key, info, scratch)
+ return !status.failed
+}
+fn pbkdf2_ok(destination: []u8, secret: []const u8, salt: []const u8, iterations: u32, scratch: []u8) bool {
+ status: fail.Status
+ password.pbkdf2_sha256(&status, destination, secret, salt, iterations, scratch)
+ return !status.failed
+}
+fn xor_ok(destination: []u8, input: []const u8, key: []const u8, nonce: []const u8, counter: u32) bool {
+ status: fail.Status
+ chacha.xor(&status, destination, input, key, nonce, counter)
+ return !status.failed
+}
 fn filled(data: []const u8, value: u8) bool { for byte in data { if byte != value { return false } }
  return true }
 fn main() {
@@ -32,25 +53,25 @@ t=b'';result=b''
 for counter in range(1,4):
  t=hmac.digest(prk,t+b'info'+bytes([counter]),'sha256');result+=t
 SOURCE+=' check(bytes.equal(hmac.sha256(output[..],key[..],"message"),'+literal(mac)+'))\n'
-SOURCE+=' check(kdf.hkdf(output[..96],"salt",key[..],"info",scratch[..]) && bytes.equal(output[..96],'+literal(result)+'))\n'
-SOURCE+=' check(password.pbkdf2_sha256(output[..96],"password","salt",2,scratch[..]) && bytes.equal(output[..96],'+literal(hashlib.pbkdf2_hmac('sha256',b'password',b'salt',2,96))+'))\n'
+SOURCE+=' check(hkdf_ok(output[..96],"salt",key[..],"info",scratch[..]) && bytes.equal(output[..96],'+literal(result)+'))\n'
+SOURCE+=' check(pbkdf2_ok(output[..96],"password","salt",2,scratch[..]) && bytes.equal(output[..96],'+literal(hashlib.pbkdf2_hmac('sha256',b'password',b'salt',2,96))+'))\n'
 SOURCE+=r''' for i in 0..100 { output[i] = 165 }
- check(!kdf.hkdf_expand(output[..64],output[..32],"info",scratch[..]) && filled(output[..],165))
- check(!kdf.hkdf_expand(output[..64],key[..],output[63..64],scratch[..]) && filled(output[..],165))
- check(!kdf.hkdf_expand(output[..64],key[..],"info",output[63..]) && filled(output[..],165))
- check(!kdf.hkdf_expand(output[..64],key[..],scratch[..4],scratch[..]))
- check(!kdf.hkdf_expand(output[..64],scratch[..32],"info",scratch[..]))
- check(!password.pbkdf2_sha256(output[..64],output[..32],"salt",2,scratch[..]) && filled(output[..],165))
- check(!password.pbkdf2_sha256(output[..64],"password",output[63..64],2,scratch[..]) && filled(output[..],165))
- check(!password.pbkdf2_sha256(output[..64],"password","salt",2,output[63..]) && filled(output[..],165))
- check(!password.pbkdf2_sha256(output[..64],"password",scratch[..4],2,scratch[..]))
- check(!password.pbkdf2_sha256(output[..64],scratch[..8],"salt",2,scratch[..]))
+ check(!expand_ok(output[..64],output[..32],"info",scratch[..]) && filled(output[..],165))
+ check(!expand_ok(output[..64],key[..],output[63..64],scratch[..]) && filled(output[..],165))
+ check(!expand_ok(output[..64],key[..],"info",output[63..]) && filled(output[..],165))
+ check(!expand_ok(output[..64],key[..],scratch[..4],scratch[..]))
+ check(!expand_ok(output[..64],scratch[..32],"info",scratch[..]))
+ check(!pbkdf2_ok(output[..64],output[..32],"salt",2,scratch[..]) && filled(output[..],165))
+ check(!pbkdf2_ok(output[..64],"password",output[63..64],2,scratch[..]) && filled(output[..],165))
+ check(!pbkdf2_ok(output[..64],"password","salt",2,output[63..]) && filled(output[..],165))
+ check(!pbkdf2_ok(output[..64],"password",scratch[..4],2,scratch[..]))
+ check(!pbkdf2_ok(output[..64],scratch[..8],"salt",2,scratch[..]))
  huge := #slice(&key[0], ~#cast(usize,0))
- check(!kdf.hkdf_expand(output[..64],key[..],huge,scratch[..]) && filled(output[..],165))
- check(!password.pbkdf2_sha256(output[..64],"password",huge,2,scratch[..]) && filled(output[..],165))
+ check(!expand_ok(output[..64],key[..],huge,scratch[..]) && filled(output[..],165))
+ check(!pbkdf2_ok(output[..64],"password",huge,2,scratch[..]) && filled(output[..],165))
  // Raw ChaCha counter exhaustion must reject before reading a forged span.
  before := key
- check(!chacha.xor(huge,huge,key[..],key[..12],0xffffffff) && bytes.equal(key[..],before[..]))
+ check(!xor_ok(huge,huge,key[..],key[..12],0xffffffff) && bytes.equal(key[..],before[..]))
  if #sizeof(usize) == 8 {
   size: u64 = 2305843009213693952
   huge_key := #slice(&key[0], #cast(usize,size))

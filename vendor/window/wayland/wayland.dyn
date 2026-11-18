@@ -5,22 +5,18 @@ use "std/ui/box" box
 // Explicit native Wayland/EGL backend. Build native bridge with build.py.
 pub type Window = native.Window
 pub fn open(status: *fail.Status, window: *Window, title: []const u8, width, height: i32) {
-  if status.failed { return }
   native.open(status, window, title, width, height)
 }
 pub fn close(window: *Window) {
   native.close(window)
 }
 pub fn poll(status: *fail.Status, window: *Window) {
-  if status.failed { return }
   native.poll(status, window)
 }
 pub fn make_current(status: *fail.Status, window: *Window) {
-  if status.failed { return }
   native.make_current(status, window)
 }
 pub fn swap(status: *fail.Status, window: *Window) {
-  if status.failed { return }
   native.swap(status, window)
 }
 pub fn gl_proc(name: *const u8) rawptr {
@@ -54,7 +50,6 @@ pub fn next_event(window: *Window, output: *Event) bool {
 }
 // The owner must outlive all worker wake calls; stop/join them before close.
 pub fn wake(status: *fail.Status, window: *const Window) {
-  if status.failed { return }
   native.wake(status, window)
 }
 
@@ -76,24 +71,19 @@ pub fn clipboard(window: *const Window) []const u8 {
 
 pub type Surrounding = native.Surrounding
 pub fn set_surrounding_text(status: *fail.Status, window: *Window, context: Surrounding) {
-  if status.failed { return }
   native.set_surrounding_text(status, window, context)
 }
 
 pub fn set_title(status: *fail.Status, window: *Window, title: []const u8) {
-  if status.failed { return }
   native.set_title(status, window, title)
 }
 pub fn set_size(status: *fail.Status, window: *Window, width, height: i32) {
-  if status.failed { return }
   native.set_size(status, window, width, height)
 }
 pub fn set_swap_interval(status: *fail.Status, window: *Window, interval: i32) {
-  if status.failed { return }
   native.set_swap_interval(status, window, interval)
 }
 pub fn try_set_clipboard(status: *fail.Status, window: *Window, text: []const u8) {
-  if status.failed { return }
   native.try_set_clipboard(status, window, text)
 }
 pub fn request_paste_snapshot(window: *Window) {
@@ -103,6 +93,5 @@ pub fn paste_pending(window: *const Window) bool {
   return native.paste_pending(window)
 }
 pub fn paste_status(status: *fail.Status, window: *const Window) {
-  if status.failed { return }
   native.paste_status(status, window)
 }

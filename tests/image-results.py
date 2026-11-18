@@ -16,13 +16,13 @@ use "std/mem" mem
 fn png_failure(arena: *mem.Arena, data: []const u8) fail.Failure {
   status: fail.Status
   image := png.decode(arena, &status, data)
-  if !status.failed || #len(image.pixels) != 0 || image.info.valid { #panic("PNG should fail") }
+  if !status.failed || #len(image.pixels) != 0 || image.info.width != 0 { #panic("PNG should fail") }
   return status.failure
 }
 fn qoi_failure(arena: *mem.Arena, data: []const u8) fail.Failure {
   status: fail.Status
   image := qoi.decode(arena, &status, data)
-  if !status.failed || #len(image.pixels) != 0 || image.info.valid { #panic("QOI should fail") }
+  if !status.failed || #len(image.pixels) != 0 || image.info.width != 0 { #panic("QOI should fail") }
   return status.failure
 }
 fn main() {
@@ -32,14 +32,14 @@ fn main() {
   pixels: [8]u8 = [255,0,0,255,0,255,0,128]
   p := png.encode(arena, &status, pixels[..], 2, 1, 4)
   pi := png.inspect(&status, p)
-  if !pi.valid || pi.width != 2 { #panic("PNG inspect") }
+  if pi.width != 2 { #panic("PNG inspect") }
   pd := png.decode(arena, &status, p)
   if pd.info.width != 2 || #len(pd.pixels) != 8 { #panic("PNG decode") }
   for i in 0..8 { if pd.pixels[i] != pixels[i] { #panic("PNG pixels") } }
   q := qoi.encode(arena, &status, pixels[..], 2, 1, 4, true)
   qi := qoi.inspect(&status, q)
   qd := qoi.decode(arena, &status, q)
-  if !qi.valid || qd.info.width != 2 { #panic("QOI roundtrip") }
+  if qi.width != 2 || qd.info.width != 2 { #panic("QOI roundtrip") }
   for i in 0..8 { if qd.pixels[i] != pixels[i] { #panic("QOI pixels") } }
   external: [70]u8 = [137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,1,0,0,0,1,8,6,0,0,0,31,21,196,137,0,0,0,13,73,68,65,84,120,156,99,248,207,192,240,31,0,5,0,1,255,137,153,61,29,0,0,0,0,73,69,78,68,174,66,96,130]
   independent := png.decode(arena, &status, external[..])
@@ -54,15 +54,15 @@ fn main() {
   rgb := qoi.encode(arena, &status, pixels[..3], 1, 1, 3, false)
   rgbd := qoi.decode(arena, &status, rgb)
   if rgbd.info.srgb || rgbd.pixels[3] != 255 { #panic("QOI RGB") }
-  if pi.height != 1 || pi.channels != 4 || !pd.info.valid ||
+  if pi.height != 1 || pi.channels != 4 || pd.info.width == 0 ||
     pd.info.height != 1 || pd.info.channels != 4 ||
     qi.width != 2 || qi.height != 1 || qi.channels != 4 || !qi.srgb ||
-    !qd.info.valid || qd.info.height != 1 || qd.info.channels != 4 || !qd.info.srgb {
+    qd.info.width == 0 || qd.info.height != 1 || qd.info.channels != 4 || !qd.info.srgb {
     #panic("success image info")
   }
   pzero: png.Image
   qzero: qoi.Image
-  if pzero.info.valid || qzero.info.valid || #len(pzero.pixels) != 0 || #len(qzero.pixels) != 0 { #panic("zero values") }
+  if pzero.info.width != 0 || qzero.info.width != 0 || #len(pzero.pixels) != 0 || #len(qzero.pixels) != 0 { #panic("zero values") }
   mark := mem.arena_mark(arena)
   marker_original := q[#len(q)-1]
   q[#len(q)-1] = 99
@@ -88,7 +88,7 @@ fn main() {
   qinfo := qoi.inspect(&qbad, empty[..])
   if pbad.failure.kind != fail.Kind.InvalidInput || qbad.failure.kind != fail.Kind.InvalidInput ||
     pbad.failure.offset != 0 || qbad.failure.offset != 0 ||
-    pinfo.valid || qinfo.valid || pinfo.width != 0 || qinfo.width != 0 { #panic("inspect malformed") }
+    pinfo.width != 0 || qinfo.width != 0 { #panic("inspect malformed") }
   pe_status: fail.Status
   qe_status: fail.Status
   pe := png.encode(arena, &pe_status, empty[..], 0, 1, 4)

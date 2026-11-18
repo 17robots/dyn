@@ -1754,7 +1754,7 @@ pub fn set_cookie(status: *fail.Status, destination: []u8, item: Cookie) []u8 {
   if !attribute_valid(item.path) || !attribute_valid(item.domain) || (item.same_site == SameSite.None && !item.secure) {
     return text_failure(status, destination, fail.Kind.InvalidInput, "invalid character", 0)
   }
-  out := format.buffer(destination)
+  out := format.buffer(status, destination)
   format.write(&out, item.name)
   format.write_byte(&out, '=')
   format.write(&out, item.value)
@@ -1794,7 +1794,7 @@ pub fn set_cookie(status: *fail.Status, destination: []u8, item: Cookie) []u8 {
   if item.partitioned {
     format.write(&out, "; Partitioned")
   }
-  if out.failed { return text_failure(status, destination, fail.Kind.Capacity, "the text does not fit the storage", 0) }
+  if status.failed { return destination[..0] }
   return destination[..out.length]
 }
 
@@ -1814,7 +1814,7 @@ pub fn sse_event(status: *fail.Status, destination: []u8, event: []const u8, id:
       return text_failure(status, destination, fail.Kind.InvalidInput, "invalid character", 0)
     }
   }
-  out := format.buffer(destination)
+  out := format.buffer(status, destination)
   if #len(event) > 0 {
     format.write(&out, "event: ")
     format.write(&out, event)
@@ -1841,7 +1841,7 @@ pub fn sse_event(status: *fail.Status, destination: []u8, event: []const u8, id:
     start = end + 1
   }
   format.write_byte(&out, '\n')
-  if out.failed { return text_failure(status, destination, fail.Kind.Capacity, "the text does not fit the storage", 0) }
+  if status.failed { return destination[..0] }
   return destination[..out.length]
 }
 

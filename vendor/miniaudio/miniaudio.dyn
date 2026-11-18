@@ -85,12 +85,19 @@ pub fn engine_create(arena: *mem.Arena, status: *fail.Status, device: bool) rawp
   }
   return state
 }
-// Whether the file started playing.
-pub fn play_file(engine: rawptr, path: []const u8, buffer: []u8) bool {
-  if engine == nil { return false }
-  converting: fail.Status
-  encoded := c.string_into(&converting, buffer, path)
-  return !converting.failed && native_play(engine, encoded) == 0
+// Starts playing the file at path; buffer holds the C copy of path.
+pub fn play_file(status: *fail.Status, engine: rawptr, path: []const u8, buffer: []u8) {
+  if status.failed { return }
+  if engine == nil {
+    audio_failed(status, "play file", -2)
+    return
+  }
+  encoded := c.string_into(status, buffer, path)
+  if status.failed { return }
+  code := native_play(engine, encoded)
+  if code != 0 {
+    audio_failed(status, "play file", code)
+  }
 }
 // Offline engine only. Outputs interleaved stereo f32 at 48 kHz; the count
 // of values written.
@@ -135,14 +142,36 @@ pub fn sound_create(arena: *mem.Arena, status: *fail.Status, engine: rawptr, pat
   }
   return state
 }
-// Native result: 0 success, negative error. stop preserves position; rewind
-// explicitly seeks to the start. Query ended to distinguish EOF from a stop.
-pub extern fn sound_start "dyn_ma_sound_start"(sound: rawptr) i32
-pub extern fn sound_stop "dyn_ma_sound_stop"(sound: rawptr) i32
-pub extern fn sound_rewind "dyn_ma_sound_rewind"(sound: rawptr) i32
+// stop preserves position; rewind explicitly seeks to the start. Query ended
+// to distinguish EOF from a stop. A closed sound fails with InvalidInput.
+pub fn sound_start(status: *fail.Status, sound: rawptr) {
+  sound_checked(status, "start sound", native_sound_start(sound))
+}
+pub fn sound_stop(status: *fail.Status, sound: rawptr) {
+  sound_checked(status, "stop sound", native_sound_stop(sound))
+}
+pub fn sound_rewind(status: *fail.Status, sound: rawptr) {
+  sound_checked(status, "rewind sound", native_sound_rewind(sound))
+}
+// volume must be finite and not negative.
+pub fn sound_volume(status: *fail.Status, sound: rawptr, volume: f32) {
+  if status.failed { return }
+  if !native_sound_volume(sound, volume) {
+    audio_failed(status, "set volume", -2)
+  }
+}
+fn sound_checked(status: *fail.Status, operation: []const u8, code: i32) {
+  if status.failed { return }
+  if code != 0 {
+    audio_failed(status, operation, code)
+  }
+}
 pub extern fn sound_playing "dyn_ma_sound_playing"(sound: rawptr) bool
 pub extern fn sound_ended "dyn_ma_sound_ended"(sound: rawptr) bool
-pub extern fn sound_volume "dyn_ma_sound_volume"(sound: rawptr, volume: f32) bool
+extern fn native_sound_start "dyn_ma_sound_start"(sound: rawptr) i32
+extern fn native_sound_stop "dyn_ma_sound_stop"(sound: rawptr) i32
+extern fn native_sound_rewind "dyn_ma_sound_rewind"(sound: rawptr) i32
+extern fn native_sound_volume "dyn_ma_sound_volume"(sound: rawptr, volume: f32) bool
 pub extern fn sound_close "dyn_ma_sound_close"(sound: rawptr)
 extern fn sound_size "dyn_ma_sound_size"() usize
 extern fn sound_align "dyn_ma_sound_align"() usize

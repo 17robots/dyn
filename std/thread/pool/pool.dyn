@@ -82,8 +82,8 @@ pub fn start(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: 
   return pool
 }
 
-// Queues task. Returns false, queuing nothing, when the queue is full or the
-// pool is stopping.
+// Whether task was queued: false, queuing nothing, when the queue is full or
+// the pool is stopping, so the caller can retry or run it elsewhere.
 pub fn submit(pool: *Pool, task: Task) bool {
   if pool == nil || task.run == nil { return false }
   sync.lock(&pool.lock)

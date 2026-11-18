@@ -40,7 +40,7 @@ fn decode_all(decoder: *hpack.Decoder, block: []const u8, output: []u8) []const 
 // A QPACK section decoded as name=value|...; "error" on failure.
 fn qpack_all(section: []const u8, output: []u8) []const u8 {
   prefix := qpack.decode_prefix(section)
-  if !prefix.ok { return "error" }
+  if !prefix.valid { return "error" }
   scratch: [1024]u8
   used: usize = 0
   at := prefix.consumed

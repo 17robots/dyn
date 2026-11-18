@@ -1,4 +1,3 @@
-use "std/parse" parse
 use "std/fail"
 use "std/mem" mem
 use "std/io" io
@@ -64,8 +63,8 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
   breaks := unicode.line_breaks(arena, status, text)
   if status.failed { return Layout{} }
   count := utf8.codepoint_count(text)
-  work := mem.push_array(Glyph, arena, count.value)
-  clusters := mem.push_array(Cluster, arena, count.value)
+  work := mem.push_array(Glyph, arena, count)
+  clusters := mem.push_array(Cluster, arena, count)
   used: usize = 0
   cluster_count: usize = 0
   break_index: usize = 0
@@ -88,7 +87,7 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
     if cluster.tab {
       width := font.advance(font.data, 32)
       if !valid_metric(width) || width < 0.0 {
-        parse.failed_at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", start)
+        fail.at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", start)
         return Layout{}
       }
       cluster.advance = width * #cast(f64, options.tab_columns)
@@ -104,7 +103,7 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
         }
         advance := font.advance(font.data, cp)
         if !valid_metric(advance) || advance < 0.0 {
-          parse.failed_at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", at)
+          fail.at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", at)
           return Layout{}
         }
         combining := unicode.combining_class(cp) != 0
@@ -113,7 +112,7 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
           adjustment = kern(font, previous, cp)
         }
         if !valid_metric(adjustment) {
-          parse.failed_at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", at)
+          fail.at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", at)
           return Layout{}
         }
         cluster.advance += adjustment
@@ -159,7 +158,7 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
         adjustment = kern(font, previous, cluster.first_cp)
       }
       if !valid_metric(adjustment) {
-        parse.failed_at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", cluster.start)
+        fail.at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", cluster.start)
         return Layout{}
       }
       next_width := width + adjustment + step(cluster, width + adjustment)
@@ -188,7 +187,7 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
             soft_adjustment = kern(font, previous, cluster.first_cp)
           }
           if !valid_metric(soft_adjustment) {
-            parse.failed_at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", cluster.start)
+            fail.at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", cluster.start)
             return Layout{}
           }
           break_width += cluster.advance + soft_adjustment
@@ -219,7 +218,7 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
         adjustment = kern(font, previous, cluster.first_cp)
       }
       if !valid_metric(adjustment) {
-        parse.failed_at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", cluster.start)
+        fail.at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", cluster.start)
         return Layout{}
       }
       x += adjustment

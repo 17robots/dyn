@@ -137,9 +137,10 @@ fn print_value(status: *fail.Status, writer: Writer, value: any) {
       // TypeInfo; a type with no text form prints as a marker rather than
       // ending the line.
       text: [1024]u8
-      rendered := format.buffer(text[..])
+      rendering: fail.Status
+      rendered := format.buffer(&rendering, text[..])
       format.write_value(&rendered, value)
-      if rendered.failed || #len(format.bytes(&rendered)) == 0 {
+      if rendering.failed || #len(format.bytes(&rendered)) == 0 {
         write(status, writer, "{?}")
       } else {
         write(status, writer, format.bytes(&rendered))

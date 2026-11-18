@@ -558,7 +558,7 @@ fn h3_frame_end(worker: *Worker, index: usize, stream_index: usize) bool {
 fn h3_decode(worker: *Worker, block: []const u8) usize {
   pool := &worker.h2
   prefix := qpack.decode_prefix(block)
-  if !prefix.ok { return 0xffffffffffffffff }
+  if !prefix.valid { return 0xffffffffffffffff }
   used: usize = 0
   at := prefix.consumed
   decoding: fail.Status

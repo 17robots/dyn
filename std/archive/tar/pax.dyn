@@ -1,5 +1,4 @@
 use "std/bytes" bytes
-use "std/parse" parse
 use "std/fail"
 
 struct Overrides { path: []const u8, link: []const u8, size: u64, has_path: bool, has_link: bool, has_size: bool, delete_size: bool }
@@ -153,6 +152,6 @@ pub fn next(status: *fail.Status, state: *ArchiveReader) Next {
   return malformed(status, cursor)
 }
 fn malformed(status: *fail.Status, offset: usize) Next {
-  parse.malformed(status, "read TAR", "malformed TAR", offset)
+  fail.at(status, fail.Kind.InvalidInput, "read TAR", "malformed TAR", offset)
   return Next{ offset: offset }
 }

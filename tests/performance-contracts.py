@@ -43,9 +43,8 @@ fn main() {''']
     def literal(data): return '"'+''.join('\\x%02x'%v for v in data)+'"'
     for text, needle in cases:
         body += ['if true {',f'text := {literal(text)}',f'needle := {literal(needle)}',
-                 'table: [64]usize','p := search.prepare(needle, table[..])',
-                 't.expect(p.valid, "prepare")',
-                 f't.expect(search.find(p.pattern, text) == {position(text.find(needle), text)}, "KMP oracle")',
+                 'table: [64]usize','preparing := fail.Status{ on_failure: fail.panic_on_failure }','p := search.prepare(&preparing, needle, table[..])',
+                 f't.expect(search.find(p, text) == {position(text.find(needle), text)}, "KMP oracle")',
                  f't.expect(bytes.find(text, needle) == {position(text.find(needle), text)}, "find oracle")',
                  f't.expect(bytes.find_last(text, needle) == {position(text.rfind(needle), text)}, "rfind oracle")','}']
     body += ['''
@@ -86,7 +85,9 @@ fn main() {''']
     }
   }
   table: [1]usize = [99]
-  t.expect(!search.prepare("ab", table[..]).valid && table[0] == 99, "prepare failure atomic")
+  short_table: fail.Status
+  _ = search.prepare(&short_table, "ab", table[..])
+  t.expect(short_table.failed && table[0] == 99, "prepare failure atomic")
   backing: [8192]u8
   arena := mem.arena_from_buffer(backing[..])
   built := builder.from_buffer(backing[..0])
@@ -124,10 +125,13 @@ fn main() {''']
     t.expect((found == &nil_entry) == (i % 2 == 0), "removed entries miss")
   }
   values: [10]i64 = [10,9,8,7,6,5,4,3,2,1]
-  stats := t.summarize(values[..])
-  t.expect(stats.valid && stats.minimum == 1 && stats.median == 5 && stats.p90 == 9 && stats.maximum == 10, "samples")
+  summarizing := fail.Status{ on_failure: fail.panic_on_failure }
+  stats := t.summarize(&summarizing, values[..])
+  t.expect(stats.minimum == 1 && stats.median == 5 && stats.p90 == 9 && stats.maximum == 10, "samples")
   invalid: [2]i64 = [5,-1]
-  t.expect(!t.summarize(invalid[..]).valid && invalid[0] == 5, "invalid sample atomic")
+  negative: fail.Status
+  _ = t.summarize(&negative, invalid[..])
+  t.expect(negative.failed && invalid[0] == 5, "invalid sample atomic")
 }
 ''']
     (src/'main.dyn').write_text('\n'.join(body))

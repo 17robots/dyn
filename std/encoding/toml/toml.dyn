@@ -1,5 +1,4 @@
 use "std/mem" mem
-use "std/parse" parse
 use "std/fail"
 use "std/unicode/utf8" utf8
 use "std/bytes"
@@ -580,7 +579,7 @@ fn bounded(value: *const Value, depth: usize) bool {
 pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *const Value {
   if status.failed { return &nil_value }
   if !utf8.valid(source) {
-    parse.malformed(status, "parse TOML", "the text is not UTF-8", 0)
+    fail.at(status, fail.Kind.InvalidInput, "parse TOML", "the text is not UTF-8", 0)
     return &nil_value
   }
   mark := mem.arena_mark(arena)
@@ -602,7 +601,7 @@ pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *const
   }
   if parser.failed {
     mem.arena_rewind(arena, mark)
-    parse.malformed(status, "parse TOML", "malformed TOML", parser.at)
+    fail.at(status, fail.Kind.InvalidInput, "parse TOML", "malformed TOML", parser.at)
     return &nil_value
   }
   return root

@@ -1,3 +1,4 @@
+use "std/fail"
 // NIST P-256 / ECDSA-SHA256. Fixed-width, fixed-schedule arithmetic.
 // Keys use SEC1 uncompressed65; signatures are raw32-byte r ||32-byte s.
 // Compiler/machine constant-time qualification is separate.
@@ -224,27 +225,36 @@ pub fn verify(signature: []const u8, message: []const u8, public_key: []const u8
   if #len(sha.sum256(digest[..], message))!=32 { return false }
   return verify_hash(signature, digest[..], public_key)
 }
-pub fn public_key(output: []u8, private_key: []const u8) bool {
+pub fn public_key(status: *fail.Status, output: []u8, private_key: []const u8) {
+  if status.failed { return }
   if #len(output)<65 || #len(private_key)!=32 || bytes.overlaps(output, private_key) {
-    return false
+    fail.invalid(status, "P-256 public key", "", "bad key, short output, or output overlapping the key")
+    return
   }
   value:=decode(private_key)
-  if zero_bit(value)!=0 || !canonical(value, N) { return false }
+  if zero_bit(value)!=0 || !canonical(value, N) {
+    fail.invalid(status, "P-256 public key", "", "bad key, short output, or output overlapping the key")
+    return
+  }
   point:=affine(scalar(generator(), value))
   output[0]=4
   encode(output[1..33], point.x)
   encode(output[33..65], point.y)
-  return true
 }
 // RFC6979 deterministic ECDSA. Retry branches concern rejection-sampled nonce
 // candidates, not scalar multiplication bits. The raw signature is not low-S
 // normalized; both S representatives are valid ECDSA.
-pub fn sign_hash(output: []u8, digest: []const u8, private_key: []const u8) bool {
+pub fn sign_hash(status: *fail.Status, output: []u8, digest: []const u8, private_key: []const u8) {
+  if status.failed { return }
   if #len(output)<64 || #len(digest)!=32 || #len(private_key)!=32 || bytes.overlaps(output, digest) || bytes.overlaps(output, private_key) {
-    return false
+    fail.invalid(status, "P-256 sign", "", "bad key or digest, short output, or output overlapping an input")
+    return
   }
   secret:=decode(private_key)
-  if zero_bit(secret)!=0 || !canonical(secret, N) { return false }
+  if zero_bit(secret)!=0 || !canonical(secret, N) {
+    fail.invalid(status, "P-256 sign", "", "bad key or digest, short output, or output overlapping an input")
+    return
+  }
   z:=reduced(decode(digest), N)
   key: [32]u8
   value: [32]u8
@@ -274,7 +284,7 @@ pub fn sign_hash(output: []u8, digest: []const u8, private_key: []const u8) bool
       if zero_bit(r)==0 && zero_bit(s)==0 {
         encode(output[..32], r)
         encode(output[32..64], s)
-        return true
+        return
       }
     }
     for i in 0..32 {
@@ -284,11 +294,18 @@ pub fn sign_hash(output: []u8, digest: []const u8, private_key: []const u8) bool
     _=hmac.sha256(key[..], key[..], material[..33])
     _=hmac.sha256(value[..], key[..], value[..])
   }
-  return false
+  fail.invalid(status, "P-256 sign", "", "bad key or digest, short output, or output overlapping an input")
 }
-pub fn sign(output: []u8, message: []const u8, private_key: []const u8) bool {
-  if bytes.overlaps(output, message) { return false }
+pub fn sign(status: *fail.Status, output: []u8, message: []const u8, private_key: []const u8) {
+  if status.failed { return }
+  if bytes.overlaps(output, message) {
+    fail.invalid(status, "P-256 sign", "", "bad key, short output, or output overlapping an input")
+    return
+  }
   digest: [32]u8
-  if #len(sha.sum256(digest[..], message))!=32 { return false }
-  return sign_hash(output, digest[..], private_key)
+  if #len(sha.sum256(digest[..], message))!=32 {
+    fail.invalid(status, "P-256 sign", "", "bad key, short output, or output overlapping an input")
+    return
+  }
+  sign_hash(status, output, digest[..], private_key)
 }

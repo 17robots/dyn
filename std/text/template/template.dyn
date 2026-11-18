@@ -1,7 +1,6 @@
 use "std/bytes" byte_ops
 use "std/io" stream
 use "std/mem" memory
-use "std/parse" parse
 use "std/fail"
 
 pub struct Template { source: []const u8 }
@@ -44,7 +43,7 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) Tem
         end += 1
       }
       if end + 1 >= #len(source) || !valid_name(trim(source[cursor + 2..end])) {
-        parse.malformed(status, "parse template", "malformed field", cursor)
+        fail.at(status, fail.Kind.InvalidInput, "parse template", "malformed field", cursor)
         return Template{}
       }
       cursor = end + 2
@@ -99,7 +98,7 @@ pub fn render_with(status: *fail.Status, destination: stream.Writer, template: *
         end += 1
       }
       if end + 1 >= #len(template.source) || !valid_name(trim(template.source[cursor + 2..end])) {
-        parse.malformed(status, "render template", "malformed field", cursor)
+        fail.at(status, fail.Kind.InvalidInput, "render template", "malformed field", cursor)
         return
       }
       render_field(status, destination, value(fields, trim(template.source[cursor + 2..end])))

@@ -1,5 +1,4 @@
 use "std/mem" mem
-use "std/parse" parse
 use "std/fail"
 pub struct Match { start: usize, end: usize, found: bool }
 struct Instruction { op: u8, byte: u8, x: usize, y: usize, z: usize }
@@ -430,7 +429,7 @@ pub fn compile(arena: *mem.Arena, status: *fail.Status, pattern: []const u8) Pro
     } else if !in_class && b == '(' {
       depth += 1
       if depth > 128 {
-        parse.malformed(status, "compile pattern", "nesting too deep", i)
+        fail.at(status, fail.Kind.InvalidInput, "compile pattern", "nesting too deep", i)
         return Program{}
       }
     } else if !in_class && b == ')' && depth > 0 {
@@ -442,7 +441,7 @@ pub fn compile(arena: *mem.Arena, status: *fail.Status, pattern: []const u8) Pro
     if count.capacity {
       #panic("regex compile size overflow")
     }
-    parse.malformed(status, "compile pattern", "malformed pattern", count.offset)
+    fail.at(status, fail.Kind.InvalidInput, "compile pattern", "malformed pattern", count.offset)
     return Program{}
   }
   if count.used > (NoPatch - 1) / 2 {

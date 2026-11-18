@@ -191,8 +191,6 @@ pub struct State {
   text_tracker: text_edits.Tracker,
 }
 
-pub struct StateResult { value: *State, valid: bool }
-
 // A state in arena. measure(measure_data, text) returns the pixel width of a
 // text run; measure_data is any *C that outlives the state.
 pub fn push_state(arena: *mem.Arena, measure: fn(*$C, []const u8) f32, measure_data: *$C, line_height: f32) *State {

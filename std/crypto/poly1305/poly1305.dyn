@@ -1,17 +1,23 @@
 use "std/encoding/binary" binary
+use "std/fail"
 // RFC 8439 section 2.5. A one-time authenticator: NEVER reuse a key.
 // Five base-2^26 limbs; secret arithmetic has fixed loop bounds, no secret
 // indexes, and no secret-dependent branches. Message lengths are public.
 // Compiler/machine constant-time qualification is tracked separately.
-pub struct State { r: [5]u64, h: [5]u64, pad: [4]u32, buffer: [16]u8, used: usize, valid: bool }
-pub struct Tag { value: [16]u8, valid: bool }
+// keyed is false before init and after finish.
+pub struct State { r: [5]u64, h: [5]u64, pad: [4]u32, buffer: [16]u8, used: usize, keyed: bool }
 const Mask: u64 = 0x3ffffff
 fn load(source: []const u8, at: usize) u64 {
   return binary.load_u32_le(source[at..at+4])
 }
-pub fn init(key: []const u8) State {
-  if #len(key) != 32 { return State{} }
-  state := State{ valid: true }
+// A key that is not 32 bytes fails with InvalidInput.
+pub fn init(status: *fail.Status, key: []const u8) State {
+  if status.failed { return State{} }
+  if #len(key) != 32 {
+    fail.invalid(status, "Poly1305", "", "the key must be 32 bytes")
+    return State{}
+  }
+  state := State{ keyed: true }
   state.r[0] = load(key, 0) & 0x3ffffff
   state.r[1] = (load(key, 3) >> 2) & 0x3ffff03
   state.r[2] = (load(key, 6) >> 4) & 0x3ffc0ff
@@ -49,8 +55,9 @@ fn block(state: *State, input: []const u8, high: u64) {
   state.h[1] = #wrapping(state.h[1] + (state.h[0] >> 26))
   state.h[0] &= Mask
 }
-pub fn update(state: *State, input: []const u8) bool {
-  if !state.valid { return false }
+// Adds input. A state that was never keyed ignores it; finish reports that.
+pub fn update(state: *State, input: []const u8) {
+  if !state.keyed { return }
   at: usize = 0
   if state.used != 0 {
     for at < #len(input) && state.used < 16 {
@@ -72,11 +79,16 @@ pub fn update(state: *State, input: []const u8) bool {
     state.used += 1
     at += 1
   }
-  return true
 }
-// finish consumes the state. A second finish or update is rejected.
-pub fn finish(state: *State) Tag {
-  if !state.valid { return Tag{} }
+// The 16-byte tag. finish consumes the state: finishing a state that is not
+// keyed (never initialized, or finished already) fails with InvalidState.
+pub fn finish(status: *fail.Status, state: *State) [16]u8 {
+  tag: [16]u8
+  if status.failed { return tag }
+  if !state.keyed {
+    fail.set(status, fail.make(fail.Kind.InvalidState, "Poly1305", "", "the state is not keyed"))
+    return tag
+  }
   if state.used != 0 {
     state.buffer[state.used] = 1
     for i in state.used+1..16 {
@@ -106,20 +118,19 @@ pub fn finish(state: *State) Tag {
     h[i] = (h[i] & ~select) | (g[i] & select)
   }
   words: [4]u64 = [(h[0] | (h[1] << 26)) & 0xffffffff, ((h[1] >> 6) | (h[2] << 20)) & 0xffffffff, ((h[2] >> 12) | (h[3] << 14)) & 0xffffffff, ((h[3] >> 18) | (h[4] << 8)) & 0xffffffff]
-  result := Tag{ valid: true }
   carry = 0
   for i in 0..4 {
     word := words[i] + state.pad[i] + carry
-    binary.store_u32_le(result.value[i*4..i*4+4], #cast(u32, word))
+    binary.store_u32_le(tag[i*4..i*4+4], #cast(u32, word))
     carry = word >> 32
   }
   state.* = State{}
-  return result
+  return tag
 }
-pub fn authenticate(message: []const u8, key: []const u8) Tag {
-  state := init(key)
-  if !update(&state, message) { return Tag{} }
-  return finish(&state)
+pub fn authenticate(status: *fail.Status, message: []const u8, key: []const u8) [16]u8 {
+  state := init(status, key)
+  update(&state, message)
+  return finish(status, &state)
 }
 // Fixed 16-byte comparison; length is public.
 pub fn equal(left: []const u8, right: []const u8) bool {

@@ -10,16 +10,29 @@ pub struct Point { row: u32, column: u32 }
 pub struct Edit { start_byte: u32, old_end_byte: u32, new_end_byte: u32, start_point: Point, old_end_point: Point, new_end_point: Point }
 pub struct Node { context: [4]u32, id: rawptr, tree: Tree }
 
-pub fn parser_create_owned() Parser {
-  return native_parser_new()
+pub fn parser_create_owned(status: *fail.Status) Parser {
+  if status.failed { return nil }
+  parser := native_parser_new()
+  if parser == nil {
+    fail.set(status, fail.make(fail.Kind.Capacity, "create parser", "", "out of memory"))
+  }
+  return parser
 }
 pub fn parser_destroy_owned(parser: Parser) {
   if parser != nil {
     native_parser_delete(parser)
   }
 }
-pub fn parser_language(parser: Parser, language: Language) bool {
-  return parser != nil && language != nil && native_set_language(parser, language)
+// A grammar built for an incompatible Tree-sitter ABI fails with Unsupported.
+pub fn parser_language(status: *fail.Status, parser: Parser, language: Language) {
+  if status.failed { return }
+  if parser == nil || language == nil {
+    fail.invalid(status, "set language", "", "no parser or language")
+    return
+  }
+  if !native_set_language(parser, language) {
+    fail.set(status, fail.make(fail.Kind.Unsupported, "set language", "", "the grammar ABI does not match this Tree-sitter"))
+  }
 }
 // Source borrowed only during call. Old tree remains caller-owned. Edit it first
 // when reparsing changed source. Syntax errors are represented in a successful
@@ -47,20 +60,29 @@ pub fn tree_destroy_owned(tree: Tree) {
     native_tree_delete(tree)
   }
 }
-pub fn tree_copy_owned(tree: Tree) Tree {
-  if tree == nil { return nil }
-  return native_tree_copy(tree)
+pub fn tree_copy_owned(status: *fail.Status, tree: Tree) Tree {
+  if status.failed { return nil }
+  if tree == nil {
+    fail.invalid(status, "copy tree", "", "no tree")
+    return nil
+  }
+  copy := native_tree_copy(tree)
+  if copy == nil {
+    fail.set(status, fail.make(fail.Kind.Capacity, "copy tree", "", "out of memory"))
+  }
+  return copy
 }
 // Coordinates are UTF-8 byte columns, not code points. Nodes obtained before an
 // edit must be reacquired (this wrapper does not expose ts_node_edit).
-pub fn tree_edit(tree: Tree, edit: *const Edit) bool {
-  if tree == nil || edit == nil { return false }
-  if edit.start_byte > edit.old_end_byte || edit.start_byte > edit.new_end_byte { return false }
-  if !point_before(edit.start_point, edit.old_end_point) || !point_before(edit.start_point, edit.new_end_point) {
-    return false
+// An edit whose start comes after its ends fails with InvalidInput.
+pub fn tree_edit(status: *fail.Status, tree: Tree, edit: *const Edit) {
+  if status.failed { return }
+  if tree == nil || edit == nil || edit.start_byte > edit.old_end_byte || edit.start_byte > edit.new_end_byte ||
+    !point_before(edit.start_point, edit.old_end_point) || !point_before(edit.start_point, edit.new_end_point) {
+    fail.invalid(status, "edit tree", "", "no tree, or the edit starts after it ends")
+    return
   }
   native_tree_edit(tree, edit)
-  return true
 }
 fn point_before(a: Point, b: Point) bool {
   return a.row < b.row || (a.row == b.row && a.column <= b.column)

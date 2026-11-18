@@ -126,12 +126,11 @@ fn check_descriptors() {
 use "std/fail"
 use "std/time"
 fn main() {
-  parsed := time.parse_iso8601("2024-02-29T12:34:56Z")
-  date := parsed.value
-  if !parsed.valid || !time.valid(&date) { #panic("date failed") }
+  status: fail.Status
+  date := time.parse_iso8601(&status, "2024-02-29T12:34:56Z")
+  if status.failed || !time.valid(&date) { #panic("date failed") }
   cursor := io.cursor("ok")
   bytes: [2]u8
-  status: fail.Status
   if io.read_exact(&status, io.cursor_reader(&cursor), bytes[..]) != 2 || status.failed { #panic("read failed") }
 }
 ''')

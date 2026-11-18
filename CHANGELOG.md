@@ -160,7 +160,7 @@ Standard library:
   `certificate`, `x509.inspect`, `aead.seal/open`, `aes`, `signature`,
   `exchange`, `hpack`, `qpack`, `fs/watch` and `ui/software.render`.
   Malformed input fails with `InvalidInput` and the byte offset
-  (`failure.offset` when `has_offset`); `parse.malformed(&status, op, msg,
+  (`failure.offset` when `has_offset`); `fail.at(&status, kind, op, msg,
   offset)` records one. Iterators return `Next{ value, offset, found }`.
   Readers that failed (zip and tar streams, watchers, der cursors) replay
   the same failure. `x509.validate` returns a `Validation` with `valid` and
@@ -190,6 +190,47 @@ Standard library:
   ...)` returns the `Context`, `edit.apply(scratch, &status, &buffer,
   &replacement)`), as do `events.collect_edit(&status, &collector, &event)`
   and the OpenSSL AEAD and key helpers (which return the bytes written).
+- One shape everywhere: a call that can fail takes `&status`, a result that
+  can come up empty has `found`, and you check `status.failed` before using
+  what you got (see "Errors and cleanup" in `docs/guide/idiomatic-dyn.md`).
+  The last exceptions move to it:
+  - Vendor calls that reported failure as `bool`, a code or a bare `nil`
+    take the status: SDL3 (`init_video`, `gl_*`, `clear`, `present`,
+    `texture_draw`, audio streams, GPU, ttf, mixer), microui, box2d, cgltf,
+    enet, lua (`create_owned`, `pop`), curl `init`, stb `resize`, miniaudio
+    sound controls and `play_file`, tree-sitter (`parser_create_owned`,
+    `parser_language`, `tree_copy_owned`, `tree_edit`). Destroy functions take
+    none. `sdl3.window_pixel_size` returns a `PixelSize`;
+    `cgltf.world_transform` and `base_color` return arrays; cgltf's optional
+    indices return `Index{ value, found }` instead of -1.
+  - Crypto primitives take the status: `chacha20`, `poly1305` (tags are
+    `[16]u8`), the AES-GCM and ChaCha20-Poly1305 primitives, HKDF, PBKDF2,
+    Argon2id (`argon2id_verify` and `argon2id_decode` too), the Ed25519,
+    P-256 and X25519 key and signing functions and `random.fill`. Hash
+    `update` functions return nothing.
+  - `fmt.buffer(&status, storage)`, `html.writer(&status, storage)` and
+    `json.writer(&status, storage)` record into the status instead of their
+    own `failed` flag; `html.failed` and `json.failed` are gone.
+    `http.page_writer(&rendering, response, storage)` takes a status of its
+    own so `http.page` can still answer 500.
+  - Bad input that came back as `valid = false` fails on the status:
+    `time.parse_iso8601`, `path.safe_join`, `path.relative`, `big.to_u64`,
+    `big.divide`, `big.power_mod`, `search.prepare`, `testing.summarize`.
+    `path.join` and `path.clean` return the bytes. `utf8.next` has `found` and
+    gives U+FFFD for an invalid byte; `utf8`/`utf16` `codepoint_count` return
+    a count. `flags.Value.present`, `http.ByteRange.present` and pcre2's
+    `Span.set` are `found`. png and qoi `Info` lose `valid`.
+  - Matrix and quaternion functions return plain values (`Mat3`, `Mat4`,
+    `Quat`, `Vec3`); degenerate input gives the zero value, and the
+    `*Result` types are gone.
+  - `parse.malformed` and `parse.failed_at` become `fail.at(&status, kind,
+    operation, message, offset)`.
+  - `vendor/openssl/tls` takes the status and returns a `Want` when the
+    socket is not ready; its `ErrorKind` and result types are gone.
+    `tls.server_alpn` and `evented/tls.offer_http2` take the status.
+  - `observe.record` and `progress` `advance`/`end` return nothing (drops
+    are counted). `bytes.Builder` is removed; use `std/bytes/builder`.
+  - Fixed: cgltf reported a missing file as out of memory.
 
 Tools:
 

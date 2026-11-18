@@ -2,7 +2,6 @@ use "vendor/zstd" provider
 use "std/fail"
 use "std/io" stream
 use "std/mem" memory
-use "std/parse" parse
 // A frame's decompressed size, when the frame header records it.
 pub struct FrameSize { size: u64, known: bool }
 // A failed decoder stays failed: later reads report the same failure.
@@ -138,7 +137,7 @@ fn decoder_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
         state.finished = true
         return 0
       }
-      parse.malformed(status, "decompress", "the input ends inside a frame", state.offset)
+      fail.at(status, fail.Kind.InvalidInput, "decompress", "the input ends inside a frame", state.offset)
       return decoder_failed(status, state)
     }
     count := stream.read(status, state.source_reader, state.compressed_storage)

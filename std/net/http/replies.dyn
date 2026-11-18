@@ -26,18 +26,19 @@ pub fn redirect(status: *fail.Status, response: *Response, location: []const u8,
 }
 
 // A Writer for an HTML page (see page): over the response's send buffer when
-// it is free, so the page goes out without a copy, else over fallback.
-pub fn page_writer(response: *Response, fallback: []u8) html.Writer {
+// it is free, so the page goes out without a copy, else over fallback. Give it
+// its own rendering status, so page can answer 500 when it did not fit.
+pub fn page_writer(rendering: *fail.Status, response: *Response, fallback: []u8) html.Writer {
   storage := body_buffer(response, #len(fallback))
-  if #len(storage) == 0 { return html.writer(fallback) }
-  return html.writer(storage)
+  if #len(storage) == 0 { return html.writer(rendering, fallback) }
+  return html.writer(rendering, storage)
 }
 
-// Sends the page from page_writer with status as text/html, not cached, with
+// Sends the page from page_writer with code as text/html, not cached, with
 // Content-Security-Policy default-src 'self' and X-Content-Type-Options
-// nosniff. 500 when it did not fit its storage.
+// nosniff. 500 when its rendering status failed (the page did not fit).
 pub fn page(status: *fail.Status, response: *Response, code: u16, rendered: *const html.Writer) {
-  if html.failed(rendered) {
+  if rendered.buffer.status == nil || rendered.buffer.status.failed {
     text(status, response, 500, "page too large")
     return
   }

@@ -449,9 +449,11 @@ fn log_request(worker: *const Worker, remote: *const network.Address, request: *
   address: [64]u8
   status: [8]u8
   micros: [24]u8
-  status_text := format.buffer(status[..])
+  // These fit their storage, so this status never fails.
+  rendering: fail.Status
+  status_text := format.buffer(&rendering, status[..])
   format.write_u64(&status_text, response.status)
-  micros_text := format.buffer(micros[..])
+  micros_text := format.buffer(&rendering, micros[..])
   format.write_i64(&micros_text, elapsed)
   fields: [5]log.Field = [
     log.Field{ name: "client", value: network.ip_text(address[..], network.address_ip(remote)) },
@@ -467,7 +469,8 @@ fn log_request(worker: *const Worker, remote: *const network.Address, request: *
 
 fn log_slow(worker: *const Worker, request: *const http.Request, elapsed: i64) {
   micros: [24]u8
-  micros_text := format.buffer(micros[..])
+  rendering: fail.Status
+  micros_text := format.buffer(&rendering, micros[..])
   format.write_i64(&micros_text, elapsed)
   fields: [3]log.Field = [
     log.Field{ name: "method", value: request.method },
@@ -1874,7 +1877,8 @@ pub fn job(T: type, response: *http.Response) *T {
 
 fn job_too_large(name: []const u8, size: usize, limit: usize) {
   storage: [192]u8
-  message := format.buffer(storage[..])
+  rendering: fail.Status
+  message := format.buffer(&rendering, storage[..])
   format.print(&message, "evented.job: {} needs {} bytes, but Config.job_size is {}; raise job_size", name, size, limit)
   #panic(format.bytes(&message))
 }

@@ -74,12 +74,17 @@ cases = {
   if output[0] != 33 || output[15] != 33 { #panic("pixels") }
   storage: [131072]u8
   arena := mem.arena_from_buffer(storage[..])
-  if !image.resize(arena, input[..], 2, 2, output[..], 4, 4, 1, false) || mem.arena_mark(arena) != mem.arena_start(arena) { #panic("arena wrapper coexistence") }
-  if output[0] != 33 || output[15] != 33 { #panic("arena pixels") }
+  scaled: [16]u8
+  status: fail.Status
+  image.resize(arena, &status, input[..], 2, 2, scaled[..], 4, 4, 1, false)
+  if status.failed || mem.arena_mark(arena) != mem.arena_start(arena) { #panic("arena wrapper coexistence") }
+  if scaled[0] != 33 || scaled[15] != 33 { #panic("arena pixels") }
   tiny: [1 + mem.ArenaBufferOverhead]u8
   pad := (16-(#cast(usize,&tiny[0])&15))&15
   exhausted := mem.arena_from_buffer(tiny[pad..pad+mem.ArenaHeader+1])
-  if image.resize(exhausted, input[..], 2, 2, output[..], 4, 4, 1, false) { #panic("arena allocator replaced") }''',
+  full: fail.Status
+  image.resize(exhausted, &full, input[..], 2, 2, scaled[..], 4, 4, 1, false)
+  if full.failure.kind != fail.Kind.Capacity { #panic("arena allocator replaced") }''',
     'vulkan': '''status: fail.Status
   library := dynlib.open(&status, "libvulkan.so.1", dynlib.Now)
   if status.failed { #panic("loader") }
@@ -241,7 +246,7 @@ try:
             if name == 'opengl':
                 imports += 'recorded_mask: u32 = 0\nfn record_clear(mask: u32) {\nrecorded_mask = mask\n}\n'
             if name == 'stb_image_resize':
-                imports += 'use "std/mem"\nuse "vendor/stb/image_resize" image\n'
+                imports += 'use "std/mem"\nuse "std/fail"\nuse "vendor/stb/image_resize" image\n'
             (work / 'main.dyn').write_text(imports + 'fn main() {\nif !raw.verify_layout() { #panic("layout") }\n' + body + '\n}\n')
             for mode in ([], ['--release']):
                 result = subprocess.run([dyn, 'build', str(work), '--no-cache', '--max-work', '100000000', '--output', str(work / 'test'), *mode], env=env, text=True, capture_output=True, timeout=180)

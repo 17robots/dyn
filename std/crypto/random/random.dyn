@@ -1,5 +1,8 @@
 use "std/crypto/core" crypto_core
+use "std/fail"
 
-pub fn fill(destination: []u8) bool {
-  return crypto_core.secure_random(destination)
+// Fills destination with cryptographically secure random bytes. A target with
+// no random source fails with Unsupported, a failing source with System.
+pub fn fill(status: *fail.Status, destination: []u8) {
+  crypto_core.secure_random(status, destination)
 }

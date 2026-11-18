@@ -69,7 +69,7 @@ fn main() {{
   check(#len(member.value) == {len(PAYLOAD)} && member.consumed == {len(GZIPPED)}, "gunzip")
   check(inflate_fails(arena, "\\xff\\xff"), "corrupt inflate")
   joined := path.join(arena, "a/b", "c")
-  check(joined.valid && bytes.equal(joined.value, "a/b/c"), "path join")
+  check(bytes.equal(joined, "a/b/c"), "path join")
 }}
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-arena-producers-') as temporary:

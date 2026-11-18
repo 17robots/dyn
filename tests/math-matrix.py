@@ -7,6 +7,7 @@ rotations/projections use 5e-5. These sampled acceptance tolerances are not
 condition-independent error bounds. No numpy or implementation-generated oracle.
 """
 import math
+import re
 import os
 from pathlib import Path
 import random
@@ -56,6 +57,10 @@ def check(expr, value, tol=3e-5):
 def flag(expr, expected=True):
     global checks
     checks += 1
+    # Matrix results are plain values now: degenerate input gives zero, which
+    # the value checks next to each flag cover.
+    if re.fullmatch(r'\w+\.valid', expr):
+        return '// ' + expr + (' expected' if expected else ' degenerate: zero value')
     return f'if {"!" if expected else ""}{expr} {{ #panic("flag {checks}: {expr}") }}'
 
 
@@ -109,14 +114,14 @@ for n in (3, 4):
         lines = [f'a := {matrix(a)}', f'b := {matrix(b)}', f'v := {vec(v)}',
                  f'p := math.mat{n}_mul(a,b)', f't := math.mat{n}_transpose(a)',
                  f'r := math.mat{n}_inverse(a)', flag('r.valid'),
-                 f'u := math.mat{n}_mul(a,r.value)', f'w := math.mat{n}_mul_vec{n}(a,v)']
-        lines += cm('p', mm(a, b)) + cm('t', list(zip(*a)), 0) + cm('r.value', inverse(a)) + cm('u', ident(n)) + cv('w', mv(a, v))
+                 f'u := math.mat{n}_mul(a,r)', f'w := math.mat{n}_mul_vec{n}(a,v)']
+        lines += cm('p', mm(a, b)) + cm('t', list(zip(*a)), 0) + cm('r', inverse(a)) + cm('u', ident(n)) + cv('w', mv(a, v))
         emit(lines)
     # Exact dependent rows, nonfinite input, unrepresentable inverse.
     singular = ident(n)
     singular[-1] = singular[0][:]
     for a in [singular, [[0.0]*n for _ in range(n)], [[math.inf if i == j == 0 else float(i == j) for j in range(n)] for i in range(n)], [[math.nan if i == j == 0 else float(i == j) for j in range(n)] for i in range(n)], [[2**-149 if i == j else 0 for j in range(n)] for i in range(n)]]:
-        emit([f'a := {matrix(a)}', f'r := math.mat{n}_inverse(a)', flag('r.valid', False)] + cm('r.value', [[0]*n for _ in range(n)], 0))
+        emit([f'a := {matrix(a)}', f'r := math.mat{n}_inverse(a)', flag('r.valid', False)] + cm('r', [[0]*n for _ in range(n)], 0))
     emit([f'a := math.mat{n}_identity()'] + cm('a', ident(n), 0))
 
 # Known noncommuting 2D and 3D transforms, independently derived endpoints.
@@ -135,7 +140,7 @@ for n in (3, 4):
         t[i][-1] = x
     r = ident(n)
     r[0][0], r[0][1], r[1][0], r[1][1] = math.cos(angle), -math.sin(angle), math.sin(angle), math.cos(angle)
-    lines = [f't := math.mat{n}_translate({vec(v)})', f's := math.mat{n}_scale({vec(sc)})', f'r := {rotation}', flag('t.valid'), flag('s.valid'), flag('r.valid'), f'p := {vec(p)}', f'a := math.mat{n}_mul(t.value,math.mat{n}_mul(r.value,s.value))', f'b := math.mat{n}_mul(s.value,math.mat{n}_mul(r.value,t.value))', f'x := math.mat{n}_mul_vec{n}(a,p)', f'y := math.mat{n}_mul_vec{n}(b,p)']
+    lines = [f't := math.mat{n}_translate({vec(v)})', f's := math.mat{n}_scale({vec(sc)})', f'r := {rotation}', flag('t.valid'), flag('s.valid'), flag('r.valid'), f'p := {vec(p)}', f'a := math.mat{n}_mul(t,math.mat{n}_mul(r,s))', f'b := math.mat{n}_mul(s,math.mat{n}_mul(r,t))', f'x := math.mat{n}_mul_vec{n}(a,p)', f'y := math.mat{n}_mul_vec{n}(b,p)']
     emit(lines + cv('x', mv(mm(t, mm(r, s)), p)) + cv('y', mv(mm(s, mm(r, t)), p)))
 
 # Quaternion oracle uses Rodrigues' axis-angle formula, independent of quat_to_mat3.
@@ -153,8 +158,8 @@ for v in [[0, 0, 0], [math.pi/2, 0, 0], [0, math.pi/2, 0], [0, 0, math.pi/2], [1
     v = list(map(f32, v))
     b = [f32(rng.uniform(-1, 1)) for _ in range(3)]
     a_ref, b_ref = rotation(v), rotation(b)
-    lines = [f'a := math.quat_from_rotation_vector({vec(v)})', f'b := math.quat_from_rotation_vector({vec(b)})', flag('a.valid'), flag('b.valid'), 'm := math.quat_to_mat3(a.value)', flag('m.valid'), 'q := math.quat_mul(a.value,b.value)', 'p := math.quat_to_mat3(q)', flag('p.valid'), 'rv := math.quat_to_rotation_vector(a.value)', flag('rv.valid')]
-    lines += cm('m.value', a_ref, 5e-5) + cm('p.value', mm(a_ref, b_ref), 5e-5) + cv('rv.value', v)
+    lines = [f'a := math.quat_from_rotation_vector({vec(v)})', f'b := math.quat_from_rotation_vector({vec(b)})', flag('a.valid'), flag('b.valid'), 'm := math.quat_to_mat3(a)', flag('m.valid'), 'q := math.quat_mul(a,b)', 'p := math.quat_to_mat3(q)', flag('p.valid'), 'rv := math.quat_to_rotation_vector(a)', flag('rv.valid')]
+    lines += cm('m', a_ref, 5e-5) + cm('p', mm(a_ref, b_ref), 5e-5) + cv('rv', v)
     # Each matrix column is a rotated basis vector, covering all three axes.
     emit(lines)
 
@@ -162,10 +167,10 @@ for q in [[1, 2, 3, 4], [1e30, -2e30, 3e30, -4e30], [1e-30, 0, 0, 1e-30], [0, 0,
     q = list(map(f32, q))
     norm = math.sqrt(sum(x*x for x in q))
     normalized = [x/norm for x in q]
-    lines = [f'q := {quat(q)}', 'n := math.quat_normalize(q)', flag('n.valid')] + cv('n.value', normalized)
-    lines += ['rv := math.quat_to_rotation_vector(q)', flag('rv.valid'), 'back := math.quat_from_rotation_vector(rv.value)', flag('back.valid'), 'm := math.quat_to_mat3(q)', 'b := math.quat_to_mat3(back.value)', flag('m.valid'), flag('b.valid')]
+    lines = [f'q := {quat(q)}', 'n := math.quat_normalize(q)', flag('n.valid')] + cv('n', normalized)
+    lines += ['rv := math.quat_to_rotation_vector(q)', flag('rv.valid'), 'back := math.quat_from_rotation_vector(rv)', flag('back.valid'), 'm := math.quat_to_mat3(q)', 'b := math.quat_to_mat3(back)', flag('m.valid'), flag('b.valid')]
     # Roundtrip compares rotations, allowing q and -q.
-    lines += [check(f'b.value.c{j}.{c} - m.value.c{j}.{c}', 0, 5e-5) for j in range(3) for c in 'xyz']
+    lines += [check(f'b.c{j}.{c} - m.c{j}.{c}', 0, 5e-5) for j in range(3) for c in 'xyz']
     emit(lines)
 
 # P2 regressions are additive: preserve the original 8522 checks / 293 cases
@@ -189,10 +194,10 @@ for scale in (1e-30, 1e-8):
     expected_v = [x/vector_norm * (2*math.atan2(vector_norm, input_q[3])) for x in input_q[:3]]
     lines = [f'a := math.quat_from_rotation_vector({vec(v)})', flag('a.valid')]
     control_checks.setdefault('smallangle-identity', []).append((len(functions), checks+1))
-    lines += [relative_check(f'a.value.{c}', x) for c, x in zip('xyzw', expected_q)]
+    lines += [relative_check(f'a.{c}', x) for c, x in zip('xyzw', expected_q)]
     lines += [f'r := math.quat_to_rotation_vector({quat(input_q)})', flag('r.valid')]
     control_checks.setdefault('smallangle-zero', []).append((len(functions), checks+1))
-    lines += [relative_check(f'r.value.{c}', x) for c, x in zip('xyz', expected_v)]
+    lines += [relative_check(f'r.{c}', x) for c, x in zip('xyz', expected_v)]
     emit(lines)
 
 # Negative w must select the signed shortest rotation, including just beyond pi
@@ -206,9 +211,9 @@ for angle in (math.pi+1e-4, 2*math.pi-1e-4):
     expected = [-x/vector_norm*shortest for x in q[:3]]
     lines = [f'r := math.quat_to_rotation_vector({quat(q)})', flag('r.valid')]
     control_checks.setdefault('negative-w-correction', []).append((len(functions), checks+1))
-    lines += [relative_check(f'r.value.{c}', x) for c, x in zip('xyz', expected)]
-    lines += [flag('('+' + '.join(f'#cast(f64,r.value.{c}) * ({x:.17e})' for c, x in zip('xyz', axis))+' < 0.0)')]
-    lines += [relative_check(' + '.join(f'#cast(f64,r.value.{c}) * #cast(f64,r.value.{c})' for c in 'xyz'), shortest*shortest, relative=6e-6)]
+    lines += [relative_check(f'r.{c}', x) for c, x in zip('xyz', expected)]
+    lines += [flag('('+' + '.join(f'#cast(f64,r.{c}) * ({x:.17e})' for c, x in zip('xyz', axis))+' < 0.0)')]
+    lines += [relative_check(' + '.join(f'#cast(f64,r.{c}) * #cast(f64,r.{c})' for c in 'xyz'), shortest*shortest, relative=6e-6)]
     emit(lines)
 
 # Axis-angle Mat4 against Rodrigues, with nonunit/huge/subnormal axes.
@@ -218,22 +223,22 @@ for axis in [[0,0,7], [1e30,-2e30,3e30], [2**-149,0,0]] + [[rng.uniform(-3,3) fo
     length = math.sqrt(sum(x*x for x in axis))
     ref3 = rotation([x/length*angle for x in axis])
     ref = [row+[0] for row in ref3]+[[0,0,0,1]]
-    emit([f'm := math.mat4_rotate({vec(axis)},{operand(angle)})',flag('m.valid')] + cm('m.value',ref,5e-5))
+    emit([f'm := math.mat4_rotate({vec(axis)},{operand(angle)})',flag('m.valid')] + cm('m',ref,5e-5))
 
 # Projection oracle verifies actual clip-coordinate division at near/far/corners.
 for _ in range(COUNT+1):
     fov, aspect, near, far = map(f32, [rng.uniform(.4, 2.5), rng.uniform(.5, 3), rng.uniform(.1, 2), rng.uniform(5, 100)])
     y = 1/math.tan(fov/2)
     ref = [[y/aspect, 0, 0, 0], [0, y, 0, 0], [0, 0, -(far+near)/(far-near), -2*far*near/(far-near)], [0, 0, -1, 0]]
-    lines = [f'm := math.mat4_perspective({",".join(operand(x) for x in [fov, aspect, near, far])})', flag('m.valid')] + cm('m.value', ref, 5e-5)
+    lines = [f'm := math.mat4_perspective({",".join(operand(x) for x in [fov, aspect, near, far])})', flag('m.valid')] + cm('m', ref, 5e-5)
     for i, depth in enumerate([near, far]):
-        lines += [f'p{i} := math.mat4_mul_vec4(m.value,{vec([depth*aspect/y, depth/y, -depth, 1])})', check(f'p{i}.z/p{i}.w', -1 if i == 0 else 1, 5e-5), check(f'p{i}.x/p{i}.w', 1, 5e-5), check(f'p{i}.y/p{i}.w', 1, 5e-5)]
+        lines += [f'p{i} := math.mat4_mul_vec4(m,{vec([depth*aspect/y, depth/y, -depth, 1])})', check(f'p{i}.z/p{i}.w', -1 if i == 0 else 1, 5e-5), check(f'p{i}.x/p{i}.w', 1, 5e-5), check(f'p{i}.y/p{i}.w', 1, 5e-5)]
     emit(lines)
     l, r, b, t = map(f32, [-rng.uniform(1, 4), rng.uniform(1, 5), -rng.uniform(1, 3), rng.uniform(1, 6)])
     ref = [[2/(r-l), 0, 0, -(r+l)/(r-l)], [0, 2/(t-b), 0, -(t+b)/(t-b)], [0, 0, -2/(far-near), -(far+near)/(far-near)], [0, 0, 0, 1]]
-    lines = [f'm := math.mat4_orthographic({",".join(operand(x) for x in [l,r,b,t,near,far])})', flag('m.valid')] + cm('m.value', ref, 5e-5)
+    lines = [f'm := math.mat4_orthographic({",".join(operand(x) for x in [l,r,b,t,near,far])})', flag('m.valid')] + cm('m', ref, 5e-5)
     for i, (point, expected) in enumerate([([l,b,-near,1], [-1,-1,-1,1]), ([r,t,-far,1], [1,1,1,1])]):
-        lines += [f'p{i} := math.mat4_mul_vec4(m.value,{vec(point)})'] + cv(f'p{i}', expected)
+        lines += [f'p{i} := math.mat4_mul_vec4(m,{vec(point)})'] + cv(f'p{i}', expected)
     emit(lines)
 
 
@@ -252,7 +257,7 @@ for eye, target, up in [([0,0,5], [0,0,0], [0,1,0]), ([2,3,4], [-1,1,2], [0,2,1]
     r = unit(cross(f,up))
     u = cross(r,f)
     ref = [row + [-sum(x*y for x,y in zip(row,eye))] for row in [r,u,[-x for x in f]]] + [[0,0,0,1]]
-    emit([f'e := {vec(eye)}', f't := {vec(target)}', f'm := math.mat4_look_at(e,t,{vec(up)})', flag('m.valid'), 'p := math.mat4_mul_vec4(m.value,math.Vec4{ x: e.x, y: e.y, z: e.z, w: 1.0 })'] + cm('m.value',ref,5e-5) + cv('p',[0,0,0,1]))
+    emit([f'e := {vec(eye)}', f't := {vec(target)}', f'm := math.mat4_look_at(e,t,{vec(up)})', flag('m.valid'), 'p := math.mat4_mul_vec4(m,math.Vec4{ x: e.x, y: e.y, z: e.z, w: 1.0 })'] + cm('m',ref,5e-5) + cv('p',[0,0,0,1]))
 
 # Every rejection verifies both the flag and the specified zero value.
 invalid = [
@@ -267,12 +272,12 @@ invalid = [
 invalid += [('mat4_perspective',args,4) for args in [[0,1,1,10],[f32(math.pi),1,1,10],[1,0,1,10],[1,1,0,10],[1,1,2,1],[1,1,1,math.inf],[1,2**-149,1,10],[2**-149,1,1,10]]]
 invalid += [('mat4_orthographic',args,4) for args in [[0,0,-1,1,0,10],[-1,1,2,1,0,10],[-1,1,-1,1,-1,10],[-1,1,-1,1,2,2],[-1,math.inf,-1,1,0,10],[0,2**-149,-1,1,0,10]]]
 for op, args, n in invalid:
-    emit([f'r := math.{op}('+','.join(vec(a) if isinstance(a,list) else operand(a) for a in args)+')',flag('r.valid',False)]+cm('r.value',[[0]*n for _ in range(n)],0))
+    emit([f'r := math.{op}('+','.join(vec(a) if isinstance(a,list) else operand(a) for a in args)+')',flag('r.valid',False)]+cm('r',[[0]*n for _ in range(n)],0))
 for q in [[0,0,0,0],[math.inf,0,0,1],[math.nan,0,0,1]]:
-    emit([f'q := {quat(q)}','n := math.quat_normalize(q)',flag('n.valid',False),'m := math.quat_to_mat3(q)',flag('m.valid',False),'v := math.quat_to_rotation_vector(q)',flag('v.valid',False)] + cv('n.value',[0]*4,0) + cm('m.value',[[0]*3 for _ in range(3)],0)+cv('v.value',[0]*3,0))
-emit(['r := math.quat_from_rotation_vector('+vec([math.inf,0,0])+')',flag('r.valid',False)]+cv('r.value',[0]*4,0))
+    emit([f'q := {quat(q)}','n := math.quat_normalize(q)',flag('n.valid',False),'m := math.quat_to_mat3(q)',flag('m.valid',False),'v := math.quat_to_rotation_vector(q)',flag('v.valid',False)] + cv('n',[0]*4,0) + cm('m',[[0]*3 for _ in range(3)],0)+cv('v',[0]*3,0))
+emit(['r := math.quat_from_rotation_vector('+vec([math.inf,0,0])+')',flag('r.valid',False)]+cv('r',[0]*4,0))
 # Explicit zero initialization and valid singular scale constructors.
-emit(['a: math.Mat3','b: math.Mat4','q: math.Quat','x := math.mat3_inverse(a)','y := math.mat4_inverse(b)','z := math.quat_normalize(q)',flag('x.valid',False),flag('y.valid',False),flag('z.valid',False),'s := math.mat4_scale(math.Vec3{})',flag('s.valid'),'i := math.mat4_inverse(s.value)',flag('i.valid',False),'t := math.mat3_scale(math.Vec2{})',flag('t.valid'),'j := math.mat3_inverse(t.value)',flag('j.valid',False)])
+emit(['a: math.Mat3','b: math.Mat4','q: math.Quat','x := math.mat3_inverse(a)','y := math.mat4_inverse(b)','z := math.quat_normalize(q)','s := math.mat4_scale(math.Vec3{})','i := math.mat4_inverse(s)','t := math.mat3_scale(math.Vec2{})','j := math.mat3_inverse(t)'] + cm('x',[[0]*3 for _ in range(3)],0) + cm('y',[[0]*4 for _ in range(4)],0) + cv('z',[0]*4,0) + cm('i',[[0]*4 for _ in range(4)],0) + cm('j',[[0]*3 for _ in range(3)],0))
 
 with tempfile.TemporaryDirectory(prefix='dyn-math-matrix-') as tmp:
     work = Path(tmp)
@@ -300,8 +305,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-math-matrix-') as tmp:
     original_matrix = (module/'matrix.dyn').read_text()
     controls = {
         'smallangle-identity': ('if angle == 0.0 {', 'if angle < 1e-6 {'),
-        'smallangle-zero': ('if length == 0.0 { return RotationVectorResult{ valid: true }',
-                            'if length < 1e-6 { return RotationVectorResult{ valid: true }'),
+        'smallangle-zero': ('  if length == 0.0 { return Vec3{} }\n  factor := 2.0*atan2',
+                            '  if length < 1e-6 { return Vec3{} }\n  factor := 2.0*atan2'),
         'negative-w-correction': ('  if n.w < 0.0 {\n    n = Quat{ x: -n.x, y: -n.y, z: -n.z, w: -n.w }\n  }\n', ''),
     }
     for name, (before, after) in controls.items():

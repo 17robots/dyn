@@ -125,7 +125,9 @@ fn main() i32 {
   }
   if #len(arguments) == 4 && (bytes.equal(arguments[3], "h2") || h3) {
     // HTTP/2 through ALPN; frames need 16 KiB of receive buffer.
-    if !https.offer_http2(context) {
+    offering: fail.Status
+    https.offer_http2(&offering, context)
+    if offering.failed {
       io.eprintln("cannot offer h2")
       return 1
     }

@@ -1,4 +1,3 @@
-use "std/parse" parse
 use "std/fail"
 use "std/mem" mem
 use "std/encoding/binary" binary
@@ -24,16 +23,16 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
   rle := kind == 10 || kind == 11
   bits := source[16]
   if (gray && bits != 8 && bits != 16) || (!gray && bits != 24 && bits != 32) {
-    parse.failed_at(status, fail.Kind.Unsupported, "decode TGA", "unsupported TGA feature", 16)
+    fail.at(status, fail.Kind.Unsupported, "decode TGA", "unsupported TGA feature", 16)
     return Image{}
   }
   alpha := source[17] & 15
   if (bits == 8 || bits == 24) && alpha != 0 {
-    parse.failed_at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", 17)
+    fail.at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", 17)
     return Image{}
   }
   if (bits == 16 || bits == 32) && alpha != 0 && alpha != 8 {
-    parse.failed_at(status, fail.Kind.Unsupported, "decode TGA", "unsupported TGA feature", 17)
+    fail.at(status, fail.Kind.Unsupported, "decode TGA", "unsupported TGA feature", 17)
     return Image{}
   }
   width := #cast(u32, binary.load_u16_le(source[12..]))
@@ -50,7 +49,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
   stride := #cast(usize, bits / 8)
   at := 18 + #cast(usize, source[0])
   if at > #len(source) {
-    parse.failed_at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", 18)
+    fail.at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", 18)
     return Image{}
   }
   mark := mem.arena_mark(arena)
@@ -67,7 +66,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
     length: usize = 1
     if rle {
       if at == #len(source) {
-        parse.failed_at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", at)
+        fail.at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", at)
         return Image{}
       }
       repeat = (source[at] & 128) != 0
@@ -75,7 +74,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
       at += 1
     }
     if length > count - produced {
-      parse.failed_at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", at)
+      fail.at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", at)
       return Image{}
     }
     needed := length * stride
@@ -83,7 +82,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
       needed = stride
     }
     if needed > #len(source) - at {
-      parse.failed_at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", at)
+      fail.at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", at)
       return Image{}
     }
     for j in 0..length {

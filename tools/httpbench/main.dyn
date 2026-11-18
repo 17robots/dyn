@@ -158,11 +158,12 @@ fn main() i32 {
     }
   }
   request_storage: [1024]u8
-  request := fmt.buffer(request_storage[..])
+  request_status: fail.Status
+  request := fmt.buffer(&request_status, request_storage[..])
   fmt.write(&request, "GET ")
   fmt.write(&request, values[2])
   fmt.write(&request, " HTTP/1.1\r\nHost: bench\r\n\r\n")
-  if request.failed {
+  if request_status.failed {
     io.eprintln("httpbench: PATH too long")
     return 2
   }

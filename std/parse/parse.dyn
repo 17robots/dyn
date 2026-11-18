@@ -1,22 +1,7 @@
 use "std/fail"
-// Shared helpers for parsers and decoders. Input decides the result, so a
-// failure names where the input went wrong: InvalidInput (or Overflow,
-// Capacity, Unsupported) with the offset in bytes from the start of the
-// input, and a short message.
-
-// Records that the input went wrong at offset.
-pub fn malformed(status: *fail.Status, operation: []const u8, message: []const u8, offset: usize) {
-  failed_at(status, fail.Kind.InvalidInput, operation, message, offset)
-}
-
-// Records a failure of kind at offset into the input.
-pub fn failed_at(status: *fail.Status, kind: fail.Kind, operation: []const u8, message: []const u8, offset: usize) {
-  if status.failed { return }
-  failure := fail.make(kind, operation, "", message)
-  failure.offset = offset
-  failure.has_offset = true
-  fail.set(status, failure)
-}
+// Number parsing shared by the parsers and decoders. A failure names where the
+// input went wrong: InvalidInput (or Overflow) with fail.at, the offset in
+// bytes from the start of the input, and a short message.
 
 // Whole text as a decimal u64: one or more ASCII digits, nothing else (no
 // sign, space or underscore). InvalidInput at the first bad byte; Overflow
@@ -24,19 +9,19 @@ pub fn failed_at(status: *fail.Status, kind: fail.Kind, operation: []const u8, m
 pub fn u64_decimal(status: *fail.Status, text: []const u8) u64 {
   if status.failed { return 0 }
   if #len(text) == 0 {
-    malformed(status, "parse number", "expected digits", 0)
+    fail.at(status, fail.Kind.InvalidInput, "parse number", "expected digits", 0)
     return 0
   }
   value: u64 = 0
   for i in 0..#len(text) {
     byte := text[i]
     if byte < '0' || byte > '9' {
-      malformed(status, "parse number", "expected a digit", i)
+      fail.at(status, fail.Kind.InvalidInput, "parse number", "expected a digit", i)
       return 0
     }
     digit := #cast(u64, byte - '0')
     if value > (18446744073709551615 - digit) / 10 {
-      failed_at(status, fail.Kind.Overflow, "parse number", "number exceeds u64", i)
+      fail.at(status, fail.Kind.Overflow, "parse number", "number exceeds u64", i)
       return 0
     }
     value = value * 10 + digit
@@ -62,13 +47,13 @@ pub fn i64_decimal(status: *fail.Status, text: []const u8) i64 {
   }
   if negative {
     if magnitude > 9223372036854775808 {
-      failed_at(status, fail.Kind.Overflow, "parse number", "number below i64 minimum", start)
+      fail.at(status, fail.Kind.Overflow, "parse number", "number below i64 minimum", start)
       return 0
     }
     return #cast(i64, #wrapping(0 - magnitude))
   }
   if magnitude > 9223372036854775807 {
-    failed_at(status, fail.Kind.Overflow, "parse number", "number exceeds i64", start)
+    fail.at(status, fail.Kind.Overflow, "parse number", "number exceeds i64", start)
     return 0
   }
   return #cast(i64, magnitude)

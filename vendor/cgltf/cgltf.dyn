@@ -15,36 +15,72 @@ pub fn parse_owned(status: *fail.Status, bytes: []const u8) Model {
   model: Model = nil
   code := native_parse(#cast(rawptr, &bytes[0]), #len(bytes), &model)
   if code != 0 {
-    kind := fail.Kind.InvalidInput
-    if code == 6 {
-      kind = fail.Kind.Capacity
-    }
-    failure := fail.make(kind, "parse glTF", "", "malformed glTF")
-    failure.native = code
-    fail.set(status, failure)
+    cgltf_failed(status, "parse glTF", code)
     return nil
   }
   return model
+}
+// A cgltf_result as a failure, native keeping the code.
+fn cgltf_failed(status: *fail.Status, operation: []const u8, code: i32) {
+  kind := fail.Kind.InvalidInput
+  message: []const u8 = "malformed glTF"
+  // cgltf_result: 6 file_not_found, 7 io_error, 8 out_of_memory, 9 legacy_gltf.
+  if code == 6 {
+    kind = fail.Kind.NotFound
+    message = "file not found"
+  } else if code == 7 {
+    kind = fail.Kind.System
+    message = "I/O error"
+  } else if code == 8 {
+    kind = fail.Kind.Capacity
+    message = "out of memory"
+  } else if code == 9 {
+    kind = fail.Kind.Unsupported
+    message = "glTF 1.0 is not supported"
+  }
+  failure := fail.make(kind, operation, "", message)
+  failure.native = code
+  fail.set(status, failure)
 }
 pub fn destroy_owned(model: Model) {
   if model != nil {
     native_free(model)
   }
 }
-pub fn validate(model: Model) bool {
-  return model != nil && native_validate(model) == 0
+pub fn validate(status: *fail.Status, model: Model) {
+  if status.failed { return }
+  if model == nil {
+    fail.invalid(status, "validate glTF", "", "no model")
+    return
+  }
+  code := native_validate(model)
+  if code != 0 {
+    cgltf_failed(status, "validate glTF", code)
+  }
 }
-// Loads only embedded data URIs/GLB buffers, never external files. -2 rejects an
-// unresolved external resource before loading any buffers. Other codes are cgltf_result.
-pub fn load_embedded(model: Model) i32 {
-  return native_embedded(model)
+// Loads only embedded data URIs/GLB buffers, never external files. A buffer
+// with an external URI that was not attached fails with InvalidState before
+// any buffer is loaded.
+pub fn load_embedded(status: *fail.Status, model: Model) {
+  if status.failed { return }
+  code := native_embedded(model)
+  if code == -1 {
+    fail.invalid(status, "load glTF buffers", "", "no model")
+  } else if code == -2 {
+    fail.set(status, fail.make(fail.Kind.InvalidState, "load glTF buffers", "", "an external buffer is not attached"))
+  } else if code != 0 {
+    cgltf_failed(status, "load glTF buffers", code)
+  }
 }
 pub extern fn node_count "dyn_cgltf_nodes"(model: Model) usize
 pub extern fn accessor_count "dyn_cgltf_accessors"(model: Model) usize
 // Non-sparse accessors only. Output borrows caller storage; model remains owned.
-pub fn read_float(model: Model, accessor: usize, element: usize, output: []f32) bool {
-  if #len(output) == 0 { return false }
-  return native_read(model, accessor, element, &output[0], #len(output))
+// A missing accessor, sparse accessor or too little output fails with InvalidInput.
+pub fn read_float(status: *fail.Status, model: Model, accessor: usize, element: usize, output: []f32) {
+  if status.failed { return }
+  if #len(output) == 0 || !native_read(model, accessor, element, &output[0], #len(output)) {
+    fail.invalid(status, "read accessor", "", "no such accessor element, or output too small")
+  }
 }
 extern fn native_parse "dyn_cgltf_parse"(bytes: rawptr, length: usize, output: *Model) i32
 extern fn native_free "cgltf_free"(model: Model)
@@ -57,9 +93,12 @@ extern fn native_read "dyn_cgltf_read"(model: Model, accessor: usize, element: u
 // Attach only once per buffer; never frees or replaces already loaded storage.
 pub extern fn buffer_count "dyn_cgltf_buffers"(model: Model) usize
 pub extern fn buffer_size "dyn_cgltf_buffer_size"(model: Model, index: usize) usize
-pub fn attach_buffer(model: Model, index: usize, bytes: []const u8) bool {
-  if #len(bytes) == 0 { return false }
-  return native_attach(model, index, #cast(rawptr, &bytes[0]), #len(bytes))
+// The bytes must match the buffer's size, and a buffer is attached once.
+pub fn attach_buffer(status: *fail.Status, model: Model, index: usize, bytes: []const u8) {
+  if status.failed { return }
+  if #len(bytes) == 0 || !native_attach(model, index, #cast(rawptr, &bytes[0]), #len(bytes)) {
+    fail.invalid(status, "attach buffer", "", "no such buffer, wrong size, or already attached")
+  }
 }
 pub fn buffer_uri(model: Model, index: usize, maximum: usize) []const u8 {
   reading: fail.Status
@@ -76,13 +115,31 @@ pub const Triangles: i32 = 5
 pub extern fn mesh_count "dyn_cgltf_meshes"(model: Model) usize
 pub extern fn material_count "dyn_cgltf_materials"(model: Model) usize
 pub extern fn primitive_count "dyn_cgltf_primitives"(model: Model, mesh: usize) usize
-// Optional index results use -1 for absent/invalid. Attribute set is usually 0.
-pub extern fn attribute "dyn_cgltf_attribute"(model: Model, mesh: usize, primitive: usize, kind: i32, set: i32) i64
-pub extern fn indices "dyn_cgltf_indices"(model: Model, mesh: usize, primitive: usize) i64
-pub extern fn material "dyn_cgltf_material"(model: Model, mesh: usize, primitive: usize) i64
+// An optional index: found is false when the model has none there.
+pub struct Index { value: usize, found: bool }
+fn optional(value: i64) Index {
+  if value < 0 { return Index{} }
+  return Index{ value: #cast(usize, value), found: true }
+}
+// The accessor of an attribute; set is usually 0.
+pub fn attribute(model: Model, mesh: usize, primitive: usize, kind: i32, set: i32) Index {
+  return optional(native_attribute(model, mesh, primitive, kind, set))
+}
+pub fn indices(model: Model, mesh: usize, primitive: usize) Index {
+  return optional(native_indices(model, mesh, primitive))
+}
+pub fn material(model: Model, mesh: usize, primitive: usize) Index {
+  return optional(native_material(model, mesh, primitive))
+}
+extern fn native_attribute "dyn_cgltf_attribute"(model: Model, mesh: usize, primitive: usize, kind: i32, set: i32) i64
+extern fn native_indices "dyn_cgltf_indices"(model: Model, mesh: usize, primitive: usize) i64
+extern fn native_material "dyn_cgltf_material"(model: Model, mesh: usize, primitive: usize) i64
 pub extern fn topology "dyn_cgltf_topology"(model: Model, mesh: usize, primitive: usize) i32
 pub extern fn element_count "dyn_cgltf_elements"(model: Model, accessor: usize) usize
-pub extern fn node_mesh "dyn_cgltf_node_mesh"(model: Model, node: usize) i64
+pub fn node_mesh(model: Model, node: usize) Index {
+  return optional(native_node_mesh(model, node))
+}
+extern fn native_node_mesh "dyn_cgltf_node_mesh"(model: Model, node: usize) i64
 // An accessor or element out of range fails with InvalidInput.
 pub fn read_index(status: *fail.Status, model: Model, accessor: usize, element: usize) u32 {
   if status.failed { return 0 }
@@ -94,11 +151,22 @@ pub fn read_index(status: *fail.Status, model: Model, accessor: usize, element: 
   return value
 }
 // Column-major world matrix and RGBA base factor, copied into caller storage.
-pub fn world_transform(model: Model, node: usize, output: []f32) bool {
-  return #len(output) >= 16 && native_transform(model, node, &output[0])
+// A missing node or material fails with InvalidInput.
+pub fn world_transform(status: *fail.Status, model: Model, node: usize) [16]f32 {
+  matrix: [16]f32
+  if status.failed { return matrix }
+  if !native_transform(model, node, &matrix[0]) {
+    fail.invalid(status, "world transform", "", "no such node")
+  }
+  return matrix
 }
-pub fn base_color(model: Model, material: usize, output: []f32) bool {
-  return #len(output) >= 4 && native_color(model, material, &output[0])
+pub fn base_color(status: *fail.Status, model: Model, material: usize) [4]f32 {
+  color: [4]f32
+  if status.failed { return color }
+  if !native_color(model, material, &color[0]) {
+    fail.invalid(status, "base color", "", "no such material")
+  }
+  return color
 }
 extern fn native_uri "dyn_cgltf_uri"(model: Model, index: usize) c.string
 extern fn native_attach "dyn_cgltf_attach"(model: Model, index: usize, bytes: rawptr, size: usize) bool

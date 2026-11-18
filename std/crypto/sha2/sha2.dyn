@@ -4,8 +4,8 @@ pub type Sha256 = crypto_core.Sha256
 pub fn init(context: *Sha256) {
   crypto_core.sha256_init(context)
 }
-pub fn update(context: *Sha256, input: []const u8) bool {
-  return crypto_core.sha256_update(context, input)
+pub fn update(context: *Sha256, input: []const u8) {
+  crypto_core.sha256_update(context, input)
 }
 pub fn finish(context: *Sha256, destination: []u8) []u8 {
   return crypto_core.sha256_finish(context, destination)

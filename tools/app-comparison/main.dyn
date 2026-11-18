@@ -136,13 +136,10 @@ fn search_walk(status: *fail.Status, directory: []const u8, result: *Search) {
     }
     if entry.kind != 4 && entry.kind != 8 { continue }
     joined := path.join(scratch, directory, entry.name)
-    if !joined.valid {
-      #panic("path join")
-    }
     if entry.kind == 4 {
-      search_walk(status, joined.value, result)
+      search_walk(status, joined, result)
     } else if bytes.ends_with(entry.name, ".txt") {
-      read := fs.read_all(scratch, status, joined.value, 1024 * mem.MiB)
+      read := fs.read_all(scratch, status, joined, 1024 * mem.MiB)
       result.files += 1
       result.bytes += #cast(u64, #len(read))
       at: usize

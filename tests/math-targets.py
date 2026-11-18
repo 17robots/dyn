@@ -100,18 +100,15 @@ def generate():
         lines.append(f'mid_{t}:{t}={mid}')
         flag(f'm.rng1{t}_center(m.Rng1{t}{{min:#bitcast({t},opaque({lo})),max:#bitcast({t},opaque({hi}))}}) == mid_{t}','wide midpoint')
     lines += [f'x:={value(2)}', f'z:={value(0)}', f'o:={value(1)}',
-              's:=m.mat4_scale(m.Vec3{x:x,y:x,z:x})', 'inv:=m.mat4_inverse(s.value)']
-    flag('s.valid && inv.valid','scale inverse')
+              's:=m.mat4_scale(m.Vec3{x:x,y:x,z:x})', 'inv:=m.mat4_inverse(s)']
     for c in range(4):
         for r,field in enumerate('xyzw'):
-            exact(f'inv.value.c{c}.{field}', (.5 if c<3 else 1) if c==r else 0)
-    lines += ['p:=m.mat4_orthographic(-x,x,-x,x,o,o+x)', 'v:=m.mat4_mul_vec4(p.value,m.Vec4{x:x,y:x,z:-o,w:o})']
-    flag('p.valid','projection')
+            exact(f'inv.c{c}.{field}', (.5 if c<3 else 1) if c==r else 0)
+    lines += ['p:=m.mat4_orthographic(-x,x,-x,x,o,o+x)', 'v:=m.mat4_mul_vec4(p,m.Vec4{x:x,y:x,z:-o,w:o})']
     for field,e in zip('xyzw',[1,1,-1,1]): exact('v.'+field,e)
     lines += ['q:=m.quat_to_mat3(m.Quat{x:z,y:z,z:o,w:z})']
-    flag('q.valid','quaternion basis')
     for c in range(3):
-        for r,field in enumerate('xyz'): exact(f'q.value.c{c}.{field}',[-1,-1,1][c] if c==r else 0)
+        for r,field in enumerate('xyz'): exact(f'q.c{c}.{field}',[-1,-1,1][c] if c==r else 0)
     lines += ['if (cpacr() & 0x00f00000) != 0 { #panic("FPU enabled on soft Thumb") }',
               'io.print("MATH TARGET PASS\\n")', '}']
     return '\n'.join(lines), checks

@@ -29,33 +29,30 @@ fn fails(state: lua.State, source: []const u8) bool {
   return status.failed
 }
 fn main() {
-  state := lua.create_owned()
-  if state == nil {
-    #panic("Lua allocation")
-  }
-  defer lua.destroy_owned(state)
   status := fail.Status{ on_failure: fail.panic_on_failure }
+  state := lua.create_owned(&status)
+  defer lua.destroy_owned(state)
   lua.execute(&status, state, "return 6 * 7")
   if lua.integer(&status, state, -1) != 42 {
     #panic("Lua result")
   }
-  if !lua.pop(state, 1) {
-    #panic("Lua pop")
-  }
+  lua.pop(&status, state, 1)
   lua.execute(&status, state, "return 'hello'")
   if !bytes.equal(lua.bytes(&status, state, -1), "hello") {
     #panic("Lua bytes")
   }
-  _ = lua.pop(state, 1) // the text expires here.
+  lua.pop(&status, state, 1) // the text expires here.
   if !fails(state, "return (") || lua.stack_size(state) != 1 {
     #panic("Lua syntax failure")
   }
-  _ = lua.pop(state, 1)
+  lua.pop(&status, state, 1)
   if !fails(state, "return missing()") {
     #panic("Lua runtime failure")
   }
-  _ = lua.pop(state, 1)
-  if lua.stack_size(state) != 0 || lua.pop(state, 1) {
+  lua.pop(&status, state, 1)
+  underflow: fail.Status
+  lua.pop(&underflow, state, 1)
+  if lua.stack_size(state) != 0 || !underflow.failed {
     #panic("Lua stack balance")
   }
   lua.execute(&status, state, "")
@@ -69,7 +66,7 @@ fn main() {
   if !not_text.failed || !no_slot.failed {
     #panic("Lua result validation")
   }
-  _ = lua.pop(state, 1)
+  lua.pop(&status, state, 1)
   io.println("Lua: 42; protected syntax/runtime failures; balanced stack")
 }
 ''', 'Lua: 42; protected syntax/runtime failures; balanced stack'),
@@ -97,7 +94,7 @@ fn main() {
     #panic("match")
   }
   span := regex.capture(data, 1)
-  if !span.set || !bytes.equal(subject[span.start..span.end], "ada") {
+  if !span.found || !bytes.equal(subject[span.start..span.end], "ada") {
     #panic("capture")
   }
   if regex.match(&status, pattern, data, "123", 0) {
@@ -123,7 +120,7 @@ fn main() {
   if !fails(unicode, unicode_data, bad_utf[..], 0) {
     #panic("invalid UTF accepted")
   }
-  if !regex.match(&status, unicode, unicode_data, "", 0) || regex.capture(unicode_data, 1).set {
+  if !regex.match(&status, unicode, unicode_data, "", 0) || regex.capture(unicode_data, 1).found {
     #panic("unset capture")
   }
   io.println("PCRE2: captured ada; no-match and invalid pattern handled")

@@ -1,3 +1,4 @@
+use "std/fail"
 // RFC 8032 Ed25519. Fixed-schedule field/scalar arithmetic adapted from the
 // public-domain TweetNaCl (https://tweetnacl.cr.yp.to/20140427/tweetnacl.c).
 // Verification handles only public values. Machine constant-time qualification
@@ -95,33 +96,44 @@ fn expand(key: []const u8) [64]u8 {
   return hash
 }
 // Destination/input overlaps are rejected, including destination tails.
-pub fn public_key(output: []u8, key: []const u8) bool {
-  if #len(output)<32 || #len(key)!=32 || bytes.overlaps(output, key) { return false }
+pub fn public_key(status: *fail.Status, output: []u8, key: []const u8) {
+  if status.failed { return }
+  if #len(output)<32 || #len(key)!=32 || bytes.overlaps(output, key) {
+    fail.invalid(status, "Ed25519 public key", "", "needs a 32-byte key and 32 bytes of output that do not overlap it")
+    return
+  }
   hash:=expand(key)
   encode(output[..32], base(hash[..32]))
-  return true
 }
-pub fn sign(output: []u8, message: []const u8, key: []const u8) bool {
+pub fn sign(status: *fail.Status, output: []u8, message: []const u8, key: []const u8) {
+  if status.failed { return }
   if #len(output)<64 || #len(key)!=32 || bytes.overlaps(output, key) || bytes.overlaps(output, message) {
-    return false
+    fail.invalid(status, "Ed25519 sign", "", "needs a 32-byte key and 64 bytes of output that overlap no input")
+    return
   }
   secret:=expand(key)
   public: [32]u8
   encode(public[..], base(secret[..32]))
   state:=sha.init()
-  _=sha.update(&state, secret[32..])
-  _=sha.update(&state, message)
+  sha.update(&state, secret[32..])
+  sha.update(&state, message)
   r: [64]u8
-  if #len(sha.finish(&state, r[..]))!=64 { return false }
+  if #len(sha.finish(&state, r[..]))!=64 {
+    fail.invalid(status, "Ed25519 sign", "", "needs a 32-byte key and 64 bytes of output that overlap no input")
+    return
+  }
   reduce(r[..])
   encoded: [32]u8
   encode(encoded[..], base(r[..32]))
   state=sha.init()
-  _=sha.update(&state, encoded[..])
-  _=sha.update(&state, public[..])
-  _=sha.update(&state, message)
+  sha.update(&state, encoded[..])
+  sha.update(&state, public[..])
+  sha.update(&state, message)
   h: [64]u8
-  if #len(sha.finish(&state, h[..]))!=64 { return false }
+  if #len(sha.finish(&state, h[..]))!=64 {
+    fail.invalid(status, "Ed25519 sign", "", "needs a 32-byte key and 64 bytes of output that overlap no input")
+    return
+  }
   reduce(h[..])
   wide: [64]i64
   for i in 0..32 {
@@ -136,7 +148,6 @@ pub fn sign(output: []u8, message: []const u8, key: []const u8) bool {
   for i in 0..32 {
     output[i]=encoded[i]
   }
-  return true
 }
 struct Decoded { point: Point, ok: bool }
 fn decode(input: []const u8) Decoded {
@@ -203,9 +214,9 @@ pub fn verify(signature: []const u8, message: []const u8, key: []const u8) bool 
   encoded: [32]u8
   if !decode(signature[..32]).ok { return false }
   state:=sha.init()
-  _=sha.update(&state, signature[..32])
-  _=sha.update(&state, key)
-  _=sha.update(&state, message)
+  sha.update(&state, signature[..32])
+  sha.update(&state, key)
+  sha.update(&state, message)
   h: [64]u8
   if #len(sha.finish(&state, h[..]))!=64 { return false }
   reduce(h[..])

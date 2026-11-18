@@ -54,18 +54,17 @@ fn build_page(keep: *mem.Arena, scratch: *mem.Arena, status: *fail.Status, sourc
   // The paths go in keep, not scratch: a failure borrows its path, and main
   // prints the failure after this function has given scratch back.
   input := path.join(keep, source, file_name)
-  read := fs.read_all(scratch, status, input.value, MaxPageBytes)
+  read := fs.read_all(scratch, status, input, MaxPageBytes)
   // Escaping turns one byte into at most six ("&quot;"), plus room for tags.
-  writer := html.writer(mem.push_bytes_uninit(scratch, 6 * #len(read) + 1024))
+  // Sized for the worst case of escaping, so status only fails here if the
+  // read did.
+  writer := html.writer(status, mem.push_bytes_uninit(scratch, 6 * #len(read) + 1024))
   render_page(&writer, read)
-  if html.failed(&writer) {
-    #panic("the page buffer is sized for the worst case of escaping")
-  }
 
   stem := file_name[..#len(file_name) - #len(".txt")]
   page_name := strings.format(scratch, "{}.html", stem)
   target := path.join(keep, output, page_name)
-  fs.write_all(status, target.value, html.output(&writer).bytes)
+  fs.write_all(status, target, html.output(&writer).bytes)
   return Page{ name: strings.clone(keep, stem), title: strings.clone(keep, page_title(read)) }
 }
 
@@ -76,7 +75,7 @@ fn build_index(keep: *mem.Arena, scratch: *mem.Arena, status: *fail.Status, outp
   for page in pages {
     size += 6 * (#len(page.name) + #len(page.title)) + 64
   }
-  writer := html.writer(mem.push_bytes_uninit(scratch, size))
+  writer := html.writer(status, mem.push_bytes_uninit(scratch, size))
   header(&writer, "All pages")
   open_tag(&writer, "<ul>\n")
   for page in pages {
@@ -88,11 +87,8 @@ fn build_index(keep: *mem.Arena, scratch: *mem.Arena, status: *fail.Status, outp
   }
   open_tag(&writer, "</ul>\n")
   footer(&writer)
-  if html.failed(&writer) {
-    #panic("the index buffer is sized for the worst case of escaping")
-  }
   target := path.join(keep, output, "index.html")
-  fs.write_all(status, target.value, html.output(&writer).bytes)
+  fs.write_all(status, target, html.output(&writer).bytes)
 }
 
 fn main() i32 {

@@ -3,7 +3,6 @@
 // bytes), a field larger than destination with Capacity. After a failure a
 // scanner is finished: next returns found false.
 use "std/io" stream
-use "std/parse" parse
 use "std/fail"
 pub struct Scanner { source: []const u8, offset: usize, finished: bool }
 pub struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, record_ended: bool, ended: bool, finished: bool }
@@ -166,7 +165,7 @@ fn fail_at(status: *fail.Status, state: *Scanner, destination: []u8, kind: fail.
   if kind == fail.Kind.Capacity {
     message = "the field does not fit destination"
   }
-  parse.failed_at(status, kind, "read CSV", message, state.offset)
+  fail.at(status, kind, "read CSV", message, state.offset)
   state.finished = true
   return Field{ text: destination[..0] }
 }

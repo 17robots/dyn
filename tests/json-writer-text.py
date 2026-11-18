@@ -36,8 +36,8 @@ def literal(text):
     return '"' + ''.join('\\x%02x' % b for b in text.encode()) + '"'
 
 
-source = ['use "std/encoding/json"', 'use "std/io"', '', 'fn show(text: []const u8) {', '  storage: [512]u8',
-          '  out := json.writer(storage[..])', '  json.text(&out, text)', '  io.println("{}", json.output(&out))', '}', '',
+source = ['use "std/encoding/json"', 'use "std/io"', 'use "std/fail"', '', 'fn show(text: []const u8) {', '  storage: [512]u8',
+          '  status: fail.Status', '  out := json.writer(&status, storage[..])', '  json.text(&out, text)', '  io.println("{}", json.output(&out))', '}', '',
           'fn main() {']
 source += [f'  show({literal(case)})' for case in cases]
 source += ['}', '']

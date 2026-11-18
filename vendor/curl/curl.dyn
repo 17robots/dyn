@@ -7,8 +7,15 @@ use "std/mem"
 pub struct Response { written: usize, http_status: c.long }
 struct Sink { destination: []u8, used: usize, full: bool }
 // Call once before starting worker threads; cleanup only after all transfers end.
-pub fn init() i32 {
-  return native_init(#cast(c.long, 3))
+pub fn init(status: *fail.Status) {
+  if status.failed { return }
+  code := native_init(#cast(c.long, 3))
+  if code != 0 {
+    reading: fail.Status
+    failure := fail.make(fail.Kind.System, "start curl", "", c.bytes_from_string(&reading, native_error_text(code), 160))
+    failure.native = code
+    fail.set(status, failure)
+  }
 }
 pub fn cleanup() {
   native_cleanup()

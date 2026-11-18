@@ -74,13 +74,6 @@ module's full declarations and comments.
 - `fn cursor_rest(state: *const Cursor) []const u8`
 - `fn cursor_read(state: *Cursor, destination: []u8) usize`
 - `fn cursor_skip(state: *Cursor, amount: usize) bool`
-- `struct Builder { data: []u8, length: usize, failed: bool, }`
-- `fn builder(storage: []u8) Builder`
-- `fn builder_bytes(state: *const Builder) []const u8`
-- `fn builder_remaining(state: *const Builder) usize`
-- `fn builder_write(state: *Builder, value: []const u8) bool`
-- `fn builder_write_byte(state: *Builder, value: u8) bool`
-- `fn builder_reset(state: *Builder)`
 - `fn overlaps(left: []const u8, right: []const u8) bool`: Empty slices never overlap.
 
 ## std/bytes/builder
@@ -96,8 +89,7 @@ module's full declarations and comments.
 ## std/bytes/search
 
 - `struct Pattern { needle: []const u8, table: []const usize }`: Prepared, allocation-free KMP search.
-- `struct Prepared { pattern: Pattern, valid: bool }`
-- `fn prepare(needle: []const u8, table: []usize) Prepared`: Capacity failure leaves table untouched.
+- `fn prepare(status: *fail.Status, needle: []const u8, table: []usize) Pattern`: A table shorter than needle fails with Capacity and is left untouched.
 - `fn find(pattern: Pattern, text: []const u8) usize`: First byte offset, or #len(text) on a miss.
 
 ## std/c
@@ -267,9 +259,9 @@ module's full declarations and comments.
 - `struct Ring { data: []u8, read: usize, length: usize, }`
 - `fn init(backing: []u8) Ring`
 - `fn length(state: *const Ring) usize`
-- `fn push(state: *Ring, byte: u8) bool`
+- `fn push(status: *fail.Status, state: *Ring, byte: u8)`: A full ring fails with Capacity and keeps its bytes.
 - `struct Popped { value: u8, found: bool }`
-- `fn pop(state: *Ring) Popped`: The oldest byte.
+- `fn pop(state: *Ring) Popped`: The oldest byte;
 
 ## std/container/slot_map
 
@@ -294,8 +286,8 @@ module's full declarations and comments.
 
 ## std/crypto/aesgcm
 
-- `fn seal(output: []u8, authentication: []u8, input: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8) bool`: Exact in-place payload operation is allowed.
-- `fn open(output: []u8, input: []const u8, authentication: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8) bool`
+- `fn seal(status: *fail.Status, output: []u8, authentication: []u8, input: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8)`: Exact in-place payload operation is allowed.
+- `fn open(status: *fail.Status, output: []u8, input: []const u8, authentication: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8)`
 
 ## std/crypto/blake2b
 
@@ -313,27 +305,27 @@ module's full declarations and comments.
 
 ## std/crypto/chacha20
 
-- `fn block(destination: []u8, key: []const u8, nonce: []const u8, counter: u32) bool`
-- `fn xor(destination: []u8, input: []const u8, key: []const u8, nonce: []const u8, counter: u32) bool`: IETF ChaCha20.
+- `fn block(status: *fail.Status, destination: []u8, key: []const u8, nonce: []const u8, counter: u32)`: One 64-byte keystream block.
+- `fn xor(status: *fail.Status, destination: []u8, input: []const u8, key: []const u8, nonce: []const u8, counter: u32)`: IETF ChaCha20.
 
 ## std/crypto/chacha20poly1305
 
-- `fn seal(output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool`
-- `fn open(output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool`
+- `fn seal(status: *fail.Status, output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8)`
+- `fn open(status: *fail.Status, output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8)`
 
 ## std/crypto/core
 
 - `struct Sha256 { state: [8]u32, tail: [64]u8, tail_length: usize, length: u64, initialized: bool, failed: bool }`: Zero is an empty SHA-256 stream.
 - `fn sha256_init(context: *Sha256)`
-- `fn sha256_update(context: *Sha256, input: []const u8) bool`: Adds one chunk.
+- `fn sha256_update(context: *Sha256, input: []const u8)`: Adds one chunk.
 - `fn sha256_finish(context: *Sha256, destination: []u8) []u8`: Finishes into 32 caller-owned bytes, or returns an empty slice on failure.
 - `fn sha256(destination: []u8, input: []const u8) []u8`: Writes 32-byte SHA-256 digest.
 - `struct HmacSha256 { inner: Sha256, outer: Sha256 }`: HMAC-SHA256 with the key pads already hashed.
-- `fn hmac_sha256_init(state: *HmacSha256, key: []const u8) bool`: False, leaving state unusable, when a key longer than a block cannot be hashed (beyond SHA-256's input limit).
+- `fn hmac_sha256_init(state: *HmacSha256, key: []const u8)`: A key longer than a block that cannot be hashed (beyond SHA-256's input limit) leaves the state failed, and sums then give an empty MAC.
 - `fn hmac_sha256_sum(state: *const HmacSha256, destination: []u8, message: []const u8) []u8`
 - `fn hmac_sha256(destination: []u8, key: []const u8, message: []const u8) []u8`
 - `fn equal_constant_time(left: []const u8, right: []const u8) bool`
-- `fn secure_random(destination: []u8) bool`: Linux getrandom.
+- `fn secure_random(status: *fail.Status, destination: []u8)`: Linux getrandom, filling all of destination;
 
 ## std/crypto/curve25519
 
@@ -363,8 +355,8 @@ module's full declarations and comments.
 
 ## std/crypto/ed25519
 
-- `fn public_key(output: []u8, key: []const u8) bool`: Destination/input overlaps are rejected, including destination tails.
-- `fn sign(output: []u8, message: []const u8, key: []const u8) bool`
+- `fn public_key(status: *fail.Status, output: []u8, key: []const u8)`: Destination/input overlaps are rejected, including destination tails.
+- `fn sign(status: *fail.Status, output: []u8, message: []const u8, key: []const u8)`
 - `fn valid_public_key(key: []const u8) bool`
 - `fn verify(signature: []const u8, message: []const u8, key: []const u8) bool`
 
@@ -383,31 +375,31 @@ module's full declarations and comments.
 ## std/crypto/kdf
 
 - `fn hkdf_extract(destination: []u8, salt: []const u8, input_key_material: []const u8) []u8`
-- `fn hkdf_expand(destination: []u8, pseudorandom_key: []const u8, info: []const u8, scratch: []u8) bool`: scratch needs 32 + len(info) + 1 bytes.
-- `fn hkdf(destination: []u8, salt: []const u8, input_key_material: []const u8, info: []const u8, scratch: []u8) bool`
+- `fn hkdf_expand(status: *fail.Status, destination: []u8, pseudorandom_key: []const u8, info: []const u8, scratch: []u8)`: scratch needs 32 + len(info) + 1 bytes.
+- `fn hkdf(status: *fail.Status, destination: []u8, salt: []const u8, input_key_material: []const u8, info: []const u8, scratch: []u8)`
 
 ## std/crypto/p256
 
 - `fn valid_public_key(public_key: []const u8) bool`
 - `fn verify_hash(signature: []const u8, digest: []const u8, public_key: []const u8) bool`
 - `fn verify(signature: []const u8, message: []const u8, public_key: []const u8) bool`
-- `fn public_key(output: []u8, private_key: []const u8) bool`
-- `fn sign_hash(output: []u8, digest: []const u8, private_key: []const u8) bool`: RFC6979 deterministic ECDSA.
-- `fn sign(output: []u8, message: []const u8, private_key: []const u8) bool`
+- `fn public_key(status: *fail.Status, output: []u8, private_key: []const u8)`
+- `fn sign_hash(status: *fail.Status, output: []u8, digest: []const u8, private_key: []const u8)`: RFC6979 deterministic ECDSA.
+- `fn sign(status: *fail.Status, output: []u8, message: []const u8, private_key: []const u8)`
 
 ## std/crypto/password
 
 - `struct Argon2Parameters { // Memory in KiB blocks, at least 8 per lane. memory: u32, iterations: u32, parallelism: u32, }`
 - `const Argon2Recommended: Argon2Parameters = Argon2Parameters{ memory: 19456, iterations: 2, parallelism: 1 }`: OWASP's first Argon2id configuration: 19 MiB, two passes, one lane.
 - `fn argon2id_workspace_words(parameters: Argon2Parameters) usize`: u64 words of workspace argon2id needs for parameters.
-- `fn argon2id_keyed(destination: []u8, password: []const u8, salt: []const u8, secret: []const u8, associated: []const u8, parameters: Argon2Parameters, workspace: []u64) bool`: Argon2id of password with salt (at least 8 bytes), and optional secret and associated data, into all of destination (4 bytes or more).
-- `fn argon2id(destination: []u8, password: []const u8, salt: []const u8, parameters: Argon2Parameters, workspace: []u64) bool`
+- `fn argon2id_keyed(status: *fail.Status, destination: []u8, password: []const u8, salt: []const u8, secret: []const u8, associated: []const u8, parameters: Argon2Parameters, workspace: []u64)`: Argon2id of password with salt (at least 8 bytes), and optional secret and associated data, into all of destination (4 bytes or more).
+- `fn argon2id(status: *fail.Status, destination: []u8, password: []const u8, salt: []const u8, parameters: Argon2Parameters, workspace: []u64)`
 - `fn argon2id_encode(destination: []u8, parameters: Argon2Parameters, salt: []const u8, hash: []const u8) []u8`: The PHC string for a hash: "$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>", salt and hash in unpadded base64.
-- `struct Argon2Hash { parameters: Argon2Parameters, salt: []u8, hash: []u8, valid: bool }`
-- `fn argon2id_decode(encoded: []const u8, storage: []u8) Argon2Hash`: Parses a PHC string from argon2id_encode;
-- `fn argon2id_verify_words(encoded: []const u8) usize`: u64 words verify needs for encoded, or 0 when encoded is not valid.
-- `fn argon2id_verify(encoded: []const u8, password: []const u8, workspace: []u64) bool`: Whether password matches encoded, comparing in constant time.
-- `fn pbkdf2_sha256(destination: []u8, password: []const u8, salt: []const u8, iterations: u32, scratch: []u8) bool`: PBKDF2-HMAC-SHA256.
+- `struct Argon2Hash { parameters: Argon2Parameters, salt: []u8, hash: []u8 }`
+- `fn argon2id_decode(status: *fail.Status, encoded: []const u8, storage: []u8) Argon2Hash`: Parses a PHC string from argon2id_encode;
+- `fn argon2id_verify_words(status: *fail.Status, encoded: []const u8) usize`: u64 words verify needs for encoded.
+- `fn argon2id_verify(status: *fail.Status, encoded: []const u8, password: []const u8, workspace: []u64) bool`: Whether password matches encoded, comparing in constant time.
+- `fn pbkdf2_sha256(status: *fail.Status, destination: []u8, password: []const u8, salt: []const u8, iterations: u32, scratch: []u8)`: PBKDF2-HMAC-SHA256.
 
 ## std/crypto/pem
 
@@ -416,23 +408,22 @@ module's full declarations and comments.
 
 ## std/crypto/poly1305
 
-- `struct State { r: [5]u64, h: [5]u64, pad: [4]u32, buffer: [16]u8, used: usize, valid: bool }`: RFC 8439 section 2.5.
-- `struct Tag { value: [16]u8, valid: bool }`
-- `fn init(key: []const u8) State`
-- `fn update(state: *State, input: []const u8) bool`
-- `fn finish(state: *State) Tag`: finish consumes the state.
-- `fn authenticate(message: []const u8, key: []const u8) Tag`
+- `struct State { r: [5]u64, h: [5]u64, pad: [4]u32, buffer: [16]u8, used: usize, keyed: bool }`: RFC 8439 section 2.5.
+- `fn init(status: *fail.Status, key: []const u8) State`: A key that is not 32 bytes fails with InvalidInput.
+- `fn update(state: *State, input: []const u8)`: Adds input.
+- `fn finish(status: *fail.Status, state: *State) [16]u8`: The 16-byte tag.
+- `fn authenticate(status: *fail.Status, message: []const u8, key: []const u8) [16]u8`
 - `fn equal(left: []const u8, right: []const u8) bool`: Fixed 16-byte comparison;
 
 ## std/crypto/random
 
-- `fn fill(destination: []u8) bool`
+- `fn fill(status: *fail.Status, destination: []u8)`: Fills destination with cryptographically secure random bytes.
 
 ## std/crypto/sha2
 
 - `type Sha256 = crypto_core.Sha256`
 - `fn init(context: *Sha256)`
-- `fn update(context: *Sha256, input: []const u8) bool`
+- `fn update(context: *Sha256, input: []const u8)`
 - `fn finish(context: *Sha256, destination: []u8) []u8`
 - `fn sum256(destination: []u8, input: []const u8) []u8`
 - `fn equal_constant_time(left: []const u8, right: []const u8) bool`
@@ -441,7 +432,7 @@ module's full declarations and comments.
 
 - `struct State { words: [8]u64, buffer: [128]u8, used: usize, low: u64, high: u64, initialized: bool, failed: bool }`
 - `fn init() State`
-- `fn update(state: *State, input: []const u8) bool`
+- `fn update(state: *State, input: []const u8)`: Adds input.
 - `fn finish(state: *State, destination: []u8) []u8`
 - `fn digest(destination: []u8, input: []const u8) []u8`
 
@@ -456,8 +447,8 @@ module's full declarations and comments.
 
 ## std/crypto/x25519
 
-- `fn shared(destination: []u8, private_key: []const u8, peer: []const u8) bool`: RFC 7748.
-- `fn public_key(destination: []u8, private_key: []const u8) bool`
+- `fn shared(status: *fail.Status, destination: []u8, private_key: []const u8, peer: []const u8)`: RFC 7748.
+- `fn public_key(status: *fail.Status, destination: []u8, private_key: []const u8)`
 
 ## std/crypto/x509
 
@@ -634,9 +625,8 @@ module's full declarations and comments.
 - `fn encode(arena: *memory.Arena, value: *const Value) []u8`: value as compact JSON, in arena.
 - `fn encode_pretty(arena: *memory.Arena, value: *const Value, indent: usize) []u8`: value as JSON indented by indent spaces per level, in arena.
 - `const MaxDepth: usize = 64`: JSON output into bounded caller storage, without a Value tree.
-- `struct Writer { buffer: format.Buffer, // Per open container: true for an object; whether it holds a member yet. objects: [MaxDepth]bool, members: [MaxDepth]bool, depth: usize, // An object member's key was written and its value is due. keyed: bool, invalid: bool, }`
-- `fn writer(storage: []u8) Writer`
-- `fn failed(target: *const Writer) bool`
+- `struct Writer { buffer: format.Buffer, // Per open container: true for an object; whether it holds a member yet. objects: [MaxDepth]bool, members: [MaxDepth]bool, depth: usize, // An object member's key was written and its value is due. keyed: bool, }`
+- `fn writer(status: *fail.Status, storage: []u8) Writer`
 - `fn output(target: *const Writer) []const u8`: The JSON written so far, or empty when failed or a container is still open.
 - `fn object_begin(target: *Writer)`
 - `fn object_end(target: *Writer)`
@@ -742,7 +732,7 @@ module's full declarations and comments.
 - `fn namespaces(bindings: []NamespaceBinding, frames: []NamespaceFrame, storage: []u8) Namespaces`
 - `fn namespace_resolve(status: *fail.Status, state: *const Namespaces, name: []const u8, attribute: bool) ExpandedName`: The expanded name of an element or attribute name in the current scope.
 - `fn namespace_enter(status: *fail.Status, state: *Namespaces, event: Event) ExpandedName`: Enter every Start, including self-closing tags;
-- `fn namespace_leave(state: *Namespaces, name: []const u8) bool`
+- `fn namespace_leave(status: *fail.Status, state: *Namespaces, name: []const u8)`: Leaves element name;
 - `enum NodeKind { Missing, Document, Element, Text, Comment, Processing, Cdata }`: Arena-owned links, borrowed source slices.
 - `struct Node { kind: NodeKind, name: []const u8, text: []const u8, attributes: []const u8, first: *Node, last: *Node, next: *Node, parent: *Node, }`
 - `const nil_node: Node = Node{}`
@@ -810,6 +800,7 @@ module's full declarations and comments.
 - `fn path_text(failure: *const Failure) []const u8`
 - `fn set(status: *Status, failure: Failure)`: Records failure unless status already holds one;
 - `fn invalid(status: *Status, operation: []const u8, path: []const u8, message: []const u8)`: Records a problem your own code found in its input, such as invalid(&status, "config", path, "port out of range").
+- `fn at(status: *Status, kind: Kind, operation: []const u8, message: []const u8, offset: usize)`: Records a failure of kind at offset bytes into the input being read, such as at(&status, Kind.InvalidInput, "parse config", "expected '='" ...
 - `fn panic_on_failure(context: rawptr, failure: *const Failure)`: For on_failure: ends the program at the first failure, with its description.
 - `fn kind_text(kind: Kind) []const u8`: A short description of kind: "not found", "permission denied".
 - `fn describe(storage: []u8, failure: Failure) []u8`: "operation path: reason" in storage, such as "open /etc/app.conf: no such file or directory" or "parse app.json at 41: expected ','".
@@ -818,7 +809,7 @@ module's full declarations and comments.
 
 - `enum Kind { Bool, String, Integer, Float, Choice }`: Command-line parser.
 - `struct Option { name: []const u8, short: u8, kind: Kind, required: bool, default_value: []const u8, choices: [][]const u8 }`
-- `struct Value { text: []const u8, present: bool, occurrences: usize }`
+- `struct Value { text: []const u8, found: bool, occurrences: usize }`
 - `struct Parsed { values: []Value, positionals: [][]const u8 }`
 - `fn bool_option(name: []const u8, short: u8) Option`
 - `fn string_option(name: []const u8, short: u8) Option`
@@ -832,16 +823,16 @@ module's full declarations and comments.
 
 ## std/fmt
 
-- `struct Buffer { data: []u8, length: usize, failed: bool }`: failed records the first write that did not fit;
-- `fn buffer(storage: []u8) Buffer`
+- `struct Buffer { data: []u8, length: usize, status: *fail.Status }`: Writes into storage, recording into status: a write that does not fit fails it with Capacity and leaves the buffer as it was before that ...
+- `fn buffer(status: *fail.Status, storage: []u8) Buffer`
 - `fn bytes(state: *const Buffer) []const u8`
 - `fn remaining(state: *const Buffer) usize`
-- `fn clear(state: *Buffer)`: Empties the buffer and clears failed.
+- `fn clear(state: *Buffer)`: Empties the buffer.
 - `fn u64_base(arena: *mem.Arena, value: u64, base: u8, uppercase: bool) []u8`: value in base 2 through 36.
 - `fn u64_decimal(arena: *mem.Arena, value: u64) []u8`
 - `fn i64_decimal(arena: *mem.Arena, value: i64) []u8`
 - `fn f64_decimal(arena: *mem.Arena, value: f64, precision: usize) []u8`: Rounded decimal with up to 15 fractional digits;
-- `fn write(state: *Buffer, value: []const u8)`: Sticky writes: each does nothing once the buffer has failed, and a value that does not fit sets failed and leaves the buffer as it was.
+- `fn write(state: *Buffer, value: []const u8)`: Sticky writes: each does nothing once the status has failed, and a value that does not fit fails it with Capacity and leaves the buffer as ...
 - `fn write_byte(state: *Buffer, value: u8)`
 - `fn write_u64(state: *Buffer, value: u64)`
 - `fn write_i64(state: *Buffer, value: i64)`
@@ -1007,14 +998,13 @@ module's full declarations and comments.
 
 - `struct Trusted { bytes: []const u8 }`: Markup the program vouches for: literals and output of other Writers.
 - `fn trusted(markup: []const u8) Trusted`: Marks bytes as markup.
-- `struct Writer { buffer: fmt.Buffer }`: failed records the first write that did not fit;
-- `fn writer(storage: []u8) Writer`
+- `struct Writer { buffer: fmt.Buffer }`: Writes markup into storage, recording into status like fmt.Buffer: a write that does not fit fails status with Capacity, and later writes ...
+- `fn writer(status: *fail.Status, storage: []u8) Writer`
 - `fn markup(destination: *Writer, value: Trusted)`
 - `fn text(destination: *Writer, value: []const u8)`: Escaped text.
 - `fn print(destination: *Writer, template: []const u8, values: ...any)`: Writes template with each {} replaced by the next value: Trusted template as it is, and anything else as fmt writes it, escaped: text ...
 - `fn number(destination: *Writer, value: u64)`
 - `fn signed(destination: *Writer, value: i64)`
-- `fn failed(source: *const Writer) bool`
 - `fn output(source: *const Writer) Trusted`: The page so far, as markup for another Writer or for a response body.
 - `fn write_escaped(buffer: *fmt.Buffer, text: []const u8)`
 - `fn entity(byte: u8) []const u8`: Entity for one byte, or empty when the byte needs no escaping.
@@ -1063,8 +1053,8 @@ module's full declarations and comments.
 
 ## std/image/png
 
-- `struct Info { width: usize, height: usize, channels: u8, valid: bool }`
-- `struct Image { info: Info, pixels: []u8 }`: Info.valid is true inside successful values.
+- `struct Info { width: usize, height: usize, channels: u8 }`
+- `struct Image { info: Info, pixels: []u8 }`: Malformed data fails with InvalidInput (at its offset when known), an impossible size with Overflow, data past the codec's working limits ...
 - `fn inspect(status: *fail.Status, source: []const u8) Info`: The header's description of the image, without decoding it.
 - `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image`
 - `fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8) []u8`
@@ -1079,8 +1069,8 @@ module's full declarations and comments.
 
 ## std/image/qoi
 
-- `struct Info { width: usize, height: usize, channels: u8, srgb: bool, valid: bool }`
-- `struct Image { info: Info, pixels: []u8 }`: Info.valid is true inside successful values.
+- `struct Info { width: usize, height: usize, channels: u8, srgb: bool }`
+- `struct Image { info: Info, pixels: []u8 }`: Malformed data fails with InvalidInput (at its offset when known), an impossible size with Overflow, data past the codec's working limits ...
 - `fn inspect(status: *fail.Status, source: []const u8) Info`: The header's description of the image, without decoding it.
 - `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image`
 - `fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) []u8`
@@ -1239,35 +1229,31 @@ module's full declarations and comments.
 - `struct Mat3 { c0: Vec3, c1: Vec3, c2: Vec3 }`
 - `struct Mat4 { c0: Vec4, c1: Vec4, c2: Vec4, c3: Vec4 }`
 - `struct Quat { x: f32, y: f32, z: f32, w: f32 }`
-- `struct Mat3Result { value: Mat3, valid: bool }`
-- `struct Mat4Result { value: Mat4, valid: bool }`
-- `struct QuatResult { value: Quat, valid: bool }`
-- `struct RotationVectorResult { value: Vec3, valid: bool }`
 - `fn mat3_identity() Mat3`
 - `fn mat3_mul_vec3(a: Mat3, v: Vec3) Vec3`
 - `fn mat3_mul(a, b: Mat3) Mat3`
 - `fn mat3_transpose(a: Mat3) Mat3`
-- `fn mat3_inverse(a: Mat3) Mat3Result`
+- `fn mat3_inverse(a: Mat3) Mat3`
 - `fn mat4_identity() Mat4`
 - `fn mat4_mul_vec4(a: Mat4, v: Vec4) Vec4`
 - `fn mat4_mul(a, b: Mat4) Mat4`
 - `fn mat4_transpose(a: Mat4) Mat4`
-- `fn mat4_inverse(a: Mat4) Mat4Result`
-- `fn mat3_translate(v: Vec2) Mat3Result`
-- `fn mat3_scale(v: Vec2) Mat3Result`
-- `fn mat3_rotate(angle: f32) Mat3Result`
-- `fn mat4_translate(v: Vec3) Mat4Result`
-- `fn mat4_scale(v: Vec3) Mat4Result`
+- `fn mat4_inverse(a: Mat4) Mat4`
+- `fn mat3_translate(v: Vec2) Mat3`
+- `fn mat3_scale(v: Vec2) Mat3`
+- `fn mat3_rotate(angle: f32) Mat3`
+- `fn mat4_translate(v: Vec3) Mat4`
+- `fn mat4_scale(v: Vec3) Mat4`
 - `fn quat_identity() Quat`
 - `fn quat_mul(a, b: Quat) Quat`
-- `fn quat_normalize(q: Quat) QuatResult`
-- `fn quat_from_rotation_vector(v: Vec3) QuatResult`
-- `fn quat_to_rotation_vector(q: Quat) RotationVectorResult`
-- `fn quat_to_mat3(q: Quat) Mat3Result`
-- `fn mat4_rotate(axis: Vec3, angle: f32) Mat4Result`: Axis normalization uses f64, including very large or subnormal f32 axes.
-- `fn mat4_look_at(eye, target, up: Vec3) Mat4Result`
-- `fn mat4_perspective(fov_y, aspect, near, far: f32) Mat4Result`
-- `fn mat4_orthographic(left, right, bottom, top, near, far: f32) Mat4Result`
+- `fn quat_normalize(q: Quat) Quat`
+- `fn quat_from_rotation_vector(v: Vec3) Quat`
+- `fn quat_to_rotation_vector(q: Quat) Vec3`
+- `fn quat_to_mat3(q: Quat) Mat3`
+- `fn mat4_rotate(axis: Vec3, angle: f32) Mat4`: Axis normalization uses f64, including very large or subnormal f32 axes.
+- `fn mat4_look_at(eye, target, up: Vec3) Mat4`
+- `fn mat4_perspective(fov_y, aspect, near, far: f32) Mat4`
+- `fn mat4_orthographic(left, right, bottom, top, near, far: f32) Mat4`
 - `struct Rng1u64 { min: u64, max: u64 }`
 - `fn rng1u64_empty(r: Rng1u64) bool`
 - `fn rng1u64_contains(r: Rng1u64, value: u64) bool`
@@ -1367,13 +1353,12 @@ module's full declarations and comments.
 ## std/math/big
 
 - `struct Int { limbs: []const u32, negative: bool }`
-- `struct Division { quotient: Int, remainder: Int, valid: bool }`
+- `struct Division { quotient: Int, remainder: Int }`
 - `fn zero() Int`
 - `fn from_u64(arena: *mem.Arena, value: u64) Int`
 - `fn from_i64(arena: *mem.Arena, value: i64) Int`
 - `fn is_zero(value: Int) bool`
-- `struct U64Result { value: u64, valid: bool }`: The value as a u64;
-- `fn to_u64(value: Int) U64Result`
+- `fn to_u64(status: *fail.Status, value: Int) u64`: The value as a u64.
 - `fn negate(value: Int) Int`
 - `fn absolute(value: Int) Int`
 - `fn compare(a: Int, b: Int) i32`: -1, 0 or 1 as a is less than, equal to or greater than b.
@@ -1381,12 +1366,11 @@ module's full declarations and comments.
 - `fn add(arena: *mem.Arena, a: Int, b: Int) Int`
 - `fn subtract(arena: *mem.Arena, a: Int, b: Int) Int`
 - `fn multiply(arena: *mem.Arena, a: Int, b: Int) Int`
-- `fn divide(arena: *mem.Arena, a: Int, b: Int) Division`: Truncated division: the quotient rounds toward zero and the remainder has the sign of a.
+- `fn divide(arena: *mem.Arena, status: *fail.Status, a: Int, b: Int) Division`: Truncated division: the quotient rounds toward zero and the remainder has the sign of a.
 - `fn shift_left(arena: *mem.Arena, value: Int, bits: usize) Int`
 - `fn shift_right(arena: *mem.Arena, value: Int, bits: usize) Int`: Shifts the magnitude right;
 - `fn bit_length(value: Int) usize`
-- `struct ModResult { value: Int, valid: bool }`: base^exponent mod modulus by square and multiply.
-- `fn power_mod(arena: *mem.Arena, base: Int, exponent: Int, modulus: Int) ModResult`
+- `fn power_mod(arena: *mem.Arena, status: *fail.Status, base: Int, exponent: Int, modulus: Int) Int`: base^exponent mod modulus by square and multiply.
 - `fn gcd(arena: *mem.Arena, a: Int, b: Int) Int`: Greatest common divisor, never negative.
 - `fn parse(arena: *mem.Arena, status: *fail.Status, text: []const u8, base: u32) Int`: Parses an optional sign and digits in base 2 through 36.
 - `fn format(arena: *mem.Arena, value: Int, base: u32) []u8`: The value's digits in base 2 through 36, lowercase, with a leading '-' when negative.
@@ -1715,8 +1699,8 @@ module's full declarations and comments.
 - `fn text(status: *fail.Status, response: *Response, code: u16, body: []const u8)`: A plain-text body with status.
 - `fn json(status: *fail.Status, response: *Response, code: u16, body: []const u8)`: A JSON body with status, not cached.
 - `fn redirect(status: *fail.Status, response: *Response, location: []const u8, set_cookie: []const u8)`: 303 See Other to location, with a Set-Cookie when set_cookie is not empty (see set_cookie): the answer to a form post.
-- `fn page_writer(response: *Response, fallback: []u8) html.Writer`: A Writer for an HTML page (see page): over the response's send buffer when it is free, so the page goes out without a copy, else over ...
-- `fn page(status: *fail.Status, response: *Response, code: u16, rendered: *const html.Writer)`: Sends the page from page_writer with status as text/html, not cached, with Content-Security-Policy default-src 'self' and ...
+- `fn page_writer(rendering: *fail.Status, response: *Response, fallback: []u8) html.Writer`: A Writer for an HTML page (see page): over the response's send buffer when it is free, so the page goes out without a copy, else over ...
+- `fn page(status: *fail.Status, response: *Response, code: u16, rendered: *const html.Writer)`: Sends the page from page_writer with code as text/html, not cached, with Content-Security-Policy default-src 'self' and ...
 - `struct Asset { // URL path below the mount, without a leading slash: "css/app.css". path: []const u8, content_type: []const u8, body: []const u8, // Empty when gzip would not be smaller. gzip: []const u8, // Quoted strong validator: "\"0123456789abcdef\"". etag: []const u8, // Unix seconds for Last-Modified, or 0 to leave it out. modified: i64, }`
 - `struct Assets { items: []Asset, count: usize }`: Assets in caller storage;
 - `fn content_type(name: []const u8) []const u8`: Content type for a file name by its extension, ASCII case-insensitive: "app.CSS" is text/css.
@@ -1727,7 +1711,7 @@ module's full declarations and comments.
 - `fn load_directory(arena: *memory.Arena, status: *fail.Status, root: []const u8, storage: []Asset, maximum: usize) Assets`: Every regular file below root, recursively, read into arena as assets in storage, sorted.
 - `fn accepts_encoding(request: *const Request, coding: []const u8) bool`: Whether the request's Accept-Encoding allows coding (RFC 9110 12.5.3): it is listed, or "*" is, with a q-value above zero.
 - `fn etag_matches(request: *const Request, etag: []const u8) bool`: If-None-Match against etag: "*" or a listed tag, comparing weakly (W/ prefixes ignored), as RFC 9110 13.1.2 requires for GET and HEAD.
-- `struct ByteRange { start: usize, end: usize, present: bool, satisfiable: bool }`: A single byte range of a representation length bytes long, from a Range header (RFC 9110 14.1.2): bytes=first-last, bytes=first- or ...
+- `struct ByteRange { start: usize, end: usize, found: bool, satisfiable: bool }`: A single byte range of a representation length bytes long, from a Range header (RFC 9110 14.1.2): bytes=first-last, bytes=first- or ...
 - `fn byte_range(request: *const Request, length: usize) ByteRange`
 - `fn serve_asset(status: *fail.Status, response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8)`: Answers request with asset: 304 when If-None-Match matches (or, without If-None-Match, when If-Modified-Since is not older than modified);
 
@@ -1773,7 +1757,7 @@ module's full declarations and comments.
 ## std/net/http/evented/tls
 
 - `fn transport(context: provider.Context) evented.Transport`
-- `fn offer_http2(context: provider.Context) bool`: Offers HTTP/2 through ALPN on context;
+- `fn offer_http2(status: *fail.Status, context: provider.Context)`: Offers HTTP/2 through ALPN on context;
 - `fn quic_context(arena: *mem.Arena, status: *fail.Status, certificate: []const u8, key: []const u8) provider.Context`: A QUIC server context offering "h3" through ALPN, from PEM files.
 - `fn quic(context: provider.Context) evented.Quic`: The QUIC stack for Config.quic.
 
@@ -1789,7 +1773,7 @@ module's full declarations and comments.
 - `fn decoder(storage: []u8, entries: []Entry) Decoder`: Storage bounds the table: limit is #len(storage) bytes, and at most EntryOverhead bytes per entry (see entries_for).
 - `fn entries_for(storage_size: usize) usize`: Entries a decoder needs for storage bytes of table.
 - `fn decode_begin(decoder: *Decoder)`: Starts a header block: a size update is allowed again before its first field.
-- `struct Decoded { length: usize, ok: bool }`
+- `struct Decoded { length: usize, valid: bool }`
 - `fn huffman_decode(source: []const u8, destination: []u8) Decoded`: Huffman-decodes source into destination (RFC 7541 5.2): padding must be at most 7 one bits, and EOS never appears.
 - `fn huffman_length(source: []const u8) usize`: Bytes huffman_encode writes for source.
 - `fn huffman_encode(source: []const u8, destination: []u8) usize`: Huffman-codes source into destination, which must hold huffman_length bytes.
@@ -1800,7 +1784,7 @@ module's full declarations and comments.
 
 - `const StaticCount: usize = 99`
 - `struct Field { name: []const u8, value: []const u8, consumed: usize }`: One decoded field line;
-- `struct Prefix { consumed: usize, ok: bool }`
+- `struct Prefix { consumed: usize, valid: bool }`
 - `fn decode_prefix(section: []const u8) Prefix`: Reads the field section prefix (RFC 9204 4.5.1).
 - `fn decode_field(status: *fail.Status, section: []const u8, scratch: []u8) Field`: Decodes the field line at the start of section into scratch.
 - `fn encode_prefix(destination: []u8) usize`: The prefix of a section that uses no dynamic table: two zero bytes.
@@ -1829,12 +1813,12 @@ module's full declarations and comments.
 - `type Context = provider.Context`
 - `type Connection = provider.Connection`
 - `type Certificate = provider.Certificate`
-- `enum Want { Nothing, Read, Write }`: What a nonblocking connection waits for before the call can go on.
-- `struct Attempt { count: usize, want: Want }`: A read or write: the bytes moved, or what the connection waits for.
+- `type Want = provider.Want`: What a nonblocking connection waits for before the call can go on, and a read or write: the bytes moved, or what the connection waits for.
+- `type Attempt = provider.Attempt`
 - `fn set_alpn_protocols(status: *fail.Status, connection: Connection, protocols: []const u8)`: The provider copies the protocol wire bytes during this call.
-- `fn server_alpn(context: Context, preference: *const []const u8) bool`: Server ALPN: each handshake picks the first protocol of preference (wire format, such as "\x02h2\x08http/1.1") the client offers.
+- `fn server_alpn(status: *fail.Status, context: Context, preference: *const []const u8)`: Server ALPN: each handshake picks the first protocol of preference (wire format, such as "\x02h2\x08http/1.1") the client offers.
 - `fn selected_alpn(connection: Connection) []const u8`: Borrows provider connection memory.
-- `fn peer_certificate_owned(connection: Connection) Certificate`
+- `fn peer_certificate_owned(connection: Connection) Certificate`: nil when the peer sent no certificate.
 - `fn certificate_release(certificate: *Certificate)`: Frees the certificate and clears the handle;
 - `fn certificate_subject(arena: *memory.Arena, status: *fail.Status, certificate: Certificate) []u8`: Complete provider-formatted subject copied into arena.
 - `fn handshake(status: *fail.Status, connection: Connection) Want`: Runs the handshake.
@@ -1888,7 +1872,7 @@ module's full declarations and comments.
 - `struct Event { kind: Kind, resource: u64, value: u64, source: []const u8, line: usize }`
 - `struct Log { events: []Event, count: usize, dropped: usize }`
 - `fn log(events: []Event) Log`
-- `fn record(destination: *Log, event: Event) bool`: Full logs drop new events;
+- `fn record(destination: *Log, event: Event)`: Full logs drop new events and count them in dropped;
 - `fn recorded(value: *const Log) []const Event`
 - `fn clear(value: *Log)`
 
@@ -2087,14 +2071,11 @@ module's full declarations and comments.
 
 ## std/parse
 
-- `fn malformed(status: *fail.Status, operation: []const u8, message: []const u8, offset: usize)`: Records that the input went wrong at offset.
-- `fn failed_at(status: *fail.Status, kind: fail.Kind, operation: []const u8, message: []const u8, offset: usize)`: Records a failure of kind at offset into the input.
 - `fn u64_decimal(status: *fail.Status, text: []const u8) u64`: Whole text as a decimal u64: one or more ASCII digits, nothing else (no sign, space or underscore).
 - `fn i64_decimal(status: *fail.Status, text: []const u8) i64`: Whole text as a decimal i64 with an optional leading '-'.
 
 ## std/path
 
-- `struct Result { value: []u8, valid: bool }`: Slash-separated lexical paths.
 - `fn basename(path: []const u8) []const u8`
 - `fn dirname(path: []const u8) []const u8`
 - `fn extension(path: []const u8) []const u8`
@@ -2103,10 +2084,10 @@ module's full declarations and comments.
 - `struct Component { value: []const u8, offset: usize, found: bool }`: ok is false after the last component.
 - `fn components(text: []const u8) Components`
 - `fn component_next(state: *Components) Component`
-- `fn join(arena: *mem.Arena, left: []const u8, right: []const u8) Result`: left and right joined by one slash, in arena.
-- `fn clean(arena: *mem.Arena, path: []const u8) Result`: path with .
-- `fn safe_join(arena: *mem.Arena, root: []const u8, child: []const u8) Result`: root joined with a relative child that cannot climb out of root, in arena.
-- `fn relative(arena: *mem.Arena, base: []const u8, target: []const u8) Result`: The path from base to target, in arena.
+- `fn join(arena: *mem.Arena, left: []const u8, right: []const u8) []u8`: left and right joined by one slash, in arena.
+- `fn clean(arena: *mem.Arena, path: []const u8) []u8`: path with .
+- `fn safe_join(arena: *mem.Arena, status: *fail.Status, root: []const u8, child: []const u8) []u8`: root joined with a relative child that cannot climb out of root, in arena.
+- `fn relative(arena: *mem.Arena, status: *fail.Status, base: []const u8, target: []const u8) []u8`: The path from base to target, in arena.
 
 ## std/process
 
@@ -2158,8 +2139,8 @@ module's full declarations and comments.
 - `struct Progress { nodes: []Node, length: usize, dropped: usize }`
 - `fn progress(storage: []Node) Progress`
 - `fn begin(state: *Progress, name: []const u8, total: u64) usize`
-- `fn advance(state: *Progress, index: usize, amount: u64) bool`
-- `fn end(state: *Progress, index: usize) bool`
+- `fn advance(state: *Progress, index: usize, amount: u64)`: A dropped or ended node (see begin) is ignored.
+- `fn end(state: *Progress, index: usize)`
 - `fn reset(state: *Progress)`
 
 ## std/rand
@@ -2420,8 +2401,8 @@ module's full declarations and comments.
 - `struct PropertyOptions { seed: u64, cases: usize, shrink_checks: usize }`
 - `struct PropertyResult { passed: bool, seed: u64, iteration: usize, example: []const u8, checks: usize, shrink_exhausted: bool, }`
 - `fn check_property(options: PropertyOptions, work: []u8, predicate: fn(rawptr, []const u8) bool, context: rawptr) PropertyResult`: Property must be deterministic and must not retain its input.
-- `struct Samples { count: usize, minimum, median, p90, maximum: i64, valid: bool }`
-- `fn summarize(samples: []i64) Samples`: Sorts caller-owned nanosecond samples in place;
+- `struct Samples { count: usize, minimum, median, p90, maximum: i64 }`
+- `fn summarize(status: *fail.Status, samples: []i64) Samples`: Sorts caller-owned nanosecond samples in place;
 - `struct TemporaryDirectory { path: []const u8, active: bool }`
 - `fn temporary_directory(arena: *mem.Arena, status: *fail.Status, prefix: []const u8) TemporaryDirectory`: Reserves a private 0700 directory.
 - `fn remove_temporary(status: *fail.Status, directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8)`
@@ -2516,7 +2497,7 @@ module's full declarations and comments.
 - `struct Task { run: fn(rawptr), data: rawptr }`: One unit of work.
 - `struct Pool { lock: sync.Mutex, ready: sync.Condition, idle: sync.Condition, tasks: []Task, head: usize, count: usize, running: usize, stopping: bool, workers: []*thread.Thread, // Handles from spawner instead of workers, when started by start_spawned. natives: []rawptr, spawner: *const thread.Spawner, started: usize, }`: Pools live in the caller's arena and must not move.
 - `fn start(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: usize, stack_size: usize) *Pool`: Starts workers threads, each with an owned stack of stack_size bytes, and a queue of capacity tasks.
-- `fn submit(pool: *Pool, task: Task) bool`: Queues task.
+- `fn submit(pool: *Pool, task: Task) bool`: Whether task was queued: false, queuing nothing, when the queue is full or the pool is stopping, so the caller can retry or run it ...
 - `fn wait(pool: *Pool)`: Blocks until every queued task has finished, including tasks submitted by running tasks.
 - `fn start_spawned(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: usize, stack_size: usize, spawner: *const thread.Spawner) *Pool`: Like start, with threads from spawner, such as std/thread/posix spawner() for tasks that call C libraries.
 - `fn stop(status: *fail.Status, pool: *Pool)`: Finishes queued tasks, then joins every worker.
@@ -2553,8 +2534,7 @@ module's full declarations and comments.
 - `fn deadline_expired(deadline: *const Deadline) bool`
 - `fn deadline_remaining(deadline: *const Deadline) i64`: Nanoseconds left before deadline;
 - `fn valid(value: *const DateTime) bool`
-- `struct Parsed { value: DateTime, valid: bool }`
-- `fn parse_iso8601(input: []const u8) Parsed`: Parses YYYY-MM-DDTHH:MM:SSZ.
+- `fn parse_iso8601(status: *fail.Status, input: []const u8) DateTime`: Parses YYYY-MM-DDTHH:MM:SSZ.
 - `fn format_iso8601(arena: *mem.Arena, value: *const DateTime) []u8`: value as YYYY-MM-DDTHH:MM:SSZ in arena, or "" when value is not a valid date in years 0 through 9999.
 - `enum Weekday { Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday }`
 - `fn days_from_civil(year: i32, month: u8, day: u8) i64`: Days since 1970-01-01 for a proleptic Gregorian date (Hinnant's days_from_civil).
@@ -2638,7 +2618,6 @@ module's full declarations and comments.
 - `struct Input { x: f32, y: f32, down: bool, // Scroll in pixels this frame, positive scrolls content up and left. scroll_x: f32, scroll_y: f32, // UTF-8 text typed this frame, and editing keys pressed this frame. text: []const u8, backspace: bool, delete: bool, left: bool, right: bool, home: bool, end: bool, enter: bool, escape: bool, tab: bool, shift: bool, control: bool, select_all: bool, copy: bool, cut: bool, paste: bool, // The clipboard text offered for paste this frame. clipboard: []const u8, // The input method's in-progress composition (preedit), shown at the focused // text field's caret but not yet inserted. composition_cursor is a byte // offset into it, or -1. composition: []const u8, composition_cursor: i32, // Editing/navigation keys in this poll were consumed by the input method, // including the poll that clears preedit. Committed text still inserts. composition_handled: bool, // One complete correction as its own ordered input step. Do not combine it // with unrelated keyboard/text input. Stale or invalid corrections fail closed. correction: *const text_edits.Replacement, }`
 - `struct Signal { box: *Box, hovered: bool, pressed: bool, released: bool, clicked: bool, dragging: bool, // Pointer movement since the press while dragging. drag_x: f32, drag_y: f32, }`
 - `struct State { arena: *mem.Arena, frame: *mem.Arena, buckets: []*Box, free: *Box, frame_index: u64, root: *Box, parents: [parent_limit]*Box, depth: usize, input: Input, previous_down: bool, press_x: f32, press_y: f32, hot: u64, next_hot: u64, active: u64, dt: f32, // Text measurement in pixels, and the line height used for Text sizes. measure: fn(rawptr, []const u8) f32, measure_data: rawptr, line_height: f32, // Seconds for animations to close half their remaining distance. half_life: f32, // Keyboard focus, and text that a copy or cut this frame produced. focused: u64, focus_claimed: bool, // Snap animations instead of easing them, for users who ask for reduced // motion. reduced_motion: bool, // Display scale applied to pixel sizes and text padding. Pass a font // rasterized at the same scale. scale: f32, copied: []const u8, // Owned previous preedit for change-driven redraw; native snapshots cap256. composition_text: [256]u8, composition_length: usize, composition_cursor: i32, // Set during building when a focused text field wants text input: pass // text_input and text_input_rect (x, y, width, height in window pixels) to // the window so the input method places its candidates at the caret. text_input: bool, text_input_rect: [4]f32, text_input_anchor: *Box, // Publish this bounded context to a native input method before enabling the // focused field. Tracker lifetime must match one window, not one widget. text_context: text_edits.Context, text_context_error: fail.Kind, text_tracker: text_edits.Tracker, }`
-- `struct StateResult { value: *State, valid: bool }`
 - `fn push_state(arena: *mem.Arena, measure: fn(*$C, []const u8) f32, measure_data: *$C, line_height: f32) *State`: A state in arena.
 - `fn display_text(label: []const u8) []const u8`: The visible part of a label: text before "##" is shown, the whole label is hashed.
 - `fn key(seed: u64, label: []const u8) u64`
@@ -2723,19 +2702,17 @@ module's full declarations and comments.
 - `fn decode(source: []const u16, offset: usize) Decode`
 - `fn encode(destination: []u16, codepoint: u32) usize`
 - `fn valid(source: []const u16) bool`
-- `struct Count { value: usize, valid: bool }`
-- `fn codepoint_count(source: []const u16) Count`: Code points in source.
+- `fn codepoint_count(source: []const u16) usize`: Code points in source, counting each unit of invalid UTF-16 (an unpaired surrogate) as one.
 
 ## std/unicode/utf8
 
 - `struct Decode { codepoint: u32, width: usize, valid: bool, }`
 - `fn decode(text: []const u8, offset: usize) Decode`
 - `fn valid(text: []const u8) bool`
-- `struct Count { value: usize, valid: bool }`
-- `fn codepoint_count(text: []const u8) Count`: Code points in text.
+- `fn codepoint_count(text: []const u8) usize`: Code points in text, counting each byte of invalid UTF-8 as one (the U+FFFD it would decode to).
 - `fn encoded_width(codepoint: u32) usize`
 - `fn encode(destination: []u8, codepoint: u32) usize`
 - `struct Iterator { text: []const u8, offset: usize, }`
 - `fn iterator(text: []const u8) Iterator`
-- `struct Next { value: u32, valid: bool }`
-- `fn next(state: *Iterator) Next`: The next code point.
+- `struct Next { value: u32, found: bool }`
+- `fn next(state: *Iterator) Next`: The next code point;

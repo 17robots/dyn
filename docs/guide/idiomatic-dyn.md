@@ -206,41 +206,67 @@ if status.failed {
 }
 ```
 
-Five rules make it work:
+Three rules cover every std and vendor call:
 
-1. **One status per unit of work.** A failed status stays failed. Work that
-   must carry on after a failure, such as a command loop, a server or each of
-   many files, declares a status per item, inside the loop.
-2. **Check before you act:** before printing results, reporting success, or
-   doing anything that does not take the status, such as your own side
-   effects, using a computed number as a size or index, or a loop that only
-   ends on data.
-3. **Cleanup after a failure** uses a fresh status, or functions that take
-   none such as `fs.close`: the failed status turns cleanup into no-ops too.
-4. **An empty result is not a failure test.** An empty file gives empty text;
-   `status.failed` is the test.
-5. **To react to one kind of failure,** such as falling back when a file is
-   missing, give that step its own status and look at `status.failure.kind`.
-   To pass it on, `fail.set(status, step.failure)`.
+1. **If it can fail, it takes `&status`.** Its result is the value itself,
+   zero or empty after a failure.
+2. **If it can come up empty, the result has `found`:** a lookup, a search, an
+   iterator at its end. Coming up empty is not a failure.
+3. **Check `status.failed` before you use what you got:** before printing
+   results, reporting success, or using a computed number as a size or index.
 
-Your own code records a problem it finds in its input the same way, with
-`fail.invalid(status, "config", path, "port out of range")`. A failure keeps
-its own copy of its text, so it stays readable after the path or message it
-came from is gone; read the parts with `fail.operation_text`, `fail.path_text`
-and `fail.message_text`. `dyn vet` warns about a status that is passed to calls
-but never read, and about an empty result used as the failure test.
+In a loop that keeps going after a failure (a server, a command loop, each of
+many files), give each item its own status. Cleanup uses functions that take
+no status (`fs.close`, `*_free_owned`, `*_destroy`), so it works after a
+failure. To react to one kind of failure, such as falling back when a file is
+missing, give that step its own status and look at `status.failure.kind`. An
+empty result is not a failure test; `status.failed` is, and `dyn vet` warns
+about a status that is never read and about an empty result used as the test.
+A failure keeps its own copy of its text; read the parts with
+`fail.operation_text`, `fail.path_text` and `fail.message_text`.
 
-Parsers and decoders work the same way: malformed input fails with
-`InvalidInput` and the byte offset where it went wrong, which your own parsers
-record with `parse.malformed(status, "read config", "expected '='", offset)`.
+### Writing a library
 
-- **Absence is not failure:** a lookup returns `nil` (`map.get`) or an empty
-  stub for tree nodes, and every `find*` returns `#len(text)` on a miss.
-- **A step with several normal outcomes** says so in its value: `found`
-  false at the end of the input, or an enum such as `Want.Read`/`Want.Write`.
-  Failure is never one of those outcomes; it goes to the status.
-- **Yes-or-no questions** return `bool`, and only predicates do:
-  `is_*`, `has_*`, `valid`.
+The same three rules, from the other side:
+
+1. **Take `status`, return the value.** No result struct, no error type of
+   your own: return zero or empty after a failure.
+2. **Pass the same status to everything you call.** A failure from `fs` or
+   `json` reaches your caller with its own operation, path and reason; there is
+   nothing to translate. Record your own failures one of three ways:
+   `fail.invalid(status, "config", path, "port out of range")` for bad input,
+   `fail.at(status, fail.Kind.InvalidInput, "read config", "expected '='",
+   offset)` for a place in the input, and `fail.set(status, fail.make(kind,
+   operation, path, message))` for anything else. Native codes become
+   failures with `io.from_linux` and its siblings.
+3. **Guard with `if status.failed { return }` only before work that does not
+   take the status:** raw system calls, writes into caller memory, loops that
+   only end on data. A function made only of status-taking calls needs no
+   check at all.
+
+```dyn
+pub fn load(arena: *mem.Arena, status: *fail.Status, path: []const u8) Config {
+  doc := json.parse(arena, status, fs.read_all(arena, status, path, 1 << 20))
+  port := json.integer(status, doc, "port")
+  if port > 65535 {
+    fail.invalid(status, "config", path, "port out of range")
+  }
+  return Config{ port: port }
+}
+```
+
+Other outcomes are values, not failures:
+
+- **Absence:** a lookup returns `nil` (`map.get`) or an empty stub for tree
+  nodes, every `find*` returns `#len(text)` on a miss, and results that can
+  come up empty carry `found`.
+- **A step with several normal outcomes** says so in its value: `found` false
+  at the end of the input, or an enum such as `Want.Read`/`Want.Write` for a
+  nonblocking socket.
+- **Yes-or-no questions** return `bool`: `is_*`, `has_*`, `valid`, `verify`,
+  `try_lock`.
+- **Math does not fail:** degenerate input (a singular matrix, a zero axis)
+  gives the zero value.
 - **A broken invariant** is `#panic`. There is no recovery.
 
 ```dyn

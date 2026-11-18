@@ -21,6 +21,7 @@ fn main() {
   defer mem.arena_release(arena)
   arguments_status: fail.Status
   arguments := process.arguments(arena, &arguments_status)
+  status := fail.Status{ on_failure: fail.panic_on_failure }
   if bytes.equal(arguments[1], "rfc") {
     secret_password: [32]u8
     salt: [16]u8
@@ -33,9 +34,7 @@ fn main() {
     parameters := password.Argon2Parameters{ memory: 32, iterations: 3, parallelism: 4 }
     workspace := mem.push_array(u64, arena, password.argon2id_workspace_words(parameters))
     tag: [32]u8
-    if !password.argon2id_keyed(tag[..], secret_password[..], salt[..], secret[..], associated[..], parameters, workspace) {
-      #panic("argon2id_keyed")
-    }
+    password.argon2id_keyed(&status, tag[..], secret_password[..], salt[..], secret[..], associated[..], parameters, workspace)
     io.println("{}", hex.encode(arena, tag[..], false))
     return
   }
@@ -61,12 +60,10 @@ fn main() {
   parameters := password.Argon2Parameters{ memory: number(arguments[3]), iterations: number(arguments[4]), parallelism: number(arguments[5]) }
   workspace := mem.push_array(u64, arena, password.argon2id_workspace_words(parameters))
   hash := mem.push_bytes_uninit(arena, number(arguments[6]))
-  if !password.argon2id(hash, arguments[1], arguments[2], parameters, workspace) {
-    #panic("argon2id")
-  }
+  password.argon2id(&status, hash, arguments[1], arguments[2], parameters, workspace)
   text: [512]u8
   encoded := password.argon2id_encode(text[..], parameters, arguments[2], hash)
   io.println("{}", encoded)
-  if !password.argon2id_verify(encoded, arguments[1], workspace) { #panic("verify") }
-  if password.argon2id_verify(encoded, "wrong password", workspace) { #panic("verify wrong") }
+  if !password.argon2id_verify(&status, encoded, arguments[1], workspace) { #panic("verify") }
+  if password.argon2id_verify(&status, encoded, "wrong password", workspace) { #panic("verify wrong") }
 }

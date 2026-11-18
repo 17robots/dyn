@@ -1,3 +1,4 @@
+use "std/fail"
 pub struct Ring {
   data: []u8,
   read: usize,
@@ -11,16 +12,20 @@ pub fn length(state: *const Ring) usize {
   return state.length
 }
 
-pub fn push(state: *Ring, byte: u8) bool {
-  if state.length == #len(state.data) || #len(state.data) == 0 { return false }
+// A full ring fails with Capacity and keeps its bytes.
+pub fn push(status: *fail.Status, state: *Ring, byte: u8) {
+  if status.failed { return }
+  if state.length == #len(state.data) || #len(state.data) == 0 {
+    fail.set(status, fail.make(fail.Kind.Capacity, "push", "", "the ring is full"))
+    return
+  }
   state.data[(state.read + state.length) % #len(state.data)] = byte
   state.length += 1
-  return true
 }
 
 pub struct Popped { value: u8, found: bool }
 
-// The oldest byte. ok is false when the ring is empty.
+// The oldest byte; found is false when the ring is empty.
 pub fn pop(state: *Ring) Popped {
   if state.length == 0 { return Popped{} }
   value := state.data[state.read]

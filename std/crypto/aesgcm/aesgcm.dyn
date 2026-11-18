@@ -1,5 +1,6 @@
 use "std/encoding/binary" binary
 use "std/crypto/core" core
+use "std/fail"
 // Portable AES-256-GCM. FIPS197 / SP800-38D. Table-free S-box inversion and
 // fixed-iteration GHASH avoid secret indexes/branches. This favors portability
 // over throughput. Compiler/platform constant-time qualification is separate.
@@ -186,10 +187,13 @@ fn valid(output: []u8, input: []const u8, aad: []const u8, key: []const u8, nonc
   return true
 }
 // Exact in-place payload operation is allowed. Other output overlaps are
-// rejected before writing. Failure, including authentication, preserves output.
-pub fn seal(output: []u8, authentication: []u8, input: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8) bool {
+// rejected before writing. Bad sizes or overlaps fail with InvalidInput, and so
+// does a tag that does not authenticate; failure preserves output.
+pub fn seal(status: *fail.Status, output: []u8, authentication: []u8, input: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8) {
+  if status.failed { return }
   if !valid(output, input, aad, source_key, nonce) || #len(authentication) != 16 || overlaps(authentication, output) || overlaps(authentication, input) || overlaps(authentication, aad) || overlaps(authentication, source_key) || overlaps(authentication, nonce) {
-    return false
+    fail.invalid(status, "AES-GCM seal", "", "bad key, nonce, tag or output size, or overlapping buffers")
+    return
   }
   key := expand(source_key)
   h := encrypt(&key, Block{})
@@ -198,11 +202,12 @@ pub fn seal(output: []u8, authentication: []u8, input: []const u8, aad: []const 
   value := tag(&key, h, j0, output, aad)
   binary.store_u64_be(authentication[..8], value.high)
   binary.store_u64_be(authentication[8..], value.low)
-  return true
 }
-pub fn open(output: []u8, input: []const u8, authentication: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8) bool {
+pub fn open(status: *fail.Status, output: []u8, input: []const u8, authentication: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8) {
+  if status.failed { return }
   if !valid(output, input, aad, source_key, nonce) || #len(authentication) != 16 || overlaps(output, authentication) {
-    return false
+    fail.invalid(status, "AES-GCM open", "", "bad key, nonce, tag or output size, or overlapping buffers")
+    return
   }
   key := expand(source_key)
   h := encrypt(&key, Block{})
@@ -211,7 +216,9 @@ pub fn open(output: []u8, input: []const u8, authentication: []const u8, aad: []
   expected: [16]u8
   binary.store_u64_be(expected[..8], value.high)
   binary.store_u64_be(expected[8..], value.low)
-  if !core.equal_constant_time(expected[..], authentication) { return false }
+  if !core.equal_constant_time(expected[..], authentication) {
+    fail.invalid(status, "AES-GCM open", "", "authentication failed")
+    return
+  }
   transform(&key, j0, output, input)
-  return true
 }

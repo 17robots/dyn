@@ -2,15 +2,18 @@
 #link("System")
 extern fn entropy "getentropy"(destination: *u8, size: usize) i32
 // getentropy accepts at most 256 bytes per call. Never use a weak fallback.
-pub fn secure_random(destination: []u8) bool {
+pub fn secure_random(status: *fail.Status, destination: []u8) {
+  if status.failed { return }
   at: usize = 0
   for at < #len(destination) {
     count := #len(destination) - at
     if count > 256 {
       count = 256
     }
-    if entropy(&destination[at], count) != 0 { return false }
+    if entropy(&destination[at], count) != 0 {
+      random_failed(status, -5)
+      return
+    }
     at += count
   }
-  return true
 }

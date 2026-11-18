@@ -25,6 +25,11 @@ use "vendor/stb/image_resize" image
 use "std/mem"
 use "std/fail"
 use "std/io"
+fn resize_fails(scratch: *mem.Arena, source: []const u8, width: i32, destination: []u8, out_width: i32) bool {
+  status: fail.Status
+  image.resize(scratch, &status, source, width, 2, destination, out_width, out_width, 4, false)
+  return status.failed
+}
 fn packing_fails(scratch: *mem.Arena, width: i32, height: i32, rectangles: []atlas.Rectangle) bool {
   status: fail.Status
   _ = atlas.pack(scratch, &status, width, height, rectangles)
@@ -74,18 +79,14 @@ fn main() {
     source[k] = 128
     k += 1
   }
-  if !image.resize(backing, source[..], 2, 2, destination[..], 4, 4, 4, false) {
-    #panic("resize")
-  }
+  image.resize(backing, &status, source[..], 2, 2, destination[..], 4, 4, 4, false)
   for value in destination[..] {
     if value != 128 {
       #panic("resize constant color")
     }
   }
-  if !image.resize(backing, source[..], 2, 2, destination[..], 4, 4, 4, true) {
-    #panic("sRGB resize")
-  }
-  if image.resize(backing, source[..], 2, 2, destination[..1], 4, 4, 4, false) || image.resize(backing, source[..], 2, 2, source[..], 2, 2, 4, false) || image.resize(backing, source[..], 0, 2, destination[..], 4, 4, 4, false) {
+  image.resize(backing, &status, source[..], 2, 2, destination[..], 4, 4, 4, true)
+  if !resize_fails(backing, source[..], 2, destination[..1], 4) || !resize_fails(backing, source[..], 2, source[..], 2) || !resize_fails(backing, source[..], 0, destination[..], 4) {
     #panic("resize bounds")
   }
   if mem.arena_mark(backing) != mark {
@@ -94,7 +95,7 @@ fn main() {
   tiny: [1 + mem.ArenaBufferOverhead]u8
   pad := (16-(#cast(usize,&tiny[0])&15))&15
   short_arena := mem.arena_from_buffer(tiny[pad..pad+mem.ArenaHeader+1])
-  if image.resize(short_arena, source[..], 2, 2, destination[..], 4, 4, 4, false) || mem.arena_mark(short_arena) != mem.arena_start(short_arena) || !packing_fails(short_arena, 16, 16, rectangles[..]) || mem.arena_mark(short_arena) != mem.arena_start(short_arena) {
+  if !resize_fails(short_arena, source[..], 2, destination[..], 4) || mem.arena_mark(short_arena) != mem.arena_start(short_arena) || !packing_fails(short_arena, 16, 16, rectangles[..]) || mem.arena_mark(short_arena) != mem.arena_start(short_arena) {
     #panic("short scratch arena")
   }
   io.println("stb atlas and resize passed")
@@ -117,20 +118,15 @@ fn main() {
   }
   args := linux.process_arguments(arena)
   smoke := #len(args) == 2 && bytes.equal(args[1], "--smoke")
-  if !sdl.init_video() {
-    #panic("SDL video")
-  }
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  sdl.init_video(&status)
   defer sdl.quit()
   text: [256]u8
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   window := sdl.window_create(&status, "Dyn interactive UI", text[..], 640, 360, sdl.WindowResizable)
   defer sdl.window_destroy_owned(window)
   renderer := sdl.renderer_create_default_owned(&status, window)
   defer sdl.renderer_destroy_owned(renderer)
-  context := ui.create(arena)
-  if context == nil {
-    #panic("UI context")
-  }
+  context := ui.create(arena, &status)
   running := true
   clicked := false
   frame: usize = 0
@@ -155,24 +151,23 @@ fn main() {
       }
       ui.mouse(context, 70, 90, action)
     }
-    if !ui.begin(context) {
-      #panic("UI begin")
-    }
-    if ui.window(context, "Debug panel", text[..], ui.Rectangle{ x: 20, y: 20, width: 300, height: 220 }) {
+    ui.begin(&status, context)
+    if ui.window(&status, context, "Debug panel", text[..], ui.Rectangle{ x: 20, y: 20, width: 300, height: 220 }) {
       if clicked {
-        _ = ui.label(context, "Button clicked!", text[..])
+        ui.label(&status, context, "Button clicked!", text[..])
       }
       else {
-        _ = ui.label(context, "Click the button below", text[..])
+        ui.label(&status, context, "Click the button below", text[..])
       }
-      if ui.button(context, "Click me", text[..]) == 1 {
+      if ui.button(&status, context, "Click me", text[..]) {
         clicked = true
       }
-      _ = ui.window_end(context)
+      ui.window_end(&status, context)
     }
-    if !ui.end(context) || !sdl.clear(renderer, 20, 28, 48, 255) || !backend.render(context, renderer) || !sdl.present(renderer) {
-      #panic("UI render")
-    }
+    ui.end(&status, context)
+    sdl.clear(&status, renderer, 20, 28, 48, 255)
+    backend.render(&status, context, renderer)
+    sdl.present(&status, renderer)
     frame += 1
     if smoke && frame >= 5 {
       break
@@ -215,9 +210,16 @@ fn main() {
   }
   sound := audio.sound_create(arena, &status, engine, args[1], path[..])
   defer audio.sound_close(sound)
-  if !audio.sound_volume(sound, 0.5) || audio.sound_volume(sound, -1.0) || audio.sound_start(sound) != 0 || audio.sound_stop(sound) != 0 || audio.sound_playing(sound) || audio.sound_rewind(sound) != 0 || audio.sound_start(sound) != 0 {
+  audio.sound_volume(&status, sound, 0.5)
+  negative: fail.Status
+  audio.sound_volume(&negative, sound, -1.0)
+  audio.sound_start(&status, sound)
+  audio.sound_stop(&status, sound)
+  if !negative.failed || audio.sound_playing(sound) {
     #panic("sound controls")
   }
+  audio.sound_rewind(&status, sound)
+  audio.sound_start(&status, sound)
   deadline := time.deadline_after(60 * time.Second)
   samples: [2048]f32
   heard := false
@@ -238,7 +240,9 @@ fn main() {
     #panic("audio completion")
   }
   audio.sound_close(sound)
-  if audio.sound_start(sound) == 0 {
+  closed: fail.Status
+  audio.sound_start(&closed, sound)
+  if !closed.failed {
     #panic("closed sound accepted")
   }
   io.println("audio playback completion passed")
@@ -299,14 +303,21 @@ fn main() {
   status := fail.Status{ on_failure: fail.panic_on_failure }
   model := cgltf.parse_owned(&status, document)
   defer cgltf.destroy_owned(model)
-  if !cgltf.validate(model) || cgltf.load_embedded(model) != 0 || cgltf.node_count(model) != 1 {
+  cgltf.validate(&status, model)
+  cgltf.load_embedded(&status, model)
+  if cgltf.node_count(model) != 1 {
     #panic("glTF validate/load")
   }
   values: [3]f32
-  if !cgltf.read_float(model, 0, 0, values[..]) || values[0] != 0.0 || values[1] != 1.0 || values[2] != 2.0 {
+  cgltf.read_float(&status, model, 0, 0, values[..])
+  if values[0] != 0.0 || values[1] != 1.0 || values[2] != 2.0 {
     #panic("glTF accessor")
   }
-  if cgltf.read_float(model, 1, 0, values[..]) || cgltf.read_float(model, 0, 0, values[..1]) {
+  missing_accessor: fail.Status
+  cgltf.read_float(&missing_accessor, model, 1, 0, values[..])
+  short_output: fail.Status
+  cgltf.read_float(&short_output, model, 0, 0, values[..1])
+  if !missing_accessor.failed || !short_output.failed {
     #panic("glTF invalid accessor accepted")
   }
   broken: fail.Status
@@ -316,7 +327,9 @@ fn main() {
   }
   external := cgltf.parse_owned(&status, "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":12,\"uri\":\"external.bin\"}]}")
   defer cgltf.destroy_owned(external)
-  if cgltf.load_embedded(external) != -2 {
+  unattached: fail.Status
+  cgltf.load_embedded(&unattached, external)
+  if unattached.failure.kind != fail.Kind.InvalidState {
     #panic("external resource not rejected")
   }
   // Application chooses how external URIs are resolved. This example supplies
@@ -329,23 +342,37 @@ fn main() {
   triangles[2] = 2
   vertex_bytes := #slice(#cast(*const u8, &vertices[0]), 36)
   index_bytes := #slice(#cast(*const u8, &triangles[0]), 6)
-  if cgltf.buffer_count(mesh) != 2 || !bytes.equal(cgltf.buffer_uri(mesh, 0, 256), "vertices.bin") || cgltf.buffer_size(mesh, 0) != 36 || cgltf.attach_buffer(mesh, 0, vertex_bytes[..1]) {
+  short_buffer: fail.Status
+  cgltf.attach_buffer(&short_buffer, mesh, 0, vertex_bytes[..1])
+  if cgltf.buffer_count(mesh) != 2 || !bytes.equal(cgltf.buffer_uri(mesh, 0, 256), "vertices.bin") || cgltf.buffer_size(mesh, 0) != 36 || !short_buffer.failed {
     #panic("mesh resource metadata")
   }
-  if !cgltf.attach_buffer(mesh, 0, vertex_bytes) || !cgltf.attach_buffer(mesh, 1, index_bytes) || cgltf.attach_buffer(mesh, 0, vertex_bytes) || cgltf.load_embedded(mesh) != 0 || !cgltf.validate(mesh) {
+  cgltf.attach_buffer(&status, mesh, 0, vertex_bytes)
+  cgltf.attach_buffer(&status, mesh, 1, index_bytes)
+  twice: fail.Status
+  cgltf.attach_buffer(&twice, mesh, 0, vertex_bytes)
+  if !twice.failed {
     #panic("mesh buffer attachment")
   }
-  if cgltf.mesh_count(mesh) != 1 || cgltf.primitive_count(mesh, 0) != 1 || cgltf.material_count(mesh) != 1 || cgltf.attribute(mesh, 0, 0, cgltf.Position, 0) != 0 || cgltf.indices(mesh, 0, 0) != 1 || cgltf.material(mesh, 0, 0) != 0 || cgltf.topology(mesh, 0, 0) != cgltf.Triangles || cgltf.node_mesh(mesh, 0) != 0 || cgltf.element_count(mesh, 0) != 3 {
+  cgltf.load_embedded(&status, mesh)
+  cgltf.validate(&status, mesh)
+  position := cgltf.attribute(mesh, 0, 0, cgltf.Position, 0)
+  indices := cgltf.indices(mesh, 0, 0)
+  material := cgltf.material(mesh, 0, 0)
+  node_mesh := cgltf.node_mesh(mesh, 0)
+  if cgltf.mesh_count(mesh) != 1 || cgltf.primitive_count(mesh, 0) != 1 || cgltf.material_count(mesh) != 1 || !position.found || position.value != 0 || !indices.found || indices.value != 1 || !material.found || material.value != 0 || cgltf.topology(mesh, 0, 0) != cgltf.Triangles || !node_mesh.found || node_mesh.value != 0 || cgltf.element_count(mesh, 0) != 3 {
     #panic("mesh traversal")
   }
   past: fail.Status
   _ = cgltf.read_index(&past, mesh, 1, 3)
-  if cgltf.read_index(&status, mesh, 1, 2) != 2 || !past.failed || cgltf.attribute(mesh, 0, 0, cgltf.Normal, 0) != -1 {
+  if cgltf.read_index(&status, mesh, 1, 2) != 2 || !past.failed || cgltf.attribute(mesh, 0, 0, cgltf.Normal, 0).found {
     #panic("mesh indices")
   }
-  transform: [16]f32
-  color: [4]f32
-  if !cgltf.world_transform(mesh, 0, transform[..]) || transform[12] != 1.0 || transform[13] != 2.0 || transform[14] != 3.0 || !cgltf.base_color(mesh, 0, color[..]) || color[1] != 0.5 || cgltf.base_color(mesh, 1, color[..]) {
+  transform := cgltf.world_transform(&status, mesh, 0)
+  color := cgltf.base_color(&status, mesh, 0)
+  no_material: fail.Status
+  _ = cgltf.base_color(&no_material, mesh, 1)
+  if transform[12] != 1.0 || transform[13] != 2.0 || transform[14] != 3.0 || color[1] != 0.5 || !no_material.failed {
     #panic("mesh transform/material")
   }
   backing := mem.arena_alloc(2 * 1024 * 1024)
@@ -357,7 +384,9 @@ fn main() {
     file := fs.read_all(backing, &status, args[1], 1024 * 1024)
     binary := cgltf.parse_owned(&status, file)
     defer cgltf.destroy_owned(binary)
-    if cgltf.load_embedded(binary) != 0 || !cgltf.read_float(binary, 0, 0, values[..]) || values[2] != 2.0 {
+    cgltf.load_embedded(&status, binary)
+    cgltf.read_float(&status, binary, 0, 0, values[..])
+    if values[2] != 2.0 {
       #panic("GLB accessor")
     }
   }
@@ -373,44 +402,42 @@ fn stale(body: physics.Body) bool {
   return status.failed
 }
 fn main() {
-  world := physics.create_owned(0.0, -10.0)
-  if world == 0 {
-    #panic("physics world")
-  }
-  defer {
-    _ = physics.destroy_owned(world)
-  }
-  ground := physics.body_create(world, 0.0, -1.0, false)
-  falling := physics.body_create(world, 0.0, 4.0, true)
-  if ground == 0 || falling == 0 || physics.box_create(ground, 10.0, 1.0, 0.0) == 0 || physics.box_create(falling, 0.5, 0.5, 1.0) == 0 {
-    #panic("physics bodies")
-  }
-  if physics.step(world, -1.0, 4) || physics.box_create(falling, -1.0, 1.0, 1.0) != 0 {
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  world := physics.create_owned(&status, 0.0, -10.0)
+  defer physics.destroy_owned(world)
+  ground := physics.body_create(&status, world, 0.0, -1.0, false)
+  falling := physics.body_create(&status, world, 0.0, 4.0, true)
+  _ = physics.box_create(&status, ground, 10.0, 1.0, 0.0)
+  _ = physics.box_create(&status, falling, 0.5, 0.5, 1.0)
+  bad_step: fail.Status
+  physics.step(&bad_step, world, -1.0, 4)
+  bad_box: fail.Status
+  _ = physics.box_create(&bad_box, falling, -1.0, 1.0, 1.0)
+  if !bad_step.failed || !bad_box.failed {
     #panic("invalid physics input")
   }
-  circle_body := physics.body_create(world, 3.0, 4.0, true)
-  circle := physics.circle_create(circle_body, 0.5, 1.0)
-  if circle == 0 || !physics.contact_events(circle, true) || physics.circle_create(circle_body, -1.0, 1.0) != 0 {
+  circle_body := physics.body_create(&status, world, 3.0, 4.0, true)
+  circle := physics.circle_create(&status, circle_body, 0.5, 1.0)
+  physics.contact_events(&status, circle, true)
+  bad_circle: fail.Status
+  _ = physics.circle_create(&bad_circle, circle_body, -1.0, 1.0)
+  if !bad_circle.failed {
     #panic("circle shape")
   }
-  anchor := physics.body_create(world, 20.0, 4.0, false)
-  pendulum := physics.body_create(world, 20.0, 2.0, true)
-  if physics.circle_create(pendulum, 0.5, 1.0) == 0 {
-    #panic("joint shape")
-  }
-  joint := physics.distance_joint(anchor, pendulum, 2.0)
-  if joint == 0 || physics.distance_joint(anchor, anchor, 2.0) != 0 {
+  anchor := physics.body_create(&status, world, 20.0, 4.0, false)
+  pendulum := physics.body_create(&status, world, 20.0, 2.0, true)
+  _ = physics.circle_create(&status, pendulum, 0.5, 1.0)
+  joint := physics.distance_joint(&status, anchor, pendulum, 2.0)
+  self_joint: fail.Status
+  _ = physics.distance_joint(&self_joint, anchor, anchor, 2.0)
+  if !self_joint.failed {
     #panic("distance joint")
   }
   contacts := false
-  i: usize = 0
-  for i < 240 {
-    if !physics.step(world, 1.0 / 60.0, 4) {
-      #panic("physics step")
-    }
-    count := physics.contact_count(world, true)
-    event_index: i32 = 0
-    for event_index < count {
+  for i in 0..240 {
+    physics.step(&status, world, 1.0 / 60.0, 4)
+    count := physics.contact_count(&status, world, true)
+    for event_index in 0..count {
       event := physics.contact(world, true, event_index)
       if !event.found {
         #panic("contact event")
@@ -418,11 +445,8 @@ fn main() {
       if event.first == circle || event.second == circle {
         contacts = true
       }
-      event_index += 1
     }
-    i += 1
   }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   circle_position := physics.position(&status, circle_body)
   joint_position := physics.position(&status, pendulum)
   if !contacts || circle_position.y < 0.4 || circle_position.y > 0.7 || joint_position.y < 1.9 || joint_position.y > 2.1 {
@@ -435,51 +459,61 @@ fn main() {
   if candidates.total < 3 || candidates.written != 1 || !inverted.failed || physics.contact(world, true, 999).found {
     #panic("physics query")
   }
-  if !physics.joint_destroy(joint) || physics.joint_destroy(joint) {
-    #panic("joint destruction")
-  }
+  physics.joint_destroy(joint)
+  physics.joint_destroy(joint)
   final := physics.position(&status, falling)
   if final.y < 0.4 || final.y > 0.7 {
     #panic("body failed to rest on ground")
   }
-  if !physics.body_destroy(falling) || !stale(falling) || physics.body_destroy(falling) {
+  physics.body_destroy(falling)
+  if !stale(falling) {
     #panic("stale body ID")
   }
+  physics.body_destroy(falling)
   io.println("Box2D falling box passed")
 }
 ''',
     'microui': r'''use "vendor/microui" ui
+use "std/fail"
 use "std/mem"
 use "std/io" io
-use "std/strings"
 use "std/bytes"
+fn rejected(step: fn(*fail.Status, ui.Context), context: ui.Context) bool {
+  status: fail.Status
+  step(&status, context)
+  return status.failed
+}
+fn outside_label(status: *fail.Status, context: ui.Context) {
+  buffer: [64]u8
+  ui.label(status, context, "outside frame", buffer[..])
+}
 fn main() {
   storage := mem.arena_alloc(1024 * 1024)
   defer {
     mem.arena_release(storage)
   }
-  context := ui.create(storage)
-  if context == nil {
-    #panic("UI context")
-  }
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  context := ui.create(storage, &status)
   buffer: [256]u8
-  if ui.label(context, "outside frame", buffer[..]) || ui.end(context) {
+  if !rejected(outside_label, context) || !rejected(ui.end, context) {
     #panic("invalid UI state accepted")
   }
   frame: usize = 0
   for frame < 3 {
-    if !ui.begin(context) || ui.begin(context) {
+    ui.begin(&status, context)
+    if !rejected(ui.begin, context) {
       #panic("UI frame")
     }
-    if !ui.window(context, "Debug", buffer[..], ui.Rectangle{ x: 10, y: 10, width: 300, height: 200 }) {
+    if !ui.window(&status, context, "Debug", buffer[..], ui.Rectangle{ x: 10, y: 10, width: 300, height: 200 }) {
       #panic("UI window")
     }
-    if !ui.label(context, "arena backed", buffer[..]) || ui.button(context, "Button", buffer[..]) < 0 {
-      #panic("UI widgets")
-    }
-    if ui.end(context) || !ui.window_end(context) || !ui.end(context) {
+    ui.label(&status, context, "arena backed", buffer[..])
+    _ = ui.button(&status, context, "Button", buffer[..])
+    if !rejected(ui.end, context) {
       #panic("UI balance")
     }
+    ui.window_end(&status, context)
+    ui.end(&status, context)
     texts: usize = 0
     rectangles: usize = 0
     for {
@@ -511,29 +545,22 @@ use "std/time"
 use "std/io" io
 use "std/bytes"
 fn main() {
-  if !enet.init() {
-    #panic("ENet init")
-  }
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  enet.init(&status)
   defer enet.quit()
   path: [64]u8
-  server := enet.listen_at_owned("0.0.0.0", 0, 2, 2, path[..])
-  if server == nil {
-    #panic("ENet server")
-  }
+  server := enet.listen_at_owned(&status, "0.0.0.0", 0, 2, 2, path[..])
   defer enet.destroy_owned(server)
-  client := enet.client_channels_owned(1, 2)
-  if client == nil {
-    #panic("ENet client")
-  }
+  client := enet.client_channels_owned(&status, 1, 2)
   defer enet.destroy_owned(client)
-  peer := enet.connect_channels(client, "127.0.0.1", enet.port(server), 2, path[..])
-  if peer == nil {
-    #panic("ENet connect")
-  }
-  if enet.send(nil, "bad") || enet.client_owned(0) != nil {
+  peer := enet.connect_channels(&status, client, "127.0.0.1", enet.port(server), 2, path[..])
+  no_peer: fail.Status
+  enet.send(&no_peer, nil, "bad")
+  no_peers: fail.Status
+  _ = enet.client_owned(&no_peers, 0)
+  if !no_peer.failed || !no_peers.failed {
     #panic("invalid ENet state accepted")
   }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   deadline := time.deadline_after(5 * time.Second)
   done := false
   for !done {
@@ -543,16 +570,12 @@ fn main() {
       if remote.channel != 1 || !bytes.equal(enet.packet_bytes(remote.packet), "ping") {
         #panic("server payload")
       }
-      if !enet.send_channel(remote.peer, 1, "pong") {
-        #panic("server echo")
-      }
+      enet.send_channel(&status, remote.peer, 1, "pong")
       enet.packet_destroy(remote.packet)
     }
     local := enet.service(&status, client, 0)
     if local.kind == enet.Connected {
-      if !enet.send_channel(peer, 1, "ping") {
-        #panic("client send")
-      }
+      enet.send_channel(&status, peer, 1, "ping")
     }
     if local.kind == enet.Received {
       if local.channel != 1 || !bytes.equal(enet.packet_bytes(local.packet), "pong") {
@@ -566,7 +589,13 @@ fn main() {
   if !done {
     #panic("ENet loopback timed out")
   }
-  if enet.send_channel(peer, 2, "invalid") || enet.client_channels_owned(1, 256) != nil || enet.listen_at_owned("bad address", 0, 1, 1, path[..]) != nil {
+  bad_channel: fail.Status
+  enet.send_channel(&bad_channel, peer, 2, "invalid")
+  many_channels: fail.Status
+  _ = enet.client_channels_owned(&many_channels, 1, 256)
+  bad_address: fail.Status
+  _ = enet.listen_at_owned(&bad_address, "bad address", 0, 1, 1, path[..])
+  if !bad_channel.failed || !many_channels.failed || !bad_address.failed {
     #panic("invalid ENet configuration")
   }
   enet.disconnect_with_reason(peer, 42)
@@ -658,9 +687,7 @@ fn main() {
   engine := audio.engine_create(storage, &status, false)
   defer audio.engine_close(engine)
   path: [4096]u8
-  if !audio.play_file(engine, args[1], path[..]) {
-    #panic("engine play")
-  }
+  audio.play_file(&status, engine, args[1], path[..])
   heard = false
   iterations = 0
   for !heard && iterations < 200 {
@@ -698,31 +725,19 @@ fn main() {
   }
   status := fail.Status{ on_failure: fail.panic_on_failure }
   bytes := fs.read_all(storage, &status, args[1], 1024 * 1024)
-  if !mixer.init() {
-    #panic("mixer init")
-  }
+  mixer.init(&status)
   defer mixer.quit()
-  engine := mixer.create_owned()
-  if engine == nil {
-    #panic("mixer create")
-  }
+  engine := mixer.create_owned(&status)
   defer mixer.destroy_owned(engine)
-  audio := mixer.decode_owned(engine, bytes)
-  if audio == nil {
-    #panic("mixer decode")
-  }
+  audio := mixer.decode_owned(&status, engine, bytes)
   defer mixer.audio_destroy_owned(audio)
-  if mixer.decode_owned(engine, "invalid") != nil {
+  invalid: fail.Status
+  if mixer.decode_owned(&invalid, engine, "invalid") != nil || !invalid.failed {
     #panic("invalid audio accepted")
   }
-  track := mixer.track_create(engine)
-  if track == nil {
-    #panic("mixer track")
-  }
+  track := mixer.track_create(&status, engine)
   defer mixer.track_destroy(track)
-  if !mixer.play(track, audio) {
-    #panic("mixer play")
-  }
+  mixer.play(&status, track, audio)
   samples: [2048]f32
   heard := false
   iterations: usize = 0
@@ -738,7 +753,9 @@ fn main() {
   if !heard || mixer.playing(track) {
     #panic("mixer did not finish audio")
   }
-  if !mixer.play(track, audio) || !mixer.stop(track) || mixer.playing(track) {
+  mixer.play(&status, track, audio)
+  mixer.stop(&status, track)
+  if mixer.playing(track) {
     #panic("mixer stop")
   }
   if mixer.generate(&status, engine, samples[..]) != 0 {
@@ -754,10 +771,7 @@ fn main() {
   if !odd.failed {
     #panic("odd sample count accepted")
   }
-  device := mixer.create_device_owned()
-  if device == nil {
-    #panic("mixer playback device")
-  }
+  device := mixer.create_device_owned(&status)
   defer mixer.destroy_owned(device)
   io.println("SDL_mixer offline playback passed")
 }

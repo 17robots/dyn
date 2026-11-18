@@ -1,8 +1,7 @@
-use "std/parse" parse
 use "std/fail"
 use "std/mem" mem
-pub struct Info { width: usize, height: usize, channels: u8, srgb: bool, valid: bool }
-// Info.valid is true inside successful values. Malformed data fails with
+pub struct Info { width: usize, height: usize, channels: u8, srgb: bool }
+// Malformed data fails with
 // InvalidInput (at its offset when known), an impossible size with Overflow,
 // data past the codec's working limits with Capacity.
 pub struct Image { info: Info, pixels: []u8 }
@@ -31,8 +30,8 @@ fn codec_failure(status: *fail.Status, operation: []const u8, detail: isize, off
 pub fn inspect(status: *fail.Status, source: []const u8) Info {
   if status.failed { return Info{} }
   info := inspect_info(source)
-  if !info.valid {
-    parse.malformed(status, "inspect QOI", "malformed QOI header", 0)
+  if info.width == 0 {
+    fail.at(status, fail.Kind.InvalidInput, "inspect QOI", "malformed QOI header", 0)
     return Info{}
   }
   return info
@@ -62,6 +61,7 @@ fn u32be(source: []const u8, at: usize) u32 {
   return a * 16777216 + b * 65536 + c * 256 + d
 }
 
+// The header, or a zero Info (width 0) when it is malformed.
 fn inspect_info(source: []const u8) Info {
   if #len(source) < 22 || source[0] != 'q' || source[1] != 'o' || source[2] != 'i' || source[3] != 'f' {
     return Info{}
@@ -72,7 +72,7 @@ fn inspect_info(source: []const u8) Info {
   if width == 0 || height == 0 || (channels != 3 && channels != 4) || source[13] > 1 {
     return Info{}
   }
-  return Info{ width: width, height: height, channels: channels, srgb: source[13] == 0, valid: true }
+  return Info{ width: width, height: height, channels: channels, srgb: source[13] == 0 }
 }
 
 fn packed_pixel(r: u8, g: u8, b: u8, a: u8) u32 {
@@ -96,7 +96,7 @@ fn add(byte_value: u8, amount: i16) u8 {
 
 fn decode_into(destination: []u8, source: []const u8) DecodeWork {
   info := inspect_info(source)
-  if !info.valid { return DecodeWork{ error: -22 } }
+  if info.width == 0 { return DecodeWork{ error: -22 } }
   count := #cast(usize, info.width) * #cast(usize, info.height)
   if info.width != 0 && count / info.width != info.height { return DecodeWork{ error: -75 } }
   if count > #len(destination) / 4 { return DecodeWork{ info: info, error: -28 } }
@@ -303,7 +303,7 @@ fn encode_into(destination: []u8, pixels: []const u8, width: usize, height: usiz
 // Decodes QOI into RGBA8 pixels in arena. Failure pushes nothing.
 fn decode_work(arena: *mem.Arena, source: []const u8) DecodeWork {
   info := inspect_info(source)
-  if !info.valid { return DecodeWork{ error: -22 } }
+  if info.width == 0 { return DecodeWork{ error: -22 } }
   mark := mem.arena_mark(arena)
   result := decode_into(mem.push_bytes_uninit(arena, #cast(usize, info.width) * #cast(usize, info.height) * 4), source)
   if !result.ok {
@@ -339,7 +339,7 @@ fn pixel_count(width: usize, height: usize, channels: u8) usize {
 pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image {
   if status.failed { return Image{} }
   info := inspect_info(source)
-  if !info.valid {
+  if info.width == 0 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "decode QOI", "", "malformed QOI"))
     return Image{}
   }

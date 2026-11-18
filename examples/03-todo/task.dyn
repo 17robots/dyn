@@ -29,7 +29,7 @@ fn marker(state: State) []const u8 {
 // the line went wrong, and the task is zero.
 fn parse_task(status: *fail.Status, line: []const u8) Task {
   if #len(line) < 4 {
-    parse.malformed(status, "read task", "a task needs a marker and text", #len(line))
+    fail.at(status, fail.Kind.InvalidInput, "read task", "a task needs a marker and text", #len(line))
     return Task{}
   }
   task := Task{ text: line[4..] }
@@ -39,7 +39,7 @@ fn parse_task(status: *fail.Status, line: []const u8) Task {
       task.state = State.Done
     }
     _ => {
-      parse.malformed(status, "read task", "a task starts with [ ] or [x]", 0)
+      fail.at(status, fail.Kind.InvalidInput, "read task", "a task starts with [ ] or [x]", 0)
       return Task{}
     }
   }

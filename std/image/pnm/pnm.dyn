@@ -1,4 +1,3 @@
-use "std/parse" parse
 use "std/fail"
 use "std/mem" mem
 // P2/P3/P5/P6 portable graymaps/pixmaps. Samples up to 65535 are rounded
@@ -67,7 +66,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
     }
   }
   if cursor.failed || width == 0 || height == 0 || maxval == 0 || maxval > 65535 || cursor.at == #len(source) || !whitespace(source[cursor.at]) {
-    parse.failed_at(status, fail.Kind.InvalidInput, "decode PNM", "malformed PNM", cursor.at)
+    fail.at(status, fail.Kind.InvalidInput, "decode PNM", "malformed PNM", cursor.at)
     return Decoded{}
   }
   channels: usize = 1
@@ -75,7 +74,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
     channels = 3
   }
   if #cast(u64, width) * #cast(u64, height) > #cast(u64, #max(usize) / channels) {
-    parse.failed_at(status, fail.Kind.Overflow, "decode PNM", "the PNM is too large", cursor.at)
+    fail.at(status, fail.Kind.Overflow, "decode PNM", "the PNM is too large", cursor.at)
     return Decoded{}
   }
   count := #cast(usize, width) * #cast(usize, height) * channels
@@ -89,7 +88,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
   // before allocating
   // malformed input never causes dimension-sized storage.
   if (!plain && count > (#len(source) - cursor.at) / stride) || (plain && count > #len(source) - cursor.at) {
-    parse.failed_at(status, fail.Kind.InvalidInput, "decode PNM", "malformed PNM", cursor.at)
+    fail.at(status, fail.Kind.InvalidInput, "decode PNM", "malformed PNM", cursor.at)
     return Decoded{}
   }
   mark := mem.arena_mark(arena)
@@ -108,7 +107,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
     }
     if cursor.failed || value > maxval {
       mem.arena_rewind(arena, mark)
-      parse.failed_at(status, fail.Kind.InvalidInput, "decode PNM", "malformed PNM", cursor.at)
+      fail.at(status, fail.Kind.InvalidInput, "decode PNM", "malformed PNM", cursor.at)
       return Decoded{}
     }
     pixels[i] = #cast(u8, (value * 255 + maxval / 2) / maxval)

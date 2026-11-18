@@ -20,12 +20,16 @@ for length in (0, 1, 3, 55, 56, 63, 64, 65, 1000):
   explicit:sha.Sha256
   sha.init(&explicit)
   middle:=#len(input)/2
-  if !sha.update(&zero,input[..middle]) || !sha.update(&zero,input[middle..]) || !sha.update(&explicit,input) {{ #panic("update") }}
+  sha.update(&zero,input[..middle])
+  sha.update(&zero,input[middle..])
+  sha.update(&explicit,input)
+  if zero.failed || explicit.failed {{ #panic("update") }}
   a:[32]u8
 b:[32]u8
   if !bytes.equal(sha.finish(&zero,a[..]),expected[..]) || !bytes.equal(sha.finish(&explicit,b[..]),expected[..]) {{ #panic("digest") }}
   sha.init(&zero)
-  if !sha.update(&zero,input) || !bytes.equal(sha.finish(&zero,a[..]),expected[..]) {{ #panic("reset") }}
+  sha.update(&zero,input)
+  if !bytes.equal(sha.finish(&zero,a[..]),expected[..]) {{ #panic("reset") }}
 }}''')
 source.append('''fn main() {
   empty:sha.Sha256
@@ -35,14 +39,17 @@ source.append('''fn main() {
   context:sha.Sha256
   sha.init(&context)
   context.length=2305843009213693951
-  if sha.update(&context,"x") || !context.failed { #panic("length overflow") }
+  sha.update(&context,"x")
+  if !context.failed { #panic("length overflow") }
   saved:=context.length
-  if sha.update(&context,"") || context.length!=saved { #panic("sticky failure") }
+  sha.update(&context,"")
+  if context.length!=saved { #panic("sticky failure") }
   for i in 0..32 { digest[i]=165 }
   if #len(sha.finish(&context,digest[..]))!=0 { #panic("failed finish") }
   for byte in digest { if byte!=165 { #panic("failed output write") } }
   sha.init(&context)
-  if !sha.update(&context,"") || context.failed { #panic("reset failure") }
+  sha.update(&context,"")
+  if context.failed { #panic("reset failure") }
 ''' + '\n'.join(f'case_{n}()' for n in (0,1,3,55,56,63,64,65,1000)) + '\n}')
 with tempfile.TemporaryDirectory(prefix='dyn-sha-zero-') as directory:
     work=Path(directory)

@@ -117,8 +117,11 @@ fn main() i32 {
   print_sorted("month", &months, arena, earlier_name)
   io.println("")
   storage_line: [64]u8
-  money := fmt.buffer(storage_line[..])
+  // Any amount of cents fits 64 bytes, so this status cannot fail.
+  rendering: fail.Status
+  money := fmt.buffer(&rendering, storage_line[..])
   write_cents(&money, largest.amount)
+  _ = rendering
   io.println("largest: {} ({}, line {})", largest.description, fmt.bytes(&money), largest.line)
   if skipped > 0 {
     io.println("skipped {} bad rows", skipped)

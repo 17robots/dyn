@@ -23,20 +23,25 @@ fn main() {
     Post{ id: 1, author: "ann", body: "hi \"there\"", created: 99, ok: true, score: 1.5, small: 7, count: 3 },
     Post{ id: -2, author: "bo", body: "x\n", score: -0.25 },
   ]
-  out := json.writer(storage[..])
+  out_status: fail.Status
+  out := json.writer(&out_status, storage[..])
   json.array_of(&out, posts[..])
   io.println("{}", json.output(&out))
-  single := json.writer(storage[..])
+  single_status: fail.Status
+  single := json.writer(&single_status, storage[..])
   json.object_of(&single, posts[1])
   io.println("{}", json.output(&single))
-  nested := json.writer(storage[..])
+  nested_status: fail.Status
+  nested := json.writer(&nested_status, storage[..])
   json.object_of(&nested, Nested{})
-  io.println("nested fails {}", json.failed(&nested))
+  io.println("nested fails {}", nested_status.failed)
 
   inner_storage: [128]u8
-  inner := html.writer(inner_storage[..])
+  inner_status: fail.Status
+  inner := html.writer(&inner_status, inner_storage[..])
   html.print(&inner, "<i>{}</i>", "a&b")
-  page := html.writer(storage[..])
+  page_status: fail.Status
+  page := html.writer(&page_status, storage[..])
   html.print(&page, "<p id=\"{}\" class=\"{}\">{} {} {}</p><style>p {{ color: red }}</style>{} [{}] {}", 42, "x\"y", "<b>", true,
     html.output(&inner), -7, html.trusted("<br>"))
   io.println("{}", html.output(&page).bytes)
