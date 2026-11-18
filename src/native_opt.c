@@ -791,7 +791,7 @@ static bool inline_small_type(const DynIrProgram *ir, DynType type) {
 static bool inline_large_value(const DynIrProgram *ir, DynType type) {
   if (!dyn_type_is_struct(type)) return false;
   size_t index = type - DYN_TYPE_STRUCT_BASE;
-  return index < ir->struct_count && ir->structs[index].size > 192;
+  return index < ir->struct_count && ir->structs[index].size > 128;
 }
 static bool inline_holds_large_value(const DynIrProgram *ir, const DynIrFunction *f) {
   if (inline_large_value(ir, f->return_type)) return true;

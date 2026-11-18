@@ -45,9 +45,8 @@ fn append_bytes(destination: []u8, offset: usize, source: []const u8) usize {
 }
 
 fn append_usize(destination: []u8, offset: usize, value: usize) usize {
-  digits: [20 + memory.ArenaBufferOverhead]u8
-  scratch := memory.arena_from_buffer(digits[..])
-  return append_bytes(destination, offset, format.u64_decimal(scratch, value))
+  digits: [20]u8
+  return append_bytes(destination, offset, decimal(digits[..], value))
 }
 
 fn request_into(destination: []u8, method: []const u8, target: []const u8, host: []const u8, body: []const u8) []u8 {
@@ -876,7 +875,10 @@ pub struct Response {
   status: u16,
   // Set by a server that closes the connection after this response: the
   // head then says Connection: close whatever the options say.
-  closing: bool,
+  closing: bool,  // Optional server-owned scratch of at least 8 KiB, reused for every
+  // response: the head and a small body are composed in it. Empty:
+  // response_begin uses its own stack buffer, zeroed on each call.
+  staging: []u8,
 }
 
 pub struct Header { name: []const u8, value: []const u8 }
@@ -921,6 +923,9 @@ pub struct Body {
   finished: bool,
   // A HEAD response: writes succeed and send nothing.
   discard: bool,
+  // The response's staging, where small chunks are framed; empty: a stack
+  // buffer, zeroed on each write.
+  staging: []u8,
 }
 
 // Handles one request: writes the response, and records any failure in
@@ -1183,8 +1188,13 @@ pub fn frame_request(input: []const u8, capacity: usize) FrameResult {
   }
   parsed := http_parse_head(input, false)
   if parsed.failed { return FrameResult{ status: FrameStatus.Invalid, offset: parsed.offset } }
-  head := parsed.head
-  if head.chunked { return FrameResult{ status: FrameStatus.Invalid } }
+  if parsed.head.chunked { return FrameResult{ status: FrameStatus.Invalid } }
+  return frame_parsed(input, capacity, parsed.head)
+}
+
+// The rest of frame_request once a complete head without chunked framing is
+// parsed, so callers that parsed it already do not parse it twice.
+fn frame_parsed(input: []const u8, capacity: usize, head: HttpHead) FrameResult {
   if head.header_length > capacity || head.content_length > capacity - head.header_length {
     return FrameResult{ status: FrameStatus.Capacity }
   }
@@ -1205,9 +1215,13 @@ pub fn frame_request(input: []const u8, capacity: usize) FrameResult {
 // then the result is Incomplete with total one past the bytes at hand.
 pub fn frame_request_decoding(input: []u8, capacity: usize) FrameResult {
   scan: usize = 0
-  if !head_complete(input, &scan) { return frame_request(input, capacity) }
+  if !head_complete(input, &scan) {
+    if #len(input) >= capacity { return FrameResult{ status: FrameStatus.Capacity } }
+    return FrameResult{ status: FrameStatus.Incomplete }
+  }
   parsed := http_parse_head(input, false)
-  if parsed.failed || !parsed.head.chunked { return frame_request(input, capacity) }
+  if parsed.failed { return FrameResult{ status: FrameStatus.Invalid, offset: parsed.offset } }
+  if !parsed.head.chunked { return frame_parsed(input, capacity, parsed.head) }
   head := parsed.head
   if head.header_length > capacity { return FrameResult{ status: FrameStatus.Capacity } }
   empty: [0]u8
@@ -1494,15 +1508,24 @@ pub fn parse_date(status: *fail.Status, text: []const u8) i64 {
   return days * 86400 + hour * 3600 + minute * 60 + second
 }
 
+// value in decimal at the start of destination; empty when it does not fit.
+// Called for every response's Content-Length: no arena, no copies.
 fn decimal(destination: []u8, value: usize) []const u8 {
-  digits: [20 + memory.ArenaBufferOverhead]u8
-  scratch := memory.arena_from_buffer(digits[..])
-  text := format.u64_decimal(scratch, value)
-  if #len(text) > #len(destination) { return destination[..0] }
-  for i in 0..#len(text) {
-    destination[i] = text[i]
+  digits: [20]u8
+  at: usize = 20
+  rest := value
+  for {
+    at -= 1
+    digits[at] = #cast(u8, rest % 10) + '0'
+    rest /= 10
+    if rest == 0 { break }
   }
-  return destination[..#len(text)]
+  count := 20 - at
+  if count > #len(destination) { return destination[..0] }
+  for i in 0..count {
+    destination[i] = digits[at + i]
+  }
+  return destination[..count]
 }
 
 fn response_invalid(status: *fail.Status, message: []const u8) {
@@ -1538,15 +1561,17 @@ fn text_valid(value: []const u8) bool {
   return true
 }
 
-enum HeadMode { Measure, Stage, Direct }
-struct HeadWriter { mode: HeadMode, staging: []u8, used: usize, response: *Response, status: *fail.Status }
+enum HeadMode { Stage, Direct }
+// Stage counts every byte in used, and sets overflow once one does not fit.
+struct HeadWriter { mode: HeadMode, staging: []u8, used: usize, overflow: bool, response: *Response, status: *fail.Status }
 fn head_emit(writer: *HeadWriter, piece: []const u8) {
-  if writer.mode == HeadMode.Measure {
-    writer.used += #len(piece)
-  } else if writer.mode == HeadMode.Stage {
-    writer.used = append_bytes(writer.staging, writer.used, piece)
-  } else {
+  if writer.mode == HeadMode.Direct {
     response_output(writer.status, writer.response, piece)
+  } else if writer.overflow || #len(piece) > #len(writer.staging) - writer.used {
+    writer.overflow = true
+    writer.used += #len(piece)
+  } else {
+    writer.used = append_bytes(writer.staging, writer.used, piece)
   }
 }
 fn head_write(writer: *HeadWriter, options: ResponseOptions, status: u16, reason: []const u8, content_type: []const u8, body_length: usize, chunked: bool, date: []const u8) {
@@ -1651,17 +1676,30 @@ fn response_begin(status: *fail.Status, response: *Response, options: ResponseOp
   if response.head_only {
     payload = body[..0]
   }
+  // The head (and a small body) is composed in staging: the server's, or
+  // 8 KiB on this stack, which is zeroed on every call.
+  if #len(response.staging) >= 8 * memory.KiB {
+    response_send(status, response, options, code, reason, content_type, body_length, chunked, date, payload, buffered,
+      response.staging[..8 * memory.KiB])
+    return
+  }
   staging: [8 * memory.KiB]u8
-  measure := HeadWriter{ mode: HeadMode.Measure, response: response, status: status }
-  head_write(&measure, options, code, reason, content_type, body_length, chunked, date)
-  head_length := measure.used
+  response_send(status, response, options, code, reason, content_type, body_length, chunked, date, payload, buffered, staging[..])
+}
+
+fn response_send(status: *fail.Status, response: *Response, options: ResponseOptions, code: u16, reason: []const u8,
+  content_type: []const u8, body_length: usize, chunked: bool, date: []const u8, payload: []const u8, buffered: bool,
+  staging: []u8) {
+  // One pass: the head goes straight into staging, and overflow says when it
+  // did not fit (then it is written out directly, or refused when buffered).
+  stage := HeadWriter{ mode: HeadMode.Stage, staging: staging, response: response, status: status }
+  head_write(&stage, options, code, reason, content_type, body_length, chunked && !buffered, date)
+  head_length := stage.used
   if buffered {
-    if head_length > #len(staging) {
+    if stage.overflow {
       fail.set(status, fail.make(fail.Kind.Capacity, "respond", "", "the head does not fit 8 KiB"))
       return
     }
-    stage := HeadWriter{ mode: HeadMode.Stage, staging: staging[..], response: response, status: status }
-    head_write(&stage, options, code, reason, content_type, body_length, false, date)
     sent_length := body_length
     if response.head_only {
       sent_length = 0
@@ -1677,12 +1715,10 @@ fn response_begin(status: *fail.Status, response: *Response, options: ResponseOp
     }
     return
   }
-  if head_length <= #len(staging) {
-    stage := HeadWriter{ mode: HeadMode.Stage, staging: staging[..], response: response, status: status }
-    head_write(&stage, options, code, reason, content_type, body_length, chunked, date)
+  if !stage.overflow {
     if #len(payload) <= #len(staging) - head_length {
       // Common case: head and body in one write.
-      used := append_bytes(staging[..], head_length, payload)
+      used := append_bytes(staging, head_length, payload)
       response.started = true
       response_output(status, response, staging[..used])
       return
@@ -2037,7 +2073,7 @@ pub fn respond_stream(status: *fail.Status, response: *Response, options: Respon
   response_begin(status, response, options, 0, true, "", false)
   if status.failed { return Body{ finished: true } }
   response.finished = true
-  return Body{ output: response.output, discard: response.head_only }
+  return Body{ output: response.output, discard: response.head_only, staging: response.staging }
 }
 
 fn hex_size(destination: []u8, value: usize) []const u8 {
@@ -2081,7 +2117,17 @@ fn body_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
   size := hex_size(size_storage[..], #len(source))
   // A small chunk leaves in one write: four writes per chunk would each be a
   // segment, and stall on Nagle with delayed ACK.
-  staging: [4 * memory.KiB]u8
+  if #len(body.staging) >= 4 * memory.KiB {
+    chunk_write(status, body, size, source, body.staging[..4 * memory.KiB])
+  } else {
+    staging: [4 * memory.KiB]u8
+    chunk_write(status, body, size, source, staging[..])
+  }
+  if status.failed { return 0 }
+  return #len(source)
+}
+
+fn chunk_write(status: *fail.Status, body: *Body, size: []const u8, source: []const u8, staging: []u8) {
   if #len(source) <= #len(staging) - #len(size) - 4 {
     used := append_bytes(staging[..], 0, size)
     used = append_bytes(staging[..], used, "\r\n")
@@ -2094,8 +2140,6 @@ fn body_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
     body_output(status, body, source)
     body_output(status, body, "\r\n")
   }
-  if status.failed { return 0 }
-  return #len(source)
 }
 
 // Borrows a stable Body slot: do not move or destroy it during the writer's lifetime.

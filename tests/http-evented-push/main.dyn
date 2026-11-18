@@ -424,12 +424,12 @@ fn main() {
     // HTTP/3 over QUIC, which brings its own TLS; TCP stays cleartext.
     quic_context := https.quic_context(arena, &setup, arguments[2], arguments[3])
     quic_stack = https.quic(quic_context)
-    config.http3 = true
+    config.http3 = evented.http3()
     config.quic = &quic_stack
   }
   if #len(arguments) > 1 && (bytes.equal(arguments[1], "h2") || bytes.equal(arguments[1], "h3")) {
     // HTTP/2 needs room for a whole 16 KiB frame.
-    config.http2 = true
+    config.http2 = evented.http2()
     config.receive_size = 32 * mem.KiB
     config.http2_connections = 8
     config.http2_slots = 16

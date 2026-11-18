@@ -24,6 +24,10 @@ pub struct Queue {
   free: []u32, free_count: usize,
   table: []u32, used_slots: usize,
   batch: usize,
+  // Where the system writes up to batch ready events: made once by open, so
+  // a wait neither allocates nor zeroes it. Empty where the platform builds
+  // its list per wait.
+  native: []u64,
 }
 const SlotEmpty: u32 = 0
 const SlotRemoved: u32 = 4294967295
@@ -41,13 +45,15 @@ pub fn open(arena: *mem.Arena, status: *fail.Status, capacity: usize) Queue {
   for table_size < 2 * capacity {
     table_size *= 2
   }
+  batch := capacity
+  if batch > MaxBatch {
+    batch = MaxBatch
+  }
   queue := Queue{
     handle: handle, active: true, entries: mem.push_array(Entry, arena, capacity),
     free: mem.push_array(u32, arena, capacity), free_count: capacity,
-    table: mem.push_array(u32, arena, table_size), batch: capacity,
-  }
-  if queue.batch > MaxBatch {
-    queue.batch = MaxBatch
+    table: mem.push_array(u32, arena, table_size), batch: batch,
+    native: mem.push_array(u64, arena, (batch * NativeEventSize + 7) / 8),
   }
   for i in 0..capacity {
     queue.free[i] = #cast(u32, capacity - 1 - i)

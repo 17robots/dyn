@@ -28,8 +28,9 @@
 //   larger than that goes to Config.on_large_body, which reads it in pieces
 //   with receive_body, or gets 413.
 //
-// Config.http2 adds HTTP/2 (see h2.dyn) for clients that ask for it, and
-// Config.http3 adds HTTP/3 over QUIC (h3.dyn) on the same port, over UDP.
+// Config.http2 = http2() adds HTTP/2 (see h2.dyn) for clients that ask for
+// it, and Config.http3 = http3() adds HTTP/3 over QUIC (h3.dyn) on the same
+// port, over UDP. A program that sets neither links no code for them.
 //
 // Config.transport replaces plain TCP reads and writes, for TLS. This module
 // has no TLS dependency; std/net/http/evented/tls supplies an OpenSSL one.
@@ -122,14 +123,16 @@ pub struct Config {
   // http2_connections state blocks (about 21 KiB each) bound the HTTP/2
   // connections per worker; http2_slots request slots (receive_size plus
   // job_size each) bound the streams in progress per worker.
-  http2: bool,
+  // Set with http2(); left zero, no HTTP/2 code is linked.
+  http2: Http2,
   http2_connections: usize,
   http2_slots: usize,
   // HTTP/3 on a UDP socket at the TCP listener's address, through quic
   // (std/net/http/evented/tls supplies OpenSSL's). Needs http2: QUIC
   // connections take its state blocks and request slots. TCP responses then
   // carry Alt-Svc. quic must stay alive until join returns.
-  http3: bool,
+  // Set with http3(); left zero, no HTTP/3 code is linked.
+  http3: Http3,
   quic: *const Quic,
   // Bytes of each worker's request arena (see arena): scratch a handler
   // allocates from and never frees, reset before the next handler runs.
@@ -252,8 +255,13 @@ fn worker_storage(config: Config) usize {
   if config.compress_level > 0 {
     per_worker += #sizeof(gzip.Encoder) + #alignof(gzip.Encoder)
   }
-  per_worker += h2_storage_size(config) + h3_storage_size(config)
-  per_worker += config.request_arena_size + mem.ArenaBufferOverhead
+  if has_http2(config) {
+    per_worker += config.http2.storage_size(config)
+  }
+  if has_http3(config) {
+    per_worker += config.http3.storage_size(config)
+  }
+  per_worker += config.request_arena_size + mem.ArenaBufferOverhead + 8 * mem.KiB
   // The event queue (entry, free list, hash table per slot), thread records,
   // alignment padding.
   per_worker += (slots + 2) * 64 + 64 * mem.KiB
@@ -345,6 +353,9 @@ struct Connection {
   parked: bool,
   // WebSocket: message assembly state; assembled bytes lead input.
   frames: websocket.WebSocketMessageState,
+  // Set by upgrade: reads the WebSocket frames in input. A program that never
+  // upgrades never reaches the frame code, so it is not linked.
+  on_frames: fn(*Worker, usize) bool,
   close_sent: bool,
   // A large body: the request head stays at input[..body_head] while body
   // bytes pass through behind it. body_left counts Content-Length bytes.
@@ -390,6 +401,9 @@ pub struct Worker {
   // otherwise wake the loop continuously.
   listening: bool,
   scratch: *mem.Arena,
+  // Where response heads are composed: 8 KiB, reused by every response this
+  // worker writes, so none zeroes a buffer of its own.
+  head_staging: []u8,
   // Every slot's input and output buffers, receive_size and send_size each.
   slot_input: []u8,
   slot_output: []u8,
@@ -727,7 +741,8 @@ fn new_response(connection: *Connection) http.Response {
     mem.arena_reset(connection.worker.request_arena)
   }
   return http.Response{ output: io.Writer{ data: connection, write: output_write },
-    reserve_body: reserve_body, commit_body: commit_body, date: connection.worker.date[..], alt_svc: alt_svc(connection.worker) }
+    reserve_body: reserve_body, commit_body: commit_body, date: connection.worker.date[..], alt_svc: alt_svc(connection.worker),
+    staging: connection.worker.head_staging }
 }
 
 // Answers status and closes the connection: through Config.on_too_large
@@ -784,7 +799,7 @@ fn close_connection(worker: *Worker, index: usize) {
   release_output(connection)
   connection.failed = true
   if connection.h2 != nil && connection.h2.quic {
-    h3_close(worker, connection)
+    worker.config.http3.close(worker, connection)
   }
   if connection.mode == Mode.Body && connection.body_started {
     // The finish function still owns its data: let it clean up.
@@ -794,7 +809,9 @@ fn close_connection(worker: *Worker, index: usize) {
     message := Message{ peer: peer_of(worker, index), kind: MessageKind.Closed, context: worker.config.message_context }
     worker.config.on_message(&message)
   }
-  h2_close_all(worker, connection)
+  if connection.h2 != nil {
+    worker.config.http2.close_all(worker, connection)
+  }
   if connection.job_running || (connection.h2 != nil && connection.h2.jobs > 0) {
     // The pool still uses this slot's job storage; free it when the job ends.
     connection.active = false
@@ -806,7 +823,9 @@ fn close_connection(worker: *Worker, index: usize) {
 
 fn recycle(worker: *Worker, index: usize) {
   connection := &worker.connections[index]
-  h2_release(worker, connection)
+  if has_http2(worker.config) {
+    worker.config.http2.release(worker, connection)
+  }
   connection.used = 0
   release_input(connection)
   input := connection.base_input
@@ -847,14 +866,14 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
   connection := &worker.connections[index]
   if connection.mode == Mode.Deferred { return flush_and_wait(worker, index) }
   if connection.mode == Mode.Body { return body_feed(worker, index) }
-  if connection.mode == Mode.Http2 { return h2_serve(worker, index) }
-  if connection.fresh && connection.mode == Mode.Http && worker.config.http2 {
+  if connection.mode == Mode.Http2 { return worker.config.http2.serve(worker, index) }
+  if connection.fresh && connection.mode == Mode.Http && has_http2(worker.config) {
     // Prior knowledge (RFC 9113 3.3): the client starts with the preface.
     if preface_prefix(connection.input[..connection.used]) {
       if connection.used < #len(Preface) { return true }
       connection.fresh = false
-      _ = h2_begin(worker, index)
-      return h2_serve(worker, index)
+      _ = worker.config.http2.begin(worker, index)
+      return worker.config.http2.serve(worker, index)
     }
     connection.fresh = false
   }
@@ -939,7 +958,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
     }
   }
   if connection.mode == Mode.WebSocket && !connection.writing && !connection.close_after {
-    if !websocket_frames(worker, index) { return false }
+    if !connection.on_frames(worker, index) { return false }
   }
   if connection.failed || !flush(connection) { return false }
   if connection.queued > 0 {
@@ -1127,10 +1146,10 @@ fn on_handshake(worker: *Worker, index: usize) {
   }
   connection.handshaking = false
   connection.last_active = now_milliseconds()
-  if worker.config.http2 && connection.transport.protocol != nil &&
+  if has_http2(worker.config) && connection.transport.protocol != nil &&
     bytes.equal(connection.transport.protocol(connection.session), "h2") {
     connection.fresh = false
-    _ = h2_begin(worker, index)
+    _ = worker.config.http2.begin(worker, index)
   }
   // The client's first request may arrive with its last handshake message.
   on_readable(worker, index)
@@ -1342,7 +1361,9 @@ fn worker_main(worker: *Worker) isize {
     mem.arena_rewind(worker.scratch, mark)
     finish_later(worker)
     // Datagrams, timers, and whatever handlers and pushes wrote to QUIC.
-    h3_poll(worker)
+    if has_http3(worker.config) {
+      worker.config.http3.poll(worker)
+    }
     // Parked clients take slots from connections that have since gone idle.
     if worker.parked > 0 {
       now := now_milliseconds()
@@ -1374,7 +1395,9 @@ fn worker_main(worker: *Worker) isize {
   if worker.listening {
     event.remove(&worker.io, &worker.queue, worker.listener.descriptor)
   }
-  h3_stop(worker)
+  if has_http3(worker.config) {
+    worker.config.http3.stop(worker)
+  }
   event.remove(&worker.io, &worker.queue, worker.waker.descriptor)
   _ = io_failed(worker)
   event.close(&worker.queue)
@@ -1389,7 +1412,8 @@ fn valid_start(status: *fail.Status, workers: []Worker, config: Config, handler:
     (config.overflow_send_count == 0) != (config.overflow_send_size == 0) ||
     (config.overflow_send_count > 0 && config.overflow_send_size <= config.send_size) ||
     (config.upload_count == 0) != (config.upload_size == 0) || (config.upload_count > 0 && config.upload_size <= config.receive_size) ||
-    config.compress_level > 9 || !h2_valid(config) || !h3_valid(config) ||
+    config.compress_level > 9 || (has_http2(config) && !config.http2.valid(config)) ||
+    (has_http3(config) && !config.http3.valid(config)) ||
     (config.transport != nil && config.transport.needs_native_threads && config.spawner == nil) ||
     #len(workers) > 0xffffffff || config.connections_per_worker > 0xffffffff {
     fail.invalid(status, "start server", "", "invalid Config")
@@ -1477,10 +1501,13 @@ fn start_worker(outer: *mem.Arena, status: *fail.Status, worker: *Worker) {
     worker.inbox.done[half] = mem.push_array(usize, arena, count)
   }
   worker.scratch = mem.arena_from_buffer(mem.push_bytes(arena, scratch_size(config)))
+  worker.head_staging = mem.push_bytes(arena, 8 * mem.KiB)
   if config.compress_level > 0 {
     worker.encoder = mem.push(gzip.Encoder, arena)
   }
-  h2_start(arena, worker)
+  if has_http2(config) {
+    config.http2.start(arena, worker)
+  }
   if config.request_arena_size > 0 {
     worker.request_arena = mem.arena_from_buffer(mem.push_bytes(arena, config.request_arena_size + mem.ArenaBufferOverhead))
   }
@@ -1491,7 +1518,9 @@ fn start_worker(outer: *mem.Arena, status: *fail.Status, worker: *Worker) {
   event.add(status, &worker.queue, worker.listener.descriptor, event.Readable, ListenerToken)
   worker.waker = event.waker_open(status)
   event.add(status, &worker.queue, worker.waker.descriptor, event.Readable, WakerToken)
-  h3_start(arena, status, worker)
+  if has_http3(config) {
+    config.http3.start(arena, status, worker)
+  }
   if !status.failed && config.spawner != nil {
     worker.native = config.spawner.spawn(config.spawner.data, arena, config.stack_size, #cast(fn(rawptr) isize, worker_main), worker)
     if worker.native == nil {
@@ -1816,7 +1845,7 @@ fn read_inbox(worker: *Worker) {
   for i in 0..inbox.done_count[half] {
     entry := inbox.done[half][i]
     if (entry & SlotJob) != 0 {
-      h2_job_done(worker, entry & ~SlotJob)
+      worker.config.http2.job_done(worker, entry & ~SlotJob)
     } else {
       job_done(worker, entry)
     }
@@ -1830,7 +1859,7 @@ fn read_inbox(worker: *Worker) {
       for c in 0..worker.slots_used {
         connection := &worker.connections[c]
         if pushable(connection) && connection.mode == Mode.Http2 && !connection.close_after {
-          h2_deliver(worker, connection, item, payload)
+          worker.config.http2.deliver(worker, connection, item, payload)
         } else if pushable(connection) && connection.topic == item.topic && !connection.close_after {
           deliver(worker, c, item, payload)
         }
@@ -1842,7 +1871,7 @@ fn read_inbox(worker: *Worker) {
     connection := &worker.connections[index]
     if pushable(connection) && connection.generation == item.generation && !connection.close_after {
       if connection.mode == Mode.Http2 {
-        h2_deliver(worker, connection, item, payload)
+        worker.config.http2.deliver(worker, connection, item, payload)
       } else {
         deliver(worker, index, item, payload)
       }
@@ -1941,7 +1970,7 @@ pub fn job(T: type, response: *http.Response) *T {
     job_too_large(#typeof(T).name, #sizeof(T), connection.worker.config.job_size)
   }
   if connection != nil && connection.h2 != nil {
-    jobs := h2_job(connection)
+    jobs := connection.worker.config.http2.job(connection)
     if jobs == nil { return nil }
     mem.arena_reset(jobs)
     return mem.push(T, jobs)
@@ -1989,7 +2018,7 @@ pub fn run(status: *fail.Status, response: *http.Response, data: *$J, work: fn(*
       job_failure(status, fail.Kind.InvalidInput, "run needs work, finish and data")
       return
     }
-    h2_run(status, connection, data, #cast(fn(rawptr), work), #cast(fn(*fail.Status, *http.Response, *const http.Request, rawptr), finish))
+    connection.worker.config.http2.run(status, connection, data, #cast(fn(rawptr), work), #cast(fn(*fail.Status, *http.Response, *const http.Request, rawptr), finish))
     if !status.failed {
       response.finished = true
     }
@@ -2137,7 +2166,7 @@ pub fn receive_body(status: *fail.Status, response: *http.Response, data: *$J, c
     return
   }
   if connection != nil && connection.h2 != nil {
-    h2_receive_body(status, connection, response, data, #cast(fn(rawptr, []const u8) bool, chunk),
+    connection.worker.config.http2.receive_body(status, connection, response, data, #cast(fn(rawptr, []const u8) bool, chunk),
       #cast(fn(*fail.Status, *http.Response, *const http.Request, rawptr, BodyEnd), finish))
     return
   }
@@ -2326,7 +2355,7 @@ pub fn open_stream(status: *fail.Status, response: *http.Response, options: http
   if status.failed { return Peer{} }
   connection := connection_of(response)
   if connection != nil && connection.h2 != nil {
-    return h2_open_stream(status, connection, response, options, topic)
+    return connection.worker.config.http2.open_stream(status, connection, response, options, topic)
   }
   if connection == nil || connection.mode != Mode.Http || response.started || response.finished || response.head_only {
     return peer_failure(status, fail.Kind.InvalidState, "not a fresh evented response")
@@ -2347,7 +2376,7 @@ pub fn open_stream(status: *fail.Status, response: *http.Response, options: http
 pub fn upgrade(status: *fail.Status, response: *http.Response, request: *const http.Request, topic: u64) Peer {
   if status.failed { return Peer{} }
   connection := connection_of(response)
-  if connection != nil && connection.h2 != nil { return h2_upgrade(status, connection, response, topic) }
+  if connection != nil && connection.h2 != nil { return connection.worker.config.http2.upgrade(status, connection, response, topic) }
   if connection == nil || connection.mode != Mode.Http || response.started || response.finished {
     return peer_failure(status, fail.Kind.InvalidState, "not a fresh evented response")
   }
@@ -2367,6 +2396,7 @@ pub fn upgrade(status: *fail.Status, response: *http.Response, request: *const h
   connection.mode = Mode.WebSocket
   connection.topic = topic
   connection.frames = websocket.message_state(true)
+  connection.on_frames = websocket_frames
   return peer_of(connection.worker, connection.index)
 }
 

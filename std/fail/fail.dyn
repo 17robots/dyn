@@ -37,18 +37,20 @@ pub enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, Alre
 // after the text it came from is gone, and copying it copies the text. Read
 // the parts with operation_text, path_text and message_text. Text longer than the storage
 // is cut short: a long path keeps its end, after "...".
+// 136 bytes, so a Status is 160: the small fields first, then the text.
 pub struct Failure {
   kind: Kind,
-  // The system's own code, when the system gave one.
-  native: isize,
-  // For text input: where it went wrong, in bytes from the start.
-  offset: usize,
   has_offset: bool,
   operation_length: u8,
   path_length: u8,
   message_length: u8,
-  // operation, then message, then path.
-  text: [228]u8,
+  // The system's own code, when the system gave one.
+  native: isize,
+  // For text input: where it went wrong, in bytes from the start.
+  offset: usize,
+  // operation, then message, then path; a path that does not fit keeps its
+  // end ("...config/app.json").
+  text: [112]u8,
 }
 
 pub struct Status {

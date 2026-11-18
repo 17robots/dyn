@@ -15,8 +15,10 @@ fn native_control(status: *fail.Status, queue: *Queue, index: usize, entry: Entr
     net.event_add(status, queue.handle, entry.descriptor, entry.events, index)
   }
 }
+const NativeEventSize: usize = #sizeof(net.Event)
+
 fn native_wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout: i32) []Event {
-  native := mem.push_array(net.Event, arena, queue.batch)
+  native := #slice(#cast(*net.Event, &queue.native[0]), queue.batch)
   count := net.event_wait(status, queue.handle, native, timeout)
   events := mem.push_array(Event, arena, count)
   for i in 0..#len(events) {

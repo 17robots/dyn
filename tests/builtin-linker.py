@@ -210,6 +210,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
                     continue
                 text = re.sub(r'^\s+[0-9a-f]+:\s+', '', line)
                 text = re.sub(r'<[^>]*>', '', re.sub(r'[0-9a-f]{6,}', 'A', re.sub(r'#-?[0-9]+', '#N', re.sub(r'0x[0-9a-f]+', 'X', text))))
+                # A zero offset prints as [x1] rather than [x1, #0]: the same
+                # instruction, where a symbol happens to start a page.
+                text = re.sub(r'\[((?:x|w)[0-9]+|sp)\]', r'[\1, #X]', text)
                 lines.append(text.rstrip())
             return lines
 

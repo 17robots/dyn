@@ -120,7 +120,7 @@ fn main() i32 {
       return 1
     }
     quic_stack = https.quic(quic_context)
-    config.http3 = true
+    config.http3 = evented.http3()
     config.quic = &quic_stack
   }
   if #len(arguments) == 4 && (bytes.equal(arguments[3], "h2") || h3) {
@@ -131,7 +131,7 @@ fn main() i32 {
       io.eprintln("cannot offer h2")
       return 1
     }
-    config.http2 = true
+    config.http2 = evented.http2()
     config.receive_size = 32 * mem.KiB
     config.http2_connections = 8
     config.http2_slots = 8
