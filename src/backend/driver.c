@@ -3721,7 +3721,9 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
       fprintf(stderr, "baseline ISA (no additional implemented host features)");
     fprintf(stderr, "\n");
   }
-  ctx->vectorize = !ctx->rv64 && !ctx->rv32 && !ctx->t32 && !debug && !debug_info && source->context.optimization && source->context.optimization->level >= 3;
+  /* Plain --release (level 0, meaning 2) vectorizes, as LLVM and GCC do at -O2. */
+  ctx->vectorize = !ctx->rv64 && !ctx->rv32 && !ctx->t32 && !debug && !debug_info && source->context.optimization &&
+                   (source->context.optimization->level ? source->context.optimization->level : 2) >= 2;
   ctx->byte_fill = !ctx->rv64 && !ctx->rv32 && !ctx->t32 && !debug && !debug_info && source->context.optimization &&
                    (source->context.optimization->level ? source->context.optimization->level : 2) >= 2;
   ctx->optimization_remarks = source->context.optimization && source->context.optimization->remarks;

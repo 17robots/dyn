@@ -393,6 +393,12 @@ Compiler:
 
 Compiler speed of generated code:
 
+- Plain `--release` vectorizes loops, as LLVM and GCC do at -O2; it took
+  `--opt-level 3` before. The loop vectorizer also handles 64-bit integer
+  lanes (XOR, AND, OR, add and subtract, two per vector), on x86-64 and
+  AArch64. `tools/codegen-bench.py` at plain `--release`: sum 3.6x, matmul
+  3.2x, pairs 1.75x, structs 1.4x and argon2 1.18x faster, the rest
+  unchanged; Argon2id's block XOR loops now run as vector code.
 - A small loop-free helper made of byte stores, such as
   `binary.store_u64_le`, now expands inside loops at `--release`. The
   inliner counted its eight stores' literals and casts and judged it too
