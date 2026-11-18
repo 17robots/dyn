@@ -218,12 +218,8 @@ fn relative_into(destination: []u8, base: []const u8, target: []const u8) Built 
   for {
     left_part := component_next(&left_parts)
     right_part := component_next(&right_parts)
-    if !left_parts.ended && !right_parts.ended && bytes.equal(left_part, right_part) {
-      continue
-    }
-    if !left_parts.ended && bytes.equal(left_part, "..") {
-      return Built{ value: destination[..0] }
-    }
+    if !left_parts.ended && !right_parts.ended && bytes.equal(left_part, right_part) { continue }
+    if !left_parts.ended && bytes.equal(left_part, "..") { return Built{ value: destination[..0] } }
     if !left_parts.ended {
       parents = 1
       for {

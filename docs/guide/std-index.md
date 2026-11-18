@@ -1048,7 +1048,8 @@ Layer: std
 - `fn is_file(info: Metadata) bool`
 - `fn remove(status: *fail.Status, path: []const u8)`: Removes the file at path.
 - `fn rename(status: *fail.Status, old_path: []const u8, new_path: []const u8)`: Renames old_path to new_path, replacing new_path when it exists.
-- `fn make_directory(status: *fail.Status, path: []const u8, mode: usize)`: Creates the directory path with mode (ignored on Windows).
+- `fn make_directory(status: *fail.Status, path: []const u8)`: Creates the directory path, readable by everyone and writable by its owner (0o755).
+- `fn make_directory_mode(status: *fail.Status, path: []const u8, mode: usize)`: Like make_directory, with the permission bits mode (ignored on Windows), such as 0o700 for a directory only its owner may enter.
 - `fn make_directory_exclusive(status: *fail.Status, path: []const u8, mode: usize)`: Creates the directory path with mode;
 - `fn remove_directory(status: *fail.Status, path: []const u8)`: Removes the empty directory path.
 - `fn open_directory(status: *fail.Status, path: []const u8, storage: []u8) Directory`: Opens the directory path for listing with directory_next.

@@ -63,6 +63,9 @@ Standard library:
   `Next.offset` becomes `state.start` (where the value began) or
   `state.offset` (archives). `array.pop` and `ring.pop` return the value,
   zero when empty. See the migration guide.
+- `fs.make_directory(&status, path)` takes no mode and makes the directory
+  0o755. `fs.make_directory_mode(&status, path, mode)` takes the bits, such
+  as 0o700 for a private directory.
 - `bufio.read_line(&status, &reader)` returns the line itself, borrowed from
   the reader's storage until the next read; `reader.ended` marks the end. A
   line longer than the storage fails with `Capacity`, and the next read
@@ -351,6 +354,9 @@ Standard library:
 
 Compiler:
 
+- A struct passed where exactly one of its fields fits names the field:
+  `expected []const u8, found DirectoryEntry: did you mean entry.name?`,
+  with a fix that adds `.name`.
 - Fixed: on x86-64 release builds, a call in a function the program never
   reaches could stop a constant argument from being folded into a function
   it does reach, so importing an unused module could change the code of

@@ -208,10 +208,51 @@ static bool error_array_argument(DynAstProgram *a, DynExprId argument, const Dyn
   error_span(x->span, s, e, message);
   return true;
 }
-static void error_argument(DynAstProgram *a, const DynSource *s, unsigned *e, DynExprId argument,
+static bool fits_argument(Sema *sema, DynAstProgram *a, DynType value, DynType target);
+static DynAstPointer *pointer_info(DynAstProgram *a, DynType t);
+/* A struct, or a pointer to one, passed where the type of exactly one of its
+   fields goes, such as a DirectoryEntry for a path: "did you mean
+   entry.name?", with a fix that adds the field. */
+static bool error_field_argument(Sema *sema, DynAstProgram *a, DynExprId argument, const DynSource *s,
+                                 unsigned *e, DynType expected, DynType found) {
+  DynType holder = found;
+  DynAstPointer *pointer = dyn_type_is_pointer(found) ? pointer_info(a, found) : NULL;
+  if (pointer) holder = pointer->pointee;
+  if (!dyn_type_is_struct(holder) || holder - DYN_TYPE_STRUCT_BASE >= a->struct_count) return false;
+  const DynAstStruct *st = &a->structs[holder - DYN_TYPE_STRUCT_BASE];
+  if (st->is_template) return false;
+  const DynAstField *match = NULL;
+  for (uint32_t i = 0; i < st->field_count; ++i) {
+    const DynAstField *field = &a->fields[st->field_start + i];
+    if (!fits_argument(sema, a, field->type, expected)) continue;
+    if (match) return false;
+    match = field;
+  }
+  if (!match) return false;
+  const DynAstExpr *x = &a->expressions[argument];
+  int length = (int)(x->span.end_byte - x->span.start_byte);
+  int field_length = (int)(match->name.end_byte - match->name.start_byte);
+  if (length > 64 || field_length > 64) return false;
+  char message[1024], want[384], got[384], suffix[80];
+  display_type_name(a, expected, s, want, sizeof(want));
+  display_type_name(a, found, s, got, sizeof(got));
+  bool simple = x->kind == DYN_EXPR_NAME || x->kind == DYN_EXPR_FIELD || x->kind == DYN_EXPR_INDEX;
+  if (simple) {
+    snprintf(message, sizeof(message), "function argument type mismatch (expected %s, found %s): did you mean %.*s.%.*s?",
+             want, got, length, s->text + x->span.start_byte, field_length, s->text + match->name.start_byte);
+    snprintf(suffix, sizeof(suffix), ".%.*s", field_length, s->text + match->name.start_byte);
+    dyn_diagnostic_fix(s, x->span.start_byte, x->span.end_byte, x->span.end_byte, suffix, true);
+  } else
+    snprintf(message, sizeof(message), "function argument type mismatch (expected %s, found %s): did you mean its field %.*s?",
+             want, got, field_length, s->text + match->name.start_byte);
+  error_span(x->span, s, e, message);
+  return true;
+}
+static void error_argument(Sema *sema, DynAstProgram *a, const DynSource *s, unsigned *e, DynExprId argument,
                            DynType expected, DynType found) {
-  if (!error_array_argument(a, argument, s, e, expected, found))
-    error_types(a, a->expressions[argument].span, s, e, "function argument type mismatch", expected, found);
+  if (error_array_argument(a, argument, s, e, expected, found)) return;
+  if (error_field_argument(sema, a, argument, s, e, expected, found)) return;
+  error_types(a, a->expressions[argument].span, s, e, "function argument type mismatch", expected, found);
 }
 /* Two neighboring arguments that each fit the other's parameter:
    "arguments 1 and 2 look swapped (expected *Arena, *Status; found *Status,
@@ -2736,7 +2777,7 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
             error_swapped_arguments(a, s, errors, a->items[held].expression, a->items[arg_index].expression,
                                     held - item_start, held_target, target);
           else
-            error_argument(a, s, errors, a->items[held].expression, held_target, held_value);
+            error_argument(sema, a, s, errors, a->items[held].expression, held_target, held_value);
           held = UINT32_MAX;
           if (swapped) continue;
         }
@@ -2746,9 +2787,9 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
           held_target = target;
           held_value = value;
         } else
-          error_argument(a, s, errors, a->items[arg_index].expression, target, value);
+          error_argument(sema, a, s, errors, a->items[arg_index].expression, target, value);
       }
-      if (held != UINT32_MAX) error_argument(a, s, errors, a->items[held].expression, held_target, held_value);
+      if (held != UINT32_MAX) error_argument(sema, a, s, errors, a->items[held].expression, held_target, held_value);
       if (callee->variadic && callee->foreign)
         for (uint32_t i = callee->param_count; i < a->expressions[id].item_count; ++i) {
           uint32_t arg_index = item_start + i;

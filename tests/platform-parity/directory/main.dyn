@@ -27,7 +27,7 @@ fn main() {
   status: fail.Status
   fs.make_directory_exclusive(&status, "listing", 493)
   fs.make_directory_exclusive(&status, "listing/inner", 493)
-  fs.make_directory(&status, "listing/inner", 493)
+  fs.make_directory(&status, "listing/inner")
   fs.write_all(&status, "listing/alpha.txt", "a")
   fs.write_all(&status, "listing/βeta.txt", "b")
   check(!status.failed, "make and write")
@@ -39,7 +39,7 @@ fn main() {
   count := 0
   for true {
     entry := fs.directory_next(&status, &directory)
-    if !entry.found { break }
+    if directory.ended { break }
     count += 1
     if bytes.equal(entry.name, "alpha.txt") {
       seen_alpha = entry.kind == 8
@@ -55,7 +55,8 @@ fn main() {
   check(count == 3 && seen_alpha && seen_beta && seen_inner, "entries")
   fs.close_directory(&directory)
   inner := fs.open_directory(&status, "listing/inner", storage[..])
-  check(!fs.directory_next(&status, &inner).found && !status.failed, "empty directory")
+  _ = fs.directory_next(&status, &inner)
+  check(inner.ended && !status.failed, "empty directory")
   fs.close_directory(&inner)
   missing: fail.Status
   _ = fs.open_directory(&missing, "missing-directory", storage[..])

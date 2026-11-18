@@ -436,9 +436,7 @@ pub fn valid(source: []const u8, stack: [][]const u8) bool {
         }
         i += 1
       }
-      if #len(item.text) > 0 && item.text[#len(item.text) - 1] == '-' {
-        return false
-      }
+      if #len(item.text) > 0 && item.text[#len(item.text) - 1] == '-' { return false }
     }
     if item.kind == Kind.Start {
       if !valid_attributes(item) { return false }

@@ -18,7 +18,7 @@ CASES = (
     ('use "std/fs"\nuse "std/mem"\nuse "std/fail"\n\nfn main() {\n  a := mem.arena_alloc(0)\n  status: fail.Status\n'
      '  _ = fs.list_entries(a, &status, ".")\n}\n', "'fs' has no pub member 'list_entries'; related: fs.list"),
     ('use "std/fs"\nuse "std/fail"\n\nfn main() {\n  status: fail.Status\n  fs.create_dir_all(&status, "x")\n}\n',
-     "'fs' has no pub member 'create_dir_all': Dyn calls it fs.make_directory(&status, path, 0o755)"),
+     "'fs' has no pub member 'create_dir_all': Dyn calls it fs.make_directory(&status, path)"),
     ('use "std/strings"\n\nfn main() {\n  _ = strings.equal("a", "b")\n}\n',
      "'strings.equal' was removed: use bytes.equal(a, b) from std/bytes"),
     # Neighboring arguments that each fit the other's place are reported as
@@ -30,6 +30,15 @@ CASES = (
      " suggestion: replace '&status, a' with 'a, &status'"),
     ('fn pair(n: i32, name: []const u8) {\n  _ = n\n  _ = name\n}\n\nfn main() {\n  name: []const u8 = "x"\n  pair(name, name)\n}\n',
      "function argument type mismatch (expected i32, found []const u8)"),
+    # A struct where exactly one of its fields fits names that field, with a
+    # fix that adds it; a struct with two fitting fields gets the plain error.
+    ('use "std/fs"\nuse "std/fail"\n\nfn main() {\n  status: fail.Status\n  entry: fs.DirectoryEntry\n'
+     '  fs.remove(&status, entry)\n}\n',
+     "function argument type mismatch (expected []const u8, found DirectoryEntry): did you mean entry.name?\n"
+     " 7 |   fs.remove(&status, entry)\n   |                      ^~~~~\n fix: insert '.name' at 7:27"),
+    ('struct Pair { a: []const u8, b: []const u8 }\nfn take(text: []const u8) {\n  _ = text\n}\n\nfn main() {\n'
+     '  pair: Pair\n  take(pair)\n}\n',
+     "function argument type mismatch (expected []const u8, found Pair)\n"),
 )
 with tempfile.TemporaryDirectory(prefix='dyn-diagnostic-hints-') as temporary:
     for index, (source, message) in enumerate(CASES):
@@ -44,4 +53,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-diagnostic-hints-') as temporary:
     (project / 'main.dyn').write_text('import: i32 = 5\n\nfn main() {\n  _ = import\n}\n')
     checked = subprocess.run([DYN, 'check', str(project)], capture_output=True, text=True, timeout=60)
     assert checked.returncode == 0, checked.stderr
-print('PASS diagnostic hints: member suggestions, related members, moved functions, private members, use instead of import, array literals, swapped arguments')
+print('PASS diagnostic hints: member suggestions, related members, moved functions, private members, use instead of import, array literals, swapped arguments, a struct for its field')

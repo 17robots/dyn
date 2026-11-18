@@ -356,9 +356,15 @@ pub fn rename(status: *fail.Status, old_path: []const u8, new_path: []const u8) 
   if status.failed { return }
   check(status, "rename", old_path, native_rename(old_path, new_path))
 }
-// Creates the directory path with mode (ignored on Windows). An existing
-// directory is not a failure; an existing file is.
-pub fn make_directory(status: *fail.Status, path: []const u8, mode: usize) {
+// Creates the directory path, readable by everyone and writable by its
+// owner (0o755). An existing directory is not a failure; an existing file
+// is.
+pub fn make_directory(status: *fail.Status, path: []const u8) {
+  make_directory_mode(status, path, 0o755)
+}
+// Like make_directory, with the permission bits mode (ignored on Windows),
+// such as 0o700 for a directory only its owner may enter.
+pub fn make_directory_mode(status: *fail.Status, path: []const u8, mode: usize) {
   if status.failed { return }
   code := native_make_directory(path, mode)
   if code < 0 && native_kind(code) == fail.Kind.AlreadyExists {
