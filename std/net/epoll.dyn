@@ -54,11 +54,16 @@ pub fn event_data(value: *const Event) u64 {
 
 // A new epoll queue descriptor, or -1 after a failure.
 pub fn event_queue(status: *fail.Status) isize {
+  if status == nil { return event_queue(&fail.Status{}) }
   if status.failed { return -1 }
   return check(status, "epoll create", #syscall(sys.EpollCreate1, 0))
 }
 
 pub fn event_control(status: *fail.Status, queue: isize, operation: usize, descriptor: isize, value: *Event) {
+  if status == nil {
+    event_control(&fail.Status{}, queue, operation, descriptor, value)
+    return
+  }
   if status.failed { return }
   _ = check(status, "epoll control", #syscall(sys.EpollCtl, queue, operation, descriptor, value))
 }
@@ -66,16 +71,28 @@ pub fn event_control(status: *fail.Status, queue: isize, operation: usize, descr
 // Registration helpers keep epoll's operation numbers and remove-event pointer
 // convention out of application code. `data` is returned unchanged by event_wait.
 pub fn event_add(status: *fail.Status, queue: isize, descriptor: isize, events: u32, data: u64) {
+  if status == nil {
+    event_add(&fail.Status{}, queue, descriptor, events, data)
+    return
+  }
   value := event(events, data)
   event_control(status, queue, EventAdd, descriptor, &value)
 }
 
 pub fn event_modify(status: *fail.Status, queue: isize, descriptor: isize, events: u32, data: u64) {
+  if status == nil {
+    event_modify(&fail.Status{}, queue, descriptor, events, data)
+    return
+  }
   value := event(events, data)
   event_control(status, queue, EventModify, descriptor, &value)
 }
 
 pub fn event_remove(status: *fail.Status, queue: isize, descriptor: isize) {
+  if status == nil {
+    event_remove(&fail.Status{}, queue, descriptor)
+    return
+  }
   // Linux ignores this argument for EPOLL_CTL_DEL, but using valid storage keeps
   // the language-level pointer contract explicit.
   value := Event{}
@@ -84,6 +101,7 @@ pub fn event_remove(status: *fail.Status, queue: isize, descriptor: isize) {
 
 // Waits for events; the number stored in events, 0 on timeout.
 pub fn event_wait(status: *fail.Status, queue: isize, events: []Event, timeout_milliseconds: i32) usize {
+  if status == nil { return event_wait(&fail.Status{}, queue, events, timeout_milliseconds) }
   if status.failed { return 0 }
   if #len(events) == 0 {
     invalid(status, "epoll wait", "no room for events")

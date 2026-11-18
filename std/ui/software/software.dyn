@@ -165,6 +165,10 @@ fn malformed(status: *fail.Status) {
 // surface data returns InvalidInput. A glyph failure may leave earlier draws
 // visible. This renderer clips text without wrapping, kerning or shaping.
 pub fn render(status: *fail.Status, surface: *Surface, commands: *const ui.Command, font: Font) {
+  if status == nil {
+    render(&fail.Status{}, surface, commands, font)
+    return
+  }
   if status.failed { return }
   if !valid_surface(surface) {
     malformed(status)

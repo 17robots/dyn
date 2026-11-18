@@ -120,6 +120,7 @@ pub struct QuicStream { handle: rawptr, id: u64, unidirectional: bool }
 
 // A QUIC server context with a PEM certificate chain and key.
 pub fn quic_server_context_create(arena: *mem.Arena, status: *fail.Status, certificate: []const u8, key: []const u8) Context {
+  if status == nil { return quic_server_context_create(arena, &fail.Status{}, certificate, key) }
   if status.failed { return nil }
   mark := mem.arena_mark(arena)
   defer mem.arena_rewind(arena, mark)
@@ -203,6 +204,7 @@ pub fn quic_open_stream(connection: rawptr) rawptr {
 }
 
 pub fn quic_read(status: *fail.Status, stream: rawptr, destination: []u8) QuicAttempt {
+  if status == nil { return quic_read(&fail.Status{}, stream, destination) }
   if status.failed || #len(destination) == 0 { return QuicAttempt{} }
   count: usize = 0
   result := ssl_read(stream, #cast(rawptr, &destination[0]), #len(destination), &count)
@@ -224,6 +226,7 @@ pub fn quic_read(status: *fail.Status, stream: rawptr, destination: []u8) QuicAt
 // Writes what fits; conclude ends the stream once all of source is taken.
 // After a failure, count still holds the bytes taken before it.
 pub fn quic_write(status: *fail.Status, stream: rawptr, source: []const u8, conclude: bool) QuicAttempt {
+  if status == nil { return quic_write(&fail.Status{}, stream, source, conclude) }
   if status.failed { return QuicAttempt{} }
   flags: u64 = 0
   if conclude {

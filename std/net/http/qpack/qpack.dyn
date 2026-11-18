@@ -98,6 +98,7 @@ pub fn decode_prefix(section: []const u8) Prefix {
 // Decodes the field line at the start of section into scratch. A reference
 // to the dynamic table fails with Syntax (QPACK_DECOMPRESSION_FAILED).
 pub fn decode_field(status: *fail.Status, section: []const u8, scratch: []u8) Field {
+  if status == nil { return decode_field(&fail.Status{}, section, scratch) }
   if status.failed { return Field{} }
   if #len(section) == 0 { return failed(status, fail.Kind.InvalidInput, 0) }
   first := section[0]

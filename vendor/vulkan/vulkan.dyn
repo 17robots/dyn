@@ -26,6 +26,7 @@ pub fn version_patch(version: u32) u32 {
 // name_buffer receives a temporary NUL-terminated copy. Returned function is
 // loader-owned. A name the loader does not know fails with NotFound.
 pub fn procedure(status: *fail.Status, instance: Instance, name: []const u8, name_buffer: []u8) Procedure {
+  if status == nil { return procedure(&fail.Status{}, instance, name, name_buffer) }
   if status.failed { return nil }
   encoded := c.string_into(status, name_buffer, name)
   if status.failed { return nil }
@@ -36,5 +37,6 @@ pub fn procedure(status: *fail.Status, instance: Instance, name: []const u8, nam
   return value
 }
 pub fn global_procedure(status: *fail.Status, name: []const u8, buffer: []u8) Procedure {
+  if status == nil { return global_procedure(&fail.Status{}, name, buffer) }
   return procedure(status, nil, name, buffer)
 }

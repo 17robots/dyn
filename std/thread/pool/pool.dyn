@@ -56,6 +56,7 @@ fn worker(pool: *Pool) isize {
 // rewound and any started workers are stopped.
 // nil after a failure.
 pub fn start(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: usize, stack_size: usize) *Pool {
+  if status == nil { return start(arena, &fail.Status{}, workers, capacity, stack_size) }
   if status.failed { return nil }
   if workers == 0 || capacity == 0 || stack_size < 256 {
     fail.invalid(status, "start pool", "", "a pool needs workers, capacity and stacks of at least 256 bytes")
@@ -112,6 +113,7 @@ pub fn wait(pool: *Pool) {
 // Like start, with threads from spawner, such as std/thread/posix spawner()
 // for tasks that call C libraries. spawner must stay alive until stop.
 pub fn start_spawned(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: usize, stack_size: usize, spawner: *const thread.Spawner) *Pool {
+  if status == nil { return start_spawned(arena, &fail.Status{}, workers, capacity, stack_size, spawner) }
   if status.failed { return nil }
   if workers == 0 || capacity == 0 || stack_size < 256 || spawner == nil {
     fail.invalid(status, "start pool", "", "a pool needs workers, capacity, a spawner and stacks of at least 256 bytes")
@@ -143,6 +145,10 @@ pub fn start_spawned(arena: *mem.Arena, status: *fail.Status, workers: usize, ca
 // Finishes queued tasks, then joins every worker. The pool's arena storage
 // may be reclaimed after a successful stop.
 pub fn stop(status: *fail.Status, pool: *Pool) {
+  if status == nil {
+    stop(&fail.Status{}, pool)
+    return
+  }
   if status.failed || pool == nil { return }
   sync.lock(&pool.lock)
   pool.stopping = true

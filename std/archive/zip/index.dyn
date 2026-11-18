@@ -57,6 +57,7 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
 // Payload CRCs are verified by extract, without allocating or decompressing here.
 // Failures are as for next, at the offending record.
 pub fn open_checked(status: *fail.Status, source: []const u8) ArchiveReader {
+  if status == nil { return open_checked(&fail.Status{}, source) }
   if status.failed { return ArchiveReader{} }
   if #len(source) > (#max(usize) >> 1) {
     fail.set(status, fail.make(fail.Kind.Overflow, "read ZIP", "", "the archive is too large"))

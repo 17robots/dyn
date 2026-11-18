@@ -129,6 +129,7 @@ fn stream_discard(state: *StreamReader, amount: usize) bool {
 // storage. Malformed input fails with InvalidInput, an entry larger than the
 // storage with Capacity, encryption or data descriptors with Unsupported.
 pub fn next_stream(status: *fail.Status, state: *StreamReader) Entry {
+  if status == nil { return next_stream(&fail.Status{}, state) }
   if status.failed { return stream_ended(state) }
   if state.failed { return stream_failed(status, state, fail.Kind.InvalidInput) }
   if state.ended { return stream_ended(state) }
@@ -203,6 +204,7 @@ pub fn open(source: []const u8) ArchiveReader {
 // Reads the next entry of an archive in memory, with the same failures as
 // next_stream.
 pub fn next(status: *fail.Status, state: *ArchiveReader) Entry {
+  if status == nil { return next(&fail.Status{}, state) }
   if status.failed { return archive_ended(state) }
   if state.failed { return archive_failed(status, state, fail.Kind.InvalidInput) }
   if #len(state.source) > (#max(usize) >> 1) { return archive_failed(status, state, fail.Kind.Overflow) }
@@ -260,6 +262,7 @@ pub fn next(status: *fail.Status, state: *ArchiveReader) Entry {
 // stored or deflate with Unsupported. Failure pushes nothing. Source must
 // remain immutable.
 pub fn extract(arena: *mem.Arena, status: *fail.Status, archive_entry: Entry) []u8 {
+  if status == nil { return extract(arena, &fail.Status{}, archive_entry) }
   empty: []u8
   if status.failed { return empty }
   if #len(archive_entry.payload) > (#max(usize) >> 1) || archive_entry.uncompressed_size > (#max(usize) >> 1) {

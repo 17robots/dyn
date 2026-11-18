@@ -29,6 +29,10 @@ fn open_removal(parent: isize, name: []const u8, storage: []u8, directory: *Dire
 // #len(frames). Depth or capacity failures may leave a partly removed tree,
 // and concurrent changes may make it fail.
 pub fn remove_tree(status: *fail.Status, path: []const u8, frames: []RemovalFrame, scratch: []u8) {
+  if status == nil {
+    remove_tree(&fail.Status{}, path, frames, scratch)
+    return
+  }
   if status.failed { return }
   if #len(frames) == 0 || #len(scratch) / #len(frames) < 280 {
     fail.invalid(status, "remove", path, "too little scratch space")

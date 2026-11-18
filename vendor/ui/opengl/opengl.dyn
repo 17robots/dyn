@@ -35,6 +35,10 @@ fn shader(api: *const gl.Api, kind: u32, source: []const u8) u32 {
   return id
 }
 pub fn open(status: *fail.Status, renderer: *Renderer, api: gl.Api) {
+  if status == nil {
+    open(&fail.Status{}, renderer, api)
+    return
+  }
   if status.failed { return }
   if renderer.program != 0 {
     render_failed(status, fail.Kind.InvalidState, "open")
@@ -159,6 +163,10 @@ fn glyph(renderer: *Renderer, clip: ui.Rect, tint: ui.Color, font: software.Font
 // Draws in order, with command clip snapshots. Font coverage is borrowed only
 // until the next callback. No persistent glyph cache or frame allocations.
 pub fn render(status: *fail.Status, renderer: *Renderer, commands: *const ui.Command, width, height: i32, font: software.Font) {
+  if status == nil {
+    render(&fail.Status{}, renderer, commands, width, height, font)
+    return
+  }
   if status.failed { return }
   if renderer.program == 0 {
     render_failed(status, fail.Kind.InvalidState, "render")

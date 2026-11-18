@@ -211,14 +211,18 @@ Three rules cover every std and vendor call:
 2. **A lookup always returns a usable value.** When it is not there the value
    is zero or empty and the status records `NotFound`; when it is there but
    wrong, `InvalidInput`. Read an optional value with a status of its own, so
-   a missing one stops nothing else:
+   a missing one stops nothing else, or pass `nil` when you do not care why:
 
    ```dyn
    status: fail.Status
-   port := json.get(i64, &status, root, "port")        // required
-   optional: fail.Status
-   debug := json.get(bool, &optional, root, "debug")   // false when missing
+   port := json.get(i64, &status, root, "port")   // required
+   debug := json.get(bool, nil, root, "debug")    // false when missing
    ```
+
+   `nil` works for every std and vendor call that takes a status: the call
+   does its work, records nothing, and returns zero or empty if it fails.
+   Inside, it still sees its own failures, so a reader given `nil` still
+   ends and a writer that runs out of room stops.
 
    Iterators return their value too. The end of the input is not a failure,
    so it does not go on the status: the call sets `ended` on the state you

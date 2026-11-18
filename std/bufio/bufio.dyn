@@ -22,6 +22,10 @@ pub fn writer_buffered(state: *const Writer) usize {
 
 // Writes everything buffered. On a failure the bytes stay buffered.
 pub fn writer_flush(status: *fail.Status, state: *Writer) {
+  if status == nil {
+    writer_flush(&fail.Status{}, state)
+    return
+  }
   if status.failed || state.used == 0 { return }
   if state.used > #len(state.storage) {
     fail.set(status, fail.make(fail.Kind.InvalidState, "flush", "", "buffered count is past the storage"))
@@ -190,6 +194,7 @@ fn read_record(status: *fail.Status, state: *Reader, destination: []u8, delimite
 // this same record with another buffer; End may include a final unterminated
 // fragment, and also comes after a failure. No allocation.
 pub fn read_until(status: *fail.Status, state: *Reader, destination: []u8, delimiter: u8) ReadResult {
+  if status == nil { return read_until(&fail.Status{}, state, destination, delimiter) }
   return read_record(status, state, destination, delimiter)
 }
 
@@ -199,6 +204,7 @@ pub fn read_until(status: *fail.Status, state: *Reader, destination: []u8, delim
 // a line break is still returned. A line longer than the storage fails with
 // Capacity, and the next call, given a fresh status, continues after it.
 pub fn read_line(status: *fail.Status, state: *Reader) []const u8 {
+  if status == nil { return read_line(&fail.Status{}, state) }
   state.ended = false
   if status.failed { return line_ended(state) }
   if state.start > state.end || state.end > #len(state.storage) || state.pending_count > 2 {

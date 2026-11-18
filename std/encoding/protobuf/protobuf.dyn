@@ -32,6 +32,7 @@ fn message_of(kind: fail.Kind) []const u8 {
 }
 // The next field. Malformed input fails with InvalidInput at its offset.
 pub fn next(status: *fail.Status, state: *Reader) Field {
+  if status == nil { return next(&fail.Status{}, state) }
   if status.failed { return ended(state, state.offset) }
   if state.failed { return failed(status, state, state.error_offset, state.kind) }
   if state.offset == #len(state.source) {
@@ -95,6 +96,7 @@ fn key(field: Field) u64 {
 // Encode error offsets are field indexes. Inputs must remain alive and must not
 // borrow unused output-arena storage. No schema, reflection or generated code.
 pub fn encode(arena: *mem.Arena, status: *fail.Status, fields: []const Field) []u8 {
+  if status == nil { return encode(arena, &fail.Status{}, fields) }
   empty: []u8
   if status.failed { return empty }
   size: usize = 0

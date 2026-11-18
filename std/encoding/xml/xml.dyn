@@ -40,6 +40,7 @@ fn stream_ended(state: *StreamScanner) Event {
   return Event{}
 }
 pub fn next_stream(status: *fail.Status, state: *StreamScanner) Event {
+  if status == nil { return next_stream(&fail.Status{}, state) }
   if status.failed || state.failed { return stream_ended(state) }
   shift_stream(state)
   for true {
@@ -139,16 +140,32 @@ fn writer_valid(status: *fail.Status, valid: bool, message: []const u8) bool {
 }
 
 pub fn write_text(status: *fail.Status, state: *Writer, value: []const u8) {
+  if status == nil {
+    write_text(&fail.Status{}, state, value)
+    return
+  }
   _ = writer_valid(status, valid_characters(value), "text holds characters XML cannot carry") && escaped(status, state, value, false)
 }
 pub fn write_start(status: *fail.Status, state: *Writer, name: []const u8) {
+  if status == nil {
+    write_start(&fail.Status{}, state, name)
+    return
+  }
   _ = writer_valid(status, #len(name) > 0 && name_end(name, 0) == #len(name), "not an XML name") && emit(status, state, "<") && emit(status, state, name)
 }
 pub fn write_attribute(status: *fail.Status, state: *Writer, name: []const u8, value: []const u8) {
+  if status == nil {
+    write_attribute(&fail.Status{}, state, name, value)
+    return
+  }
   _ = writer_valid(status, #len(name) > 0 && name_end(name, 0) == #len(name) && valid_characters(value), "not an XML name, or the value holds characters XML cannot carry") && emit(status, state, " ") && emit(status, state, name) && emit(status, state, "=\"") &&
     escaped(status, state, value, true) && emit(status, state, "\"")
 }
 pub fn write_start_end(status: *fail.Status, state: *Writer, self_closing: bool) {
+  if status == nil {
+    write_start_end(&fail.Status{}, state, self_closing)
+    return
+  }
   if self_closing {
     _ = emit(status, state, "/>")
     return
@@ -156,6 +173,10 @@ pub fn write_start_end(status: *fail.Status, state: *Writer, self_closing: bool)
   _ = emit(status, state, ">")
 }
 pub fn write_end(status: *fail.Status, state: *Writer, name: []const u8) {
+  if status == nil {
+    write_end(&fail.Status{}, state, name)
+    return
+  }
   _ = writer_valid(status, #len(name) > 0 && name_end(name, 0) == #len(name), "not an XML name") && emit(status, state, "</") && emit(status, state, name) && emit(status, state, ">")
 }
 fn whitespace(byte: u8) bool {
@@ -264,6 +285,7 @@ fn valid_text(text: []const u8, attribute: bool) bool {
 }
 
 pub fn next(status: *fail.Status, state: *Scanner) Event {
+  if status == nil { return next(&fail.Status{}, state) }
   if status.failed || state.failed || state.offset == #len(state.source) { return scan_ended(state) }
   start := state.offset
   if state.source[start] != '<' {
@@ -361,6 +383,7 @@ fn attribute_ended(state: *AttributeScanner) Attribute {
   return Attribute{}
 }
 pub fn next_attribute(status: *fail.Status, state: *AttributeScanner) Attribute {
+  if status == nil { return next_attribute(&fail.Status{}, state) }
   if status.failed || state.failed { return attribute_ended(state) }
   at := state.offset
   for at < #len(state.source) && whitespace(state.source[at]) {

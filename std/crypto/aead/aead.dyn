@@ -36,6 +36,7 @@ fn conflicts(arena: *mem.Arena, _count: usize, first: []const u8, second: []cons
 // values, preserves the arena prefix, and consumes no arena bytes. A bad key,
 // nonce or size, or an input in the arena's free space, fails with InvalidInput.
 pub fn seal(arena: *mem.Arena, status: *fail.Status, kind: Cipher, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Sealed {
+  if status == nil { return seal(arena, &fail.Status{}, kind, plaintext, additional, key, nonce) }
   if status.failed { return Sealed{} }
   count := #len(plaintext)
   if !valid(kind, count, additional, key, nonce) || count > #max(usize) - 16 {
@@ -69,6 +70,7 @@ pub fn seal(arena: *mem.Arena, status: *fail.Status, kind: Cipher, plaintext: []
 // On failure clears all allocated plaintext before rewinding. Authentication
 // rejection is InvalidInput. Failure never publishes partial plaintext.
 pub fn open(arena: *mem.Arena, status: *fail.Status, kind: Cipher, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) []u8 {
+  if status == nil { return open(arena, &fail.Status{}, kind, ciphertext, tag, additional, key, nonce) }
   empty: []u8
   if status.failed { return empty }
   count := #len(ciphertext)

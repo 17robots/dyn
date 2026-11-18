@@ -616,6 +616,7 @@ fn add_match(encoder: *Encoder, length: usize, distance: usize) {
 // Compresses source into destination; the bytes written. Too small a
 // destination fails with Capacity (deflate_bound always suffices).
 pub fn deflate(status: *fail.Status, destination: []u8, source: []const u8, level: u8, encoder: *Encoder) []u8 {
+  if status == nil { return deflate(&fail.Status{}, destination, source, level, encoder) }
   if status.failed { return destination[..0] }
   clamped := level
   if clamped < MinLevel {

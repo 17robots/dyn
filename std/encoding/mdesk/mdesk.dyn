@@ -54,6 +54,7 @@ pub const nil_node: Node = Node{}
 // never nil: malformed text fails with InvalidInput at the offending byte
 // and returns the read-only nil_node stub.
 pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *Node {
+  if status == nil { return parse(arena, &fail.Status{}, source) }
   if status.failed { return #cast(*Node, &nil_node) }
   mark := mem.arena_mark(arena)
   parser := Parser{ arena: arena, status: status, source: source }

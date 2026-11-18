@@ -8,6 +8,7 @@ pub struct Rectangle { width: i32, height: i32, x: i32, y: i32, was_packed: i32 
 // failure: compare the count. Bad sizes fail with InvalidInput. An exhausted
 // scratch arena panics.
 pub fn pack(scratch: *mem.Arena, status: *fail.Status, width: usize, height: usize, rectangles: []Rectangle) usize {
+  if status == nil { return pack(scratch, &fail.Status{}, width, height, rectangles) }
   if status.failed { return 0 }
   if scratch == nil {
     fail.invalid(status, "pack rectangles", "", "no scratch arena")

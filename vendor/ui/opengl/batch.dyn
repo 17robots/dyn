@@ -36,6 +36,10 @@ const batch_vertex: []const u8 = "#version 330 core\nlayout(location=0) in vec2 
 const batch_fragment: []const u8 = "#version 330 core\nin vec2 uv; in vec4 tint; in vec2 position; in vec4 rect; in vec2 mode;\nuniform sampler2D image; out vec4 color;\nvoid main(){float a;\nif(mode.y>0.5){a=texture(image,uv).r;}\nelse{float r=mode.x;vec2 q=abs(position-rect.xy)-(rect.zw-vec2(r));\nfloat d=length(max(q,vec2(0.)))+min(max(q.x,q.y),0.)-r;a=clamp(.5-d,0.,1.);}\ncolor=vec4(tint.rgb,tint.a*a);}"
 
 pub fn open_batch(status: *fail.Status, batch: *Batch, api: gl.Api) {
+  if status == nil {
+    open_batch(&fail.Status{}, batch, api)
+    return
+  }
   if status.failed { return }
   if batch.program != 0 {
     render_failed(status, fail.Kind.InvalidState, "open batch")
@@ -240,6 +244,10 @@ fn batch_glyph(batch: *Batch, stream: *Stream, font: software.Font, codepoint: u
 // means fewer draw calls. A full atlas is cleared between draw calls, so a
 // frame with more distinct glyphs than fit returns Capacity.
 pub fn render_batch(status: *fail.Status, batch: *Batch, commands: *const ui.Command, width, height: i32, font: software.Font, vertices: []f32) {
+  if status == nil {
+    render_batch(&fail.Status{}, batch, commands, width, height, font, vertices)
+    return
+  }
   if status.failed { return }
   if batch.program == 0 {
     render_failed(status, fail.Kind.InvalidState, "render batch")

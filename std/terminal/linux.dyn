@@ -5,6 +5,7 @@ use "std/os/linux/sys"
 
 // The terminal settings of descriptor; fails when it is not a terminal.
 pub fn read_state(status: *fail.Status, descriptor: isize) State {
+  if status == nil { return read_state(&fail.Status{}, descriptor) }
   result: State
   if status.failed { return result }
   code := #syscall(sys.Ioctl, descriptor, 21505, &result.bytes[0])
@@ -15,6 +16,10 @@ pub fn read_state(status: *fail.Status, descriptor: isize) State {
 }
 
 pub fn restore(status: *fail.Status, descriptor: isize, saved: *const State) {
+  if status == nil {
+    restore(&fail.Status{}, descriptor, saved)
+    return
+  }
   if status.failed { return }
   if saved == nil {
     fail.invalid(status, "restore terminal", "", "no saved settings")
@@ -38,6 +43,7 @@ fn make_raw(_descriptor: isize, state: *State) {
 }
 
 pub fn size(status: *fail.Status, descriptor: isize) Size {
+  if status == nil { return size(&fail.Status{}, descriptor) }
   if status.failed { return Size{} }
   bytes: [8]u8
   code := #syscall(sys.Ioctl, descriptor, 21523, &bytes[0])

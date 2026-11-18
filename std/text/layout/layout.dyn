@@ -34,6 +34,7 @@ fn step(cluster: Cluster, x: f64) f64 {
 // Bidi reordering, OpenType substitutions and complex-script shaping belong to
 // the caller/provider (for example HarfBuzz), not this simple layout engine.
 pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: Font, requested: Options) Layout {
+  if status == nil { return build(arena, &fail.Status{}, source, font, requested) }
   if status.failed { return Layout{} }
   options := requested
   if options.tab_columns == 0 {

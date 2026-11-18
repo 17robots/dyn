@@ -16,6 +16,10 @@ pub fn hkdf_extract(destination: []u8, salt: []const u8, input_key_material: []c
 // Destination and scratch must not overlap each other or the borrowed key/info,
 // including unused slice tails. Validation failure leaves all storage unchanged.
 pub fn hkdf_expand(status: *fail.Status, destination: []u8, pseudorandom_key: []const u8, info: []const u8, scratch: []u8) {
+  if status == nil {
+    hkdf_expand(&fail.Status{}, destination, pseudorandom_key, info, scratch)
+    return
+  }
   if status.failed { return }
   limit: u64 = 2305843009213693951
   if #len(pseudorandom_key) < 32 || #len(pseudorandom_key) > limit || #len(destination) > 8160 || #len(info) > #max(usize) - 33 || #len(info) > limit - 97 || #len(scratch) < 33 + #len(info) {
@@ -65,6 +69,10 @@ pub fn hkdf_expand(status: *fail.Status, destination: []u8, pseudorandom_key: []
 }
 
 pub fn hkdf(status: *fail.Status, destination: []u8, salt: []const u8, input_key_material: []const u8, info: []const u8, scratch: []u8) {
+  if status == nil {
+    hkdf(&fail.Status{}, destination, salt, input_key_material, info, scratch)
+    return
+  }
   if status.failed { return }
   extracted: [32]u8
   if #len(hkdf_extract(extracted[..], salt, input_key_material)) != 32 {

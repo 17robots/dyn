@@ -696,6 +696,10 @@ fn clipboard_deliver(window: *Window) {
 }
 
 pub fn paste_status(status: *fail.Status, window: *const Window) {
+  if status == nil {
+    paste_status(&fail.Status{}, window)
+    return
+  }
   if status.failed { return }
   if window.desktop.paste_pending {
     window_failed(status, fail.Kind.InvalidState, "paste status")
@@ -988,6 +992,10 @@ fn desktop_selection(window: *Window, event: *Event) {
 // Offers an owned snapshot up to 16 MiB. Rejects before changing ownership or
 // bytes; in-flight INCR transfers retain their own independent snapshots.
 pub fn try_set_clipboard(status: *fail.Status, window: *Window, text: []const u8) {
+  if status == nil {
+    try_set_clipboard(&fail.Status{}, window, text)
+    return
+  }
   if status.failed { return }
   if window.display == nil {
     window_failed(status, fail.Kind.InvalidState, "try set clipboard")
@@ -1087,6 +1095,10 @@ pub fn box_input(window: *const Window) box.Input {
 
 // GUI-thread window metadata changes. Dimensions remain bounded before Xlib.
 pub fn set_title(status: *fail.Status, window: *Window, title: []const u8) {
+  if status == nil {
+    set_title(&fail.Status{}, window, title)
+    return
+  }
   if status.failed { return }
   if window.display == nil || window.handle == 0 {
     window_failed(status, fail.Kind.InvalidState, "set title")
@@ -1110,6 +1122,10 @@ pub fn set_title(status: *fail.Status, window: *Window, title: []const u8) {
 }
 extern fn resize_window "XResizeWindow"(display:rawptr, window:usize, width, height:u32) i32
 pub fn set_size(status: *fail.Status, window:*Window, width, height:i32) {
+  if status == nil {
+    set_size(&fail.Status{}, window, width, height)
+    return
+  }
   if status.failed { return }
   if window.display==nil || window.handle==0 {
     window_failed(status, fail.Kind.InvalidState, "set size")

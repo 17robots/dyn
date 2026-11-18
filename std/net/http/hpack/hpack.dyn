@@ -287,6 +287,7 @@ fn copy_into(destination: []u8, source: []const u8) bool {
 // with Syntax for malformed input (a COMPRESSION_ERROR) and Capacity when
 // scratch is too small.
 pub fn decode_field(status: *fail.Status, decoder: *Decoder, block: []const u8, scratch: []u8) Field {
+  if status == nil { return decode_field(&fail.Status{}, decoder, block, scratch) }
   if status.failed { return Field{} }
   if #len(block) == 0 { return failed(status, fail.Kind.InvalidInput, 0) }
   first := block[0]

@@ -22,6 +22,7 @@ fn provider_failed(status: *fail.Status, reader: *const Reader, operation: []con
 // advances the reader. No filesystem extraction or path interpretation is done.
 // An unreadable archive fails with InvalidInput and libarchive's message.
 pub fn open_memory_owned(status: *fail.Status, source: []const u8) Reader {
+  if status == nil { return open_memory_owned(&fail.Status{}, source) }
   if status.failed { return Reader{ ended: true } }
   if #len(source) == 0 {
     fail.invalid(status, "open archive", "", "empty archive")
@@ -56,6 +57,7 @@ pub fn destroy_owned(reader: *Reader) {
 // Entry and its strings expire at next header/read mutation or reader
 // destruction.
 pub fn next(status: *fail.Status, reader: *Reader) Entry {
+  if status == nil { return next(&fail.Status{}, reader) }
   if status.failed || reader.ended {
     reader.ended = true
     return nil
@@ -79,6 +81,7 @@ pub fn next(status: *fail.Status, reader: *Reader) Entry {
   return entry
 }
 pub fn entry_name(status: *fail.Status, entry: Entry, maximum: usize) []const u8 {
+  if status == nil { return entry_name(&fail.Status{}, entry, maximum) }
   if status.failed { return "" }
   if entry == nil {
     fail.invalid(status, "read archive", "", "no entry")
@@ -92,6 +95,7 @@ pub fn entry_size(entry: Entry) i64 {
 }
 // Reads the current entry's data; zero at its end.
 pub fn read(status: *fail.Status, reader: *const Reader, destination: []u8) usize {
+  if status == nil { return read(&fail.Status{}, reader, destination) }
   if status.failed || #len(destination) == 0 { return 0 }
   if reader.handle == nil {
     fail.invalid(status, "read archive", "", "no reader")

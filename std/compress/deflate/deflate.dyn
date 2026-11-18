@@ -904,6 +904,7 @@ pub struct Inflated { value: []u8, consumed: usize }
 
 // RFC 1951 stored, fixed-Huffman, and dynamic-Huffman DEFLATE, into arena.
 pub fn inflate(arena: *mem.Arena, status: *fail.Status, input: []const u8) Inflated {
+  if status == nil { return inflate(arena, &fail.Status{}, input) }
   if status.failed { return Inflated{} }
   return grow_until_done(arena, status, input, false)
 }
@@ -911,6 +912,7 @@ pub fn inflate(arena: *mem.Arena, status: *fail.Status, input: []const u8) Infla
 // One RFC 1952 gzip member, into arena. consumed identifies any following
 // member or trailing data.
 pub fn gunzip(arena: *mem.Arena, status: *fail.Status, input: []const u8) Inflated {
+  if status == nil { return gunzip(arena, &fail.Status{}, input) }
   if status.failed { return Inflated{} }
   return grow_until_done(arena, status, input, true)
 }

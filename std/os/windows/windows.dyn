@@ -57,6 +57,7 @@ fn terminated(path: []const u8, storage: []u8) *const u8 {
 }
 // A handle, or -1 after a failure.
 pub fn file_open(status: *fail.Status, path: []const u8, write_access: bool, create: bool) isize {
+  if status == nil { return file_open(&fail.Status{}, path, write_access, create) }
   if status.failed { return -1 }
   // Keep this below MSVC's stack-probe threshold; this bootstrap runtime does
   // not depend on compiler-rt. Win32 legacy paths are bounded at 260 bytes.
@@ -77,6 +78,10 @@ pub fn file_open(status: *fail.Status, path: []const u8, write_access: bool, cre
   return #cast(isize, raw)
 }
 pub fn file_close(status: *fail.Status, handle: isize) {
+  if status == nil {
+    file_close(&fail.Status{}, handle)
+    return
+  }
   if status.failed { return }
   if close_handle_raw(#cast(rawptr, #cast(usize, handle))) == 0 {
     _ = windows_failed(status, "close", "", #cast(isize, last_error_raw()))
@@ -106,6 +111,7 @@ pub fn thread_yield() {
 }
 // A socket, or -1 after a failure.
 pub fn socket_open(status: *fail.Status, family: i32, kind: i32, protocol: i32) isize {
+  if status == nil { return socket_open(&fail.Status{}, family, kind, protocol) }
   if status.failed { return -1 }
   startup := socket_initialize()
   if startup != 0 { return windows_failed(status, "socket", "", startup) }

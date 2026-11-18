@@ -40,6 +40,7 @@ fn symbol(handle: dynlib.Handle, name: []const u8) rawptr {
 }
 // A missing function fails with NotFound, its name as the failure's path.
 pub fn load(status: *fail.Status, handle: dynlib.Handle) Api {
+  if status == nil { return load(&fail.Status{}, handle) }
   if status.failed { return Api{} }
   api := Api{}
   api.log2vis = #cast(fn(*const u32, i32, *u32, *u32, *i32, *i32, *i8)i8, symbol(handle, "fribidi_log2vis"))
@@ -62,6 +63,7 @@ fn separator(cp: u32) bool {
 // shape original logical source, not visual (which may contain mirrored or
 // Arabic presentation-form characters). Use levels/maps to position shaped runs.
 pub fn resolve(arena: *mem.Arena, status: *fail.Status, api: *const Api, text: []const u8, base: u32) Paragraph {
+  if status == nil { return resolve(arena, &fail.Status{}, api, text, base) }
   if status.failed { return Paragraph{} }
   if !direction(base) || #len(text) > 2147483647 {
     bidi_failed(status, fail.Kind.InvalidInput, "resolve", 0)
@@ -133,6 +135,7 @@ pub fn resolve(arena: *mem.Arena, status: *fail.Status, api: *const Api, text: [
 // Reorders a wrapped line with native L1/L2 handling. Does not mutate paragraph
 // levels/maps. Flags zero leave shaping, mirroring and mark placement to HB.
 pub fn reorder(arena: *mem.Arena, status: *fail.Status, api: *const Api, paragraph: *const Paragraph, start, end: usize) Line {
+  if status == nil { return reorder(arena, &fail.Status{}, api, paragraph, start, end) }
   if status.failed { return Line{} }
   count := #len(paragraph.logical)
   if start > end || end > count || count > 2147483647 || #len(paragraph.levels) != count || #len(paragraph.types) != count || !direction(paragraph.base) {

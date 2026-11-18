@@ -579,6 +579,7 @@ fn bounded(value: *const Value, depth: usize) bool {
 // exhausted arenas panic.
 // Malformed input fails with InvalidInput at the offending byte.
 pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *const Value {
+  if status == nil { return parse(arena, &fail.Status{}, source) }
   if status.failed { return &nil_value }
   if !utf8.valid(source) {
     fail.at(status, fail.Kind.InvalidInput, "parse TOML", "the text is not UTF-8", 0)
@@ -691,6 +692,7 @@ fn emit(output: *array.Array(u8), current: *const Value, depth: usize) bool {
 // Output borrows arena
 // malformed/manual trees return InvalidInput and rewind.
 pub fn encode(arena: *mem.Arena, status: *fail.Status, root: *const Value) []u8 {
+  if status == nil { return encode(arena, &fail.Status{}, root) }
   empty: []u8
   if status.failed { return empty }
   if root == nil || root.kind != Kind.Table || !valid_children(root) { return unencodable(status) }

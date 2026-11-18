@@ -16,6 +16,7 @@ fn failed(status: *fail.Status, kind: fail.Kind, operation: []const u8, message:
 }
 // The compressed size; a destination too small fails with Capacity.
 pub fn compress(status: *fail.Status, destination: []u8, source: []const u8) usize {
+  if status == nil { return compress(&fail.Status{}, destination, source) }
   if status.failed { return 0 }
   if #len(source) > MaxInput || #len(destination) == 0 || #len(destination) > 2147483647 {
     return failed(status, fail.Kind.InvalidInput, "compress", "bad buffer sizes", 0)
@@ -32,6 +33,7 @@ pub fn compress(status: *fail.Status, destination: []u8, source: []const u8) usi
 // The decompressed size; malformed input, or output past destination, fails
 // with InvalidInput.
 pub fn decompress(status: *fail.Status, destination: []u8, source: []const u8) usize {
+  if status == nil { return decompress(&fail.Status{}, destination, source) }
   if status.failed { return 0 }
   if #len(source) == 0 || #len(source) > 2147483647 || #len(destination) > 2147483647 {
     return failed(status, fail.Kind.InvalidInput, "decompress", "bad buffer sizes", -1)

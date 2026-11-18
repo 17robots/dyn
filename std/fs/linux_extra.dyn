@@ -78,6 +78,7 @@ pub fn close_directory(directory: *Directory) {
 // scratch is the copy buffer. A failed close is not reported: sync the
 // destination when it must be durable.
 pub fn copy_file(status: *fail.Status, source: []const u8, destination: []const u8, scratch: []u8) usize {
+  if status == nil { return copy_file(&fail.Status{}, source, destination, scratch) }
   if status.failed { return 0 }
   if #len(scratch) == 0 {
     fail.invalid(status, "copy", source, "scratch buffer is empty")
@@ -168,6 +169,10 @@ fn native_rename(old_path: []const u8, new_path: []const u8) isize {
 
 // Creates the symbolic link link pointing at target.
 pub fn symbolic_link(status: *fail.Status, target: []const u8, link: []const u8) {
+  if status == nil {
+    symbolic_link(&fail.Status{}, target, link)
+    return
+  }
   if status.failed { return }
   target_storage: [4096 + mem.ArenaBufferOverhead]u8
   link_storage: [4096 + mem.ArenaBufferOverhead]u8
@@ -182,6 +187,10 @@ pub fn symbolic_link(status: *fail.Status, target: []const u8, link: []const u8)
 
 // Makes a directory's entries durable, such as a rename into it.
 pub fn sync_directory(status: *fail.Status, path: []const u8) {
+  if status == nil {
+    sync_directory(&fail.Status{}, path)
+    return
+  }
   if status.failed { return }
   opened := open_flags(path, directory_flag, 0)
   if opened < 0 {
@@ -206,6 +215,7 @@ pub struct AtomicFile {
 // Both paths are borrowed until commit or abort. temporary must be a sibling
 // of destination (same directory), chosen by the caller.
 pub fn atomic_begin(status: *fail.Status, destination: []const u8, temporary: []const u8) AtomicFile {
+  if status == nil { return atomic_begin(&fail.Status{}, destination, temporary) }
   if status.failed { return AtomicFile{} }
   if #len(destination) == 0 || #len(temporary) == 0 {
     fail.invalid(status, "create", destination, "empty path")
@@ -218,6 +228,10 @@ pub fn atomic_begin(status: *fail.Status, destination: []const u8, temporary: []
 
 // Syncs and closes the temporary file and renames it onto the destination.
 pub fn atomic_commit(status: *fail.Status, transaction: *AtomicFile) {
+  if status == nil {
+    atomic_commit(&fail.Status{}, transaction)
+    return
+  }
   if status.failed { return }
   if !transaction.active {
     fail_kind(status, "commit", transaction.destination, fail.Kind.InvalidState, "not active")
@@ -235,6 +249,10 @@ pub fn atomic_commit(status: *fail.Status, transaction: *AtomicFile) {
 // Also syncs the parent directory, making the committed rename durable across
 // power loss on Linux file systems that honor fsync for directories.
 pub fn atomic_commit_durable(status: *fail.Status, transaction: *AtomicFile, parent_directory: []const u8) {
+  if status == nil {
+    atomic_commit_durable(&fail.Status{}, transaction, parent_directory)
+    return
+  }
   atomic_commit(status, transaction)
   sync_directory(status, parent_directory)
 }
@@ -251,6 +269,10 @@ pub fn atomic_abort(transaction: *AtomicFile) {
 // Writes source to destination through the sibling temporary file and renames
 // it into place, so destination is either the old file or all of source.
 pub fn write_atomic(status: *fail.Status, destination: []const u8, temporary: []const u8, source: []const u8) {
+  if status == nil {
+    write_atomic(&fail.Status{}, destination, temporary, source)
+    return
+  }
   transaction := atomic_begin(status, destination, temporary)
   write(status, &transaction.file, source)
   atomic_commit(status, &transaction)
@@ -296,6 +318,10 @@ fn app_directory_into(status: *fail.Status, kind: AppDirectory, destination: []u
 // Locks file with flock(2): operation is LOCK_SH (1), LOCK_EX (2), or either
 // with LOCK_NB (4); LOCK_UN (8) unlocks.
 pub fn lock(status: *fail.Status, file: *File, operation: usize) {
+  if status == nil {
+    lock(&fail.Status{}, file, operation)
+    return
+  }
   if !usable(status, file, "lock") { return }
   value := #syscall(sys.Flock, file.descriptor, operation)
   for value == -4 {
@@ -305,6 +331,10 @@ pub fn lock(status: *fail.Status, file: *File, operation: usize) {
 }
 // Sets the length of the file at path.
 pub fn truncate(status: *fail.Status, path: []const u8, length: usize) {
+  if status == nil {
+    truncate(&fail.Status{}, path, length)
+    return
+  }
   if status.failed { return }
   if length > 9223372036854775807 {
     fail.invalid(status, "truncate", path, "length too large")
@@ -332,6 +362,7 @@ fn kept(arena: *mem.Arena, status: *fail.Status, mark: usize, value: []u8) []u8 
 
 // The target of the symbolic link at path, in arena.
 pub fn read_link(arena: *mem.Arena, status: *fail.Status, path: []const u8) []u8 {
+  if status == nil { return read_link(arena, &fail.Status{}, path) }
   empty: []u8
   if status.failed { return empty }
   mark := mem.arena_mark(arena)
@@ -353,6 +384,7 @@ pub fn read_link(arena: *mem.Arena, status: *fail.Status, path: []const u8) []u8
 
 // The per-user directory of kind, in arena.
 pub fn app_directory(arena: *mem.Arena, status: *fail.Status, kind: AppDirectory) []u8 {
+  if status == nil { return app_directory(arena, &fail.Status{}, kind) }
   empty: []u8
   if status.failed { return empty }
   mark := mem.arena_mark(arena)

@@ -178,6 +178,7 @@ fn poll_native(items: []PollDescriptor, milliseconds: i32) isize {
 // Winsock fills the buffer before WSAEMSGSIZE on a truncated datagram.
 // Return a capacity+1 sentinel; consumers must not treat it as stored bytes.
 pub fn receive_packet(status: *fail.Status, descriptor: isize, bytes: []u8) usize {
+  if status == nil { return receive_packet(&fail.Status{}, descriptor, bytes) }
   if status.failed { return 0 }
   data: *u8 = nil
   if #len(bytes) > 0 {

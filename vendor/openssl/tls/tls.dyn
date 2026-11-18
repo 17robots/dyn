@@ -56,6 +56,7 @@ fn stalled(status: *fail.Status, operation: []const u8, connection: Connection, 
 
 // Loads provider-default trust roots and enables peer-certificate verification.
 pub fn context_create_owned(status: *fail.Status) Context {
+  if status == nil { return context_create_owned(&fail.Status{}) }
   if status.failed { return nil }
   provider_clear_error()
   method := tls_client_method()
@@ -86,6 +87,7 @@ pub fn context_free_owned(context: Context) {
 // Creates a server context and loads PEM certificate chain/private key.
 pub fn server_context_create_owned(status: *fail.Status, certificate: []const u8, key: []const u8,
   certificate_buffer: []u8, key_buffer: []u8) Context {
+  if status == nil { return server_context_create_owned(&fail.Status{}, certificate, key, certificate_buffer, key_buffer) }
   certificate_path := c.string_into(status, certificate_buffer, certificate)
   key_path := c.string_into(status, key_buffer, key)
   if status.failed { return nil }
@@ -115,6 +117,7 @@ fn server_context_from_paths(status: *fail.Status, certificate: *const u8, key: 
 
 // The arena supplies temporary C strings only; OpenSSL owns the result.
 pub fn server_context_create(arena: *mem.Arena, status: *fail.Status, certificate: []const u8, key: []const u8) Context {
+  if status == nil { return server_context_create(arena, &fail.Status{}, certificate, key) }
   if status.failed { return nil }
   mark := mem.arena_mark(arena)
   defer mem.arena_rewind(arena, mark)
@@ -125,6 +128,7 @@ pub fn server_context_create(arena: *mem.Arena, status: *fail.Status, certificat
 }
 
 pub fn server_connection_create_owned(status: *fail.Status, context: Context, descriptor: i32) Connection {
+  if status == nil { return server_connection_create_owned(&fail.Status{}, context, descriptor) }
   if status.failed { return nil }
   if context == nil || descriptor < 0 {
     fail.invalid(status, "create TLS connection", "", "no context, or a negative descriptor")
@@ -147,6 +151,10 @@ pub fn server_connection_create_owned(status: *fail.Status, context: Context, de
 // protocols is OpenSSL wire format: one length byte followed by each protocol.
 // OpenSSL copies the bytes; the caller retains ownership.
 pub fn set_alpn_protocols(status: *fail.Status, connection: Connection, protocols: []const u8) {
+  if status == nil {
+    set_alpn_protocols(&fail.Status{}, connection, protocols)
+    return
+  }
   if status.failed { return }
   valid := connection != nil && #len(protocols) != 0 && #len(protocols) <= 4294967295
   index: usize = 0
@@ -173,6 +181,10 @@ pub fn set_alpn_protocols(status: *fail.Status, connection: Connection, protocol
 // preference must outlive the context (a string literal does). No common
 // protocol continues without ALPN.
 pub fn set_server_alpn(status: *fail.Status, context: Context, preference: *const []const u8) {
+  if status == nil {
+    set_server_alpn(&fail.Status{}, context, preference)
+    return
+  }
   if status.failed { return }
   if context == nil || preference == nil || #len(preference.*) == 0 {
     fail.invalid(status, "set server ALPN", "", "no context or no protocols")
@@ -243,6 +255,7 @@ pub fn certificate_free_owned(certificate: Certificate) {
 // Configures both certificate hostname verification and SNI. name_buffer must
 // fit hostname plus NUL and is only borrowed during this call.
 pub fn connection_create_owned(status: *fail.Status, context: Context, descriptor: i32, hostname: []const u8, name_buffer: []u8) Connection {
+  if status == nil { return connection_create_owned(&fail.Status{}, context, descriptor, hostname, name_buffer) }
   if status.failed { return nil }
   if context == nil || descriptor < 0 || #len(hostname) == 0 {
     fail.invalid(status, "create TLS connection", hostname, "no context or hostname, or a negative descriptor")
@@ -277,6 +290,7 @@ fn connection_from_name(status: *fail.Status, context: Context, descriptor: i32,
 }
 
 pub fn connection_create(arena: *mem.Arena, status: *fail.Status, context: Context, descriptor: i32, hostname: []const u8) Connection {
+  if status == nil { return connection_create(arena, &fail.Status{}, context, descriptor, hostname) }
   if status.failed { return nil }
   if context == nil || descriptor < 0 || #len(hostname) == 0 {
     fail.invalid(status, "create TLS connection", hostname, "no context or hostname, or a negative descriptor")
@@ -304,6 +318,7 @@ fn no_connection(status: *fail.Status, operation: []const u8) {
 // A certificate that does not verify fails with PermissionDenied, the
 // verification code in native.
 pub fn handshake(status: *fail.Status, connection: Connection) Want {
+  if status == nil { return handshake(&fail.Status{}, connection) }
   if status.failed { return Want.Nothing }
   if connection == nil {
     no_connection(status, "handshake")
@@ -323,6 +338,7 @@ pub fn handshake(status: *fail.Status, connection: Connection) Want {
 }
 
 pub fn server_handshake(status: *fail.Status, connection: Connection) Want {
+  if status == nil { return server_handshake(&fail.Status{}, connection) }
   if status.failed { return Want.Nothing }
   if connection == nil {
     no_connection(status, "handshake")
@@ -337,6 +353,7 @@ pub fn server_handshake(status: *fail.Status, connection: Connection) Want {
 // Reads what is available; count 0 with no want is the end of the stream
 // (the peer's close_notify).
 pub fn read(status: *fail.Status, connection: Connection, destination: []u8) Attempt {
+  if status == nil { return read(&fail.Status{}, connection, destination) }
   if status.failed { return Attempt{} }
   if connection == nil {
     no_connection(status, "read")
@@ -355,6 +372,7 @@ pub fn read(status: *fail.Status, connection: Connection, destination: []u8) Att
 }
 
 pub fn write(status: *fail.Status, connection: Connection, source: []const u8) Attempt {
+  if status == nil { return write(&fail.Status{}, connection, source) }
   if status.failed { return Attempt{} }
   if connection == nil {
     no_connection(status, "write")
@@ -372,6 +390,7 @@ pub fn write(status: *fail.Status, connection: Connection, source: []const u8) A
 // call again to finish the exchange, or close the socket.
 // https://docs.openssl.org/3.4/man3/SSL_shutdown/
 pub fn shutdown(status: *fail.Status, connection: Connection) Want {
+  if status == nil { return shutdown(&fail.Status{}, connection) }
   if status.failed { return Want.Nothing }
   if connection == nil {
     no_connection(status, "shutdown")
@@ -399,6 +418,7 @@ pub fn error_string(destination: []u8, code: u64) []u8 {
 // subject_text_free_owned.
 extern fn provider_text_free "CRYPTO_free"(pointer: rawptr, file: *const u8, line: i32)
 pub fn subject_text_owned(status: *fail.Status, certificate: Certificate) *u8 {
+  if status == nil { return subject_text_owned(&fail.Status{}, certificate) }
   if status.failed { return nil }
   if certificate == nil {
     fail.invalid(status, "certificate subject", "", "no certificate")

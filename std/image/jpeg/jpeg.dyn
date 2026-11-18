@@ -362,6 +362,7 @@ fn channel(decoder: *const Decoder, index: usize, x, y: usize) i32 {
 // Inputs must not borrow unused backing of the output arena.
 // Invalid/unsupported input restores the arena mark. Allocation exhaustion panics.
 pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image {
+  if status == nil { return decode(arena, &fail.Status{}, source) }
   if status.failed { return Image{} }
   if #len(source) < 4 || source[0] != 255 || source[1] != 216 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "decode JPEG", "", "malformed JPEG"))

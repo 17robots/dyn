@@ -18,12 +18,20 @@ pub type Attempt = provider.Attempt
 
 // The provider copies the protocol wire bytes during this call.
 pub fn set_alpn_protocols(status: *fail.Status, connection: Connection, protocols: []const u8) {
+  if status == nil {
+    set_alpn_protocols(&fail.Status{}, connection, protocols)
+    return
+  }
   provider.set_alpn_protocols(status, connection, protocols)
 }
 // Server ALPN: each handshake picks the first protocol of preference (wire
 // format, such as "\x02h2\x08http/1.1") the client offers. preference must
 // outlive the context; a string literal does.
 pub fn server_alpn(status: *fail.Status, context: Context, preference: *const []const u8) {
+  if status == nil {
+    server_alpn(&fail.Status{}, context, preference)
+    return
+  }
   provider.set_server_alpn(status, context, preference)
 }
 // Borrows provider connection memory. Invalid after connection_release or a
@@ -45,6 +53,7 @@ pub fn certificate_release(certificate: *Certificate) {
 // empty value and consumes no arena bytes. Exhaustion panics.
 // https://github.com/openssl/openssl/blob/master/crypto/x509/x509_obj.c
 pub fn certificate_subject(arena: *memory.Arena, status: *fail.Status, certificate: Certificate) []u8 {
+  if status == nil { return certificate_subject(arena, &fail.Status{}, certificate) }
   empty: []u8
   formatted := provider.subject_text_owned(status, certificate)
   if status.failed { return empty }
@@ -63,22 +72,27 @@ pub fn certificate_subject(arena: *memory.Arena, status: *fail.Status, certifica
 // Runs the handshake. On a nonblocking socket it may stop with a want; call
 // it again once the socket is ready. Want.Nothing means it completed.
 pub fn handshake(status: *fail.Status, connection: Connection) Want {
+  if status == nil { return handshake(&fail.Status{}, connection) }
   return provider.handshake(status, connection)
 }
 pub fn server_handshake(status: *fail.Status, connection: Connection) Want {
+  if status == nil { return server_handshake(&fail.Status{}, connection) }
   return provider.server_handshake(status, connection)
 }
 // Reads what is available; count 0 with no want is the end of the stream.
 pub fn read(status: *fail.Status, connection: Connection, destination: []u8) Attempt {
+  if status == nil { return read(&fail.Status{}, connection, destination) }
   return provider.read(status, connection, destination)
 }
 pub fn write(status: *fail.Status, connection: Connection, source: []const u8) Attempt {
+  if status == nil { return write(&fail.Status{}, connection, source) }
   return provider.write(status, connection, source)
 }
 // Sends close_notify. Want.Read means it was sent and the peer's is pending;
 // call again to finish the exchange, or close the socket.
 // https://docs.openssl.org/3.4/man3/SSL_shutdown/
 pub fn shutdown(status: *fail.Status, connection: Connection) Want {
+  if status == nil { return shutdown(&fail.Status{}, connection) }
   return provider.shutdown(status, connection)
 }
 // The provider's text for an error code, in arena.
@@ -91,6 +105,7 @@ pub fn error_string(arena: *memory.Arena, code: u64) []u8 {
 }
 
 pub fn client_config_create(status: *fail.Status) Context {
+  if status == nil { return client_config_create(&fail.Status{}) }
   return provider.context_create_owned(status)
 }
 pub fn server_config_create(
@@ -99,6 +114,7 @@ pub fn server_config_create(
   certificate: []const u8,
   key: []const u8,
 ) Context {
+  if status == nil { return server_config_create(arena, &fail.Status{}, certificate, key) }
   return provider.server_context_create(arena, status, certificate, key)
 }
 // Frees the configuration and clears the handle; releasing a cleared handle does nothing.
@@ -114,9 +130,11 @@ pub fn client_connection_create(
   descriptor: i32,
   hostname: []const u8,
 ) Connection {
+  if status == nil { return client_connection_create(arena, &fail.Status{}, context, descriptor, hostname) }
   return provider.connection_create(arena, status, context, descriptor, hostname)
 }
 pub fn server_connection_create(status: *fail.Status, context: Context, descriptor: i32) Connection {
+  if status == nil { return server_connection_create(&fail.Status{}, context, descriptor) }
   return provider.server_connection_create_owned(status, context, descriptor)
 }
 // Frees the connection state and clears the handle. The socket stays open; close it separately.

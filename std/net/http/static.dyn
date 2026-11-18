@@ -177,6 +177,7 @@ pub fn find_asset(assets: *const Assets, path: []const u8) *const Asset {
 // when storage is too small or a file exceeds maximum bytes; with the
 // operating system's failure when a directory or file cannot be read.
 pub fn load_directory(arena: *memory.Arena, status: *fail.Status, root: []const u8, storage: []Asset, maximum: usize) Assets {
+  if status == nil { return load_directory(arena, &fail.Status{}, root, storage, maximum) }
   assets := Assets{ items: storage }
   load_tree(arena, status, root, "", &assets, maximum, 0)
   if status.failed { return Assets{ items: storage[..0] } }
@@ -310,6 +311,7 @@ fn decimal_value(text: []const u8) Decimal {
 // several ranges, or bad syntax): send the whole representation.
 // InvalidInput when the range starts past the end: answer 416.
 pub fn byte_range(status: *fail.Status, request: *const Request, length: usize) ByteRange {
+  if status == nil { return byte_range(&fail.Status{}, request, length) }
   if status.failed { return ByteRange{} }
   header := find_header(request, "Range")
   if !header.found { return no_range(status, "no Range header") }
@@ -380,6 +382,10 @@ fn put_decimal(destination: []u8, at: usize, value: usize) usize {
 // as Cache-Control when not empty, such as "public, max-age=31536000,
 // immutable" for fingerprinted names or "no-cache" to revalidate each time.
 pub fn serve_asset(status: *fail.Status, response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8) {
+  if status == nil {
+    serve_asset(&fail.Status{}, response, request, asset, cache_control)
+    return
+  }
   headers: [7]Header
   count: usize = 0
   headers[count] = Header{ name: "ETag", value: asset.etag }

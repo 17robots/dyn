@@ -951,7 +951,7 @@ Layer: heap
 
 Layer: heap
 
-- `struct Buffer { data: []u8, length: usize, status: *fail.Status }`: Writes into storage, recording into status: a write that does not fit fails it with Capacity and leaves the buffer as it was before that ...
+- `struct Buffer { data: []u8, length: usize, status: *fail.Status, broken: bool }`: Writes into storage, recording into status: a write that does not fit fails it with Capacity and leaves the buffer as it was before that ...
 - `fn buffer(status: *fail.Status, storage: []u8) Buffer`
 - `fn bytes(state: *const Buffer) []const u8`
 - `fn remaining(state: *const Buffer) usize`

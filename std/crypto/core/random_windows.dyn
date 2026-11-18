@@ -1,6 +1,10 @@
 #target(kernel: windows)
 extern fn entropy "dyn_crypto_random"(algorithm: rawptr, destination: *u8, size: u32, flags: u32) i32
 pub fn secure_random(status: *fail.Status, destination: []u8) {
+  if status == nil {
+    secure_random(&fail.Status{}, destination)
+    return
+  }
   if status.failed { return }
   at: usize = 0
   for at < #len(destination) {

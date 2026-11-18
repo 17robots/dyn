@@ -7,6 +7,10 @@ pub struct Size { width: i32, height: i32 }
 // Init/quit must be balanced; destroy fonts before quit. Use each font on its
 // creating thread. SDL owns rendered surfaces; destroy them separately.
 pub fn init(status: *fail.Status) {
+  if status == nil {
+    init(&fail.Status{})
+    return
+  }
   if status.failed { return }
   if !native_init() {
     sdl3.record_error(status, "start SDL_ttf")
@@ -16,6 +20,7 @@ pub fn quit() {
   native_quit()
 }
 pub fn open_owned(status: *fail.Status, path: []const u8, buffer: []u8, points: f32) Font {
+  if status == nil { return open_owned(&fail.Status{}, path, buffer, points) }
   if status.failed { return nil }
   if !(points > 0.0) {
     fail.invalid(status, "open font", path, "the size must be positive")
@@ -37,6 +42,7 @@ pub fn destroy_owned(font: Font) {
 // Empty text passed as an actual NUL string because SDL interprets length 0 as
 // NUL-terminated. Nonempty text uses byte length, never scans past the slice.
 pub fn measure(status: *fail.Status, font: Font, text: []const u8) Size {
+  if status == nil { return measure(&fail.Status{}, font, text) }
   if status.failed { return Size{} }
   if font == nil {
     fail.invalid(status, "measure text", "", "no font")
@@ -56,6 +62,7 @@ pub fn measure(status: *fail.Status, font: Font, text: []const u8) Size {
   return Size{ width: width, height: height }
 }
 pub fn render_owned(status: *fail.Status, font: Font, text: []const u8, color: sdl3.Color) sdl3.Surface {
+  if status == nil { return render_owned(&fail.Status{}, font, text, color) }
   if status.failed { return nil }
   if font == nil || #len(text) == 0 {
     fail.invalid(status, "render text", "", "no font or text")

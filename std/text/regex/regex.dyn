@@ -415,6 +415,7 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
 // malformed pattern fails with InvalidInput at the offending byte. Nesting is
 // limited to 128.
 pub fn compile(arena: *mem.Arena, status: *fail.Status, pattern: []const u8) Program {
+  if status == nil { return compile(arena, &fail.Status{}, pattern) }
   if status.failed { return Program{} }
   depth: usize = 0
   escaped := false
@@ -632,6 +633,7 @@ fn execute(program: Program, text: []const u8, captures: []Span, workspace: []us
 // program from a failed compile. Reuses arena-reserved workspace: matching
 // itself allocates nothing.
 pub fn find(status: *fail.Status, program: Program, text: []const u8) Match {
+  if status == nil { return find(&fail.Status{}, program, text) }
   if status.failed { return Match{} }
   return find_from(status, program, text, 0)
 }

@@ -14,6 +14,10 @@ pub fn length(state: *const Ring) usize {
 
 // A full ring fails with Capacity and keeps its bytes.
 pub fn push(status: *fail.Status, state: *Ring, byte: u8) {
+  if status == nil {
+    push(&fail.Status{}, state, byte)
+    return
+  }
   if status.failed { return }
   if state.length == #len(state.data) || #len(state.data) == 0 {
     fail.set(status, fail.make(fail.Kind.Capacity, "push", "", "the ring is full"))

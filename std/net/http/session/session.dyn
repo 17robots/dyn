@@ -49,6 +49,7 @@ pub fn token(request: *const http.Request) []const u8 {
 // unexpired at now and not forgotten since. NotFound when there is none;
 // then ask the store and remember its answer.
 pub fn cached(status: *fail.Status, cache: *Cache, shared: *Shared, token: []const u8, now: i64) Session {
+  if status == nil { return cached(&fail.Status{}, cache, shared, token, now) }
   if status.failed { return Session{} }
   seen := versions.stale(&cache.copy, &shared.sessions)
   if seen != 0 {
@@ -73,6 +74,7 @@ pub fn cached(status: *fail.Status, cache: *Cache, shared: *Shared, token: []con
 // InvalidInput when token or csrf has the wrong length or data is too long.
 pub fn remember(status: *fail.Status, cache: *Cache, token: []const u8, user: i64, csrf: []const u8, data: []const u8,
   expires: i64) Session {
+  if status == nil { return remember(&fail.Status{}, cache, token, user, csrf, data, expires) }
   if status.failed { return Session{} }
   if #len(token) != TokenLength || #len(csrf) != CsrfLength || #len(data) > DataSize {
     fail.invalid(status, "remember session", "", "token, csrf or data has the wrong length")
@@ -91,6 +93,7 @@ pub fn remember(status: *fail.Status, cache: *Cache, token: []const u8, user: i6
 // ResponseOptions.cookies or to http.redirect. Fails with System when the
 // system has no randomness.
 pub fn start(arena: *mem.Arena, status: *fail.Status, seconds: i64) New {
+  if status == nil { return start(arena, &fail.Status{}, seconds) }
   if status.failed { return New{} }
   raw: [32]u8
   random.fill(status, raw[..])

@@ -492,6 +492,10 @@ fn next_addresses(addresses: *Addresses, scratch: []u64) {
 // when parameters, salt, destination or workspace are invalid or too small.
 pub fn argon2id_keyed(status: *fail.Status, destination: []u8, password: []const u8, salt: []const u8, secret: []const u8, associated: []const u8,
   parameters: Argon2Parameters, workspace: []u64) {
+  if status == nil {
+    argon2id_keyed(&fail.Status{}, destination, password, salt, secret, associated, parameters, workspace)
+    return
+  }
   if status.failed { return }
   if !parameters_valid(parameters) || #len(salt) < 8 || #len(destination) < 4 ||
     #len(workspace) < argon2id_workspace_words(parameters) {
@@ -630,6 +634,10 @@ fn derive(destination: []u8, password: []const u8, salt: []const u8, secret: []c
 }
 
 pub fn argon2id(status: *fail.Status, destination: []u8, password: []const u8, salt: []const u8, parameters: Argon2Parameters, workspace: []u64) {
+  if status == nil {
+    argon2id(&fail.Status{}, destination, password, salt, parameters, workspace)
+    return
+  }
   argon2id_keyed(status, destination, password, salt, "", "", parameters, workspace)
 }
 
@@ -758,6 +766,7 @@ fn field(text: []const u8, start: usize) usize {
 // Parses a PHC string from argon2id_encode; salt and hash land in storage
 // (128 bytes is plenty). Any other form fails with InvalidInput.
 pub fn argon2id_decode(status: *fail.Status, encoded: []const u8, storage: []u8) Argon2Hash {
+  if status == nil { return argon2id_decode(&fail.Status{}, encoded, storage) }
   if status.failed { return malformed_hash(status) }
   prefix := "$argon2id$v=19$"
   if #len(encoded) < #len(prefix) { return malformed_hash(status) }
@@ -794,6 +803,7 @@ fn malformed_hash(status: *fail.Status) Argon2Hash {
 
 // u64 words verify needs for encoded.
 pub fn argon2id_verify_words(status: *fail.Status, encoded: []const u8) usize {
+  if status == nil { return argon2id_verify_words(&fail.Status{}, encoded) }
   storage: [256]u8
   decoded := argon2id_decode(status, encoded, storage[..])
   if status.failed { return 0 }
@@ -804,6 +814,7 @@ pub fn argon2id_verify_words(status: *fail.Status, encoded: []const u8) usize {
 // encoding, or a workspace shorter than argon2id_verify_words, fails with
 // InvalidInput.
 pub fn argon2id_verify(status: *fail.Status, encoded: []const u8, password: []const u8, workspace: []u64) bool {
+  if status == nil { return argon2id_verify(&fail.Status{}, encoded, password, workspace) }
   storage: [256]u8
   decoded := argon2id_decode(status, encoded, storage[..])
   if status.failed { return false }

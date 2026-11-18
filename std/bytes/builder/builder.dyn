@@ -51,6 +51,10 @@ fn at_cursor(arena: *const memory.Arena, bytes: []const u8, extra: usize) bool {
 // nothing, when source does not fit the storage left.
 // Allocation: none; capacity is fixed until an explicit reserve or append_grow.
 pub fn append(status: *fail.Status, state: *Builder, source: []const u8) {
+  if status == nil {
+    append(&fail.Status{}, state, source)
+    return
+  }
   if status.failed { return }
   if state.length > #len(state.storage) {
     fail.set(status, fail.make(fail.Kind.InvalidState, "append", "", "builder length is past its storage"))

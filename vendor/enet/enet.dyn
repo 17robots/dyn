@@ -13,6 +13,10 @@ pub const Received: i32 = 3
 // kind is zero when no event came in time.
 pub struct Event { kind: i32, peer: Peer, packet: Packet, channel: u8, data: u32 }
 pub fn init(status: *fail.Status) {
+  if status == nil {
+    init(&fail.Status{})
+    return
+  }
   if status.failed { return }
   if native_init() != 0 {
     fail.set(status, fail.make(fail.Kind.System, "start ENet", "", "initialization failed"))
@@ -21,10 +25,12 @@ pub fn init(status: *fail.Status) {
 pub extern fn quit "enet_deinitialize"()
 // Convenience listener uses loopback and one channel; port=0 is ephemeral.
 pub fn listen_owned(status: *fail.Status, port: u16, peers: usize) Host {
+  if status == nil { return listen_owned(&fail.Status{}, port, peers) }
   buffer: [16]u8
   return listen_at_owned(status, "127.0.0.1", port, peers, 1, buffer[..])
 }
 pub fn client_owned(status: *fail.Status, peers: usize) Host {
+  if status == nil { return client_owned(&fail.Status{}, peers) }
   return client_channels_owned(status, peers, 1)
 }
 pub fn destroy_owned(host: Host) {
@@ -34,11 +40,13 @@ pub fn destroy_owned(host: Host) {
 }
 pub extern fn port "dyn_enet_port"(host: Host) u16
 pub fn connect(status: *fail.Status, host: Host, ip: []const u8, port: u16, buffer: []u8) Peer {
+  if status == nil { return connect(&fail.Status{}, host, ip, port, buffer) }
   return connect_channels(status, host, ip, port, 1, buffer)
 }
 // Service both endpoints. Every received packet must be destroyed, including
 // packets the app ignores. A socket failure fails with System.
 pub fn service(status: *fail.Status, host: Host, timeout_ms: u32) Event {
+  if status == nil { return service(&fail.Status{}, host, timeout_ms) }
   if status.failed { return Event{} }
   event := Event{}
   code := native_service(host, timeout_ms, &event.kind, &event.peer, &event.packet, &event.channel, &event.data)
@@ -55,9 +63,17 @@ pub fn service(status: *fail.Status, host: Host, timeout_ms: u32) Event {
 // 1 MiB. No peer, a channel the connection lacks, or a larger packet fails with
 // InvalidInput.
 pub fn send(status: *fail.Status, peer: Peer, bytes: []const u8) {
+  if status == nil {
+    send(&fail.Status{}, peer, bytes)
+    return
+  }
   send_channel(status, peer, 0, bytes)
 }
 pub fn send_channel(status: *fail.Status, peer: Peer, channel: u8, bytes: []const u8) {
+  if status == nil {
+    send_channel(&fail.Status{}, peer, channel, bytes)
+    return
+  }
   if status.failed { return }
   data: rawptr = nil
   if #len(bytes) != 0 {
@@ -100,6 +116,7 @@ extern fn native_disconnect "enet_peer_disconnect"(peer: Peer, data: u32)
 // channels must be 1..255. No DNS lookup or hidden filesystem/network work.
 // A bad address, channel count or port in use fails with InvalidInput.
 pub fn listen_at_owned(status: *fail.Status, ip: []const u8, port: u16, peers: usize, channels: usize, buffer: []u8) Host {
+  if status == nil { return listen_at_owned(&fail.Status{}, ip, port, peers, channels, buffer) }
   encoded := c.string_into(status, buffer, ip)
   if status.failed { return nil }
   host := native_host(encoded, port, peers, channels)
@@ -109,6 +126,7 @@ pub fn listen_at_owned(status: *fail.Status, ip: []const u8, port: u16, peers: u
   return host
 }
 pub fn client_channels_owned(status: *fail.Status, peers: usize, channels: usize) Host {
+  if status == nil { return client_channels_owned(&fail.Status{}, peers, channels) }
   if status.failed { return nil }
   host := native_host(nil, 0, peers, channels)
   if host == nil {
@@ -117,6 +135,7 @@ pub fn client_channels_owned(status: *fail.Status, peers: usize, channels: usize
   return host
 }
 pub fn connect_channels(status: *fail.Status, host: Host, ip: []const u8, port: u16, channels: usize, buffer: []u8) Peer {
+  if status == nil { return connect_channels(&fail.Status{}, host, ip, port, channels, buffer) }
   encoded := c.string_into(status, buffer, ip)
   if status.failed { return nil }
   peer := native_connect(host, encoded, port, channels)

@@ -38,6 +38,7 @@ fn set_mode_bytes(state: *State, mode: u32) {
 
 // The console mode of descriptor; fails when it is not a console.
 pub fn read_state(status: *fail.Status, descriptor: isize) State {
+  if status == nil { return read_state(&fail.Status{}, descriptor) }
   result := State{}
   if status.failed { return result }
   mode: u32 = 0
@@ -50,6 +51,10 @@ pub fn read_state(status: *fail.Status, descriptor: isize) State {
 }
 
 pub fn restore(status: *fail.Status, descriptor: isize, saved: *const State) {
+  if status == nil {
+    restore(&fail.Status{}, descriptor, saved)
+    return
+  }
   if status.failed { return }
   if saved == nil {
     fail.invalid(status, "restore terminal", "", "no saved settings")
@@ -74,6 +79,7 @@ fn make_raw(descriptor: isize, state: *State) {
 // The visible window of the console screen buffer. Descriptor 0 reports the
 // standard output buffer.
 pub fn size(status: *fail.Status, descriptor: isize) Size {
+  if status == nil { return size(&fail.Status{}, descriptor) }
   if status.failed { return Size{} }
   handle := handle_of(descriptor)
   if descriptor == 0 {

@@ -86,6 +86,7 @@ fn native_timeout(descriptor: isize, milliseconds: usize, sending: bool) isize {
 
 // A value greater than capacity means the datagram was truncated.
 pub fn receive_packet(status: *fail.Status, descriptor: isize, bytes: []u8) usize {
+  if status == nil { return receive_packet(&fail.Status{}, descriptor, bytes) }
   if status.failed { return 0 }
   data: *u8 = nil
   if #len(bytes) > 0 {

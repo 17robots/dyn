@@ -85,6 +85,7 @@ fn skip(source: []const u8, start: usize) usize {
 // Inputs must not borrow unused backing of the output arena.
 // Invalid/unsupported input restores the arena mark. Allocation exhaustion panics.
 pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decoded {
+  if status == nil { return decode(arena, &fail.Status{}, source) }
   if status.failed { return Decoded{} }
   if #len(source) < 13 || source[0] != 71 || source[1] != 73 || source[2] != 70 || source[3] != 56 || (source[4] != 55 && source[4] != 57) || source[5] != 97 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "decode GIF", "", "malformed GIF"))

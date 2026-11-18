@@ -102,6 +102,7 @@ struct MessageVector { data: *u8, length: usize }
 struct MessageHeader { name: rawptr, name_length: u32, vectors: *MessageVector, count: i32, control: rawptr, control_length: u32, flags: i32 }
 // Only the fact of truncation is portable, not the full original wire length.
 pub fn receive_packet(status: *fail.Status, descriptor: isize, bytes: []u8) usize {
+  if status == nil { return receive_packet(&fail.Status{}, descriptor, bytes) }
   if status.failed { return 0 }
   data: *u8 = nil
   if #len(bytes) > 0 {

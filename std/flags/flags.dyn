@@ -161,6 +161,7 @@ fn parse_buffers(
 // InvalidInput at the argument's index, naming the option; all pushes are
 // rewound and the result is empty.
 pub fn parse(arena: *memory.Arena, status: *fail.Status, options: []const Option, arguments: [][]const u8) Parsed {
+  if status == nil { return parse(arena, &fail.Status{}, options, arguments) }
   if status.failed { return Parsed{} }
   mark := memory.arena_mark(arena)
   values := memory.push_array(Value, arena, #len(options))

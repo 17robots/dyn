@@ -27,6 +27,7 @@ fn failed(status: *fail.Status, state: *Cursor, kind: fail.Kind, offset: usize) 
 // Malformed input fails with InvalidInput, a length past usize with Overflow,
 // both at the offending byte.
 pub fn next(status: *fail.Status, state: *Cursor) Element {
+  if status == nil { return next(&fail.Status{}, state) }
   if status.failed { return ended(state, state.offset) }
   if state.failed { return failed(status, state, state.error_kind, state.error_offset) }
   start := state.offset

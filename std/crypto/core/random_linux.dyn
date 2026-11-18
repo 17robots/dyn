@@ -3,6 +3,10 @@ use "std/os/linux/sys"
 // Linux getrandom, filling all of destination; a failing source fails with
 // System and the errno in native.
 pub fn secure_random(status: *fail.Status, destination: []u8) {
+  if status == nil {
+    secure_random(&fail.Status{}, destination)
+    return
+  }
   if status.failed { return }
   total: usize = 0
   for total < #len(destination) {

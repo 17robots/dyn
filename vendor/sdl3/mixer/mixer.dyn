@@ -8,6 +8,10 @@ pub type Mixer = rawptr
 pub type Audio = rawptr
 pub type Track = rawptr
 pub fn init(status: *fail.Status) {
+  if status == nil {
+    init(&fail.Status{})
+    return
+  }
   if status.failed { return }
   if !native_init() {
     sdl3.record_error(status, "start SDL_mixer")
@@ -17,6 +21,7 @@ pub extern fn quit "MIX_Quit"()
 extern fn native_init "MIX_Init"() bool
 // Offline stereo f32 at 48 kHz, no device. Pull audio into caller storage.
 pub fn create_owned(status: *fail.Status) Mixer {
+  if status == nil { return create_owned(&fail.Status{}) }
   if status.failed { return nil }
   spec := sdl3.AudioSpec{ format: sdl3.AudioF32, channels: 2, frequency: 48000 }
   value := native_create(&spec)
@@ -28,6 +33,7 @@ pub fn create_owned(status: *fail.Status) Mixer {
 // Default playback device; availability and output latency are device-dependent.
 // Use playing/stop with this mixer; generate is only for offline mixers.
 pub fn create_device_owned(status: *fail.Status) Mixer {
+  if status == nil { return create_device_owned(&fail.Status{}) }
   if status.failed { return nil }
   value := native_device(sdl3.AudioDeviceDefaultPlayback, nil)
   if value == nil {
@@ -43,6 +49,7 @@ pub fn destroy_owned(mixer: Mixer) {
 // Source borrowed only during synchronous predecode; provider owns the audio.
 // Audio can outlive the originating mixer and must be destroyed separately.
 pub fn decode_owned(status: *fail.Status, mixer: Mixer, bytes: []const u8) Audio {
+  if status == nil { return decode_owned(&fail.Status{}, mixer, bytes) }
   if status.failed { return nil }
   if mixer == nil || #len(bytes) == 0 {
     fail.invalid(status, "decode audio", "", "no mixer or no bytes")
@@ -65,6 +72,7 @@ pub fn audio_destroy_owned(audio: Audio) {
   }
 }
 pub fn track_create(status: *fail.Status, mixer: Mixer) Track {
+  if status == nil { return track_create(&fail.Status{}, mixer) }
   if status.failed { return nil }
   if mixer == nil {
     fail.invalid(status, "create track", "", "no mixer")
@@ -82,6 +90,10 @@ pub fn track_destroy(track: Track) {
   }
 }
 pub fn play(status: *fail.Status, track: Track, audio: Audio) {
+  if status == nil {
+    play(&fail.Status{}, track, audio)
+    return
+  }
   if status.failed { return }
   if track == nil || audio == nil {
     fail.invalid(status, "play", "", "no track or audio")
@@ -92,6 +104,10 @@ pub fn play(status: *fail.Status, track: Track, audio: Audio) {
   }
 }
 pub fn stop(status: *fail.Status, track: Track) {
+  if status == nil {
+    stop(&fail.Status{}, track)
+    return
+  }
   if status.failed { return }
   if track == nil {
     fail.invalid(status, "stop", "", "no track")
@@ -107,6 +123,7 @@ pub fn playing(track: Track) bool {
 // Samples are interleaved stereo f32. Length must be even. Returns the count
 // of meaningful samples; the provider fills the rest with silence.
 pub fn generate(status: *fail.Status, mixer: Mixer, samples: []f32) usize {
+  if status == nil { return generate(&fail.Status{}, mixer, samples) }
   if status.failed { return 0 }
   if mixer == nil || #len(samples) == 0 || #len(samples) % 2 != 0 || #len(samples) > 536870911 {
     fail.invalid(status, "generate audio", "", "no mixer, or an odd or empty sample buffer")

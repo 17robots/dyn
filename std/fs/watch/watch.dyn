@@ -37,6 +37,7 @@ pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan:
 // storage until next refill. An overflow invalidates all cached workspace state.
 // storage holds event records: at least 272 bytes.
 pub fn open(status: *fail.Status, storage: []u8) Watcher {
+  if status == nil { return open(&fail.Status{}, storage) }
   if status.failed { return Watcher{} }
   if #len(storage) < 272 {
     _ = failure(status, "watch", "", -28)
@@ -51,6 +52,7 @@ pub fn open(status: *fail.Status, storage: []u8) Watcher {
 }
 // Watches path; the watch identifier, -1 after a failure.
 pub fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i32 {
+  if status == nil { return add(&fail.Status{}, state, path, mask) }
   if status.failed { return -1 }
   if #len(path) == 0 || !state.active { return failure(status, "watch", path, -22) }
   storage: [4096 + mem.ArenaBufferOverhead]u8
@@ -61,6 +63,10 @@ pub fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i
   return #cast(i32, value)
 }
 pub fn remove(status: *fail.Status, state: *Watcher, watch: i32) {
+  if status == nil {
+    remove(&fail.Status{}, state, watch)
+    return
+  }
   if status.failed { return }
   if !state.active {
     _ = failure(status, "unwatch", "", -9)
@@ -95,6 +101,7 @@ fn idle(state: *Watcher) Event {
   return Event{}
 }
 pub fn next(status: *fail.Status, state: *Watcher) Event {
+  if status == nil { return next(&fail.Status{}, state) }
   state.ended = false
   if status.failed { return idle(state) }
   if state.failed {

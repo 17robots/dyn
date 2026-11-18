@@ -9,6 +9,7 @@ use "std/mem" mem
 pub struct TemporaryDirectory { path: []const u8, active: bool }
 // Reserves a private 0700 directory. Its path is in arena.
 pub fn temporary_directory(arena: *mem.Arena, status: *fail.Status, prefix: []const u8) TemporaryDirectory {
+  if status == nil { return temporary_directory(arena, &fail.Status{}, prefix) }
   if status.failed { return TemporaryDirectory{} }
   for byte in prefix {
     if byte == 0 || byte == '/' {
@@ -31,6 +32,10 @@ pub fn temporary_directory(arena: *mem.Arena, status: *fail.Status, prefix: []co
   return TemporaryDirectory{}
 }
 pub fn remove_temporary(status: *fail.Status, directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8) {
+  if status == nil {
+    remove_temporary(&fail.Status{}, directory, frames, scratch)
+    return
+  }
   if !directory.active { return }
   fs.remove_tree(status, directory.path, frames, scratch)
   if !status.failed {

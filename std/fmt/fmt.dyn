@@ -9,19 +9,20 @@ use "std/fail"
 // it with Capacity and leaves the buffer as it was before that write, and once
 // status has failed (for any reason) writes do nothing. So callers write
 // freely and check status once at the end. A zero Buffer writes nothing.
-pub struct Buffer { data: []u8, length: usize, status: *fail.Status }
+// With a nil status, failures are not recorded, but broken still stops the
+// writes after the first that did not fit, so the text never has a gap.
+pub struct Buffer { data: []u8, length: usize, status: *fail.Status, broken: bool }
 pub fn buffer(status: *fail.Status, storage: []u8) Buffer {
   return Buffer{ data: storage, length: 0, status: status }
 }
-// Whether writes have stopped: the status failed, or there is none.
+// Whether writes have stopped: one did not fit, or the status failed.
 fn stopped(state: *const Buffer) bool {
-  return state.status == nil || state.status.failed
+  return state.broken || (state.status != nil && state.status.failed)
 }
 // Records that a write did not fit; false, for the put functions to return.
 fn full(state: *Buffer) bool {
-  if state.status != nil {
-    fail.set(state.status, fail.make(fail.Kind.Capacity, "format", "", "the text does not fit the buffer"))
-  }
+  state.broken = true
+  fail.set(state.status, fail.make(fail.Kind.Capacity, "format", "", "the text does not fit the buffer"))
   return false
 }
 pub fn bytes(state: *const Buffer) []const u8 {
@@ -34,6 +35,7 @@ pub fn remaining(state: *const Buffer) usize {
 // Empties the buffer. Its status is the caller's and stays as it is.
 pub fn clear(state: *Buffer) {
   state.length = 0
+  state.broken = false
 }
 
 fn put(state: *Buffer, value: []const u8) bool {

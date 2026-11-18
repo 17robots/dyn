@@ -54,6 +54,7 @@ fn boundary_of(content_type: []const u8) []const u8 {
 // Content-Type is not multipart/form-data or has no valid boundary (1-70
 // bytes), or the body does not start with the first delimiter.
 pub fn multipart(status: *fail.Status, request: *const Request) Parts {
+  if status == nil { return multipart(&fail.Status{}, request) }
   if status.failed { return Parts{ failed: true } }
   header := find_header(request, "Content-Type")
   if !header.found || #len(header.value) < 19 || !ascii_equal(header.value[..19], "multipart/form-data") {
@@ -128,6 +129,7 @@ fn parts_ended(reader: *Parts) Part {
   return Part{}
 }
 pub fn next_part(status: *fail.Status, reader: *Parts) Part {
+  if status == nil { return next_part(&fail.Status{}, reader) }
   if status.failed { return parts_ended(reader) }
   if reader.failed {
     multipart_failure(status, "an earlier part was malformed")

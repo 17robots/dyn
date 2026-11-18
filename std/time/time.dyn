@@ -18,6 +18,7 @@ pub struct DateTime {
 
 // a + b, or Overflow in status when the sum is outside i64.
 pub fn checked_add(status: *fail.Status, a, b: i64) i64 {
+  if status == nil { return checked_add(&fail.Status{}, a, b) }
   if status.failed { return 0 }
   if (b > 0 && a > 9223372036854775807 - b) || (b < 0 && a < -9223372036854775807 - 1 - b) {
     fail.set(status, fail.make(fail.Kind.Overflow, "add", "", "duration is outside i64"))
@@ -27,6 +28,7 @@ pub fn checked_add(status: *fail.Status, a, b: i64) i64 {
 }
 // a - b, or Overflow in status when the difference is outside i64.
 pub fn checked_sub(status: *fail.Status, a, b: i64) i64 {
+  if status == nil { return checked_sub(&fail.Status{}, a, b) }
   if status.failed { return 0 }
   if b == -9223372036854775807 - 1 {
     if a >= 0 {
@@ -154,6 +156,7 @@ fn read_two(input: []const u8, at: usize) u8 {
 // Parses YYYY-MM-DDTHH:MM:SSZ. Anything else, or a date that does not exist,
 // fails with InvalidInput.
 pub fn parse_iso8601(status: *fail.Status, input: []const u8) DateTime {
+  if status == nil { return parse_iso8601(&fail.Status{}, input) }
   value: DateTime
   if status.failed { return value }
   if !parse_iso8601_into(input, &value) {

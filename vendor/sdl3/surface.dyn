@@ -9,6 +9,7 @@ pub fn surface_destroy_owned(surface: Surface) {
 }
 // Upload copies surface data; surface may be destroyed after this call.
 pub fn texture_from_surface_owned(status: *fail.Status, renderer: Renderer, surface: Surface) Texture {
+  if status == nil { return texture_from_surface_owned(&fail.Status{}, renderer, surface) }
   if status.failed { return nil }
   if renderer == nil || surface == nil {
     fail.invalid(status, "create texture", "", "no renderer or surface")
@@ -27,6 +28,10 @@ pub fn texture_destroy_owned(texture: Texture) {
 }
 // Draw entire texture to entire rendering target. Present separately.
 pub fn texture_draw(status: *fail.Status, renderer: Renderer, texture: Texture) {
+  if status == nil {
+    texture_draw(&fail.Status{}, renderer, texture)
+    return
+  }
   if status.failed { return }
   if renderer == nil || texture == nil {
     fail.invalid(status, "draw texture", "", "no renderer or texture")

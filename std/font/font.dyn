@@ -40,6 +40,7 @@ fn table(data: []const u8, tag: u32) Table {
   return Table{}
 }
 pub fn open(status: *fail.Status, data: []const u8) Face {
+  if status == nil { return open(&fail.Status{}, data) }
   if status.failed { return Face{} }
   if #len(data) < 12 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "open font", "", "malformed font"))
@@ -272,6 +273,7 @@ fn edge(edges: []Edge, used: *usize, a, b: Point) {
 // and 16,777,216 pixel-edge pairs (before 4x4 supersampling).
 // Output belongs to arena; temporary outline storage is rewound on completion.
 pub fn raster(arena: *mem.Arena, status: *fail.Status, face: *const Face, index: u16, pixels_per_em: usize) Bitmap {
+  if status == nil { return raster(arena, &fail.Status{}, face, index, pixels_per_em) }
   if status.failed { return Bitmap{} }
   if index >= face.glyphs || face.units_per_em == 0 || pixels_per_em == 0 || pixels_per_em > 256 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "raster glyph", "", "malformed glyph"))
@@ -476,6 +478,7 @@ pub struct Atlas { pixels: []u8, width: usize, height: usize, line_height: i32, 
 // be strictly increasing Unicode scalars. Caller chooses dimensions, 1..4096.
 // Entire output belongs to arena. A failure rewinds all allocations from this call.
 pub fn atlas(arena: *mem.Arena, status: *fail.Status, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: usize) Atlas {
+  if status == nil { return atlas(arena, &fail.Status{}, face, codepoints, pixels_per_em, width, height) }
   if status.failed { return Atlas{} }
   if width == 0 || height == 0 || width > 4096 || height > 4096 || face.units_per_em == 0 || pixels_per_em == 0 || pixels_per_em > 256 || #len(codepoints) > 65536 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "build atlas", "", "malformed atlas"))

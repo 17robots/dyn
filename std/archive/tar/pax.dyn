@@ -95,6 +95,7 @@ fn apply_overrides(entry: *Entry, values: Overrides) {
 // it fails again the same way. Malformed or truncated input fails with
 // InvalidInput at the offending header (or the end, for truncation).
 pub fn next(status: *fail.Status, state: *ArchiveReader) Entry {
+  if status == nil { return next(&fail.Status{}, state) }
   if status.failed { return archive_ended(state) }
   cursor := state.offset
   global := state.defaults

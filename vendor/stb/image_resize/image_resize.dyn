@@ -8,6 +8,10 @@ use "std/fail"
 // Bad sizes, channels or buffers fail with InvalidInput. An exhausted scratch
 // arena panics.
 pub fn resize(scratch: *mem.Arena, status: *fail.Status, source: []const u8, width: usize, height: usize, destination: []u8, out_width: usize, out_height: usize, channels: usize, srgb: bool) {
+  if status == nil {
+    resize(scratch, &fail.Status{}, source, width, height, destination, out_width, out_height, channels, srgb)
+    return
+  }
   if status.failed { return }
   if scratch == nil || #len(source) == 0 || #len(destination) == 0 {
     fail.invalid(status, "resize", "", "no scratch arena, source or destination")

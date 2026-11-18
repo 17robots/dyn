@@ -28,6 +28,10 @@ fn spawn_with_size_untyped(arena: *mem.Arena, status: *fail.Status, stack_size: 
 // Success clears the native owner. Failure retains it for retry; keep the
 // arena/thread/context alive until success. One caller controls this descriptor.
 pub fn join(status: *fail.Status, thread: *Thread) {
+  if status == nil {
+    join(&fail.Status{}, thread)
+    return
+  }
   if status.failed || thread.native.handle == nil { return }
   if !win.thread_join(&thread.native) {
     fail.set(status, io.from_windows("join thread", "", win.thread_error()))

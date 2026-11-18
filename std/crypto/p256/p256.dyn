@@ -226,6 +226,10 @@ pub fn verify(signature: []const u8, message: []const u8, public_key: []const u8
   return verify_hash(signature, digest[..], public_key)
 }
 pub fn public_key(status: *fail.Status, output: []u8, private_key: []const u8) {
+  if status == nil {
+    public_key(&fail.Status{}, output, private_key)
+    return
+  }
   if status.failed { return }
   if #len(output)<65 || #len(private_key)!=32 || bytes.overlaps(output, private_key) {
     fail.invalid(status, "P-256 public key", "", "bad key, short output, or output overlapping the key")
@@ -245,6 +249,10 @@ pub fn public_key(status: *fail.Status, output: []u8, private_key: []const u8) {
 // candidates, not scalar multiplication bits. The raw signature is not low-S
 // normalized; both S representatives are valid ECDSA.
 pub fn sign_hash(status: *fail.Status, output: []u8, digest: []const u8, private_key: []const u8) {
+  if status == nil {
+    sign_hash(&fail.Status{}, output, digest, private_key)
+    return
+  }
   if status.failed { return }
   if #len(output)<64 || #len(digest)!=32 || #len(private_key)!=32 || bytes.overlaps(output, digest) || bytes.overlaps(output, private_key) {
     fail.invalid(status, "P-256 sign", "", "bad key or digest, short output, or output overlapping an input")
@@ -297,6 +305,10 @@ pub fn sign_hash(status: *fail.Status, output: []u8, digest: []const u8, private
   fail.invalid(status, "P-256 sign", "", "bad key or digest, short output, or output overlapping an input")
 }
 pub fn sign(status: *fail.Status, output: []u8, message: []const u8, private_key: []const u8) {
+  if status == nil {
+    sign(&fail.Status{}, output, message, private_key)
+    return
+  }
   if status.failed { return }
   if bytes.overlaps(output, message) {
     fail.invalid(status, "P-256 sign", "", "bad key, short output, or output overlapping an input")

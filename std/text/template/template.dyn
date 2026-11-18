@@ -34,6 +34,7 @@ fn valid_name(name: []const u8) bool {
 // Required storage exhaustion panics, including for nonempty literal templates.
 // A malformed {{field}} fails with InvalidInput at its offset.
 pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) Template {
+  if status == nil { return parse(arena, &fail.Status{}, source) }
   if status.failed { return Template{} }
   cursor: usize = 0
   for cursor < #len(source) {
@@ -68,6 +69,10 @@ fn write(status: *fail.Status, destination: stream.Writer, source: []const u8) {
 }
 
 pub fn render(status: *fail.Status, destination: stream.Writer, template: *const Template, fields: []const Field) {
+  if status == nil {
+    render(&fail.Status{}, destination, template, fields)
+    return
+  }
   render_with(status, destination, template, fields, write)
 }
 
@@ -75,6 +80,10 @@ pub fn render(status: *fail.Status, destination: stream.Writer, template: *const
 // is unchanged. A malformed field fails with InvalidInput at its offset.
 pub fn render_with(status: *fail.Status, destination: stream.Writer, template: *const Template, fields: []const Field,
   render_field: fn(*fail.Status, stream.Writer, []const u8)) {
+  if status == nil {
+    render_with(&fail.Status{}, destination, template, fields, render_field)
+    return
+  }
   if status.failed { return }
   if template == nil || render_field == nil {
     fail.invalid(status, "render template", "", "no template or field renderer")

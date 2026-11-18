@@ -37,6 +37,7 @@ fn invalid(status: *fail.Status, operation: []const u8, path: []const u8, messag
 // Starts path with arguments (argv[0] first). The Child lives in arena; on
 // failure it is inactive, so wait and terminate on it do nothing.
 pub fn spawn(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, configuration: Options) *Child {
+  if status == nil { return spawn(arena, &fail.Status{}, path, arguments, configuration) }
   child := mem.push(Child, arena)
   if status.failed { return child }
   if #len(path) == 0 || #len(arguments) == 0 {
@@ -87,6 +88,7 @@ pub fn spawn(arena: *mem.Arena, status: *fail.Status, path: []const u8, argument
 // Waits for child to end; nonblocking returns at once with finished false
 // while it runs. Waiting on a child that already ended is InvalidState.
 pub fn wait(status: *fail.Status, child: *Child, nonblocking: bool) Exit {
+  if status == nil { return wait(&fail.Status{}, child, nonblocking) }
   if status.failed { return Exit{} }
   if !child.active {
     failure := fail.make(fail.Kind.InvalidState, "wait", "", "the child has already been waited for")
@@ -98,6 +100,10 @@ pub fn wait(status: *fail.Status, child: *Child, nonblocking: bool) Exit {
 }
 // Kills child. It still needs a wait to be reaped.
 pub fn terminate(status: *fail.Status, child: *Child) {
+  if status == nil {
+    terminate(&fail.Status{}, child)
+    return
+  }
   if status.failed { return }
   if !child.active {
     failure := fail.make(fail.Kind.InvalidState, "terminate", "", "the child has already been waited for")
@@ -109,6 +115,7 @@ pub fn terminate(status: *fail.Status, child: *Child) {
 }
 // A pipe: write to output, read from input. Close both with close_pipe.
 pub fn pipe(status: *fail.Status) Pipe {
+  if status == nil { return pipe(&fail.Status{}) }
   if status.failed { return Pipe{ input: -1, output: -1 } }
   return pipe_native(status)
 }
@@ -127,6 +134,7 @@ pub fn environment_or(arena: *mem.Arena, name: []const u8, fallback: []const u8)
 // read, and then the status says why: NotFound when it is unset. Read an
 // optional variable with a status of its own, or use environment_or.
 pub fn environment(arena: *mem.Arena, status: *fail.Status, name: []const u8) []u8 {
+  if status == nil { return environment(arena, &fail.Status{}, name) }
   empty: []u8
   if status.failed { return empty }
   if #len(name) == 0 {
@@ -204,6 +212,7 @@ fn capture_input_overlap(arena: *mem.Arena, path: []const u8, arguments: [][]con
 // descendants are not killed. A nonzero exit code is a successful capture.
 pub fn capture(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8,
   configuration: Options, policy: CaptureOptions) Captured {
+  if status == nil { return capture(arena, &fail.Status{}, path, arguments, configuration, policy) }
   if status.failed { return Captured{} }
   if capture_input_overlap(arena, path, arguments, configuration) {
     invalid(status, "capture", path, "an input lies in the arena's free space")
@@ -343,6 +352,7 @@ pub fn start() Program {
 // Unix preserves native bytes; Windows converts UTF-16 to UTF-8.
 // Failure rewinds arena; success lives until its next reset/rewind/destroy.
 pub fn arguments(arena: *mem.Arena, status: *fail.Status) [][]const u8 {
+  if status == nil { return arguments(arena, &fail.Status{}) }
   empty: [][]const u8
   if status.failed { return empty }
   mark := mem.arena_mark(arena)

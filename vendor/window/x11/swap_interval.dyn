@@ -34,6 +34,10 @@ fn swap_extension(list: []const u8, wanted: []const u8) bool {
 // a non-nil GLX procedure address alone does not establish driver support.
 // Only immediate (0) and one-refresh (1) intervals are part of this contract.
 pub fn set_swap_interval(status: *fail.Status, window:*Window, interval:i32) {
+  if status == nil {
+    set_swap_interval(&fail.Status{}, window, interval)
+    return
+  }
   if status.failed { return }
   if window==nil || window.display==nil || window.context==nil || window.handle==0 {
     window_failed(status, fail.Kind.InvalidState, "set swap interval")

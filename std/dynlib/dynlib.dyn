@@ -15,6 +15,7 @@ pub const Global: i32 = 256
 
 // Opens the library at path; nil after a failure.
 pub fn open(status: *fail.Status, path: []const u8, flags: i32) Handle {
+  if status == nil { return open(&fail.Status{}, path, flags) }
   if status.failed { return nil }
   storage: [4096 + mem.ArenaBufferOverhead]u8
   if #len(path) >= #len(storage) {
@@ -29,6 +30,7 @@ pub fn open(status: *fail.Status, path: []const u8, flags: i32) Handle {
 // The address of the symbol called name; nil after a failure. A symbol may
 // itself be nil: check status.failed, not the address.
 pub fn symbol(status: *fail.Status, handle: Handle, name: []const u8) rawptr {
+  if status == nil { return symbol(&fail.Status{}, handle, name) }
   if status.failed { return nil }
   if handle == nil {
     fail.set(status, fail.make(fail.Kind.InvalidState, "find symbol", name, "the library is not open"))
@@ -46,6 +48,10 @@ pub fn symbol(status: *fail.Status, handle: Handle, name: []const u8) rawptr {
 
 // Clears the owned handle only after a successful close. Failure retains ownership.
 pub fn close(status: *fail.Status, handle: *Handle) {
+  if status == nil {
+    close(&fail.Status{}, handle)
+    return
+  }
   if status.failed { return }
   if handle == nil || handle.* == nil {
     fail.set(status, fail.make(fail.Kind.InvalidState, "close library", "", "the library is not open"))

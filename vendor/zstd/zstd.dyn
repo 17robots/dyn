@@ -13,6 +13,7 @@ pub fn compress_bound(source_size: usize) usize {
 }
 // The compressed size. Too small a destination fails with Capacity.
 pub fn compress(status: *fail.Status, destination: []u8, source: []const u8, level: i32) usize {
+  if status == nil { return compress(&fail.Status{}, destination, source, level) }
   if status.failed { return 0 }
   destination_pointer: rawptr = nil
   source_pointer: rawptr = nil
@@ -28,6 +29,7 @@ pub fn compress(status: *fail.Status, destination: []u8, source: []const u8, lev
 // The decompressed size. Malformed input fails with InvalidInput, too small a
 // destination with Capacity.
 pub fn decompress(status: *fail.Status, destination: []u8, source: []const u8) usize {
+  if status == nil { return decompress(&fail.Status{}, destination, source) }
   if status.failed { return 0 }
   destination_pointer: rawptr = nil
   source_pointer: rawptr = nil
@@ -42,6 +44,7 @@ pub fn decompress(status: *fail.Status, destination: []u8, source: []const u8) u
 }
 // A malformed or empty frame header fails with InvalidInput.
 pub fn frame_size(status: *fail.Status, source: []const u8) FrameSize {
+  if status == nil { return frame_size(&fail.Status{}, source) }
   if status.failed { return FrameSize{} }
   size := ContentSizeError
   if #len(source) != 0 {
@@ -109,6 +112,7 @@ pub fn stream_workspace_size(window_log: u32) usize {
 }
 // Too small a workspace, or a window_log outside 10..30, fails with Capacity.
 pub fn stream_context(status: *fail.Status, workspace: []u8, window_log: u32) StreamContext {
+  if status == nil { return stream_context(&fail.Status{}, workspace, window_log) }
   if status.failed { return StreamContext{ failed: true } }
   required := stream_workspace_size(window_log)
   if required == 0 || #len(workspace) < required {
@@ -131,6 +135,7 @@ pub fn stream_context(status: *fail.Status, workspace: []u8, window_log: u32) St
   return StreamContext{ value: value }
 }
 pub fn stream_decode(status: *fail.Status, context: *StreamContext, destination: []u8, source: []const u8) Decoded {
+  if status == nil { return stream_decode(&fail.Status{}, context, destination, source) }
   if status.failed { return Decoded{} }
   if context.failed {
     if context.provider_code == 0 {

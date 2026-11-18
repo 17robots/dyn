@@ -26,6 +26,7 @@ pub fn compress_bound(source_size: usize) usize {
 }
 // Compresses source into arena at level.
 pub fn compress(arena: *memory.Arena, status: *fail.Status, source: []const u8, level: i32) []u8 {
+  if status == nil { return compress(arena, &fail.Status{}, source, level) }
   empty: []u8
   if status.failed { return empty }
   mark := memory.arena_mark(arena)
@@ -41,6 +42,7 @@ pub fn compress(arena: *memory.Arena, status: *fail.Status, source: []const u8, 
 // One frame whose header records its size, into arena. A frame without a
 // recorded size fails with Unsupported: use the streaming decoder.
 pub fn decompress(arena: *memory.Arena, status: *fail.Status, source: []const u8) []u8 {
+  if status == nil { return decompress(arena, &fail.Status{}, source) }
   empty: []u8
   if status.failed { return empty }
   mark := memory.arena_mark(arena)
@@ -64,6 +66,7 @@ pub fn decompress(arena: *memory.Arena, status: *fail.Status, source: []const u8
   return allocation[..written]
 }
 pub fn frame_size(status: *fail.Status, source: []const u8) FrameSize {
+  if status == nil { return frame_size(&fail.Status{}, source) }
   size := provider.frame_size(status, source)
   return FrameSize{ size: size.size, known: size.known }
 }

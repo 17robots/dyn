@@ -49,6 +49,10 @@ fn mac(status: *fail.Status, ciphertext: []const u8, aad: []const u8, key: []con
   return poly.finish(status, &state)
 }
 pub fn seal(status: *fail.Status, output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) {
+  if status == nil {
+    seal(&fail.Status{}, output, tag, input, aad, key, nonce)
+    return
+  }
   if status.failed { return }
   if !valid(output, input, aad, key, nonce) || #len(tag) != 16 || overlaps(tag, output) || overlaps(tag, input) || overlaps(tag, aad) || overlaps(tag, key) || overlaps(tag, nonce) {
     fail.invalid(status, "ChaCha20-Poly1305 seal", "", "bad key, nonce, tag or output size, or overlapping buffers")
@@ -62,6 +66,10 @@ pub fn seal(status: *fail.Status, output: []u8, tag: []u8, input: []const u8, aa
   }
 }
 pub fn open(status: *fail.Status, output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) {
+  if status == nil {
+    open(&fail.Status{}, output, input, tag, aad, key, nonce)
+    return
+  }
   if status.failed { return }
   if !valid(output, input, aad, key, nonce) || #len(tag) != 16 || overlaps(output, tag) {
     fail.invalid(status, "ChaCha20-Poly1305 open", "", "bad key, nonce, tag or output size, or overlapping buffers")

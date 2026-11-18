@@ -68,6 +68,7 @@ fn complete(state: *Reader) bool {
 }
 // The next token. Malformed input fails with InvalidInput at its offset.
 pub fn next(status: *fail.Status, state: *Reader) Token {
+  if status == nil { return next(&fail.Status{}, state) }
   if status.failed { return ended(state, state.offset) }
   if state.failed { return failed(status, state, state.error_offset, state.error_kind) }
   start := state.offset
@@ -250,6 +251,7 @@ fn extra(tag: u8) usize {
 // Fails, writing nothing, with InvalidInput (Capacity past 64 levels,
 // Overflow past usize) at the index of the offending token.
 pub fn encode(arena: *mem.Arena, status: *fail.Status, tokens: []const Token) []u8 {
+  if status == nil { return encode(arena, &fail.Status{}, tokens) }
   empty: []u8
   if status.failed { return empty }
   state := Reader{}

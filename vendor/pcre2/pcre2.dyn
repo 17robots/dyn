@@ -27,6 +27,7 @@ fn provider_failed(status: *fail.Status, kind: fail.Kind, operation: []const u8,
 }
 // A malformed pattern fails with InvalidInput at its offset.
 pub fn compile_owned(status: *fail.Status, pattern: []const u8, options: u32) Pattern {
+  if status == nil { return compile_owned(&fail.Status{}, pattern, options) }
   if status.failed { return nil }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
@@ -59,6 +60,7 @@ pub fn match_data_destroy_owned(data: MatchData) {
 // and thread-confined. Captures are meaningful only after a match. Whether it
 // matched; a match error (such as a resource limit) fails with System.
 pub fn match(status: *fail.Status, pattern: Pattern, data: MatchData, subject: []const u8, start: usize) bool {
+  if status == nil { return match(&fail.Status{}, pattern, data, subject, start) }
   if status.failed { return false }
   if pattern == nil || data == nil || start > #len(subject) {
     provider_failed(status, fail.Kind.InvalidInput, "match", -33, 0, false)
@@ -79,6 +81,7 @@ pub fn match(status: *fail.Status, pattern: Pattern, data: MatchData, subject: [
 // Where group index matched (0 is the whole match). NotFound for a group that
 // took no part in the match or an index past the pattern's groups.
 pub fn capture(status: *fail.Status, data: MatchData, index: usize) Span {
+  if status == nil { return capture(&fail.Status{}, data, index) }
   if status.failed { return Span{} }
   if data == nil || index >= #cast(usize, native_count(data)) { return no_capture(status) }
   offsets := native_offsets(data)

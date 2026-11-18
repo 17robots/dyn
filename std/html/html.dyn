@@ -219,7 +219,7 @@ pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) {
   }
   // Reserve the worst case once. Near-capacity and aliased inputs keep the
   // span writer below, including its exact partial-write failure behavior.
-  if buffer.status != nil && !buffer.status.failed && buffer.length <= #len(buffer.data) && #len(text) > 0 &&
+  if !buffer.broken && (buffer.status == nil || !buffer.status.failed) && buffer.length <= #len(buffer.data) && #len(text) > 0 &&
     #len(text) <= (#len(buffer.data) - buffer.length) / 6 {
     maximum := #len(text) * 6
     destination := buffer.data[buffer.length..buffer.length + maximum]

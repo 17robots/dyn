@@ -12,6 +12,7 @@ fn load(source: []const u8, at: usize) u64 {
 }
 // A key that is not 32 bytes fails with InvalidInput.
 pub fn init(status: *fail.Status, key: []const u8) State {
+  if status == nil { return init(&fail.Status{}, key) }
   if status.failed { return State{} }
   if #len(key) != 32 {
     fail.invalid(status, "Poly1305", "", "the key must be 32 bytes")
@@ -83,6 +84,7 @@ pub fn update(state: *State, input: []const u8) {
 // The 16-byte tag. finish consumes the state: finishing a state that is not
 // keyed (never initialized, or finished already) fails with InvalidState.
 pub fn finish(status: *fail.Status, state: *State) [16]u8 {
+  if status == nil { return finish(&fail.Status{}, state) }
   tag: [16]u8
   if status.failed { return tag }
   if !state.keyed {
@@ -128,6 +130,7 @@ pub fn finish(status: *fail.Status, state: *State) [16]u8 {
   return tag
 }
 pub fn authenticate(status: *fail.Status, message: []const u8, key: []const u8) [16]u8 {
+  if status == nil { return authenticate(&fail.Status{}, message, key) }
   state := init(status, key)
   update(&state, message)
   return finish(status, &state)

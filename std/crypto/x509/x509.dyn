@@ -401,6 +401,7 @@ fn reason_text(reason: Reason) []const u8 {
 // unsupported algorithm or critical extension fails with Unsupported, any
 // other defect with InvalidInput.
 pub fn inspect(status: *fail.Status, encoded: []const u8) View {
+  if status == nil { return inspect(&fail.Status{}, encoded) }
   if status.failed { return View{} }
   inspected := examine(encoded)
   if inspected.reason != Reason.None {

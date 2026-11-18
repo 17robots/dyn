@@ -25,6 +25,7 @@ fn terminated(path: []const u8, storage: []u8) *const u8 {
 }
 // A descriptor, or -1 after a failure.
 pub fn file_open(status: *fail.Status, path: []const u8, write_access: bool, create: bool) isize {
+  if status == nil { return file_open(&fail.Status{}, path, write_access, create) }
   if status.failed { return -1 }
   storage: [4096 + mem.ArenaBufferOverhead]u8
   name := terminated(path, storage[..])
@@ -39,6 +40,10 @@ pub fn file_open(status: *fail.Status, path: []const u8, write_access: bool, cre
   return checked(status, "open", path, #syscall(sys.Open, name, flags, 420))
 }
 pub fn file_close(status: *fail.Status, handle: isize) {
+  if status == nil {
+    file_close(&fail.Status{}, handle)
+    return
+  }
   if status.failed { return }
   _ = checked(status, "close", "", #syscall(sys.Close, handle))
 }
@@ -47,6 +52,7 @@ pub fn thread_yield() {
 }
 // A socket, or -1 after a failure.
 pub fn socket_open(status: *fail.Status, family: i32, kind: i32, protocol: i32) isize {
+  if status == nil { return socket_open(&fail.Status{}, family, kind, protocol) }
   if status.failed { return -1 }
   return checked(status, "socket", "", #syscall(sys.Socket, family, kind, protocol))
 }

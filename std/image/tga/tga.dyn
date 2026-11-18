@@ -9,6 +9,7 @@ pub struct Image { info: Info, pixels: []u8 }
 // Inputs must not borrow unused backing of the output arena.
 // Invalid/unsupported input restores the arena mark. Allocation exhaustion panics.
 pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image {
+  if status == nil { return decode(arena, &fail.Status{}, source) }
   if status.failed { return Image{} }
   if #len(source) < 18 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "decode TGA", "", "malformed TGA"))
@@ -123,6 +124,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
 // Ownership: encoded bytes borrow arena backing; pixels are not retained.
 // Inputs must not borrow unused backing of the output arena.
 pub fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width, height: usize, channels: u8) []u8 {
+  if status == nil { return encode(arena, &fail.Status{}, pixels, width, height, channels) }
   empty: []u8
   if status.failed { return empty }
   if width == 0 || height == 0 || width > 65535 || height > 65535 || (channels != 1 && channels != 2 && channels != 3 && channels != 4) {

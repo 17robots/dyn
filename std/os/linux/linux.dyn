@@ -88,6 +88,7 @@ pub struct SpawnOptions { input: isize, output: isize, error: isize, directory: 
 struct CStringPointer { value: *u8 }
 
 pub fn pipe(status: *fail.Status) Pipe {
+  if status == nil { return pipe(&fail.Status{}) }
   if status.failed { return Pipe{ input: -1, output: -1 } }
   descriptors: [2]i32
   value := #syscall(sys.Pipe2, &descriptors[0], 0)
@@ -97,9 +98,14 @@ pub fn pipe(status: *fail.Status) Pipe {
 // Closes descriptor. Never retry a failed close: the descriptor may already
 // be reused.
 pub fn close_descriptor(status: *fail.Status, descriptor: isize) {
+  if status == nil {
+    close_descriptor(&fail.Status{}, descriptor)
+    return
+  }
   _ = check(status, "close", #syscall(sys.Close, descriptor))
 }
 pub fn duplicate_to(status: *fail.Status, descriptor: isize, target: isize) isize {
+  if status == nil { return duplicate_to(&fail.Status{}, descriptor, target) }
   if status.failed { return -1 }
   if descriptor == target { return check(status, "duplicate", #syscall(sys.Fcntl, descriptor, 1, 0)) }
   value := #syscall(sys.Dup2, descriptor, target, 0)
@@ -109,11 +115,16 @@ pub fn duplicate_to(status: *fail.Status, descriptor: isize, target: isize) isiz
   return check(status, "duplicate", value)
 }
 pub fn send_signal(status: *fail.Status, process: isize, signal: usize) {
+  if status == nil {
+    send_signal(&fail.Status{}, process, signal)
+    return
+  }
   if status.failed { return }
   _ = check(status, "signal", #syscall(sys.Kill, process, signal))
 }
 // fork: 0 in the child, the child's id in the parent.
 pub fn fork_process(status: *fail.Status) isize {
+  if status == nil { return fork_process(&fail.Status{}) }
   if status.failed { return -1 }
   return check(status, "fork", fork_native())
 }
@@ -160,6 +171,7 @@ pub fn spawn_environment(
   environment: [][]const u8,
   options: SpawnOptions,
 ) isize {
+  if status == nil { return spawn_environment(arena, &fail.Status{}, path, arguments, environment, options) }
   if status.failed { return -1 }
   mark := memory.arena_mark(arena)
   defer memory.arena_rewind(arena, mark)
@@ -302,6 +314,7 @@ fn raw_duplicate(descriptor: isize, target: isize) isize {
 // Waits for process to end. nonblocking returns process 0 when it is
 // still running.
 pub fn wait(status: *fail.Status, process: isize, nonblocking: bool) Waited {
+  if status == nil { return wait(&fail.Status{}, process, nonblocking) }
   if status.failed { return Waited{} }
   wait_status: i32 = 0
   options: usize = 0
@@ -338,6 +351,7 @@ pub fn exit_process(status: u8) {
 // storage. NotFound when the variable is unset; Capacity when the value does
 // not fit destination.
 pub fn environment_get(status: *fail.Status, name: []const u8, destination: []u8) []u8 {
+  if status == nil { return environment_get(&fail.Status{}, name, destination) }
   if status.failed { return destination[..0] }
   if #len(name) == 0 {
     fail.invalid(status, "read environment", name, "empty variable name")
@@ -412,6 +426,7 @@ pub fn environment_get(status: *fail.Status, name: []const u8, destination: []u8
 
 // The working directory, in destination.
 pub fn current_directory(status: *fail.Status, destination: []u8) []u8 {
+  if status == nil { return current_directory(&fail.Status{}, destination) }
   if status.failed { return destination[..0] }
   if #len(destination) == 0 {
     fail.set(status, io.from_linux("current directory", "", -34))
@@ -433,13 +448,22 @@ fn signal_disposition(status: *fail.Status, signal: usize, handler: usize) {
   _ = check(status, "set signal action", #syscall(sys.RtSigaction, signal, &action, 0, 8))
 }
 pub fn signal_ignore(status: *fail.Status, signal: usize) {
+  if status == nil {
+    signal_ignore(&fail.Status{}, signal)
+    return
+  }
   signal_disposition(status, signal, 1)
 }
 pub fn signal_default(status: *fail.Status, signal: usize) {
+  if status == nil {
+    signal_default(&fail.Status{}, signal)
+    return
+  }
   signal_disposition(status, signal, 0)
 }
 
 pub fn spawn(arena: *memory.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, options: SpawnOptions) isize {
+  if status == nil { return spawn(arena, &fail.Status{}, path, arguments, options) }
   empty: [0][]const u8
   return spawn_environment(arena, status, path, arguments, empty[..], options)
 }
