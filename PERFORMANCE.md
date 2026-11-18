@@ -1,5 +1,34 @@
 # Performance qualification
 
+
+## Against C, Go and Zig — 2026-11-17
+
+`tools/bench/run.py` builds each kernel in Dyn (`--release`), C (`cc -O2`,
+gcc 16.2), Go 1.27 and Zig 0.17 (ReleaseFast, and ReleaseSafe, which keeps
+bounds checks as Dyn's release builds do), checks the outputs agree, and
+reports the median of 5 runs on x86-64 Linux. Times in seconds; the ratio
+columns are Dyn's time over the other build's.
+
+| kernel | dyn | c -O2 | go | zig | zig safe | /c | /go | /zig | /zig safe |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| bodies | 0.030 | 0.016 | 0.049 | 0.025 | 0.025 | 1.84 | 0.61 | 1.19 | 1.17 |
+| fib | 0.081 | 0.065 | 0.295 | 0.160 | 0.262 | 1.25 | 0.28 | 0.51 | 0.31 |
+| hash | 0.076 | 0.075 | 0.075 | 0.075 | 0.076 | 1.02 | 1.01 | 1.01 | 1.01 |
+| matmul | 0.051 | 0.056 | 0.106 | 0.129 | 0.128 | 0.90 | 0.48 | 0.39 | 0.40 |
+| points | 0.010 | 0.009 | 0.013 | 0.010 | 0.009 | 1.11 | 0.77 | 1.00 | 1.09 |
+| sieve | 0.130 | 0.111 | 0.136 | 0.104 | 0.107 | 1.18 | 0.96 | 1.25 | 1.22 |
+
+`bodies` passes a 64-byte struct by value. Before this change it took
+0.046 s: an inlined call copied the argument into a parameter, and an
+out-of-line call copied it three times (a snapshot, the outgoing stack area
+and the callee's frame). Now an inlined body reads a caller's local in place
+when it never writes or takes the address of the parameter; a callee keeps a
+stack-passed struct where it arrived, or reads a by-pointer one (AArch64,
+Windows) through the pointer, outside debug builds; and a caller passes a
+local whose address is never taken without a snapshot. An out-of-line call
+of a 64-byte struct went from 3.0 to 1.7 ns. What remains in `bodies` is the
+copy into the `for b in bodies` loop variable, which C and Zig avoid.
+
 ## Editor rewrite reuse — 2026-10-29
 
 `dyn lsp` rewrote the imports of every project file on each edit. A file's

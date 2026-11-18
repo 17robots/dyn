@@ -332,7 +332,9 @@
       "openssl/asn1_mac.h"
     ],
     "selector": "^(?!_)",
-    "cflags": [],
+    "cflags": [
+      "-DOPENSSL_ENGINE_STUBS"
+    ],
     "links": [
       "ssl",
       "crypto"

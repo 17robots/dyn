@@ -19,7 +19,7 @@ use "std/net" network
 use "std/net/http" http
 use "std/net/http/qpack" qpack
 
-pub enum QuicStatus { Ok, WouldBlock, End, Reset, Failed }
+pub enum QuicStatus { Ok, WouldBlock, End, Failed }
 pub struct QuicIo { count: usize, status: QuicStatus }
 // An accepted stream; unidirectional streams carry control and QPACK data.
 pub struct QuicStream { handle: rawptr, id: u64, unidirectional: bool }
@@ -36,7 +36,7 @@ pub struct Quic {
   accept_stream: fn(rawptr) QuicStream,
   // A new server unidirectional stream on a connection, or nil.
   open_stream: fn(rawptr) rawptr,
-  // End: the peer finished the stream; Reset: the peer reset it.
+  // End: the peer finished the stream; Failed: it was reset or broke.
   read: fn(rawptr, []u8) QuicIo,
   // Writes what fits; true concludes the stream after source.
   write: fn(rawptr, []const u8, bool) QuicIo,
@@ -239,11 +239,7 @@ fn h3_accept(worker: *Worker, handle: rawptr) {
     quic.close(handle, H3ExcessiveLoad)
     return
   }
-  worker.free_count -= 1
-  index := worker.free[worker.free_count]
-  if index >= worker.slots_used {
-    worker.slots_used = index + 1
-  }
+  index := take_connection(worker)
   connection := &worker.connections[index]
   connection.descriptor = -1
   connection.active = true

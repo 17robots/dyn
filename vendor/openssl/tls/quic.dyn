@@ -111,8 +111,10 @@ const ValueClassGeneric: u32 = 0
 const ValueWriteBufferAvailable: u32 = 9
 const ShutdownNoBlock: u64 = 4
 
-pub enum QuicStatus { Ok, WouldBlock, End, Reset, Failed }
-pub struct QuicIo { count: usize, status: QuicStatus }
+// One stream read or write: count bytes moved; blocked when no more can move
+// until quic_handle_events runs again; ended when the peer finished the
+// stream (reads only). A stream the peer reset fails with Interrupted.
+pub struct QuicAttempt { count: usize, blocked: bool, ended: bool }
 // An accepted stream: unidirectional streams are the client's (id % 4 == 2).
 pub struct QuicStream { handle: rawptr, id: u64, unidirectional: bool }
 
@@ -200,23 +202,29 @@ pub fn quic_open_stream(connection: rawptr) rawptr {
   return native.ssl_new_stream(connection, StreamUni | StreamNoBlock)
 }
 
-pub fn quic_read(stream: rawptr, destination: []u8) QuicIo {
-  if #len(destination) == 0 { return QuicIo{} }
+pub fn quic_read(status: *fail.Status, stream: rawptr, destination: []u8) QuicAttempt {
+  if status.failed || #len(destination) == 0 { return QuicAttempt{} }
   count: usize = 0
-  status := ssl_read(stream, #cast(rawptr, &destination[0]), #len(destination), &count)
-  if status == 1 { return QuicIo{ count: count } }
-  code := ssl_error(stream, status)
-  if code == ErrorWantRead { return QuicIo{ status: QuicStatus.WouldBlock } }
-  if code == ErrorZeroReturn { return QuicIo{ status: QuicStatus.End } }
+  result := ssl_read(stream, #cast(rawptr, &destination[0]), #len(destination), &count)
+  if result == 1 { return QuicAttempt{ count: count } }
+  code := ssl_error(stream, result)
+  if code == ErrorWantRead { return QuicAttempt{ blocked: true } }
+  if code == ErrorZeroReturn { return QuicAttempt{ ended: true } }
   state := native.ssl_get_stream_read_state(stream)
-  if state == StreamStateFinished { return QuicIo{ status: QuicStatus.End } }
-  if state == StreamStateResetRemote { return QuicIo{ status: QuicStatus.Reset } }
-  provider_clear_error()
-  return QuicIo{ status: QuicStatus.Failed }
+  if state == StreamStateFinished { return QuicAttempt{ ended: true } }
+  if state == StreamStateResetRemote {
+    provider_clear_error()
+    fail.set(status, fail.make(fail.Kind.Interrupted, "read QUIC stream", "", "the peer reset the stream"))
+    return QuicAttempt{}
+  }
+  provider_failed(status, "read QUIC stream")
+  return QuicAttempt{}
 }
 
 // Writes what fits; conclude ends the stream once all of source is taken.
-pub fn quic_write(stream: rawptr, source: []const u8, conclude: bool) QuicIo {
+// After a failure, count still holds the bytes taken before it.
+pub fn quic_write(status: *fail.Status, stream: rawptr, source: []const u8, conclude: bool) QuicAttempt {
+  if status.failed { return QuicAttempt{} }
   flags: u64 = 0
   if conclude {
     flags = WriteConclude
@@ -226,14 +234,14 @@ pub fn quic_write(stream: rawptr, source: []const u8, conclude: bool) QuicIo {
   if #len(source) > 0 {
     pointer = #cast(rawptr, &source[0])
   }
-  status := native.ssl_write_ex2(stream, pointer, #len(source), flags, &written)
-  if status == 1 { return QuicIo{ count: written } }
-  code := ssl_error(stream, status)
+  result := native.ssl_write_ex2(stream, pointer, #len(source), flags, &written)
+  if result == 1 { return QuicAttempt{ count: written } }
+  code := ssl_error(stream, result)
   if code == ErrorWantWrite || code == ErrorWantRead {
-    return QuicIo{ count: written, status: QuicStatus.WouldBlock }
+    return QuicAttempt{ count: written, blocked: true }
   }
-  provider_clear_error()
-  return QuicIo{ count: written, status: QuicStatus.Failed }
+  provider_failed(status, "write QUIC stream")
+  return QuicAttempt{ count: written }
 }
 
 // Bytes the stream's send buffer takes now.

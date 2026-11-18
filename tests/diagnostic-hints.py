@@ -21,6 +21,15 @@ CASES = (
      "'fs' has no pub member 'create_dir_all': Dyn calls it fs.make_directory(&status, path, 0o755)"),
     ('use "std/strings"\n\nfn main() {\n  _ = strings.equal("a", "b")\n}\n',
      "'strings.equal' was removed: use bytes.equal(a, b) from std/bytes"),
+    # Neighboring arguments that each fit the other's place are reported as
+    # swapped, with the swap as a suggestion; a plain mismatch is not.
+    ('use "std/fs"\nuse "std/mem"\nuse "std/fail"\n\nfn main() {\n  a := mem.arena_alloc(0)\n  status: fail.Status\n'
+     '  _ = fs.read_all(&status, a, "x", 10)\n}\n',
+     "function arguments 1 and 2 look swapped (expected *Arena, *Status; found *Status, *Arena)\n"
+     " 8 |   _ = fs.read_all(&status, a, \"x\", 10)\n   |                   ^~~~~~~~~~\n"
+     " suggestion: replace '&status, a' with 'a, &status'"),
+    ('fn pair(n: i32, name: []const u8) {\n  _ = n\n  _ = name\n}\n\nfn main() {\n  name: []const u8 = "x"\n  pair(name, name)\n}\n',
+     "function argument type mismatch (expected i32, found []const u8)"),
 )
 with tempfile.TemporaryDirectory(prefix='dyn-diagnostic-hints-') as temporary:
     for index, (source, message) in enumerate(CASES):
@@ -35,4 +44,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-diagnostic-hints-') as temporary:
     (project / 'main.dyn').write_text('import: i32 = 5\n\nfn main() {\n  _ = import\n}\n')
     checked = subprocess.run([DYN, 'check', str(project)], capture_output=True, text=True, timeout=60)
     assert checked.returncode == 0, checked.stderr
-print('PASS diagnostic hints: member suggestions, related members, moved functions, private members, use instead of import, array literals')
+print('PASS diagnostic hints: member suggestions, related members, moved functions, private members, use instead of import, array literals, swapped arguments')

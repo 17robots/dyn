@@ -158,7 +158,11 @@ typedef struct {
      memory at local_offset. */
   bool *memory_local, *address_exposed;
   uint32_t *local_offset;
-  int32_t *alias;      /* case pointer bindings: the pointer standing for a local, or -1 */
+  int32_t *alias;      /* case pointer bindings and aliased parameters: the pointer standing for a local, or -1 */
+  /* The aggregate argument being passed is a local no expression takes the
+     address of, so it cannot change before the call: ssa_pass copies it
+     to the outgoing area straight from the local, with no snapshot. */
+  bool stable_argument;
   uint32_t variable_count, hidden_variables;
   uint32_t frame;      /* bytes of frame memory below FP, before spills */
   SsaRegion *regions; uint32_t region_count, region_capacity; /* by falling offset */
@@ -1309,9 +1313,13 @@ static void ssa_pass(Ssa *s, SsaArguments *list, DynType type, int32_t value, in
     if (count && parts[0].cls < 0 && !raw_aggregate(ir, type)) {
       /* Memory class: a snapshot now, copied to the outgoing area at the call.
          Arrays and payload enums instead pass each leaf, in a register or
-         its own eight-byte slot, as the tree emitter does. */
-      int32_t copy = ssa_temporary(s, type);
-      ssa_copy_aggregate(s, copy, value, size, alignment);
+         its own eight-byte slot, as the tree emitter does. A stable local
+         needs no snapshot. */
+      int32_t copy = value;
+      if (!s->stable_argument) {
+        copy = ssa_temporary(s, type);
+        ssa_copy_aggregate(s, copy, value, size, alignment);
+      }
       ssa_argument(s, list, copy, SSA_STACK + (int32_t)*stack, (int32_t)size);
       *stack += (size + 7) / 8 * 8;
       return;
@@ -1632,7 +1640,18 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
       else ssa_argument(s, &list, copy, SSA_STACK + (int32_t)stack_slot(ctx, &parts[0], &stack), -8);
       continue;
     }
+    if (i < fixed || !packed) {
+      const DynIrExpr *named = &ir->expressions[ir->items[e->item_start + i].expression];
+      uint32_t local;
+      /* A call's result lands in a fresh temporary that nothing else
+         names, so later arguments cannot change it either. */
+      s->stable_argument = (named->kind == DYN_EXPR_NAME && named->integer >= s->f->local_start &&
+                            named->integer - s->f->local_start < s->f->local_count &&
+                            ssa_local_index(s, named->integer, &local) && !s->address_exposed[local]) ||
+                           named->kind == DYN_EXPR_CALL || named->kind == DYN_EXPR_INDIRECT_CALL;
+    }
     ssa_pass(s, &list, type, value, length, parts, count, &stack);
+    s->stable_argument = false;
     /* Microsoft x64 variadic callees read a float from its integer
        register too. */
     if (c_variadic && ctx->win64 && float_type(type) && count == 1 && parts[0].cls >= 8)
@@ -3242,11 +3261,25 @@ static void ssa_build(Ssa *s) {
       n = firsts[i + 1] - firsts[i];
       int32_t address = ssa_frame(s, s->local_offset[local]);
       if (n == 1 && incoming[next].part.leaf == DYN_TYPE_RAWPTR) {
-        /* Passed as a pointer to the caller's copy. */
+        /* Passed as a pointer to the caller's copy, which belongs to this
+           call: outside debug builds the parameter lives there. */
         int32_t pointer = incoming[next].part.cls >= 0 ? incoming[next].value
                           : ssa_load(s, ssa_frame(s, 16 + incoming[next].part.stack), -1, 1, 0, SSA_MEM(64, 0, 0));
-        ssa_emit(s, SO_COPYMEM, SC_NONE, address, pointer, -1, size, 1);
+        if (!ctx->debug_mode) s->alias[local] = pointer;
+        else ssa_emit(s, SO_COPYMEM, SC_NONE, address, pointer, -1, size, 1);
         next += 1;
+        continue;
+      }
+      /* Memory class on the stack: the incoming area belongs to this call,
+         so outside debug builds the parameter lives there. */
+      bool in_place = !ctx->debug_mode && !ctx->a64 && n > 0 && alignment <= 8;
+      for (unsigned k = 0; k < n && in_place; ++k) {
+        const Incoming *in = &incoming[next + k];
+        in_place = in->part.cls < 0 && in->part.stack == incoming[next].part.stack + in->part.offset;
+      }
+      if (in_place) {
+        s->alias[local] = ssa_frame(s, 16 + incoming[next].part.stack);
+        next += n;
         continue;
       }
       for (unsigned k = 0; k < n; ++k) {
@@ -9631,6 +9664,17 @@ static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
       continue;
     }
     ssa_transfer(e, L_REG, X_R10, from.src_kind, from.src, SC_INT, X_R11);
+    if (bytes >= 64) {
+      /* Large copies use rep movsb with RSI, RDI and RCX saved around it:
+         they may hold arguments already. The pushes move RSP by 24. */
+      CODE(0x56, 0x57, 0x51);                                      /* push rsi; push rdi; push rcx */
+      CODE(0x4c, 0x89, 0xd6);                                      /* mov rsi, r10 */
+      CODE(0x48, 0x8d, 0xbc, 0x24); word(ctx, (uint32_t)(location - SSA_STACK + 24)); /* lea rdi, [rsp + 24 + at] */
+      byte(ctx, 0xb9); word(ctx, (uint32_t)bytes);                 /* mov ecx, bytes */
+      CODE(0xf3, 0xa4);                                            /* rep movsb */
+      CODE(0x59, 0x5f, 0x5e);                                      /* pop rcx; pop rdi; pop rsi */
+      continue;
+    }
     for (int32_t at = 0; at < bytes;) {
       unsigned width = bytes - at >= 8 ? 8 : bytes - at >= 4 ? 4 : bytes - at >= 2 ? 2 : 1;
       int prefix = width == 2 ? 0x66 : -1;

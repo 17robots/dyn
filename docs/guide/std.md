@@ -52,13 +52,29 @@ search for a word finds the function that does it.
   and provider handles have their own close or join. Resetting an arena closes
   nothing.
 
+## Layers
+
+Every std module belongs to one of three layers, listed in `std/layers.txt`:
+
+- **core**: no operating system and no memory source. Bytes, UTF-8, hashing,
+  crypto primitives, intrusive containers, `std/fail`, `std/math`.
+- **heap**: arenas from `std/mem`, plus everything built on them: formatting,
+  strings, parsers and codecs, images, `std/io` streams.
+- **std**: needs an operating system: files, sockets, processes, threads,
+  clocks, and the raw system bindings in `std/os`.
+
+Core and heap build for every target, bare metal included, and import only
+their own layer or lower; `tests/std-layers.py` checks both on riscv64-none,
+riscv32-none and thumbv7em-none. On bare metal, arenas come from the region
+between the program image and the stack (see [bare metal](bare-metal.md)).
+
 ## Packages
 
 ### Memory, bytes and text
 
 | Package | Purpose |
 | --- | --- |
-| `std/mem` | Arenas, typed pushes, `append`, scratch scopes, frames and growing arenas |
+| `std/mem` | Arenas on OS pages, caller buffers or any block source; typed pushes, marks, reset and release |
 | `std/bytes` | Byte-slice operations, cursors and splitters |
 | `std/bytes/builder` | Byte and UTF-8 string builder over caller storage or an arena |
 | `std/bytes/search` | Prepared KMP search |

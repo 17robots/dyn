@@ -38,21 +38,21 @@ pub fn next(status: *fail.Status, statement: *Statement) bool {
 
 // Column index of the current row as an integer, converted the way SQLite
 // converts (NULL is 0, text is parsed, a real is truncated); 0 off a row.
-pub fn integer(statement: *const Statement, index: i32) i64 {
+pub fn integer(statement: *const Statement, index: usize) i64 {
   if !readable(statement, index) { return 0 }
-  return sqlite_column_integer(statement.handle, index)
+  return sqlite_column_integer(statement.handle, native_index(index))
 }
 // Column index of the current row as bytes, borrowed until the next step:
 // text and blobs as stored, NULL empty, numbers as SQLite writes them.
-pub fn bytes(statement: *const Statement, index: i32) []const u8 {
+pub fn bytes(statement: *const Statement, index: usize) []const u8 {
   if !readable(statement, index) { return "" }
   // Text and blobs come back as stored; column_bytes must follow column_blob.
-  pointer := sqlite_column_blob(statement.handle, index)
-  length := sqlite_column_bytes(statement.handle, index)
+  pointer := sqlite_column_blob(statement.handle, native_index(index))
+  length := sqlite_column_bytes(statement.handle, native_index(index))
   if pointer == nil || length <= 0 { return "" }
   return #slice(pointer, length)
 }
-pub fn text(arena: *mem.Arena, statement: *const Statement, index: i32) []const u8 {
+pub fn text(arena: *mem.Arena, statement: *const Statement, index: usize) []const u8 {
   value := bytes(statement, index)
   copy := mem.push_bytes(arena, #len(value))
   _ = mem.copy(copy, value)
@@ -108,8 +108,8 @@ pub fn cached(status: *fail.Status, statements: *Cache, sql: []const u8) *Statem
   return &entry.statement
 }
 
-fn readable(statement: *const Statement, index: i32) bool {
-  return statement.handle != nil && statement.state == State.Row && index >= 0 && index < statement.columns
+fn readable(statement: *const Statement, index: usize) bool {
+  return statement.handle != nil && statement.state == State.Row && index < statement.columns
 }
 
 // Finalizes every cached statement. Call before closing the database.

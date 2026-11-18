@@ -208,6 +208,37 @@ static bool error_array_argument(DynAstProgram *a, DynExprId argument, const Dyn
   error_span(x->span, s, e, message);
   return true;
 }
+static void error_argument(DynAstProgram *a, const DynSource *s, unsigned *e, DynExprId argument,
+                           DynType expected, DynType found) {
+  if (!error_array_argument(a, argument, s, e, expected, found))
+    error_types(a, a->expressions[argument].span, s, e, "function argument type mismatch", expected, found);
+}
+/* Two neighboring arguments that each fit the other's parameter:
+   "arguments 1 and 2 look swapped (expected *Arena, *Status; found *Status,
+   *Arena)", with a suggestion that swaps their text. */
+static void error_swapped_arguments(DynAstProgram *a, const DynSource *s, unsigned *e, DynExprId first,
+                                    DynExprId second, uint32_t position, DynType first_type,
+                                    DynType second_type) {
+  DynSpan left = a->expressions[first].span, right = a->expressions[second].span;
+  char message[1024], want_first[200], want_second[200], replacement[256];
+  display_type_name(a, first_type, s, want_first, sizeof(want_first));
+  display_type_name(a, second_type, s, want_second, sizeof(want_second));
+  snprintf(message, sizeof(message),
+           "function arguments %u and %u look swapped (expected %s, %s; found %s, %s)", position + 1,
+           position + 2, want_first, want_second, want_second, want_first);
+  size_t left_length = left.end_byte - left.start_byte, right_length = right.end_byte - right.start_byte;
+  size_t middle_length = right.start_byte - left.end_byte;
+  if (left.end_byte <= right.start_byte && left_length + middle_length + right_length < sizeof(replacement)) {
+    memcpy(replacement, s->text + right.start_byte, right_length);
+    memcpy(replacement + right_length, s->text + left.end_byte, middle_length);
+    memcpy(replacement + right_length + middle_length, s->text + left.start_byte, left_length);
+    replacement[left_length + middle_length + right_length] = 0;
+    dyn_diagnostic_fix(s, left.start_byte, left.start_byte, right.end_byte, replacement, false);
+  }
+  DynSpan both = left;
+  both.end_byte = right.end_byte;
+  error_span(both, s, e, message);
+}
 static bool integer(Sema *sema, DynType t) {
   t = underlying_type(sema->program, t);
   return t >= DYN_TYPE_I8 && t <= DYN_TYPE_USIZE;
@@ -1077,6 +1108,9 @@ static bool can_convert(Sema *sema, DynAstProgram *a, DynType from,
   DynAstSlice *fs = slice_info(a, from), *ts = slice_info(a, to);
   return fs && ts && fs->element == ts->element && !fs->is_const &&
          ts->is_const;
+}
+static bool fits_argument(Sema *sema, DynAstProgram *a, DynType value, DynType target) {
+  return value == target || can_convert(sema, a, value, target);
 }
 static DynExprId convert_expr(DynAstProgram *a, DynExprId source,
                               DynType target) {
@@ -2678,20 +2712,43 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
                            : callee->param_count;
       uint32_t item_start = a->expressions[id].item_start;
       DynType return_type = callee->return_type;
+      /* A mismatch waits for the next argument: when that one mismatches
+         too and each fits the other's place, they are reported as swapped. */
+      uint32_t held = UINT32_MAX;
+      DynType held_target = DYN_TYPE_ERROR, held_value = DYN_TYPE_ERROR;
       for (uint32_t i = 0; i < count; ++i) {
         uint32_t arg_index = item_start + i;
         DynType target = a->params[callee->param_start + i].type,
                 value = check_expr(sema, a, a->items[arg_index].expression, s, errors, target);
         vet_cast(sema, a, s, a->items[arg_index].expression, target);
+        bool mismatch = false;
         if (value != target && value != DYN_TYPE_ERROR &&
             target != DYN_TYPE_ERROR) {
           if (can_convert(sema, a, value, target))
             a->items[arg_index].expression = convert_expr(a, a->items[arg_index].expression, target);
-          else if (!error_array_argument(a, a->items[arg_index].expression, s, errors, target, value))
-            error_types(a, a->expressions[a->items[arg_index].expression].span, s, errors,
-                        "function argument type mismatch", target, value);
+          else
+            mismatch = true;
         }
+        if (held != UINT32_MAX) {
+          bool swapped = mismatch && fits_argument(sema, a, held_value, target) &&
+                         fits_argument(sema, a, value, held_target);
+          if (swapped)
+            error_swapped_arguments(a, s, errors, a->items[held].expression, a->items[arg_index].expression,
+                                    held - item_start, held_target, target);
+          else
+            error_argument(a, s, errors, a->items[held].expression, held_target, held_value);
+          held = UINT32_MAX;
+          if (swapped) continue;
+        }
+        if (!mismatch) continue;
+        if (i + 1 < count) {
+          held = arg_index;
+          held_target = target;
+          held_value = value;
+        } else
+          error_argument(a, s, errors, a->items[arg_index].expression, target, value);
       }
+      if (held != UINT32_MAX) error_argument(a, s, errors, a->items[held].expression, held_target, held_value);
       if (callee->variadic && callee->foreign)
         for (uint32_t i = callee->param_count; i < a->expressions[id].item_count; ++i) {
           uint32_t arg_index = item_start + i;

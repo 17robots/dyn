@@ -348,6 +348,10 @@ typedef struct {
   bool *active;
   /* Locals whose address is taken anywhere; a call may change them. */
   bool *addressed;
+  /* Locals written anywhere after their declaration: assigned whole or in
+     part, iterated by pointer, or a case subject (an arm may alias a
+     payload). With addressed, a local neither marks keeps its first value. */
+  bool *written;
   /* Original expression ID -> 1 + the rebuilt expression holding its value,
      for pure leaf calls hoisted out of the statement being rebuilt. */
   uint32_t *substitute;
@@ -389,6 +393,10 @@ typedef struct {
   /* 1 + the plan node this body belongs to, or 0 for unplanned bodies. */
   uint32_t plan;
   bool returns, expand, in_loop;
+  /* Parameters bound to a caller's local instead of a copy: parameter
+     alias_from[i] (an input local ID) is output local alias_to[i]. */
+  uint32_t alias_from[8], alias_to[8];
+  uint32_t alias_count;
 } InlineScope;
 typedef struct {
   uint32_t *ids;
@@ -458,6 +466,8 @@ static uint32_t inline_children(Inline *b, InlineList *list) {
 static uint32_t inline_local(Inline *b, const InlineScope *s, uint32_t id) {
   if (id == UINT32_MAX)
     return id;
+  for (uint32_t i = 0; i < s->alias_count; ++i)
+    if (s->alias_from[i] == id) return s->alias_to[i];
   if (id < s->function->local_start ||
       id - s->function->local_start >= s->function->local_count) {
     b->failed = true;
@@ -774,6 +784,22 @@ static bool inline_small_type(const DynIrProgram *ir, DynType type) {
   }
   return type < DYN_TYPE_ARRAY_BASE;
 }
+/* A function that returns, takes or keeps a struct this large by value is
+   not inlined: its body is mostly the struct's zeroing and copying, so each
+   inlined copy adds that code to the caller and saves only the call. Such
+   functions are usually failure paths (fail.make, fail.set). */
+static bool inline_large_value(const DynIrProgram *ir, DynType type) {
+  if (!dyn_type_is_struct(type)) return false;
+  size_t index = type - DYN_TYPE_STRUCT_BASE;
+  return index < ir->struct_count && ir->structs[index].size > 192;
+}
+static bool inline_holds_large_value(const DynIrProgram *ir, const DynIrFunction *f) {
+  if (inline_large_value(ir, f->return_type)) return true;
+  if ((uint64_t)f->local_start + f->local_count > ir->local_count) return true;
+  for (uint32_t i = 0; i < f->local_count; ++i)
+    if (inline_large_value(ir, ir->locals[f->local_start + i].type)) return true;
+  return false;
+}
 static bool inline_leaf(const DynIrProgram *ir, const DynIrFunction *f) {
   if (f->body_count != 1 || f->param_count > 4 ||
       f->local_count != f->param_count ||
@@ -898,9 +924,10 @@ static bool inline_admits(const Inline *b, const InlineScope *scope, uint64_t id
                           uint32_t count, unsigned depth, uint32_t node) {
   if (!scope->expand || id >= b->in->function_count || depth > 16 || b->active[id])
     return false;
+  const DynIrFunction *f = &b->in->functions[id];
+  if (inline_holds_large_value(b->in, f)) return false;
   /* A planned site expands exactly when the plan chose it. */
   if (node) return b->plan[node].chosen && b->plan[node].function == id;
-  const DynIrFunction *f = &b->in->functions[id];
   if (f->foreign || f->generic || f->variadic || f->is_main ||
       f->local_count > 128 || count != f->param_count ||
       (uint64_t)f->param_start + f->param_count > b->in->param_count)
@@ -974,6 +1001,25 @@ static bool inline_call_bound(Inline *b, const InlineScope *scope,
   if (b->failed)
     return true;
   for (uint32_t i = 0; i < f->param_count; ++i) {
+    /* A struct or array parameter the body only reads, given a caller local
+       whose address is never taken, reads that local instead of a copy:
+       neither side can change it while the body runs. */
+    uint32_t param = b->in->params[f->param_start + i].local_id;
+    if (!bound && b->written && param < b->in->local_count && nested.alias_count < 8 &&
+        !b->written[param] && !b->addressed[param] &&
+        (dyn_type_is_struct(b->in->locals[param].type) || dyn_type_is_array(b->in->locals[param].type))) {
+      DynExprId argument = b->in->items[call->item_start + i].expression;
+      const DynIrExpr *named = argument < b->in->expression_count ? &b->in->expressions[argument] : NULL;
+      if (named && named->kind == DYN_EXPR_NAME && named->integer < b->in->local_count &&
+          !b->addressed[named->integer] && named->type == b->in->locals[param].type) {
+        uint32_t target = inline_local(b, scope, (uint32_t)named->integer);
+        if (target != UINT32_MAX) {
+          nested.alias_from[nested.alias_count] = param;
+          nested.alias_to[nested.alias_count++] = target;
+          continue;
+        }
+      }
+    }
     DynIrStmt s = inline_empty(DYN_STMT_LOCAL, call->span);
     s.local_id =
         inline_local(b, &nested, b->in->params[f->param_start + i].local_id);
@@ -1831,6 +1877,32 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
     b.loop_span[i] = low == UINT32_MAX ? 0 : high - low + 1;
   }
   b.addressed = calloc(b.in->local_count ? b.in->local_count : 1, sizeof(bool));
+  b.written = calloc(b.in->local_count ? b.in->local_count : 1, sizeof(bool));
+  if (!b.written) b.failed = true;
+  for (size_t i = 0; i < b.in->statement_count && !b.failed; ++i) {
+    const DynIrStmt *s = &b.in->statements[i];
+    DynExprId root = DYN_NO_EXPR;
+    if (s->kind == DYN_STMT_ASSIGN) {
+      if (s->target == DYN_NO_EXPR) {
+        if (s->local_id < b.in->local_count) b.written[s->local_id] = true;
+        continue;
+      }
+      root = s->target;
+    } else if ((s->kind == DYN_STMT_FOR && s->for_pointer) || s->kind == DYN_STMT_CASE) {
+      root = s->expression;
+    } else {
+      continue;
+    }
+    for (unsigned d = 0; d < 64 && root != DYN_NO_EXPR && root < b.in->expression_count; ++d) {
+      const DynIrExpr *x = &b.in->expressions[root];
+      if (x->kind == DYN_EXPR_NAME) {
+        if ((uint64_t)x->integer < b.in->local_count) b.written[x->integer] = true;
+        break;
+      }
+      if (x->kind != DYN_EXPR_FIELD && x->kind != DYN_EXPR_INDEX && x->kind != DYN_EXPR_SLICE) break;
+      root = x->left;
+    }
+  }
   b.substitute = calloc(b.in->expression_count ? b.in->expression_count : 1, sizeof(*b.substitute));
   if (!b.substitute) b.failed = true;
   // Uniform-parameter qualification currently covers native x86-64 SSA only;
@@ -1956,6 +2028,7 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
   free(b.loop_low);
   free(b.loop_span);
   free(b.addressed);
+  free(b.written);
   free(b.substitute);
   free(b.param_literals);
   free(b.escaped);

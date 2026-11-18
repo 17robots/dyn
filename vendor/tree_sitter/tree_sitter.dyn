@@ -94,24 +94,24 @@ pub fn root(tree: Tree) Node {
 pub fn node_valid(node: Node) bool {
   return node.id != nil && node.tree != nil
 }
-pub fn node_start(node: Node) u32 {
+pub fn node_start(node: Node) usize {
   if !node_valid(node) { return 0 }
-  return native_start(node)
+  return #cast(usize, native_start(node))
 }
-pub fn node_end(node: Node) u32 {
+pub fn node_end(node: Node) usize {
   if !node_valid(node) { return 0 }
-  return native_end(node)
+  return #cast(usize, native_end(node))
 }
 pub fn node_has_error(node: Node) bool {
   return node_valid(node) && native_has_error(node)
 }
-pub fn child_count(node: Node) u32 {
+pub fn child_count(node: Node) usize {
   if !node_valid(node) { return 0 }
-  return native_child_count(node)
+  return #cast(usize, native_child_count(node))
 }
-pub fn child(node: Node, index: u32) Node {
-  if !node_valid(node) { return Node{} }
-  return native_child(node, index)
+pub fn child(node: Node, index: usize) Node {
+  if !node_valid(node) || index > 4294967295 { return Node{} }
+  return native_child(node, #cast(u32, index))
 }
 // Type name borrows grammar storage; grammar must remain loaded.
 // The node's grammar name; empty for an invalid node.

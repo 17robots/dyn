@@ -271,7 +271,7 @@ fn edge(edges: []Edge, used: *usize, a, b: Point) {
 // pixels_per_em is 1..256. Limits: 1,048,576 output pixels, 8,192 points,
 // and 16,777,216 pixel-edge pairs (before 4x4 supersampling).
 // Output belongs to arena; temporary outline storage is rewound on completion.
-pub fn raster(arena: *mem.Arena, status: *fail.Status, face: *const Face, index: u16, pixels_per_em: u16) Bitmap {
+pub fn raster(arena: *mem.Arena, status: *fail.Status, face: *const Face, index: u16, pixels_per_em: usize) Bitmap {
   if status.failed { return Bitmap{} }
   if index >= face.glyphs || face.units_per_em == 0 || pixels_per_em == 0 || pixels_per_em > 256 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "raster glyph", "", "malformed glyph"))

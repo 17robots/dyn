@@ -119,10 +119,13 @@ for devices. Each `mmio` access costs one call.
 
 ## Library support
 
-`std/mem`, `std/io`, `std/mmio` and modules built only on them, such as `std/fmt`,
-`std/bytes` and the containers, work. Modules that need an operating system
-(`std/fs`, `std/net`, `std/process`, `std/thread`, `std/time`) do not
-compile for this target. `#syscall` is rejected.
+Every module in the core and heap layers of `std/layers.txt` works: bytes,
+UTF-8, hashing, crypto primitives, containers, `std/mem`, `std/io`,
+`std/mmio`, `std/fmt`, strings, parsers, codecs and images. The test suite
+checks each of them for riscv64-none, riscv32-none and thumbv7em-none. The
+std layer needs an operating system (`std/fs`, `std/net`, `std/process`,
+`std/thread`, `std/time`) and does not compile for these targets. `#syscall`
+is rejected.
 
 ## Limits
 

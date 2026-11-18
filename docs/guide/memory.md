@@ -40,9 +40,10 @@ The whole API:
 | --- | --- |
 | `arena_alloc(block_size)` | An arena on OS pages that adds blocks as needed |
 | `arena_from_buffer(storage)` | An arena in caller storage that never grows |
+| `arena_from_zeroed(storage)` | The same, for storage known to be zero (a `push_array(u8, ...)` from OS pages): pushes skip zeroing it, so untouched pages cost no memory |
 | `arena_from_source(source)` | An arena whose blocks come from a `Source` |
 | `push(T, arena)` | One zeroed `T` |
-| `push_array(T, arena, count)` | `count` zeroed `T`s |
+| `push_array(T, arena, count)` | `count` zeroed `T`s; on OS pages never handed out, the zeros are the OS's and the pages stay untouched |
 | `push_bytes(arena, count)` | `count` uninitialized bytes, right at the cursor |
 | `arena_mark` / `arena_rewind` | Take back everything pushed after a mark |
 | `arena_reset` | Take back everything |

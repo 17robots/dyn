@@ -4,7 +4,7 @@ use "std/unicode/utf8"
 // fields directly. Database must remain open until every statement is finalized.
 pub enum State { Ready, Row, Done, Failed }
 // columns is the result column count, fixed when the statement is prepared.
-pub struct Statement { handle: rawptr, state: State, code: i32, columns: i32 }
+pub struct Statement { handle: rawptr, state: State, code: i32, columns: usize }
 // A compiled statement, the SQL bytes it took, and empty when the SQL held
 // only whitespace or comments (then there is no statement to step).
 pub struct Prepared { statement: Statement, consumed: usize, empty: bool }
@@ -51,9 +51,9 @@ pub fn prepare(status: *fail.Status, database: Database, sql: []const u8) Prepar
     return Prepared{}
   }
   consumed := #cast(usize, tail) - #cast(usize, &sql[0])
-  columns: i32 = 0
+  columns: usize = 0
   if handle != nil {
-    columns = sqlite_column_count(handle)
+    columns = #cast(usize, sqlite_column_count(handle))
   }
   return Prepared{ statement: Statement{ handle: handle, columns: columns }, consumed: consumed, empty: handle == nil }
 }
@@ -122,31 +122,31 @@ pub fn clear_bindings(status: *fail.Status, statement: *Statement) {
   }
   checked(status, "bind", sqlite_clear_bindings(statement.handle))
 }
-pub fn bind_null(status: *fail.Status, statement: *Statement, index: i32) {
+pub fn bind_null(status: *fail.Status, statement: *Statement, index: usize) {
   if status.failed { return }
   if !can_bind(statement) {
     sqlite_failed(status, "bind", InvalidArgument)
     return
   }
-  checked(status, "bind", sqlite_bind_null(statement.handle, index))
+  checked(status, "bind", sqlite_bind_null(statement.handle, native_index(index)))
 }
-pub fn bind_i64(status: *fail.Status, statement: *Statement, index: i32, value: i64) {
+pub fn bind_i64(status: *fail.Status, statement: *Statement, index: usize, value: i64) {
   if status.failed { return }
   if !can_bind(statement) {
     sqlite_failed(status, "bind", InvalidArgument)
     return
   }
-  checked(status, "bind", sqlite_bind_integer(statement.handle, index, value))
+  checked(status, "bind", sqlite_bind_integer(statement.handle, native_index(index), value))
 }
-pub fn bind_f64(status: *fail.Status, statement: *Statement, index: i32, value: f64) {
+pub fn bind_f64(status: *fail.Status, statement: *Statement, index: usize, value: f64) {
   if status.failed { return }
   if !can_bind(statement) {
     sqlite_failed(status, "bind", InvalidArgument)
     return
   }
-  checked(status, "bind", sqlite_bind_float(statement.handle, index, value))
+  checked(status, "bind", sqlite_bind_float(statement.handle, native_index(index), value))
 }
-fn bind_bytes(statement: *Statement, index: i32, value: []const u8, text: bool) i32 {
+fn bind_bytes(statement: *Statement, index: usize, value: []const u8, text: bool) i32 {
   if !can_bind(statement) { return InvalidArgument }
   if #len(value) > 2147483647 { return Overflow }
   // Empty data must have a non-null pointer so it is not bound as SQL NULL.
@@ -157,13 +157,13 @@ fn bind_bytes(statement: *Statement, index: i32, value: []const u8, text: bool) 
   }
   transient := #cast(rawptr, #cast(isize, -1))
   if text {
-    return sqlite_bind_text(statement.handle, index, pointer, #cast(i32, #len(value)), transient)
+    return sqlite_bind_text(statement.handle, native_index(index), pointer, #cast(i32, #len(value)), transient)
   }
-  return sqlite_bind_blob(statement.handle, index, pointer, #cast(i32, #len(value)), transient)
+  return sqlite_bind_blob(statement.handle, native_index(index), pointer, #cast(i32, #len(value)), transient)
 }
 // SQLite copies bindings before return. Text must be valid UTF-8 without NUL;
 // use blobs for arbitrary bytes. Inputs may be changed immediately after binding.
-pub fn bind_text(status: *fail.Status, statement: *Statement, index: i32, value: []const u8) {
+pub fn bind_text(status: *fail.Status, statement: *Statement, index: usize, value: []const u8) {
   if status.failed { return }
   if !utf8.valid(value) {
     fail.invalid(status, "bind", "", "text is not valid UTF-8")
@@ -177,7 +177,7 @@ pub fn bind_text(status: *fail.Status, statement: *Statement, index: i32, value:
   }
   checked(status, "bind", bind_bytes(statement, index, value, true))
 }
-pub fn bind_blob(status: *fail.Status, statement: *Statement, index: i32, value: []const u8) {
+pub fn bind_blob(status: *fail.Status, statement: *Statement, index: usize, value: []const u8) {
   if status.failed { return }
   checked(status, "bind", bind_bytes(statement, index, value, false))
 }
@@ -197,7 +197,7 @@ pub fn bind_values(status: *fail.Status, statement: *Statement, values: ...any) 
 fn bind_list(status: *fail.Status, statement: *Statement, values: []const any) {
   for i in 0..#len(values) {
     if status.failed { return }
-    index := #cast(i32, i + 1)
+    index := i + 1
     case values[i] {
       i64 value => { bind_i64(status, statement, index, value) }
       i32 value => { bind_i64(status, statement, index, value) }
@@ -253,40 +253,47 @@ pub fn done(statement: *Statement) {
   _ = sqlite_clear_bindings(statement.handle)
 }
 
-pub fn column_count(statement: *const Statement) i32 {
+pub fn column_count(statement: *const Statement) usize {
   if statement.handle == nil { return 0 }
-  return sqlite_column_count(statement.handle)
+  return #cast(usize, sqlite_column_count(statement.handle))
+}
+
+// SQLite's int for a parameter or column index; past its range, 0, which
+// SQLite rejects as out of range.
+fn native_index(index: usize) i32 {
+  if index > 2147483647 { return 0 }
+  return #cast(i32, index)
 }
 // Columns are zero-based and available only after Row. No implicit conversions:
 // kind distinguishes NULL, empty text, empty blob and numeric zero. Returned bytes
 // borrow SQLite storage until step/reset/finalize; clone them into an arena to retain.
 // Off a row or out of range fails with InvalidInput.
-pub fn column(status: *fail.Status, statement: *const Statement, index: i32) Column {
+pub fn column(status: *fail.Status, statement: *const Statement, index: usize) Column {
   if status.failed { return Column{} }
-  if statement.handle == nil || statement.state != State.Row || index < 0 || index >= statement.columns {
+  if statement.handle == nil || statement.state != State.Row || index >= statement.columns {
     sqlite_failed(status, "read column", InvalidArgument)
     return Column{}
   }
-  kind := sqlite_column_type(statement.handle, index)
+  kind := sqlite_column_type(statement.handle, native_index(index))
   if kind == 5 { return Column{ kind: ColumnKind.Null } }
   if kind == 1 {
-    return Column{ kind: ColumnKind.Integer, integer: sqlite_column_integer(statement.handle, index) }
+    return Column{ kind: ColumnKind.Integer, integer: sqlite_column_integer(statement.handle, native_index(index)) }
   }
   if kind == 2 {
-    return Column{ kind: ColumnKind.Float, real: sqlite_column_float(statement.handle, index) }
+    return Column{ kind: ColumnKind.Float, real: sqlite_column_float(statement.handle, native_index(index)) }
   }
   pointer: *const u8 = nil
   result_kind := ColumnKind.Text
   if kind == 3 {
-    pointer = sqlite_column_text(statement.handle, index)
+    pointer = sqlite_column_text(statement.handle, native_index(index))
   } else if kind == 4 {
-    pointer = sqlite_column_blob(statement.handle, index)
+    pointer = sqlite_column_blob(statement.handle, native_index(index))
     result_kind = ColumnKind.Blob
   } else {
     sqlite_failed(status, "read column", InvalidArgument)
     return Column{}
   }
-  length := sqlite_column_bytes(statement.handle, index)
+  length := sqlite_column_bytes(statement.handle, native_index(index))
   if pointer == nil && (length != 0 || kind == 3) {
     sqlite_failed(status, "read column", 7)
     return Column{}

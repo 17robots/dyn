@@ -25,12 +25,12 @@ use "vendor/stb/image_resize" image
 use "std/mem"
 use "std/fail"
 use "std/io"
-fn resize_fails(scratch: *mem.Arena, source: []const u8, width: i32, destination: []u8, out_width: i32) bool {
+fn resize_fails(scratch: *mem.Arena, source: []const u8, width: usize, destination: []u8, out_width: usize) bool {
   status: fail.Status
   image.resize(scratch, &status, source, width, 2, destination, out_width, out_width, 4, false)
   return status.failed
 }
-fn packing_fails(scratch: *mem.Arena, width: i32, height: i32, rectangles: []atlas.Rectangle) bool {
+fn packing_fails(scratch: *mem.Arena, width: usize, height: usize, rectangles: []atlas.Rectangle) bool {
   status: fail.Status
   _ = atlas.pack(scratch, &status, width, height, rectangles)
   return status.failed

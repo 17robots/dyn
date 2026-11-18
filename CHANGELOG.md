@@ -14,6 +14,9 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+Breaking: see [docs/migrations/0.1.0-preview.40.md](docs/migrations/0.1.0-preview.40.md),
+and run `dyn fix` first.
+
 Language (2026-11-16 cleanup; see `docs/guide/rules.md`):
 
 - A `for` with no condition and no `break` leaves only by `return` or a
@@ -232,6 +235,10 @@ Standard library:
   - `vendor/openssl/tls` takes the status and returns a `Want` when the
     socket is not ready; its `ErrorKind` and result types are gone.
     `tls.server_alpn` and `evented/tls.offer_http2` take the status.
+    `quic_read` and `quic_write` take the status too and return a
+    `QuicAttempt` (`count`, `blocked`, `ended`); a stream the peer resets
+    fails with `Interrupted`. `QuicStatus` and `QuicIo` leave the vendor
+    module, and `evented.QuicStatus` loses `Reset`.
   - `observe.record` and `progress` `advance`/`end` return nothing (drops
     are counted). `bytes.Builder` is removed; use `std/bytes/builder`.
   - Fixed: cgltf reported a missing file as out of memory.
@@ -251,6 +258,18 @@ Standard library:
     and `sessions.forget` return an `http.Cookie`.
   - `http.page_writer(&status, response, storage)` takes the handler's status
     again: a page that does not fit fails it, and the server answers 500.
+- Std has three layers, listed in `std/layers.txt` and shown in the std
+  index: core (no operating system, no memory source), heap (arenas and what
+  builds on them) and std (needs an operating system). Core and heap build
+  for every target; the suite and CI check all 110 of those modules on
+  riscv64-none, riscv32-none and thumbv7em-none, and that no module imports
+  a higher layer.
+- Counts, lengths and indexes are `usize` across the vendor wrappers too:
+  `sqlite` column and parameter indexes and `column_count`
+  (`Statement.columns`), `pcre2.capture`, `tree_sitter` `child`,
+  `child_count`, `node_start` and `node_end`, `lua.pop` and `stack_size`,
+  `stb` image and atlas sizes, and `font.raster`'s `pixels_per_em`. The
+  rule is in `docs/guide/style.md`.
 - Arenas (`std/mem`) keep a small core. Running out always panics, a fixed
   buffer included, with a message that says whether the buffer was full, a
   limit was reached or the source had no more memory:
@@ -293,6 +312,11 @@ Standard library:
       own events.
   - `fs.read_all` no longer fails with `Capacity`: an arena that cannot hold
     the file panics.
+  - Pushes skip zeroing OS pages that were never handed out, which are
+    already zero, so a large `push_array` on `arena_alloc` memory costs no
+    memory until it is written. `arena_from_zeroed(storage)` is
+    `arena_from_buffer` for storage known to be zero (such as a
+    `push_array(u8, ...)` from OS pages), with the same saving.
 
 Compiler:
 
@@ -301,8 +325,33 @@ Compiler:
   it does reach, so importing an unused module could change the code of
   used ones.
 
+Compiler speed of generated code:
+
+- Struct and array parameters are copied less. An inlined body reads a
+  caller's local in place when it never writes the parameter or takes its
+  address; a callee keeps a stack-passed struct where it arrived and reads a
+  by-pointer one (AArch64, Windows) through the pointer, outside debug
+  builds; a caller passes a local whose address is never taken without a
+  snapshot. A 64-byte struct passed by value to an inlined function costs no
+  copy (0.046 to 0.030 s on `tools/bench/bodies`), and an out-of-line call
+  one copy instead of three.
+- Smaller code where failures are recorded. A function that takes, returns
+  or keeps a struct over 192 bytes by value (such as `fail.make` and
+  `fail.set`) is no longer inlined, x86-64 copies a large stack argument with
+  `rep movsb` instead of one move per eight bytes, and a call's result is
+  passed on without a second copy. A site that records a failure is 181
+  bytes of code instead of 386, and the example programs are 5-23% smaller
+  than before this change (all now smaller than on preview 39). Kernel
+  speed is unchanged.
+- `tools/bench/run.py` also builds each kernel with Zig (ReleaseFast and
+  ReleaseSafe); see PERFORMANCE.md.
+
 Tools:
 
+- `tools/bind-vendors.py` builds the raw OpenSSL binding against OpenSSL 4
+  as well as 3: removed ENGINE calls bind to OpenSSL's own stubs, and a
+  macro helper gives way when the header declares the real function
+  (`BIO_eof`).
 - Errors can carry a fix. Text output prints it under the snippet
   (`fix: replace 'push_bytes_uninit' with 'push_bytes'`), and
   `--diagnostics json` adds `"fix": {replacement, path, certain, offset,
@@ -323,6 +372,9 @@ Tools:
   (`fs.list_dir`, `fs.create_dir_all`, `fs.exists`, `strings.equal`, ...)
   say what Dyn calls them, and a member with no close spelling lists related
   ones (`related: fs.list`).
+- Two neighboring arguments that each fit the other's parameter are reported
+  as swapped, with the swap as a suggestion: `function arguments 1 and 2 look
+  swapped (expected *Arena, *Status; found *Status, *Arena)`.
 - `dyn guide` prints the guide built into the compiler: `--brief` for one
   page of what to write (and what not to bring from Go, Rust, Zig or C), or a
   topic: `rules`, `idioms`, `language`, `memory`, `collections`, `std`,
@@ -384,6 +436,10 @@ Servers:
   long (blocking work on the event loop), in the access log or on stderr.
 - `std/cache`: per-worker copies of shared data, from the pattern the
   session cache used. `std/net/http/session` now builds on it.
+- The evented server sets up a connection slot when it is first taken, and
+  its job arena on its first job, so idle slots cost no memory: the flagship
+  server with the default `Config` (four workers of 1024 slots) is 0.5 MiB
+  resident after serving, down from 9.7 MiB.
 - `evented.job` panics, naming the type and both sizes, when the job type is
   larger than `Config.job_size`. It used to return nil on every request.
 

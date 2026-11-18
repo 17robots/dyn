@@ -390,6 +390,13 @@ pub struct Worker {
   // otherwise wake the loop continuously.
   listening: bool,
   scratch: *mem.Arena,
+  // Every slot's input and output buffers, receive_size and send_size each.
+  slot_input: []u8,
+  slot_output: []u8,
+  // Job storage, job_stride bytes per slot. A slot's job arena is made on
+  // its first job, so idle slots leave their pages untouched.
+  job_bytes: []u8,
+  job_stride: usize,
   // Why the loop stopped, reported by join.
   error: fail.Status,
   // The worker's internal calls share io and handler calls share request.
@@ -1243,11 +1250,7 @@ fn on_accept(worker: *Worker) {
       worker.refused += 1
       continue
     }
-    worker.free_count -= 1
-    index := worker.free[worker.free_count]
-    if index >= worker.slots_used {
-      worker.slots_used = index + 1
-    }
+    index := take_connection(worker)
     connection := &worker.connections[index]
     connection.descriptor = descriptor
     connection.active = true
@@ -1355,7 +1358,8 @@ fn worker_main(worker: *Worker) isize {
     }
   }
   finish_later(worker)
-  for i in 0..#len(worker.connections) {
+  // Slots past slots_used were never taken.
+  for i in 0..worker.slots_used {
     close_connection(worker, i)
   }
   // Running jobs own their slots' storage: wait for every one to report back.
@@ -1400,6 +1404,32 @@ fn valid_start(status: *fail.Status, workers: []Worker, config: Config, handler:
   return true
 }
 
+// Takes a free slot, setting it up the first time: its buffers and links.
+// Slots taken before keep them through recycle.
+fn take_connection(worker: *Worker) usize {
+  worker.free_count -= 1
+  index := worker.free[worker.free_count]
+  if index >= worker.slots_used {
+    worker.slots_used = index + 1
+  }
+  connection := &worker.connections[index]
+  if connection.worker == nil {
+    config := worker.config
+    connection.input = worker.slot_input[index * config.receive_size..(index + 1) * config.receive_size]
+    connection.base_input = connection.input
+    if config.upload_count > 0 {
+      connection.uploads = &worker.upload_pool
+    }
+    connection.output = worker.slot_output[index * config.send_size..(index + 1) * config.send_size]
+    connection.base_output = connection.output
+    connection.pool = &worker.send_pool
+    connection.worker = worker
+    connection.index = index
+    connection.generation = 1
+  }
+  return index
+}
+
 // Allocates the worker's connections and queue, then spawns its thread.
 // worker.listener and worker.own_listener are set by the caller.
 fn start_worker(outer: *mem.Arena, status: *fail.Status, worker: *Worker) {
@@ -1408,14 +1438,16 @@ fn start_worker(outer: *mem.Arena, status: *fail.Status, worker: *Worker) {
   // Most of a worker's storage is per-slot buffers of which few are busy.
   // Advise before anything touches it: with transparent huge pages, a first
   // touch would otherwise make a whole 2 MiB page resident.
-  backing := mem.push_bytes(outer, worker_storage(config))
+  // push_array on fresh pages leaves them untouched, and the worker's own
+  // pushes then skip zeroing them, so only slots in use cost memory.
+  backing := mem.push_array(u8, outer, worker_storage(config))
   mem.advise_sparse(backing)
-  arena := mem.arena_from_buffer(backing)
+  arena := mem.arena_from_zeroed(backing)
   worker.connections = mem.push_array(Connection, arena, count)
   worker.free = mem.push_array(usize, arena, count)
   worker.later = mem.push_array(usize, arena, count)
-  receive := mem.push_bytes(arena, count * config.receive_size)
-  send := mem.push_bytes(arena, count * config.send_size)
+  worker.slot_input = mem.push_bytes(arena, count * config.receive_size)
+  worker.slot_output = mem.push_bytes(arena, count * config.send_size)
   worker.send_pool.backing = mem.push_bytes(arena, config.overflow_send_count * config.overflow_send_size)
   worker.send_pool.free = mem.push_array(usize, arena, config.overflow_send_count)
   worker.send_pool.free_count = config.overflow_send_count
@@ -1430,23 +1462,12 @@ fn start_worker(outer: *mem.Arena, status: *fail.Status, worker: *Worker) {
   for i in 0..config.upload_count {
     worker.upload_pool.free[i] = config.upload_count - 1 - i
   }
-  job_stride := config.job_size + mem.ArenaBufferOverhead
-  job_bytes := mem.push_bytes(arena, count * job_stride)
+  if config.job_size > 0 {
+    worker.job_stride = config.job_size + mem.ArenaBufferOverhead
+    worker.job_bytes = mem.push_bytes(arena, count * worker.job_stride)
+  }
+  // Slots are set up when first taken (take_connection).
   for c in 0..count {
-    worker.connections[c].input = receive[c * config.receive_size..(c + 1) * config.receive_size]
-    worker.connections[c].base_input = worker.connections[c].input
-    if config.upload_count > 0 {
-      worker.connections[c].uploads = &worker.upload_pool
-    }
-    worker.connections[c].output = send[c * config.send_size..(c + 1) * config.send_size]
-    worker.connections[c].base_output = worker.connections[c].output
-    worker.connections[c].pool = &worker.send_pool
-    worker.connections[c].worker = worker
-    worker.connections[c].index = c
-    worker.connections[c].generation = 1
-    if config.job_size > 0 {
-      worker.connections[c].jobs = mem.arena_from_buffer(job_bytes[c * job_stride..(c + 1) * job_stride])
-    }
     worker.free[c] = count - 1 - c
   }
   worker.free_count = count
@@ -1925,10 +1946,15 @@ pub fn job(T: type, response: *http.Response) *T {
     mem.arena_reset(jobs)
     return mem.push(T, jobs)
   }
-  if connection == nil || connection.jobs == nil || connection.job_running { return nil }
+  if connection == nil || connection.job_running || connection.worker.job_stride == 0 { return nil }
   // In Config.on_large_body, before receive_body: storage for the reader.
   large_head := connection.mode == Mode.Body && !connection.body_started
   if connection.mode != Mode.Http && !large_head { return nil }
+  if connection.jobs == nil {
+    worker := connection.worker
+    at := connection.index * worker.job_stride
+    connection.jobs = mem.arena_from_buffer(worker.job_bytes[at..at + worker.job_stride])
+  }
   mem.arena_reset(connection.jobs)
   return mem.push(T, connection.jobs)
 }
