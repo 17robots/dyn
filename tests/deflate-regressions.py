@@ -15,6 +15,7 @@ SOURCE = r'''use "std/parse" parse
 use "std/compress/deflate" deflate
 use "std/compress/gzip" gzip
 use "std/io" io
+use "std/fail"
 use "std/fs" fs
 use "std/mem" memory
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
@@ -60,12 +61,10 @@ fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool
 }
 fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, corrupt: bool) {
   owned := memory.arena_alloc(4000000)
-  encoded_file := fs.open(encoded_path)
-  encoded := fs.read_contents(owned, &encoded_file, 1000000)
-  fs.close(&encoded_file)
-  expected_file := fs.open(expected_path)
-  expected := fs.read_contents(owned, &expected_file, 1000000)
-  fs.close(&expected_file)
+  encoded_file: fail.Status
+  encoded := fs.read_all(owned, &encoded_file, encoded_path, 1000000)
+  expected_file: fail.Status
+  expected := fs.read_all(owned, &expected_file, expected_path, 1000000)
   require(!encoded_file.failed && !expected_file.failed, "read fixture")
   chunks: [5]usize = [1, 257, 258, 33025, 65536]
   for chunk in chunks {

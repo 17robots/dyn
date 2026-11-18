@@ -1,9 +1,10 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>Errors are values</title></head>
+<html><head><meta charset="utf-8"><title>Failure is state</title></head>
 <body>
-<h1>Errors are values</h1>
+<h1>Failure is state</h1>
 <p><a href="index.html">All pages</a></p>
-<p>A call that can fail returns {value, failure}. The value is always safe to
-read, so a failure you ignore gives you an empty result, not a crash.</p>
+<p>A call that can fail takes a status. The first failure stays there, and
+every later call given that status does nothing, so you check it once,
+before you act on the results.</p>
 <p>A broken invariant is different: that is a bug, and the program panics.</p>
 </body></html>

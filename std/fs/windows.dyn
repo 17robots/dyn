@@ -116,3 +116,6 @@ fn native_unmap(address: usize, _size: usize) isize {
   if win_map_release(#cast(rawptr, address)) == 0 { return last_error() }
   return 0
 }
+fn native_text(code: isize) []const u8 {
+  return io.windows_text(code)
+}

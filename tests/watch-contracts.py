@@ -19,13 +19,15 @@ def bounded_descriptors():
     resource.setrlimit(resource.RLIMIT_NOFILE, (64 if soft == resource.RLIM_INFINITY else min(64, soft), hard))
 
 SOURCE = r'''use "std/fs/watch" watch
+use "std/fail"
 use "std/fs" fs
 use "std/io" io
 use "std/bytes" bytes
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn create(path: []const u8) {
-  opened := fs.create(path)
-  require(!opened.failed, "create file")
+  status: fail.Status
+  opened := fs.create(&status, path)
+  require(!status.failed, "create file")
   fs.close(&opened)
 }
 fn malformed(storage: []u8, used: usize) {

@@ -7,7 +7,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT/'build'/('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
-SOURCE = r'''use "std/fs"
+SOURCE = r'''use "std/fail"
+use "std/fs"
 use "std/io"
 use "std/bufio"
 use "std/process"
@@ -81,47 +82,48 @@ fn main() {
   unopened := fs.File{}
   require(!fs.is_open(&unopened), "stdlib assertion 61")
   fs.close(&unopened)
-  require(fs.read(&unopened, tiny_backing[..]) == 0 && unopened.failure.kind == errors.Kind.InvalidState, "stdlib assertion 63")
-  missing := fs.open("missing-file")
+  unopened_status: fail.Status
+  require(fs.read(&unopened_status, &unopened, tiny_backing[..]) == 0 && unopened_status.failure.kind == errors.Kind.InvalidState, "stdlib assertion 63")
+  missing: fail.Status
+  _ = fs.open(&missing, "missing-file")
   require(missing.failed && missing.failure.kind == errors.Kind.NotFound && missing.failure.native != 0, "stdlib assertion 65")
-  created := fs.create_exclusive("café-😀.txt")
-  require(!created.failed, "stdlib assertion 67")
-  duplicate := fs.create_exclusive("café-😀.txt")
+  status: fail.Status
+  created := fs.create_exclusive(&status, "café-😀.txt")
+  require(!status.failed, "stdlib assertion 67")
+  duplicate: fail.Status
+  _ = fs.create_exclusive(&duplicate, "café-😀.txt")
   require(duplicate.failed && duplicate.failure.kind == errors.Kind.AlreadyExists, "stdlib assertion 69")
   require(io.complete(io.write_all(fs.writer(&created), "abc")), "stdlib assertion 72")
-  fs.sync(&created)
-  require(!created.failed, "stdlib assertion 73")
+  fs.sync(&status, &created)
+  require(!status.failed, "stdlib assertion 73")
   moved := created
   fs.close(&moved)
   require(!fs.is_open(&moved), "stdlib assertion 75")
   fs.close(&moved)
-  appended := fs.append("café-😀.txt")
-  require(!appended.failed && fs.write(&appended, "def") != 0 && !appended.failed, "stdlib assertion 79")
+  appended := fs.append(&status, "café-😀.txt")
+  fs.write(&status, &appended, "def")
+  require(!status.failed, "stdlib assertion 79")
   fs.close(&appended)
-  opened := fs.open("café-😀.txt")
-  require(!opened.failed && fs.seek(&opened, 2, 0) == 2, "stdlib assertion 82")
+  opened := fs.open(&status, "café-😀.txt")
+  require(fs.seek(&status, &opened, 2, 0) == 2 && !status.failed, "stdlib assertion 82")
   contents: [8]u8
   read := io.read_exact(fs.reader(&opened), contents[..4])
   require((read.status == io.Status.Complete && !io.failed(read.failure)) && bytes.equal(contents[..4], "cdef"), "stdlib assertion 85")
   require(io.read(fs.reader(&opened), contents[..]).status == io.Status.End, "stdlib assertion 86")
   fs.close(&opened)
   mark := mem.arena_mark(arena)
-  bounded_file := fs.open("café-😀.txt")
-  bounded := fs.read_contents(arena, &bounded_file, 5)
-  fs.close(&bounded_file)
+  bounded_file: fail.Status
+  bounded := fs.read_all(arena, &bounded_file, "café-😀.txt", 5)
   require(bounded_file.failed && bounded_file.failure.kind == errors.Kind.Overflow && mem.arena_mark(arena) == mark, "stdlib assertion 90")
-  exhausted_file := fs.open("café-😀.txt")
-  exhausted := fs.read_contents(tiny, &exhausted_file, 100)
-  fs.close(&exhausted_file)
+  exhausted_file: fail.Status
+  exhausted := fs.read_all(tiny, &exhausted_file, "café-😀.txt", 100)
   require(exhausted_file.failed && exhausted_file.failure.kind == errors.Kind.Capacity && mem.arena_mark(tiny) == mem.arena_start(tiny), "stdlib assertion 92")
-  all_file := fs.open("café-😀.txt")
-  all := fs.read_contents(arena, &all_file, 6)
-  fs.close(&all_file)
+  all_file: fail.Status
+  all := fs.read_all(arena, &all_file, "café-😀.txt", 6)
   require(!all_file.failed && bytes.equal(all, "abcdef"), "stdlib assertion 94")
-  require(fs.write_all("café-😀.txt", "z"), "stdlib assertion 95")
-  truncated_file := fs.open("café-😀.txt")
-  truncated := fs.read_contents(arena, &truncated_file, 1)
-  fs.close(&truncated_file)
+  require(fs_write_file("café-😀.txt", "z"), "stdlib assertion 95")
+  truncated_file: fail.Status
+  truncated := fs.read_all(arena, &truncated_file, "café-😀.txt", 1)
   require(!truncated_file.failed && bytes.equal(truncated, "z"), "stdlib assertion 97")
   buffering: usize = 0
   for buffering <= 8 {
@@ -167,6 +169,13 @@ fn main() {
   require(!errors.failed(finished.failure) && time.elapsed(started.value, finished.value).value >= time.Millisecond, "stdlib assertion 139")
   require(!errors.failed(time.sleep(0).failure), "stdlib assertion 140")
   require(io.complete(io.println_to(io.stdout(), "stdlib passed")), "stdlib assertion 141")
+}
+
+// Writes data to path; whether it worked.
+fn fs_write_file(path: []const u8, data: []const u8) bool {
+  status: fail.Status
+  fs.write_all(&status, path, data)
+  return !status.failed
 }
 '''
 

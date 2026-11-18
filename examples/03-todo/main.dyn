@@ -11,6 +11,7 @@
 // Run: dyn run examples/03-todo -- add learn Dyn
 
 use "std/container/array"
+use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/parse"
@@ -76,15 +77,11 @@ fn main() i32 {
 
   tasks: array.Array(Task)
   array.init(&tasks, arena)
-  loaded := load(&tasks, arena, path)
-  if io.failed(loaded.failure) {
-    io.eprintln("todo: cannot read {}", path)
-    return 1
-  }
-  if parse.failed(loaded.problem) {
-    io.eprintln("todo: {}:{}: {}", path, loaded.line, loaded.problem.message)
-    return 1
-  }
+  // Loading and saving can fail; both take this status. Check it before
+  // acting on what load returned.
+  status: fail.Status
+  load(&tasks, arena, &status, path)
+  if status.failed { return report(status) }
 
   changed := false
   command := args[1]
@@ -135,11 +132,15 @@ fn main() i32 {
   }
 
   if changed {
-    failure := save(tasks.items, arena, path)
-    if io.failed(failure) {
-      io.eprintln("todo: cannot save {}", path)
-      return 1
-    }
+    save(tasks.items, arena, &status, path)
+    if status.failed { return report(status) }
   }
   return 0
+}
+
+// Prints what failed, such as "todo: open todo.txt: permission denied".
+fn report(status: fail.Status) i32 {
+  storage: [512]u8
+  io.eprintln("todo: {}", fail.describe(storage[..], status.failure))
+  return 1
 }

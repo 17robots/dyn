@@ -3,6 +3,7 @@
 // "error offset message" when parsing fails. tests/selfhost-parser.py compares
 // the output with the C parser through tests/selfhost-parser-oracle.c.
 use "std/fmt"
+use "std/fail"
 use "std/fs"
 use "std/io"
 use "std/process"
@@ -61,9 +62,8 @@ fn main() {
     put(&out, arena, "== ")
     put(&out, arena, path)
     put(&out, arena, "\n")
-    source_file := fs.open(path)
-    source := fs.read_contents(arena, &source_file, 64 * mem.MiB)
-    fs.close(&source_file)
+    source_file: fail.Status
+    source := fs.read_all(arena, &source_file, path, 64 * mem.MiB)
     if source_file.failed {
       #panic("cannot read source")
     }

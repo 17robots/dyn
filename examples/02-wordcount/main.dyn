@@ -7,6 +7,7 @@
 //
 // Run: dyn run examples/02-wordcount -- examples/02-wordcount/poem.txt
 
+use "std/fail"
 use "std/fmt"
 use "std/fs"
 use "std/io"
@@ -50,8 +51,22 @@ fn count_chunk(counts: *Counts, chunk: []const u8) {
   }
 }
 
-// io.Reader is the seam every input shares: a file, standard input, a
-// socket or bytes in memory. The function does not care which.
+// Counts one file, a chunk at a time. Every fs call takes the status: after a
+// failure fs.read returns 0, so the loop ends by itself and nothing here
+// needs to check.
+fn count_file(status: *fail.Status, name: []const u8, counts: *Counts) {
+  file := fs.open(status, name)
+  // defer runs when this function returns, however it returns.
+  defer fs.close(&file)
+  chunk: [64 * 1024]u8
+  for {
+    count := fs.read(status, &file, chunk[..])
+    if count == 0 { break }
+    count_chunk(counts, chunk[..count])
+  }
+}
+
+// Standard input is an io.Reader, which reports how each read went.
 fn count_reader(reader: io.Reader, counts: *Counts) io.Failure {
   chunk: [64 * 1024]u8
   failure: io.Failure    // zero: no failure yet
@@ -120,27 +135,17 @@ fn main() i32 {
   }
 
   total: Counts
-  status: i32 = 0
+  exit_code: i32 = 0
   for name in files {
-    // A fallible call returns {value, failure}. The value is always safe
-    // to read; on failure it is a closed File.
-    opened := fs.open(name)
-    if opened.failed {
-      io.eprintln("wordcount: {}: {}", name, describe(opened.failure.kind))
-      status = 1
-      continue
-    }
-    // A File is an OS handle, so it must have exactly one owner. take moves
-    // it out of the result instead of copying it; dyn vet flags a copy.
-    file := opened
-    // defer runs when this loop iteration's block ends, however it ends.
-    defer fs.close(&file)
-
+    // Each file has its own status, so one that cannot be read does not
+    // stop the others.
+    status: fail.Status
     counts: Counts
-    failure := count_reader(fs.reader(&file), &counts)
-    if io.failed(failure) {
-      io.eprintln("wordcount: {}: {}", name, describe(failure.kind))
-      status = 1
+    count_file(&status, name, &counts)
+    if status.failed {
+      storage: [512]u8
+      io.eprintln("wordcount: {}", fail.describe(storage[..], status.failure))
+      exit_code = 1
       continue
     }
     show(counts, name)
@@ -149,5 +154,5 @@ fn main() i32 {
   if #len(files) > 1 {
     show(total, "total")
   }
-  return status
+  return exit_code
 }

@@ -2,6 +2,7 @@ use "std/parse" parse
 #target(kernel: linux)
 use "std/mem" mem
 use "std/io" io
+use "std/fail"
 use "std/fs" fs
 use "std/c" c
 use "std/os/linux/sys"
@@ -92,10 +93,11 @@ pub fn next(state: *Watcher) EventResult {
   if state.offset == state.used {
     if !state.active { return event_failure(state, -9) }
     file := fs.adopt_handle(state.descriptor)
-    count := fs.read(&file, state.storage)
-    if file.failed {
-      if file.failure.native == -11 { return EventResult{ status: Status.Empty } }
-      return event_error(state, file.failure.kind, file.failure.native)
+    status: fail.Status
+    count := fs.read(&status, &file, state.storage)
+    if status.failed {
+      if status.failure.native == -11 { return EventResult{ status: Status.Empty } }
+      return event_error(state, status.failure.kind, status.failure.native)
     }
     if count == 0 { return event_failure(state, -5) }
     state.offset = 0

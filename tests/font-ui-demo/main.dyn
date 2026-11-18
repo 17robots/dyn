@@ -5,6 +5,7 @@ use "std/ui" ui
 use "std/ui/software" software
 use "std/mem" mem
 use "std/image/png" png
+use "std/fail"
 use "std/fs" fs
 use "std/fmt" fmt
 use "std/font" font
@@ -23,9 +24,8 @@ fn main() {
   if io.failed(arguments.failure) || #len(arguments.value) != 3 {
     #panic("usage: font-ui-demo FONT.ttf OUTPUT.png")
   }
-  bytes_file := fs.open(arguments.value[1])
-  bytes := fs.read_contents(output, &bytes_file, 64000000)
-  fs.close(&bytes_file)
+  bytes_file: fail.Status
+  bytes := fs.read_all(output, &bytes_file, arguments.value[1], 64000000)
   if bytes_file.failed {
     #panic("cannot read font")
   }
@@ -84,7 +84,14 @@ fn main() {
     #panic("UI demo render")
   }
   encoded := png.encode(output, pixels, 480, 240, 4)
-  if parse.failed(encoded.failure) || !fs.write_all(arguments.value[2], encoded.value) {
+  if parse.failed(encoded.failure) || !fs_write_file(arguments.value[2], encoded.value) {
     #panic("UI demo output")
   }
+}
+
+// Writes data to path; whether it worked.
+fn fs_write_file(path: []const u8, data: []const u8) bool {
+  status: fail.Status
+  fs.write_all(&status, path, data)
+  return !status.failed
 }

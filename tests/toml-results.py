@@ -15,6 +15,7 @@ CLI='''use "std/parse" parse
 use "std/encoding/toml" toml
 use "std/io" io
 use "std/mem" mem
+use "std/fail"
 use "std/fs" fs
 use "std/process" process
 fn main() {
@@ -22,9 +23,8 @@ fn main() {
  defer { mem.arena_release(arena) }
  args := process.arguments(arena)
  if io.failed(args.failure) || #len(args.value) != 3 { #panic("arguments") }
- source_file := fs.open(args.value[1])
- source := fs.read_contents(arena, &source_file, 16777216)
- fs.close(&source_file)
+ source_file: fail.Status
+ source := fs.read_all(arena, &source_file, args.value[1], 16777216)
  if source_file.failed { #panic("read") }
  mark := mem.arena_mark(arena)
  parsed := toml.parse(arena,source)
@@ -35,8 +35,15 @@ fn main() {
  }
  encoded := toml.encode(arena,parsed.root)
  if parse.failed(encoded.failure) { #panic("encode") }
- if !fs.write_all(args.value[2],encoded.value) { #panic("write") }
+ if !fs_write_file(args.value[2],encoded.value) { #panic("write") }
  io.println("OK")
+}
+
+// Writes data to path; whether it worked.
+fn fs_write_file(path: []const u8, data: []const u8) bool {
+  status: fail.Status
+  fs.write_all(&status, path, data)
+  return !status.failed
 }
 '''
 VALID=[b'',b'x=1\n',b'''title = "TOML Example"

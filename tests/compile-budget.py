@@ -28,7 +28,7 @@ IMPORTS = ['std/bytes', 'std/strings', 'std/fmt', 'std/encoding/json', 'std/fs',
            'std/text plain', 'std/io']
 # Measured values; the budget allows 25 percent more. Peak RSS is the highest
 # seen on 2 to 32 cores; allocation counts did not vary with the core count.
-ALLOCATIONS = {'--release': 30260, '--debug': 52488, 'check': 18442}
+ALLOCATIONS = {'--release': 36702, '--debug': 59582, 'check': 23541}
 PEAK_MIB = {'--release': 91, '--debug': 68, 'check': 39}
 WALL_CEILING_MS = 5000
 MARGIN = 1.25

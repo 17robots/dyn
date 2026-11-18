@@ -17,6 +17,7 @@ use "std/io"
 use "std/mem"
 use "std/container/array"
 use "std/container/map"
+use "std/fail"
 use "std/fs" files       // an import can be renamed
 use "std/panic"
 
@@ -310,29 +311,31 @@ fn memory() {
 }
 
 // ------------------------------------------------- Failure is state ---
-// No exceptions and no error values to check after each call. A failed
-// operation marks its object: check file.failed once, where it matters.
+// No exceptions and no error values to check after each call. A function
+// that can fail takes a *fail.Status, as one that allocates takes an arena.
+// The first failure stays in the status and later calls do nothing, so you
+// check status.failed once, before acting on the results.
 fn read_config(arena: *mem.Arena) {
-  file := files.open("does-not-exist.conf")
-  text := files.read_contents(arena, &file, 1 << 20)
-  files.close(&file)
-  if file.failure.kind == io.Kind.NotFound {
+  status: fail.Status
+  text := files.read_all(arena, &status, "does-not-exist.conf", 1 << 20)
+  if status.failed && status.failure.kind == fail.Kind.NotFound {
     io.println("config missing")
     return
   }
-  if file.failed {
+  if status.failed {
     storage: [256]u8
-    io.println("config unreadable: {}", io.describe(storage[..], file.failure))
+    io.println("config unreadable: {}", fail.describe(storage[..], status.failure))
     return
   }
   io.println("config {} bytes", #len(text))
 }
 
 // ---------------------------------------------------------------- Defer ---
-// Defers run in reverse order when their block ends, on any exit,
-// including a panic. There is no recovery from a panic: it is a bug, and
-// expected failures are values. panic.set_handler runs one function after
-// cleanups, before the panic reports and exits, for logs or crash reports.
+// Defers run in reverse order when their block ends, on any exit: falling
+// off the end, return, break or continue. A panic does not run them: it is a
+// bug, there is no recovery, and expected failures go in a status.
+// panic.set_handler runs one function before the panic reports and exits,
+// for logs or crash reports.
 fn crash_report(message: []const u8) {
   io.eprintln("crash: {}", message)
 }

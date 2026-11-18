@@ -1,5 +1,6 @@
 // mem.advise_sparse: touching one byte every 2 MiB of an advised region costs
 // one 4 KiB page each, not a huge page. Prints resident KiB before and after.
+use "std/fail"
 use "std/fs"
 use "std/io"
 use "std/mem"
@@ -8,7 +9,7 @@ use "std/parse"
 fn resident_kib() u64 {
   arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
-  text := fs.read_all(arena, "/proc/self/statm", 4096)
+  text := fs_read_file(arena, "/proc/self/statm", 4096)
   space: usize = 0
   for space < #len(text) && text[space] != ' ' {
     space += 1
@@ -33,4 +34,10 @@ fn main() {
     at += 2 * mem.MiB
   }
   io.println("{}", resident_kib() - before)
+}
+
+// The whole file at path; empty when it cannot be read.
+fn fs_read_file(arena: *mem.Arena, path: []const u8, maximum: usize) []u8 {
+  status: fail.Status
+  return fs.read_all(arena, &status, path, maximum)
 }
