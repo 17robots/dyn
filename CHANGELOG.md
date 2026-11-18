@@ -436,6 +436,11 @@ Servers:
   `http.Connection`, `http.StreamReader`, `http.StreamWriter`,
   `http.StreamResult` and `http.AcceptResult` aliases. Use the `std/net` and
   `std/io` names.
+- HTTP/2 and HTTP/3 are linked only when set: `config.http2 =
+  evented.http2()` and `config.http3 = evented.http3()` replace the `bool`
+  fields, and a server that sets neither carries no HTTP/2, HTTP/3, HPACK or
+  QPACK code (about 100 KB). WebSocket frame code is linked only when the
+  program calls `evented.upgrade`.
 - `evented.serve` works on macOS and Windows: without load-balancing
   `SO_REUSEPORT` it shares one listener across workers. It failed with
   Unsupported there before.

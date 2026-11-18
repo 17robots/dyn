@@ -209,8 +209,41 @@ struct H2Pool {
   read: []u8,
 }
 
+// HTTP/2 for Config.http2: the calls the server makes into this file. A
+// program that never calls http2() reaches none of them, so none of HTTP/2
+// (nor HPACK) is linked into it.
+pub struct Http2 {
+  storage_size: fn(Config) usize,
+  valid: fn(Config) bool,
+  start: fn(*mem.Arena, *Worker),
+  serve: fn(*Worker, usize) bool,
+  begin: fn(*Worker, usize) bool,
+  close_all: fn(*Worker, *Connection),
+  release: fn(*Worker, *Connection),
+  job_done: fn(*Worker, usize),
+  deliver: fn(*Worker, *Connection, Post, []const u8),
+  job: fn(*Connection) *mem.Arena,
+  run: fn(*fail.Status, *Connection, rawptr, fn(rawptr), fn(*fail.Status, *http.Response, *const http.Request, rawptr)),
+  receive_body: fn(*fail.Status, *Connection, *http.Response, rawptr, fn(rawptr, []const u8) bool,
+    fn(*fail.Status, *http.Response, *const http.Request, rawptr, BodyEnd)),
+  open_stream: fn(*fail.Status, *Connection, *http.Response, http.ResponseOptions, u64) Peer,
+  upgrade: fn(*fail.Status, *Connection, *http.Response, u64) Peer,
+}
+
+// HTTP/2 for Config.http2: prior-knowledge cleartext clients and TLS clients
+// whose ALPN chose "h2".
+pub fn http2() Http2 {
+  return Http2{ storage_size: h2_storage_size, valid: h2_valid, start: h2_start, serve: h2_serve, begin: h2_begin,
+    close_all: h2_close_all, release: h2_release, job_done: h2_job_done, deliver: h2_deliver, job: h2_job, run: h2_run,
+    receive_body: h2_receive_body, open_stream: h2_open_stream, upgrade: h2_upgrade }
+}
+
+fn has_http2(config: Config) bool {
+  return config.http2.serve != nil
+}
+
 fn h2_storage_size(config: Config) usize {
-  if !config.http2 { return 0 }
+  if !has_http2(config) { return 0 }
   size := config.http2_connections * (#sizeof(H2) + #alignof(H2) + #sizeof(usize))
   size += config.http2_slots * (#sizeof(Slot) + config.receive_size + config.job_size + mem.ArenaBufferOverhead + 2 * #sizeof(usize))
   size += 2 * config.receive_size + 2 * (MaxFrame + 1024) + h2_body_size(config) + 256
@@ -223,13 +256,12 @@ fn h2_body_size(config: Config) usize {
 }
 
 fn h2_valid(config: Config) bool {
-  return !config.http2 || (config.receive_size >= MaxFrame + 4 * FrameHead + 1024 && config.http2_connections > 0 &&
+  return (config.receive_size >= MaxFrame + 4 * FrameHead + 1024 && config.http2_connections > 0 &&
       config.http2_slots > 0)
 }
 
 fn h2_start(arena: *mem.Arena, worker: *Worker) {
   config := worker.config
-  if !config.http2 { return }
   pool := &worker.h2
   pool.states = mem.push_array(H2, arena, config.http2_connections)
   pool.free = mem.push_array(usize, arena, config.http2_connections)

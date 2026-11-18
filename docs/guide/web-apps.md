@@ -442,7 +442,7 @@ pool started earlier cannot take the signal.
 
 ## HTTP/2
 
-Set `Config.http2` and every connection may speak HTTP/2 (RFC 9113): TLS
+Set `Config.http2 = evented.http2()` and every connection may speak HTTP/2 (RFC 9113): TLS
 clients that pick `h2` through ALPN, which browsers do once
 `https.offer_http2(&status, context)` offers it, and cleartext clients that start with
 the connection preface (prior knowledge, as `curl --http2-prior-knowledge`
@@ -464,7 +464,7 @@ use "std/net/http/evented"
 
 fn http2_config() evented.Config {
   config := evented.default_config()
-  config.http2 = true
+  config.http2 = evented.http2()
   // A whole 16 KiB frame must fit the receive buffer.
   config.receive_size = 32 * mem.KiB
   config.http2_connections = 256
@@ -493,12 +493,12 @@ static indexes and Huffman-coded literals.
 
 ## HTTP/3
 
-Experimental. HTTP/3 is off unless `Config.http3` is set, and one test
+Experimental. HTTP/3 is off unless `Config.http3` is set (and then linked), and one test
 covers it, which needs OpenSSL 3.5 and a curl built with HTTP/3. Use
 HTTP/2 over TLS for production; most deployments put a proxy in front for
 HTTP/3 anyway.
 
-Set `Config.http3` (with `Config.http2`) and give `Config.quic` a QUIC stack:
+Set `Config.http3 = evented.http3()` (with `Config.http2`) and give `Config.quic` a QUIC stack:
 `https.quic(https.quic_context(arena, "cert.pem", "key.pem").value)` from
 `std/net/http/evented/tls`, which uses OpenSSL's QUIC server (OpenSSL 3.5 or
 later). Each worker then opens a UDP socket at the TCP listener's address
@@ -514,8 +514,8 @@ use "std/net/http/evented/tls" https
 fn http3_config(quic: *const evented.Quic) evented.Config {
   config := evented.default_config()
   config.receive_size = 32 * mem.KiB
-  config.http2 = true
-  config.http3 = true
+  config.http2 = evented.http2()
+  config.http3 = evented.http3()
   config.quic = quic
   return config
 }

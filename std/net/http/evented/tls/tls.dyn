@@ -7,9 +7,9 @@
 //   config.transport = &transport
 //   config.spawner = &spawner
 //
-// For HTTP/2 set Config.http2 and call offer_http2(context) before starting:
-// browsers then negotiate "h2" through ALPN. For HTTP/3 also set
-// Config.http3 and Config.quic to quic(quic_context(...)): QUIC needs its own
+// For HTTP/2 set Config.http2 = evented.http2() and call offer_http2(context)
+// before starting: browsers then negotiate "h2" through ALPN. For HTTP/3 also
+// set Config.http3 = evented.http3() and Config.quic to quic(quic_context(...)): QUIC needs its own
 // context (OpenSSL's QUIC server method), with the same certificate.
 //
 // OpenSSL keeps per-thread state, so workers must be libc threads: evented

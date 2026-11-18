@@ -1,4 +1,4 @@
-// HTTP/3 (RFC 9114) on evented workers, with Config.http3 and a QUIC stack in
+// HTTP/3 (RFC 9114) on evented workers, with Config.http3 = http3() and a QUIC stack in
 // Config.quic (std/net/http/evented/tls supplies OpenSSL's). Each worker owns
 // a UDP socket on the TCP listener's address (SO_REUSEPORT) and a QUIC
 // listener; TCP responses then carry Alt-Svc, so browsers move to HTTP/3.
@@ -132,12 +132,34 @@ fn write_varint(destination: []u8, value: u64) usize {
 
 // ---------------------------------------------------------------- setup
 
+// HTTP/3 for Config.http3: the calls the server makes into this file. A
+// program that never calls http3() links none of HTTP/3 or QPACK.
+pub struct Http3 {
+  storage_size: fn(Config) usize,
+  valid: fn(Config) bool,
+  start: fn(*mem.Arena, *fail.Status, *Worker),
+  close: fn(*Worker, *Connection),
+  poll: fn(*Worker),
+  stop: fn(*Worker),
+}
+
+// HTTP/3 for Config.http3, on a UDP socket at the TCP listener's address.
+// Needs Config.http2 (QUIC connections use its state blocks and request
+// slots) and Config.quic.
+pub fn http3() Http3 {
+  return Http3{ storage_size: h3_storage_size, valid: h3_valid, start: h3_start, close: h3_close, poll: h3_poll,
+    stop: h3_stop }
+}
+
+fn has_http3(config: Config) bool {
+  return config.http3.poll != nil
+}
+
 fn h3_valid(config: Config) bool {
-  return !config.http3 || (config.quic != nil && config.http2)
+  return config.quic != nil && has_http2(config)
 }
 
 fn h3_storage_size(config: Config) usize {
-  if !config.http3 { return 0 }
   return MaxFrame + 1024 + config.http2_connections * #sizeof(usize) + 64
 }
 
@@ -145,7 +167,7 @@ fn h3_storage_size(config: Config) usize {
 // address, and the Alt-Svc value TCP responses advertise.
 fn h3_start(arena: *mem.Arena, status: *fail.Status, worker: *Worker) {
   config := worker.config
-  if status.failed || !config.http3 { return }
+  if status.failed { return }
   worker.h2.read = mem.push_bytes(arena, MaxFrame + 1024)
   worker.h3_connections = mem.push_array(usize, arena, config.http2_connections)
   address := network.Address{}
