@@ -60,7 +60,7 @@ Standard library:
   and reason, and every later call given that status does nothing and returns
   zero or empty. Check `status.failed` once, before acting on the results.
   `Status.on_failure` is called once when the first failure is recorded.
-  A `fail.Failure` keeps its own copy of its text (up to 228 bytes; a long
+  A `fail.Failure` keeps its own copy of its text (up to 112 bytes; a long
   path keeps its end), so it stays readable after the text it came from is
   gone; read it with `fail.operation_text`, `fail.path_text` and
   `fail.message_text`. `io.Kind` is now the same type as `fail.Kind`.
@@ -362,6 +362,17 @@ Compiler speed of generated code:
   loop of 16-byte stores instead of `rep stosb`, whose fixed start-up cost
   made declaring a status take about 9 ns; it now takes about 1 ns, and code
   is slightly smaller.
+- `fail.Status` is 160 bytes (was 280) and `fail.Failure` 136 (was 256): the
+  small fields come first and a failure keeps up to 112 bytes of text, a long
+  path keeping its end. Declaring a status costs about nothing.
+- The evented server does less per request: one parse of the request head
+  (it was parsed twice), the response head written once into a per-worker
+  buffer (it was measured, then written, into an 8 KiB stack buffer zeroed
+  on every response), `Content-Length` formatted without an arena, and the
+  event buffer made once per queue instead of zeroed on every wait. On the
+  test server that is +3% to +4% over preview 39; the flagship server serves
+  1.2 million requests a second at 16 and 64 connections (preview 39's
+  blocking server: 0.77 million).
 - `tools/bench/run.py` also builds each kernel with Zig (ReleaseFast and
   ReleaseSafe); see PERFORMANCE.md.
 

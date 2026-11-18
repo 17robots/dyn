@@ -8,6 +8,9 @@ fn native_close(_handle: isize) {
 }
 fn native_control(_status: *fail.Status, _queue: *Queue, _index: usize, _entry: Entry) {
 }
+// Windows builds its poll list per wait from the entries.
+const NativeEventSize: usize = 0
+
 fn native_wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout: i32) []Event {
   count: usize = 0
   for entry in queue.entries {

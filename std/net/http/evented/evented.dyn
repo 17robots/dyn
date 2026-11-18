@@ -261,7 +261,7 @@ fn worker_storage(config: Config) usize {
   if has_http3(config) {
     per_worker += config.http3.storage_size(config)
   }
-  per_worker += config.request_arena_size + mem.ArenaBufferOverhead
+  per_worker += config.request_arena_size + mem.ArenaBufferOverhead + 8 * mem.KiB
   // The event queue (entry, free list, hash table per slot), thread records,
   // alignment padding.
   per_worker += (slots + 2) * 64 + 64 * mem.KiB
@@ -401,6 +401,9 @@ pub struct Worker {
   // otherwise wake the loop continuously.
   listening: bool,
   scratch: *mem.Arena,
+  // Where response heads are composed: 8 KiB, reused by every response this
+  // worker writes, so none zeroes a buffer of its own.
+  head_staging: []u8,
   // Every slot's input and output buffers, receive_size and send_size each.
   slot_input: []u8,
   slot_output: []u8,
@@ -738,7 +741,8 @@ fn new_response(connection: *Connection) http.Response {
     mem.arena_reset(connection.worker.request_arena)
   }
   return http.Response{ output: io.Writer{ data: connection, write: output_write },
-    reserve_body: reserve_body, commit_body: commit_body, date: connection.worker.date[..], alt_svc: alt_svc(connection.worker) }
+    reserve_body: reserve_body, commit_body: commit_body, date: connection.worker.date[..], alt_svc: alt_svc(connection.worker),
+    staging: connection.worker.head_staging }
 }
 
 // Answers status and closes the connection: through Config.on_too_large
@@ -1497,6 +1501,7 @@ fn start_worker(outer: *mem.Arena, status: *fail.Status, worker: *Worker) {
     worker.inbox.done[half] = mem.push_array(usize, arena, count)
   }
   worker.scratch = mem.arena_from_buffer(mem.push_bytes(arena, scratch_size(config)))
+  worker.head_staging = mem.push_bytes(arena, 8 * mem.KiB)
   if config.compress_level > 0 {
     worker.encoder = mem.push(gzip.Encoder, arena)
   }

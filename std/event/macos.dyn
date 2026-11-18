@@ -43,8 +43,10 @@ fn native_control(status: *fail.Status, queue: *Queue, index: usize, entry: Entr
     fail.set(status, io.from_darwin("change event queue", "", code))
   }
 }
+const NativeEventSize: usize = #sizeof(Kevent)
+
 fn native_wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, milliseconds: i32) []Event {
-  native := mem.push_array(Kevent, arena, queue.batch)
+  native := #slice(#cast(*Kevent, &queue.native[0]), queue.batch)
   timeout := Timeout{}
   pointer: *Timeout = nil
   if milliseconds >= 0 {
