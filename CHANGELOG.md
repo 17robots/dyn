@@ -358,6 +358,10 @@ Compiler speed of generated code:
   bytes of code instead of 386, and the example programs are 5-23% smaller
   than before this change (all now smaller than on preview 39). Kernel
   speed is unchanged.
+- Locals of 257 bytes to 4 KiB, such as a `fail.Status`, are zeroed with a
+  loop of 16-byte stores instead of `rep stosb`, whose fixed start-up cost
+  made declaring a status take about 9 ns; it now takes about 1 ns, and code
+  is slightly smaller.
 - `tools/bench/run.py` also builds each kernel with Zig (ReleaseFast and
   ReleaseSafe); see PERFORMANCE.md.
 

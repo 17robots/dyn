@@ -7462,7 +7462,7 @@ static uint64_t ssa_clobbers(Ssa *s, const SsaValue *v) {
     return ssa_is_const(s, v->b, &c) || s->ctx->bmi2 ? 0 : UINT64_C(1) << X_RCX;
   }
   case SO_COPYMEM: return v->aux > 64 ? (UINT64_C(1) << X_RCX | UINT64_C(1) << X_RSI | UINT64_C(1) << X_RDI) : UINT64_C(1) << X_RCX;
-  case SO_ZEROMEM: return v->aux > 256 ? (UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDI) : 0;
+  case SO_ZEROMEM: return v->aux > 4096 ? (UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDI) : 0;
   case SO_FILLMEM: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDI;
   case SO_SUM:
   case SO_AXPY:
@@ -9027,6 +9027,36 @@ static void ssa_zero_memory(SsaEmit *e, SsaValue *v) {
     while (at < size) {
       unsigned width = size - at >= 8 ? 8 : size - at >= 4 ? 4 : size - at >= 2 ? 2 : 1;
       SsaMemory slot = m; slot.disp += (int32_t)at;
+      if (width == 1) { x86_mem_op(ctx, -1, false, OP1(0xc6), 0, slot, false); byte(ctx, 0); }
+      else if (width == 2) { x86_mem_op(ctx, 0x66, false, OP1(0xc7), 0, slot, false); byte(ctx, 0); byte(ctx, 0); }
+      else { x86_mem_op(ctx, -1, width == 8, OP1(0xc7), 0, slot, false); word(ctx, 0); }
+      at += width;
+    }
+    return;
+  }
+  if (size <= 4096) {
+    /* A loop of two 16-byte stores, then the tail: rep stosb costs a fixed
+       30 or so cycles to start, which dominated a 296-byte fail.Status
+       zeroed per loop iteration, and unrolled stores would cost about ten
+       bytes of code per 16 bytes. R11 walks the bytes; R10 counts. */
+    SsaMemory m = ssa_address_of(e, v->a, -1, 1, 0, X_R10, X_R11);
+    x86_mem_op(ctx, -1, true, OP1(0x8d), X_R11, m, false);                                   /* lea r11, [address] */
+    x86_reg_op(ctx, 0x66, false, OP2(0x0f, 0xef), SSA_XS1 - X_XMM0, SSA_XS1 - X_XMM0, false); /* pxor */
+    CODE(0x41, 0xba); word(ctx, size / 32);                                                    /* mov r10d, size / 32 */
+    size_t loop = ctx->text.n;
+    x86_mem_op(ctx, 0xf3, false, OP2(0x0f, 0x7f), SSA_XS1 - X_XMM0, (SsaMemory){X_R11, -1, 1, 0}, false);  /* movdqu [r11] */
+    x86_mem_op(ctx, 0xf3, false, OP2(0x0f, 0x7f), SSA_XS1 - X_XMM0, (SsaMemory){X_R11, -1, 1, 16}, false); /* movdqu [r11 + 16] */
+    CODE(0x49, 0x83, 0xc3, 0x20);                                                              /* add r11, 32 */
+    CODE(0x41, 0xff, 0xca);                                                                    /* dec r10d */
+    CODE(0x0f, 0x85); word(ctx, (uint32_t)((int64_t)loop - (int64_t)(ctx->text.n + 4)));     /* jnz loop */
+    uint32_t tail = size % 32, at = 0;
+    if (tail >= 16) {
+      x86_mem_op(ctx, 0xf3, false, OP2(0x0f, 0x7f), SSA_XS1 - X_XMM0, (SsaMemory){X_R11, -1, 1, 0}, false);
+      at = 16;
+    }
+    while (at < tail) {
+      unsigned width = tail - at >= 8 ? 8 : tail - at >= 4 ? 4 : tail - at >= 2 ? 2 : 1;
+      SsaMemory slot = {X_R11, -1, 1, (int32_t)at};
       if (width == 1) { x86_mem_op(ctx, -1, false, OP1(0xc6), 0, slot, false); byte(ctx, 0); }
       else if (width == 2) { x86_mem_op(ctx, 0x66, false, OP1(0xc7), 0, slot, false); byte(ctx, 0); byte(ctx, 0); }
       else { x86_mem_op(ctx, -1, width == 8, OP1(0xc7), 0, slot, false); word(ctx, 0); }
