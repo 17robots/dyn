@@ -343,7 +343,10 @@ typedef struct {
   uint32_t loop_stride, next_loop;
   uint32_t *loop_low, *loop_span;
   unsigned expansions, constants, budget, resource_budget, reserved_growth, reserved_resources;
-  unsigned *costs;
+  /* costs: copied records, for the growth budget. sizes: the same with
+     literals and integer casts free in loop-free callees, for the checks
+     that keep large callees calls (see inline_expression_cost). */
+  unsigned *costs, *sizes;
   bool failed, leaf_only, uniform_params;
   bool *active;
   /* Locals whose address is taken anywhere; a call may change them. */
@@ -700,25 +703,39 @@ static DynIrStmt inline_empty(DynStmtKind kind, DynSpan span) {
                      .span = span};
 }
 /* Saturating estimates include expression/item trees and dispatch records.
-   Even an empty case arm costs a copied record and a dispatch alternative. */
+   Even an empty case arm costs a copied record and a dispatch alternative.
+   With discount, literals and integer casts cost nothing: they become
+   immediates or vanish in the backend, so a loop-free helper made of byte
+   stores of a shifted value (binary.store_u64_le, which the backend turns
+   into one store) counts as the few operations it is. The discounted size
+   only decides whether a callee is too large to expand; the growth budget
+   keeps the full count, so it changes no other choice (a cheaper callee
+   that left budget over let map.locate expand into insert, which lost the
+   unswitching and registers it gets on its own). A callee with a loop keeps
+   the full count. */
 static unsigned inline_expression_cost(const DynIrProgram *ir, DynExprId id,
-                                       unsigned depth) {
+                                       unsigned depth, bool discount) {
   if (id == DYN_NO_EXPR) return 0;
   if (id >= ir->expression_count || depth > 32) return 257;
   const DynIrExpr *e = &ir->expressions[id];
-  unsigned cost = e->kind == DYN_EXPR_CALL ? 8 : 1;
-  cost += inline_expression_cost(ir, e->left, depth + 1);
+  bool free = discount &&
+              (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_BOOL || e->kind == DYN_EXPR_CHAR ||
+               e->kind == DYN_EXPR_NIL ||
+               ((e->kind == DYN_EXPR_CAST || e->kind == DYN_EXPR_CONVERT) && e->type < DYN_TYPE_STRUCT_BASE &&
+                e->type != DYN_TYPE_F32 && e->type != DYN_TYPE_F64));
+  unsigned cost = e->kind == DYN_EXPR_CALL ? 8 : free ? 0 : 1;
+  cost += inline_expression_cost(ir, e->left, depth + 1, discount);
   if (cost > 256) return 257;
-  cost += inline_expression_cost(ir, e->right, depth + 1);
+  cost += inline_expression_cost(ir, e->right, depth + 1, discount);
   if (e->kind == DYN_EXPR_SLICE)
-    cost += inline_expression_cost(ir, (DynExprId)e->integer, depth + 1);
+    cost += inline_expression_cost(ir, (DynExprId)e->integer, depth + 1, discount);
   if ((uint64_t)e->item_start + e->item_count > ir->item_count) return 257;
   for (uint32_t i = 0; i < e->item_count && cost <= 256; ++i)
-    cost += 1 + inline_expression_cost(ir, ir->items[e->item_start + i].expression, depth + 1);
+    cost += 1 + inline_expression_cost(ir, ir->items[e->item_start + i].expression, depth + 1, discount);
   return cost > 256 ? 257 : cost;
 }
 static unsigned inline_cost(const DynIrProgram *ir, uint32_t start,
-                            uint32_t count, unsigned depth) {
+                            uint32_t count, unsigned depth, bool discount) {
   if (depth > 32 || (uint64_t)start + count > ir->child_count)
     return 257;
   unsigned cost = 0;
@@ -727,18 +744,37 @@ static unsigned inline_cost(const DynIrProgram *ir, uint32_t start,
     if (id >= ir->statement_count)
       return 257;
     const DynIrStmt *s = &ir->statements[id];
-    cost += 1 + inline_expression_cost(ir, s->expression, 0) +
-            inline_expression_cost(ir, s->target, 0) +
-            inline_cost(ir, s->body_start, s->body_count, depth + 1) +
-            inline_cost(ir, s->else_start, s->else_count, depth + 1);
+    cost += 1 + inline_expression_cost(ir, s->expression, 0, discount) +
+            inline_expression_cost(ir, s->target, 0, discount) +
+            inline_cost(ir, s->body_start, s->body_count, depth + 1, discount) +
+            inline_cost(ir, s->else_start, s->else_count, depth + 1, discount);
     if ((uint64_t)s->case_arm_start + s->case_arm_count > ir->case_arm_count)
       return 257;
     for (uint32_t j = 0; j < s->case_arm_count && cost <= 256; ++j) {
       const DynIrCaseArm *arm = &ir->case_arms[s->case_arm_start + j];
-      cost += 1 + inline_cost(ir, arm->body_start, arm->body_count, depth + 1);
+      cost += 1 + inline_cost(ir, arm->body_start, arm->body_count, depth + 1, discount);
     }
   }
   return cost;
+}
+/* Whether the statements hold a loop at any depth. */
+static bool inline_has_loop(const DynIrProgram *ir, uint32_t start, uint32_t count, unsigned depth) {
+  if (depth > 32 || (uint64_t)start + count > ir->child_count) return true;
+  for (uint32_t i = 0; i < count; ++i) {
+    uint32_t id = ir->children[start + i];
+    if (id >= ir->statement_count) return true;
+    const DynIrStmt *s = &ir->statements[id];
+    if (s->kind == DYN_STMT_FOR) return true;
+    if (inline_has_loop(ir, s->body_start, s->body_count, depth + 1) ||
+        inline_has_loop(ir, s->else_start, s->else_count, depth + 1))
+      return true;
+    if ((uint64_t)s->case_arm_start + s->case_arm_count > ir->case_arm_count) return true;
+    for (uint32_t j = 0; j < s->case_arm_count; ++j) {
+      const DynIrCaseArm *arm = &ir->case_arms[s->case_arm_start + j];
+      if (inline_has_loop(ir, arm->body_start, arm->body_count, depth + 1)) return true;
+    }
+  }
+  return false;
 }
 /* Default optimization expands only small, straight-line leaves in loops.
    Count expressions, not statements: a single return can contain a large tree.
@@ -948,7 +984,7 @@ static bool inline_admits(const Inline *b, const InlineScope *scope, uint64_t id
   /* Like LLVM's threshold bonus for calls in loops: a call that repeats
      may be twice the size, still within the caller's growth budget. */
   unsigned limit = scope->in_loop && !b->leaf_only ? 128 : 64;
-  return !(cost > limit || growth > b->budget || resources > b->resource_budget ||
+  return !(b->sizes[id] > limit || growth > b->budget || resources > b->resource_budget ||
            (!hot && (growth > b->budget - b->reserved_growth ||
                      resources > b->resource_budget - b->reserved_resources)));
 }
@@ -1448,8 +1484,8 @@ static bool inline_plan_fits(const Inline *b, uint32_t node) {
   /* A repeating site may be twice the size, like LLVM's bonus for loops,
      when it runs often for its size: a large callee behind a branch, such
      as a resize, stays a call. */
-  unsigned cost = b->costs[x->function];
-  if (cost > 128 || (cost > 64 && !(x->weight >= 8 && x->weight * 2 >= (double)x->growth))) return false;
+  unsigned size = b->sizes[x->function];
+  if (size > 128 || (size > 64 && !(x->weight >= 8 && x->weight * 2 >= (double)x->growth))) return false;
   /* No recursion along the chain, and at most 16 deep. */
   unsigned depth = 0;
   for (uint32_t at = x->parent; ; at = b->plan[at].parent) {
@@ -1806,14 +1842,18 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
   b.active = calloc(o->ir.function_count ? o->ir.function_count : 1,
                     sizeof(*b.active));
   b.costs = calloc(o->ir.function_count ? o->ir.function_count : 1, sizeof(*b.costs));
-  if (!b.active || !b.costs) {
-    free(b.active); free(b.costs);
+  b.sizes = calloc(o->ir.function_count ? o->ir.function_count : 1, sizeof(*b.sizes));
+  if (!b.active || !b.costs || !b.sizes) {
+    free(b.active); free(b.costs); free(b.sizes);
     return false;
   }
   for (size_t i = 0; i < b.in->function_count; ++i) {
     const DynIrFunction *f = &b.in->functions[i];
     if (f->foreign || f->generic || (b.in->live.functions && !b.in->live.functions[i])) continue;
-    b.costs[i] = inline_cost(b.in, f->body_start, f->body_count, 0);
+    b.costs[i] = inline_cost(b.in, f->body_start, f->body_count, 0, false);
+    b.sizes[i] = inline_has_loop(b.in, f->body_start, f->body_count, 0)
+                     ? b.costs[i]
+                     : inline_cost(b.in, f->body_start, f->body_count, 0, true);
   }
   /* Reserve the bounded 512-cost-unit O3 allowance (24 at O2) independently
      for each live caller. Nested expansions debit that same reservation.
@@ -2025,6 +2065,7 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
     memset(b.out.unstable_locals, 1, b.out.local_count);
   free(b.active);
   free(b.costs);
+  free(b.sizes);
   free(b.loop_low);
   free(b.loop_span);
   free(b.addressed);
