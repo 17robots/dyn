@@ -43,9 +43,12 @@ fn main() {
     fail.invalid(&other, "check", "a/path", "a short message")
   }
   io.println("{}", fail.describe(storage[..], kept))
+  // The ring shard comes from the stack address: fill through the same call
+  // as the kept failure, so its text lands in the same shard wherever the
+  // stack is.
   for i in 0..2000 {
     other: fail.Status
-    fail.invalid(&other, "check", "some/long/path/name/for/filler.txt", "filler message text")
+    _ = fs.open(&other, "/nonexistent/dir/file.txt")
   }
   io.println("{}", fail.describe(storage[..], kept))
   check(#len(fail.path_text(&kept)) == 0, "lost text is empty")
