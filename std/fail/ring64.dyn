@@ -1,0 +1,49 @@
+#target(pointer_bits: 64)
+// The failure text ring on 64-bit targets. Threads share it, so it is split
+// into 16 shards, each with its own position on its own cache line, and a
+// failure's text goes to the shard its thread's stack address picks: threads
+// recording failures at once rarely touch the same position.
+extern fn ring_load "dyn_atomic_load_u64"(p: *const u64) u64
+extern fn ring_claim "dyn_atomic_compare_exchange_u64"(p: *u64, expected: u64, desired: u64) bool
+
+const Shards: usize = 16
+// Bytes in one shard: what a failure's text has to outlast.
+const RingSize: usize = 4096
+// The most text one failure keeps.
+const MaxText: usize = 1024
+ring: [65536]u8
+// Bytes ever reserved in each shard, alone on a 64-byte line.
+struct Position { reserved: u64, pad: [7]u64 }
+positions: [16]Position
+
+// Reserves count bytes in one shard without wrapping past its end. The
+// result is the shard in the top byte and the shard's position below it.
+fn ring_reserve(count: usize) u64 {
+  probe: u8 = 0
+  stack := #cast(usize, &probe) >> 16
+  shard := (stack ^ (stack >> 4) ^ (stack >> 8)) & (Shards - 1)
+  position := &positions[shard]
+  for {
+    at := ring_load(&position.reserved)
+    offset := #cast(usize, at % #cast(u64, RingSize))
+    start := at
+    if offset + count > RingSize {
+      start = at + #cast(u64, RingSize - offset)
+    }
+    if ring_claim(&position.reserved, at, start + #cast(u64, count)) {
+      return (#cast(u64, shard) << 56) | start
+    }
+  }
+}
+
+// Where text reserved at text_at begins in ring.
+fn ring_offset(text_at: u64) usize {
+  shard := #cast(usize, text_at >> 56)
+  return shard * RingSize + #cast(usize, (text_at & 0xffffffffffffff) % #cast(u64, RingSize))
+}
+
+// Whether newer text has taken the place of text reserved at text_at.
+fn ring_kept(text_at: u64) bool {
+  shard := #cast(usize, text_at >> 56)
+  return ring_load(&positions[shard].reserved) <= (text_at & 0xffffffffffffff) + #cast(u64, RingSize)
+}

@@ -20,7 +20,8 @@
 //    failure.
 // 2. A lookup always returns a usable value: zero or empty when it is not
 //    there, with NotFound on the status. Read an optional value with a status
-//    of its own. Iterators report the end of their input with found.
+//    of its own. An iterator returns its value too, and sets ended on its
+//    state when it has nothing left.
 // 3. Check status.failed before you use what you got: before printing
 //    results, or using a computed number as a size or index.
 // In a loop that keeps going after a failure, give each item its own status.
@@ -32,25 +33,27 @@
 // The portable reason. Kind.Ok is the zero value.
 pub enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }
 
-// What went wrong, where, and doing what. A Failure owns its text: failure
-// copies the operation, path and message in, so a failure stays readable
-// after the text it came from is gone, and copying it copies the text. Read
-// the parts with operation_text, path_text and message_text. Text longer than the storage
-// is cut short: a long path keeps its end, after "...".
-// 136 bytes, so a Status is 160: the small fields first, then the text.
+// What went wrong, where, and doing what. 32 bytes, so a Status is 56.
+//
+// The text (operation, message and path) is kept in a ring that the whole
+// process shares, so a Failure stays small and copying one is cheap. A
+// failure keeps up to 1 KiB of text (256 bytes on 32-bit targets); a longer
+// path keeps its end, after "...". The text stays readable until about 4 KiB
+// of newer failure text has been recorded on the same part of the ring
+// (threads mostly use parts of their own). After that the *_text functions
+// return "" and describe gives the kind and the system's code instead.
 pub struct Failure {
   kind: Kind,
   has_offset: bool,
-  operation_length: u8,
-  path_length: u8,
-  message_length: u8,
+  operation_length: u16,
+  message_length: u16,
+  path_length: u16,
   // The system's own code, when the system gave one.
   native: isize,
   // For text input: where it went wrong, in bytes from the start.
   offset: usize,
-  // operation, then message, then path; a path that does not fit keeps its
-  // end ("...config/app.json").
-  text: [112]u8,
+  // Where the text starts in the ring.
+  text_at: u64,
 }
 
 pub struct Status {
@@ -62,31 +65,47 @@ pub struct Status {
   context: rawptr,
 }
 
-// A failure of kind with its text copied in. operation is what was being
-// done ("open", "parse"), path the file, address or document involved, and
-// message the specific reason; empty parts are left out of describe. Set
-// native or offset on the result when there is one.
+// A failure of kind with its text copied into the ring. operation is what
+// was being done ("open", "parse"), path the file, address or document
+// involved, and message the specific reason; empty parts are left out of
+// describe. Set native or offset on the result when there is one.
 pub fn make(kind: Kind, operation: []const u8, path: []const u8, message: []const u8) Failure {
   result := Failure{ kind: kind }
-  used: usize = 0
   // Operation and message are short and say the most; the path gets the rest.
-  operation_kept := keep(result.text[used..], operation)
-  result.operation_length = #cast(u8, operation_kept)
-  used += operation_kept
-  message_kept := keep(result.text[used..], message)
-  result.message_length = #cast(u8, message_kept)
-  used += message_kept
-  room := #len(result.text) - used
-  if #len(path) <= room {
-    result.path_length = #cast(u8, keep(result.text[used..], path))
-    return result
+  operation_kept := smaller(#len(operation), MaxText)
+  message_kept := smaller(#len(message), MaxText - operation_kept)
+  room := MaxText - operation_kept - message_kept
+  path_kept := #len(path)
+  cut := path_kept > room
+  if cut {
+    path_kept = room
+    if room < 4 {
+      path_kept = 0
+    }
   }
-  if room < 4 { return result }
-  _ = keep(result.text[used..], "...")
-  tail := path[#len(path) - (room - 3)..]
-  _ = keep(result.text[used + 3..], tail)
-  result.path_length = #cast(u8, room)
+  total := operation_kept + message_kept + path_kept
+  if total == 0 { return result }
+  result.text_at = ring_reserve(total)
+  base := ring_offset(result.text_at)
+  text := ring[base..base + total]
+  _ = keep(text, operation[..operation_kept])
+  _ = keep(text[operation_kept..], message[..message_kept])
+  path_start := operation_kept + message_kept
+  if cut && path_kept > 0 {
+    _ = keep(text[path_start..], "...")
+    _ = keep(text[path_start + 3..], path[#len(path) - (path_kept - 3)..])
+  } else {
+    _ = keep(text[path_start..], path[..path_kept])
+  }
+  result.operation_length = #cast(u16, operation_kept)
+  result.message_length = #cast(u16, message_kept)
+  result.path_length = #cast(u16, path_kept)
   return result
+}
+
+fn smaller(a: usize, b: usize) usize {
+  if a < b { return a }
+  return b
 }
 
 // Copies as much of text as fits into storage; the count copied.
@@ -101,17 +120,37 @@ fn keep(storage: []u8, text: []const u8) usize {
   return count
 }
 
-// The parts of a failure's text. Each borrows the failure.
+// All of a failure's text, or "" once newer text has taken its place in
+// the ring.
+fn text_of(failure: *const Failure) []const u8 {
+  total: usize = #cast(usize, failure.operation_length) + failure.message_length + failure.path_length
+  if total == 0 || !text_kept(failure) { return ring[..0] }
+  base := ring_offset(failure.text_at)
+  return ring[base..base + total]
+}
+
+fn text_kept(failure: *const Failure) bool {
+  return ring_kept(failure.text_at)
+}
+
+// The parts of a failure's text. Each borrows the ring: use it before many
+// newer failures are recorded, or copy it. "" once the text is gone.
 pub fn operation_text(failure: *const Failure) []const u8 {
-  return failure.text[..failure.operation_length]
+  text := text_of(failure)
+  if #len(text) == 0 { return text }
+  return text[..failure.operation_length]
 }
 pub fn message_text(failure: *const Failure) []const u8 {
+  text := text_of(failure)
+  if #len(text) == 0 { return text }
   start: usize = failure.operation_length
-  return failure.text[start..start + failure.message_length]
+  return text[start..start + failure.message_length]
 }
 pub fn path_text(failure: *const Failure) []const u8 {
-  start: usize = failure.operation_length + failure.message_length
-  return failure.text[start..start + failure.path_length]
+  text := text_of(failure)
+  if #len(text) == 0 { return text }
+  start: usize = #cast(usize, failure.operation_length) + failure.message_length
+  return text[start..start + failure.path_length]
 }
 
 // Records failure unless status already holds one; later failures are
@@ -119,7 +158,16 @@ pub fn path_text(failure: *const Failure) []const u8 {
 pub fn set(status: *Status, failure: Failure) {
   if status.failed || failure.kind == Kind.Ok { return }
   status.failed = true
-  status.failure = failure
+  // Field by field: a whole-struct copy through the pointer would also check
+  // for overlap, and set is inlined at every site that records a failure.
+  status.failure.kind = failure.kind
+  status.failure.has_offset = failure.has_offset
+  status.failure.operation_length = failure.operation_length
+  status.failure.message_length = failure.message_length
+  status.failure.path_length = failure.path_length
+  status.failure.native = failure.native
+  status.failure.offset = failure.offset
+  status.failure.text_at = failure.text_at
   if status.on_failure != nil {
     status.on_failure(status.context, &status.failure)
   }
@@ -168,8 +216,12 @@ pub fn kind_text(kind: Kind) []const u8 {
 // "operation path: reason" in storage, such as
 // "open /etc/app.conf: no such file or directory" or
 // "parse app.json at 41: expected ','". Empty parts are left out; the reason
-// is the message, else the kind. Truncated to storage.
+// is the message, else the kind. Once the text is gone from the ring it is
+// the kind and the system's code: "not found (code -2)". Truncated to
+// storage.
 pub fn describe(storage: []u8, failure: Failure) []u8 {
+  has_text := failure.operation_length != 0 || failure.message_length != 0 || failure.path_length != 0
+  if has_text && !text_kept(&failure) { return describe_bare(storage, failure) }
   used: usize = 0
   used = put(storage, used, operation_text(&failure))
   if failure.path_length != 0 {
@@ -179,7 +231,10 @@ pub fn describe(storage: []u8, failure: Failure) []u8 {
     used = put(storage, used, path_text(&failure))
   }
   if failure.has_offset {
-    used = put(storage, used, " at ")
+    if used != 0 {
+      used = put(storage, used, " ")
+    }
+    used = put(storage, used, "at ")
     used = put_number(storage, used, failure.offset)
   }
   if used != 0 {
@@ -189,6 +244,27 @@ pub fn describe(storage: []u8, failure: Failure) []u8 {
     used = put(storage, used, message_text(&failure))
   } else {
     used = put(storage, used, kind_text(failure.kind))
+  }
+  // Another thread may have taken the ring space while this copied it.
+  if has_text && !text_kept(&failure) { return describe_bare(storage, failure) }
+  return storage[..used]
+}
+
+fn describe_bare(storage: []u8, failure: Failure) []u8 {
+  used := put(storage, 0, kind_text(failure.kind))
+  if failure.has_offset {
+    used = put(storage, used, " at ")
+    used = put_number(storage, used, failure.offset)
+  }
+  if failure.native != 0 {
+    used = put(storage, used, " (code ")
+    if failure.native < 0 {
+      used = put(storage, used, "-")
+      used = put_number(storage, used, #cast(usize, 0 - failure.native))
+    } else {
+      used = put_number(storage, used, #cast(usize, failure.native))
+    }
+    used = put(storage, used, ")")
   }
   return storage[..used]
 }

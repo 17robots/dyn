@@ -1,0 +1,32 @@
+#target(pointer_bits: 32)
+// The failure text ring on 32-bit targets (bare metal and WebAssembly), which
+// run one thread.
+const RingSize: usize = 4096
+// The most text one failure keeps.
+const MaxText: usize = 256
+ring: [4096]u8
+// Bytes ever reserved.
+ring_reserved: u64
+
+// Reserves count bytes without wrapping past the ring's end; the position of
+// the first.
+fn ring_reserve(count: usize) u64 {
+  at := ring_reserved
+  offset := #cast(usize, at % #cast(u64, RingSize))
+  start := at
+  if offset + count > RingSize {
+    start = at + #cast(u64, RingSize - offset)
+  }
+  ring_reserved = start + #cast(u64, count)
+  return start
+}
+
+// Where text reserved at text_at begins in ring.
+fn ring_offset(text_at: u64) usize {
+  return #cast(usize, text_at % #cast(u64, RingSize))
+}
+
+// Whether newer text has taken the place of text reserved at text_at.
+fn ring_kept(text_at: u64) bool {
+  return ring_reserved <= text_at + #cast(u64, RingSize)
+}

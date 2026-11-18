@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Recording a failure costs a call, not a copy of the 288-byte failure at
-every site. Functions that take, return or keep a struct over 192 bytes by
-value are not inlined, and x86-64 copies a large stack argument with
-rep movsb, straight from a call's result. Each extra site that builds a
-fail.Failure stays under 220 bytes of code (it was 386), and the program
-still reports the right failure."""
+"""Recording a failure costs a call to fail.make and a 40-byte copy, not a
+copy of a large failure at every site. fail.set copies the failure field by
+field, so where it is inlined the copy needs no overlap check. Each extra
+site that builds a fail.Failure stays under 220 bytes of code (it was 386),
+and the program still reports the right failure."""
 import os
 from pathlib import Path
 import subprocess

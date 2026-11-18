@@ -392,9 +392,16 @@ Compiler speed of generated code:
   loop of 16-byte stores instead of `rep stosb`, whose fixed start-up cost
   made declaring a status take about 9 ns; it now takes about 1 ns, and code
   is slightly smaller.
-- `fail.Status` is 160 bytes (was 280) and `fail.Failure` 136 (was 256): the
-  small fields come first and a failure keeps up to 112 bytes of text, a long
-  path keeping its end. Declaring a status costs about nothing.
+- `fail.Status` is 64 bytes (was 280) and `fail.Failure` 40 (was 256). A
+  failure's text (operation, message, path) goes into a ring the process
+  shares, split by thread stack so threads rarely meet, and a failure keeps
+  up to 1 KiB of it (256 bytes on 32-bit targets), a long path keeping its
+  end. Recording a failure takes about 17 ns instead of 30, and as long as
+  before with eight threads at once. The text stays readable until about
+  4 KiB of newer failure text lands on the same part of the ring; after
+  that `describe` gives the kind and the system's code ("not found (code
+  -2)") and the `*_text` functions return "". The `text` field is gone;
+  read the text with `operation_text`, `message_text` and `path_text`.
 - The evented server does less per request: one parse of the request head
   (it was parsed twice), the response head written once into a per-worker
   buffer (it was measured, then written, into an 8 KiB stack buffer zeroed

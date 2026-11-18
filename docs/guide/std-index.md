@@ -916,9 +916,9 @@ Layer: std
 Layer: core
 
 - `enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }`: The portable reason.
-- `struct Failure { kind: Kind, has_offset: bool, operation_length: u8, path_length: u8, message_length: u8, // The system's own code, when the system gave one. native: isize, // For text input: where it went wrong, in bytes from the start. offset: usize, // operation, then message, then path; a path that does not fit keeps its // end ("...config/app.json"). text: [112]u8, }`: What went wrong, where, and doing what.
+- `struct Failure { kind: Kind, has_offset: bool, operation_length: u16, message_length: u16, path_length: u16, // The system's own code, when the system gave one. native: isize, // For text input: where it went wrong, in bytes from the start. offset: usize, // Where the text starts in the ring. text_at: u64, }`: What went wrong, where, and doing what.
 - `struct Status { failed: bool, failure: Failure, // Optional. Called once, inside the call that failed, when the first // failure is recorded, with context. It cannot undo the failure. on_failure: fn(rawptr, *const Failure), context: rawptr, }`
-- `fn make(kind: Kind, operation: []const u8, path: []const u8, message: []const u8) Failure`: A failure of kind with its text copied in.
+- `fn make(kind: Kind, operation: []const u8, path: []const u8, message: []const u8) Failure`: A failure of kind with its text copied into the ring.
 - `fn operation_text(failure: *const Failure) []const u8`: The parts of a failure's text.
 - `fn message_text(failure: *const Failure) []const u8`
 - `fn path_text(failure: *const Failure) []const u8`
