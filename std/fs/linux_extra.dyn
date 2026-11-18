@@ -13,6 +13,8 @@ pub struct Directory {
   offset: usize,
   used: usize,
   path: []const u8,
+  // Set by directory_next when it returns no entry.
+  ended: bool,
 }
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
@@ -59,7 +61,7 @@ fn native_directory_next(directory: *Directory, entry: *DirectoryEntry) isize {
     dot := #len(name) == 1 && name[0] == '.'
     dot_dot := #len(name) == 2 && name[0] == '.' && name[1] == '.'
     if !dot && !dot_dot {
-      entry.* = DirectoryEntry{ name: name, kind: kind, found: true }
+      entry.* = DirectoryEntry{ name: name, kind: kind }
       return 0
     }
   }

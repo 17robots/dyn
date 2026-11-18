@@ -171,13 +171,13 @@ fn safe_join_into(destination: []u8, root: []const u8, child: []const u8) Built 
   return normalized
 }
 
-pub struct Components { text: []const u8, offset: usize }
-// ok is false after the last component.
-pub struct Component { value: []const u8, offset: usize, found: bool }
+// start is where the last component returned begins. ended turns true when
+// component_next finds no component left; that call returns "".
+pub struct Components { text: []const u8, offset: usize, start: usize, ended: bool }
 pub fn components(text: []const u8) Components {
   return Components{ text: text }
 }
-pub fn component_next(state: *Components) Component {
+pub fn component_next(state: *Components) []const u8 {
   for state.offset < #len(state.text) && state.text[state.offset] == '/' {
     state.offset += 1
   }
@@ -185,7 +185,12 @@ pub fn component_next(state: *Components) Component {
   for state.offset < #len(state.text) && state.text[state.offset] != '/' {
     state.offset += 1
   }
-  return Component{ value: state.text[start..state.offset], offset: start, found: start != state.offset }
+  if start == state.offset {
+    state.ended = true
+    return ""
+  }
+  state.start = start
+  return state.text[start..state.offset]
 }
 
 // Lexical relative path, for normalized inputs up to 4096 bytes each.
@@ -213,20 +218,22 @@ fn relative_into(destination: []u8, base: []const u8, target: []const u8) Built 
   for {
     left_part := component_next(&left_parts)
     right_part := component_next(&right_parts)
-    if left_part.found && right_part.found && bytes.equal(left_part.value, right_part.value) {
+    if !left_parts.ended && !right_parts.ended && bytes.equal(left_part, right_part) {
       continue
     }
-    if left_part.found && bytes.equal(left_part.value, "..") {
+    if !left_parts.ended && bytes.equal(left_part, "..") {
       return Built{ value: destination[..0] }
     }
-    if left_part.found {
+    if !left_parts.ended {
       parents = 1
+      for {
+        _ = component_next(&left_parts)
+        if left_parts.ended { break }
+        parents += 1
+      }
     }
-    for component_next(&left_parts).found {
-      parents += 1
-    }
-    if right_part.found {
-      remainder = right_text[right_part.offset..]
+    if !right_parts.ended {
+      remainder = right_text[right_parts.start..]
     }
     break
   }

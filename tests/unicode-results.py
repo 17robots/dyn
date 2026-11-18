@@ -25,7 +25,7 @@ struct Grapheme { value: []const u8, found: bool, offset: usize, failure: fail.F
 fn next_grapheme(g: *text.Graphemes) Grapheme {
  status: fail.Status
  r := text.next_grapheme(&status, g)
- return Grapheme{ value: r.value, found: r.found, offset: status.failure.offset, failure: status.failure }
+ return Grapheme{ value: r, found: !g.ended, offset: status.failure.offset, failure: status.failure }
 }
 fn converted(r: Converted, expected: []const u8) {
  require(r.failure.kind == fail.Kind.Ok && bytes.equal(r.value, expected), "conversion golden")

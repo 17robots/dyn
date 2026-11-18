@@ -35,9 +35,11 @@ must live, and put it where it lives that long.
   zeroed `*Note` with its field defaults.
 - **Linked lists in an arena** need no individual frees: `Note.previous`
   points at the older note, and `nil` ends the list.
-- **Reading lines.** `bufio.reader` buffers standard input;
-  `bufio.read_line` returns `Complete`, `End`, or `More` when the line did
-  not fit in the buffer you gave it.
+- **Reading lines.** `bufio.reader` buffers standard input, and
+  `bufio.read_line` returns the next line, borrowed from that buffer until
+  the next read. `reader.ended` turns true at the end of the input. A line
+  longer than the buffer fails with `Capacity`; the next read, with a fresh
+  status, carries on after it.
 
 ## Exercises
 

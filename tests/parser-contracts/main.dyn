@@ -41,10 +41,10 @@ fn csv_check(source: []const u8, expected: bool) {
       stream_status: fail.Status
       first := csv.next(&direct_status, &direct, a[..capacity])
       second := csv.next_stream(&stream_status, &streamed, b[..capacity])
-      if first.found != second.found || (capacity == 4 && first.found != expected) || direct_status.failure.kind != stream_status.failure.kind {
+      if direct.ended != streamed.ended || (capacity == 4 && direct.ended == expected) || direct_status.failure.kind != stream_status.failure.kind {
         #panic("CSV scanner acceptance mismatch")
       }
-      if first.found && (!bytes.equal(first.text, second.text) || first.end_record != second.end_record) {
+      if !direct.ended && (!bytes.equal(first.text, second.text) || first.end_record != second.end_record) {
         #panic("CSV field mismatch")
       }
     }
@@ -54,7 +54,7 @@ fn xml_check(source: []const u8, expected: bool) {
   direct := xml.scanner(source)
   direct_status: fail.Status
   original := xml.next(&direct_status, &direct)
-  if original.found != expected {
+  if direct.ended == expected {
     #panic("XML fixture invalid")
   }
   if expected {
@@ -64,7 +64,7 @@ fn xml_check(source: []const u8, expected: bool) {
       streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
       stream_status: fail.Status
       event := xml.next_stream(&stream_status, &streamed)
-      if event.found || stream_status.failure.kind != fail.Kind.Capacity {
+      if !streamed.ended || stream_status.failure.kind != fail.Kind.Capacity {
         #panic("XML short storage")
       }
     }
@@ -80,10 +80,10 @@ fn xml_check(source: []const u8, expected: bool) {
       streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
       stream_status: fail.Status
       event := xml.next_stream(&stream_status, &streamed)
-      if event.found != original.found || stream_status.failure.kind != direct_status.failure.kind {
+      if streamed.ended != direct.ended || stream_status.failure.kind != direct_status.failure.kind {
         #panic("XML chunk acceptance mismatch")
       }
-      if event.found && (event.value.kind != original.value.kind || !bytes.equal(event.value.name, original.value.name) || !bytes.equal(event.value.text, original.value.text) || !bytes.equal(event.value.attributes, original.value.attributes)) {
+      if !streamed.ended && (event.kind != original.kind || !bytes.equal(event.name, original.name) || !bytes.equal(event.text, original.text) || !bytes.equal(event.attributes, original.attributes)) {
         #panic("XML chunk contents mismatch")
       }
     }
@@ -210,8 +210,8 @@ fn recorded_errors() {
   keys: usize = 0
   for {
     item := ini.next(&scanning, &scan)
-    if !item.found { break }
-    if item.value.kind == ini.Kind.Pair {
+    if scan.ended { break }
+    if item.kind == ini.Kind.Pair {
       keys += 1
     }
   }
@@ -222,20 +222,26 @@ fn recorded_errors() {
   buffer: [8]u8
   count: usize = 0
   reading: fail.Status
-  for csv.next(&reading, &fields, buffer[..]).found {
+  for {
+    _ = csv.next(&reading, &fields, buffer[..])
+    if fields.ended { break }
     count += 1
   }
   again: fail.Status
-  if count != 1 || reading.failure.kind != fail.Kind.InvalidInput || reading.failure.offset != 2 || csv.next(&again, &fields, buffer[..]).found {
+  _ = csv.next(&again, &fields, buffer[..])
+  if count != 1 || reading.failure.kind != fail.Kind.InvalidInput || reading.failure.offset != 2 || !fields.ended {
     #panic("CSV error is sticky")
   }
   events := xml.scanner("<a></b <c/>")
   seen: usize = 0
   scanning_xml: fail.Status
-  for xml.next(&scanning_xml, &events).found {
+  for {
+    _ = xml.next(&scanning_xml, &events)
+    if events.ended { break }
     seen += 1
   }
-  if seen != 1 || scanning_xml.failure.kind != fail.Kind.InvalidInput || xml.next(&again, &events).found {
+  _ = xml.next(&again, &events)
+  if seen != 1 || scanning_xml.failure.kind != fail.Kind.InvalidInput || !events.ended {
     #panic("XML error is sticky")
   }
 }

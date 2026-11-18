@@ -220,8 +220,9 @@ Three rules cover every std and vendor call:
    debug := json.get(bool, &optional, root, "debug")   // false when missing
    ```
 
-   Iterators are the exception: `next` reports the end of the input with
-   `found`, because reaching the end is not a failure.
+   Iterators return their value too. The end of the input is not a failure,
+   so it does not go on the status: the call sets `ended` on the state you
+   passed (`scan.ended`, `reader.ended`) and returns zero.
 3. **Check `status.failed` before you use what you got:** before printing
    results, reporting success, or using a computed number as a size or index.
 
@@ -272,37 +273,36 @@ Other outcomes are values, not failures:
   returns an empty stub, and every byte `find*` returns `#len(text)` on a
   miss. Lookups into input (JSON, INI, HTTP, the environment) record
   `NotFound` instead (rule 2).
-- **A step with several normal outcomes** says so in its value: `found` false
-  at the end of the input, or an enum such as `Want.Read`/`Want.Write` for a
-  nonblocking socket.
+- **The end of an iterator** is `ended` on its state, set by the call that
+  found nothing left. A step with several normal outcomes says so in an
+  enum, such as `Want.Read`/`Want.Write` for a nonblocking socket.
 - **Yes-or-no questions** return `bool`: `is_*`, `has_*`, `valid`, `verify`,
   `try_lock`.
 - **Math does not fail:** degenerate input (a singular matrix, a zero axis)
   gives the zero value.
 - **A broken invariant** is `#panic`. There is no recovery.
 
-```dyn
-struct Next { value: Token, offset: usize, found: bool }
-```
-
 A scanner takes the status like any other call, so a loop over it reads
-straight through and checks once at the end; after a failure, `next` reports
-`found` false:
+straight through and checks once at the end. A failure also sets `ended`, so
+the loop stops either way:
 
 ```dyn
 status: fail.Status
 scan := ini.scanner(text)
 for {
   item := ini.next(&status, &scan)
-  if !item.found {
+  if scan.ended {
     break
   }
-  apply(item.value)
+  apply(item)
 }
 if status.failed {
   report(status.failure)
 }
 ```
+
+`pop` on `std/container/array` and `std/container/ring` returns the zero value
+when empty; check the count first where empty is possible.
 
 Ownership is independent of success: say whether a returned slice borrows the
 input, occupies caller storage or lives in a supplied arena, and never allocate

@@ -18,24 +18,23 @@ use "std/bytes"
 use "std/sync"
 fn require(value: bool, message: []const u8) { if !value { io.eprintln("{}", message)
 #panic(message) } }
-fn lines(text: []const u8, expected: []const u8, capacity: usize, buffering: usize) {
+fn lines(text: []const u8, expected: []const u8, buffering: usize) {
   cursor := io.cursor(text)
-  scratch: [8]u8
+  scratch: [16]u8
   input := bufio.reader(io.cursor_reader(&cursor), scratch[..buffering])
-  chunk: [8]u8
   result: [256]u8
   used: usize = 0
   status: fail.Status
-  empty := bufio.read_line(&status, &input, chunk[..0])
-  require(empty.status == bufio.ReadStatus.More && empty.transferred == 0, "stdlib assertion 27")
   for {
-    part := bufio.read_line(&status, &input, chunk[..capacity])
+    line := bufio.read_line(&status, &input)
     require(!status.failed, "stdlib assertion 30")
-    for byte in chunk[..part.transferred] { result[used] = byte
-    used += 1 }
-    if part.status == bufio.ReadStatus.Complete { result[used] = '|'
-    used += 1 }
-    if part.status == bufio.ReadStatus.End { break }
+    if input.ended { break }
+    for byte in line {
+      result[used] = byte
+      used += 1
+    }
+    result[used] = '|'
+    used += 1
   }
   require(bytes.equal(result[..used], expected), "stdlib assertion 35")
 }
@@ -126,26 +125,40 @@ fn main() {
   truncated_file: fail.Status
   truncated := fs.read_all(arena, &truncated_file, "café-😀.txt", 1)
   require(!truncated_file.failed && bytes.equal(truncated, "z"), "stdlib assertion 97")
-  buffering: usize = 0
-  for buffering <= 8 {
-    capacity: usize = 1
-    for capacity <= 8 {
-      lines("abc\r\n\nlonger line\nlast", "abc||longer line|last", capacity, buffering)
-      lines("\r\n\r\r\nx\ry\n\r", "|\r|x\ry|\r", capacity, buffering)
-      lines("12345678\n", "12345678|", capacity, buffering)
-      lines("", "", capacity, buffering)
-      capacity += 1
-    }
+  buffering: usize = 12
+  for buffering <= 16 {
+    lines("abc\r\n\nlonger line\nlast", "abc||longer line|last|", buffering)
+    lines("\r\n\r\r\nx\ry\n\r", "|\r|x\ry|\r|", buffering)
+    lines("12345678\n", "12345678|", buffering)
+    lines("", "", buffering)
     buffering += 1
   }
+  // A line longer than the storage fails with Capacity; the next read, with
+  // a fresh status, continues after it.
+  long_cursor := io.cursor("ab\nlonger\ncd")
+  long_storage: [4]u8
+  long_input := bufio.reader(io.cursor_reader(&long_cursor), long_storage[..])
+  first_status: fail.Status
+  first_line := bufio.read_line(&first_status, &long_input)
+  require(!first_status.failed && bytes.equal(first_line, "ab"), "stdlib assertion 111")
+  long_status: fail.Status
+  _ = bufio.read_line(&long_status, &long_input)
+  require(long_status.failure.kind == fail.Kind.Capacity && long_input.ended, "stdlib assertion 112")
+  after_status: fail.Status
+  after_line := bufio.read_line(&after_status, &long_input)
+  require(!after_status.failed && !long_input.ended && bytes.equal(after_line, "cd"), "stdlib assertion 113")
+  _ = bufio.read_line(&after_status, &long_input)
+  require(!after_status.failed && long_input.ended, "stdlib assertion 113b")
   error_storage: [8]u8
-  for error_capacity in [0, 8] {
-    failing := bufio.reader(io.Reader{ read: error_read }, error_storage[..#cast(usize, error_capacity)])
-    failing_status: fail.Status
-    error_line := bufio.read_line(&failing_status, &failing, contents[..])
-    require(failing_status.failed && error_line.transferred == 1, "stdlib assertion 114")
-    require(contents[0] == 'x' && failing_status.failure.kind == fail.Kind.PermissionDenied && failing_status.failure.native == 0, "stdlib assertion 115")
-  }
+  failing := bufio.reader(io.Reader{ read: error_read }, error_storage[..])
+  failing_status: fail.Status
+  _ = bufio.read_line(&failing_status, &failing)
+  require(failing_status.failed && failing.ended, "stdlib assertion 114")
+  require(failing_status.failure.kind == fail.Kind.PermissionDenied && failing_status.failure.native == 0, "stdlib assertion 115")
+  no_storage := bufio.reader(io.Reader{ read: error_read }, error_storage[..0])
+  no_storage_status: fail.Status
+  _ = bufio.read_line(&no_storage_status, &no_storage)
+  require(no_storage_status.failure.kind == fail.Kind.InvalidInput && no_storage.ended, "stdlib assertion 116")
   failed_output := bufio.writer(io.Writer{ write: error_write }, error_storage[..])
   pending: fail.Status
   io.write(&pending, bufio.writer_adapter(&failed_output), "pending")

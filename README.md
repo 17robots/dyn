@@ -179,7 +179,7 @@ may be newer than the latest published preview.
 | --- | --- |
 | `std/fs` | Basic open/create/append/exclusive-create, read/write, seek/sync, close and stream adapters work on Linux, macOS and Windows. Directory traversal works on all three; metadata and atomic replacement remain Linux-specific; watching is available through the separate portable watch module. |
 | `fs.File{}` | Unopened. Use `fs.take(&file)` to transfer ownership, `fs.borrow(&file)` for a view, and `adopt_handle`/`borrow_handle` for native handles. Closing a borrowed or already-closed file returns `InvalidState`. |
-| `bufio.read_line` | Strips LF or CRLF, preserves lone CR. Returns `bufio.ReadStatus.More` when the destination fills: process those bytes and continue the same line. `Complete` ends a line; `End` may include a final fragment. Takes the status first; a failure lands there and the result ends. |
+| `bufio.read_line` | `line := bufio.read_line(&status, &reader)` returns the next line without LF or CRLF, preserving a lone CR; it borrows the reader's storage until the next read. `reader.ended` turns true at the end of the input or after a failure. A line longer than the storage fails with `Capacity`, and the next read with a fresh status continues after it. |
 | `process.arguments(arena, &status)` | Includes argv[0]; descriptors and bytes belong to the arena. Unix preserves native bytes; Windows converts UTF-16 to UTF-8. Linux reads `/proc/self/cmdline`; macOS and Windows use native process data. |
 | `time.monotonic_now()` / `realtime_now()` | Native clocks; monotonic measures durations, realtime uses Unix epoch. A target without a clock reads zero, and `sleep` returns at once where it cannot sleep (WASI, the browser). Date and duration helpers are portable. |
 | `fail.Status` | Fallible calls take `*fail.Status` first; the first failure sticks and later calls do nothing. Check `status.failed`; `failure.kind` is portable and `failure.native` keeps the original code, which may be zero for library failures. |
@@ -197,8 +197,8 @@ failure, and return memory valid until that arena is reset, rewound or destroyed
 No hidden heap ownership is transferred to the caller.
 
 Migration: replace raw `File{ descriptor: ... }` construction with an explicit
-adopt or borrow operation. Line results now use `bufio.ReadStatus`, and a full
-buffer is `More`, not an I/O error. Use `read_until` for byte-exact delimiters.
+adopt or borrow operation. Use `read_until` for byte-exact delimiters into a
+buffer you pass; it reports `bufio.ReadStatus.More` when that buffer fills.
 
 ## Library qualification
 

@@ -24,20 +24,20 @@ use "std/fs" fs
 use "std/io" io
 use "std/bytes" bytes
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
-struct Got { value: watch.Next, failure: fail.Failure }
+struct Got { value: watch.Event, found: bool, failure: fail.Failure }
 fn next(state: *watch.Watcher) Got {
   status: fail.Status
   value := watch.next(&status, state)
-  return Got{ value: value, failure: status.failure }
+  return Got{ value: value, found: !state.ended, failure: status.failure }
 }
 fn event(state: *watch.Watcher) watch.Event {
   got := next(state)
-  require(got.failure.kind == fail.Kind.Ok && got.value.found, "expected an event")
-  return got.value.event
+  require(got.failure.kind == fail.Kind.Ok && got.found, "expected an event")
+  return got.value
 }
 fn empty(state: *watch.Watcher) bool {
   got := next(state)
-  return got.failure.kind == fail.Kind.Ok && !got.value.found
+  return got.failure.kind == fail.Kind.Ok && !got.found
 }
 fn add_fails(state: *watch.Watcher, path: []const u8) bool {
   status: fail.Status

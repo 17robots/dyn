@@ -557,8 +557,11 @@ pub fn is_missing(value: *const Value) bool {
   return value == nil || (value.tag & 255) == 0
 }
 
-pub struct Iterator { cursor: *const Value, remaining: usize, object: bool }
-pub struct Entry { value: *const Value, key: []const u8, found: bool }
+// ended turns true when next finds no entry left; that entry's value is
+// nil_value.
+pub struct Iterator { cursor: *const Value, remaining: usize, object: bool, ended: bool }
+// key is "" for an array element.
+pub struct Entry { value: *const Value, key: []const u8 }
 // @ownership Iterator and entries borrow the document's arena storage.
 // Iteration is linear; repeated at(array, index) traversal can be quadratic.
 pub fn iterator(container: *const Value) Iterator {
@@ -567,7 +570,11 @@ pub fn iterator(container: *const Value) Iterator {
   return Iterator{ cursor: #cast(*const Value, #cast(usize, container) + 16), remaining: length(container), object: value_kind == KindObject }
 }
 pub fn next(state: *Iterator) Entry {
-  if state == nil || state.remaining == 0 { return Entry{ value: &nil_value } }
+  if state == nil { return Entry{ value: &nil_value } }
+  if state.remaining == 0 {
+    state.ended = true
+    return Entry{ value: &nil_value }
+  }
   value := state.cursor
   key: []const u8
   if state.object {
@@ -576,5 +583,5 @@ pub fn next(state: *Iterator) Entry {
   }
   state.cursor = read_after(value)
   state.remaining -= 1
-  return Entry{ value: value, key: key, found: true }
+  return Entry{ value: value, key: key }
 }

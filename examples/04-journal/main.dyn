@@ -154,35 +154,30 @@ fn main() {
   defer mem.arena_release(frame)
   journal := Journal{ permanent: permanent }
 
-  // Fixed storage on the stack: one buffer for bufio, one for the line.
-  input_storage: [4096]u8
+  // Fixed storage on the stack for bufio. Each line borrows it until the
+  // next read.
+  input_storage: [512]u8
   reader := bufio.reader(io.stdin(), input_storage[..])
-  line: [512]u8
-  // Reading input has its own status: a command that fails does not stop
-  // the journal, but input that cannot be read does.
-  input: fail.Status
   for {
-    read := bufio.read_line(&input, &reader, line[..])
+    // Each read has its own status: a line too long for the storage is
+    // skipped, but input that cannot be read stops the journal.
+    input: fail.Status
+    line := bufio.read_line(&input, &reader)
+    if input.failed && input.failure.kind == fail.Kind.Capacity {
+      io.println("line too long")
+      continue
+    }
     if input.failed {
       storage: [512]u8
       io.eprintln("journal: {}", fail.describe(storage[..], input.failure))
       return
     }
-    if read.status == bufio.ReadStatus.More {
-      // The line did not fit. Skip the rest of it. After a failure
-      // read_line reports End, so this loop always finishes.
-      for read.status == bufio.ReadStatus.More {
-        read = bufio.read_line(&input, &reader, line[..])
-      }
-      io.println("line too long")
-      continue
-    }
-    run(&journal, frame, line[..read.transferred])
+    if reader.ended { return }
+    run(&journal, frame, line)
     if mem.arena_used(frame) > journal.frame_peak {
       journal.frame_peak = mem.arena_used(frame)
     }
     // Everything the command put in frame is gone now, all at once.
     mem.arena_reset(frame)
-    if read.status == bufio.ReadStatus.End { return }
   }
 }

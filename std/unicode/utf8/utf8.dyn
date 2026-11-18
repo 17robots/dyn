@@ -117,23 +117,26 @@ pub fn encode(destination: []u8, codepoint: u32) usize {
 pub struct Iterator {
   text: []const u8,
   offset: usize,
+  // Set by the next call that finds no code point left; it returns 0.
+  ended: bool,
 }
 
 pub fn iterator(text: []const u8) Iterator {
-  return Iterator{ text: text, offset: 0 }
+  return Iterator{ text: text, offset: 0, ended: false }
 }
 
-pub struct Next { value: u32, found: bool }
-
-// The next code point; found is false at the end. A byte of invalid UTF-8
+// The next code point; sets state.ended at the end. A byte of invalid UTF-8
 // gives U+FFFD and is skipped. Use valid to reject invalid text.
-pub fn next(state: *Iterator) Next {
-  if state.offset >= #len(state.text) { return Next{} }
+pub fn next(state: *Iterator) u32 {
+  if state.offset >= #len(state.text) {
+    state.ended = true
+    return 0
+  }
   decoded := decode(state.text, state.offset)
   if !decoded.valid {
     state.offset += 1
-    return Next{ value: 0xfffd, found: true }
+    return 0xfffd
   }
   state.offset += decoded.width
-  return Next{ value: decoded.codepoint, found: true }
+  return decoded.codepoint
 }

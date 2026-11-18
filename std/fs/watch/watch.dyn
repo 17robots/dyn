@@ -28,10 +28,10 @@ pub const FixedWatchCapacity: usize = 0
 // watcher stays failed: later calls fail the same way.
 // Ownership: a live watcher is not an independent owner when copied. Keep one
 // stable owner and close it before its storage is released or reused.
-pub struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, failure: fail.Failure }
+// ended is set by a next call that returns no event: none is pending now,
+// and a later call may return one.
+pub struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
-// found is false when no event is pending.
-pub struct Next { event: Event, found: bool }
 
 // Watches are non-recursive. Register each directory explicitly. Names borrow
 // storage until next refill. An overflow invalidates all cached workspace state.
@@ -84,17 +84,22 @@ fn load(bytes: []const u8, at: usize) u32 {
 }
 // Buffered records are returned first; reading more needs an active watcher.
 // Empty and rescan events remain protocol states.
-fn next_failed(status: *fail.Status, state: *Watcher, code: isize) Next {
+fn next_failed(status: *fail.Status, state: *Watcher, code: isize) Event {
   state.failed = true
   _ = failure(status, "read events", "", code)
   state.failure = status.failure
-  return Next{}
+  return idle(state)
 }
-pub fn next(status: *fail.Status, state: *Watcher) Next {
-  if status.failed { return Next{} }
+fn idle(state: *Watcher) Event {
+  state.ended = true
+  return Event{}
+}
+pub fn next(status: *fail.Status, state: *Watcher) Event {
+  state.ended = false
+  if status.failed { return idle(state) }
   if state.failed {
     fail.set(status, state.failure)
-    return Next{}
+    return idle(state)
   }
   if state.used > #len(state.storage) || state.offset > state.used { return next_failed(status, state, -74) }
   if state.offset == state.used {
@@ -103,11 +108,11 @@ pub fn next(status: *fail.Status, state: *Watcher) Next {
     reading: fail.Status
     count := fs.read(&reading, &file, state.storage)
     if reading.failed {
-      if reading.failure.native == -11 { return Next{} }
+      if reading.failure.native == -11 { return idle(state) }
       state.failed = true
       state.failure = reading.failure
       fail.set(status, reading.failure)
-      return Next{}
+      return idle(state)
     }
     if count == 0 { return next_failed(status, state, -5) }
     state.offset = 0
@@ -134,8 +139,7 @@ pub fn next(status: *fail.Status, state: *Watcher) Next {
   if rescan {
     state.rescan_required = true
   }
-  return Next{ found: true, event: Event{ watch: watch, mask: mask,
-    cookie: load(state.storage, at+8), name: name[..end], rescan: rescan } }
+  return Event{ watch: watch, mask: mask, cookie: load(state.storage, at+8), name: name[..end], rescan: rescan }
 }
 // Call only after rebuilding the snapshot; events may continue arriving during
 // that scan, so drain/reconcile them before treating the workspace as current.

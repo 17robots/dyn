@@ -1,12 +1,13 @@
 // RFC 4180-style, allocation-free field scanner and streaming writer.
 // Malformed text fails with InvalidInput (at its offset, for a scanner over
-// bytes), a field larger than destination with Capacity. After a failure a
-// scanner is finished: next returns found false.
+// bytes), a field larger than destination with Capacity. A scanner's ended
+// turns true when next returns no field, at the end of the input or after a
+// failure; that field's text is empty.
 use "std/io" stream
 use "std/fail"
-pub struct Scanner { source: []const u8, offset: usize, finished: bool }
-pub struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, record_ended: bool, ended: bool, finished: bool }
-pub struct Field { text: []u8, end_record: bool, end_input: bool, found: bool }
+pub struct Scanner { source: []const u8, offset: usize, finished: bool, ended: bool }
+pub struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, record_ended: bool, input_done: bool, finished: bool, ended: bool }
+pub struct Field { text: []u8, end_record: bool, end_input: bool }
 struct ByteResult { value: u8, end: bool, ok: bool }
 pub struct Writer { sink: stream.Writer, fields: usize }
 
@@ -22,14 +23,14 @@ fn stream_byte(status: *fail.Status, state: *StreamScanner) ByteResult {
     state.has_lookahead = false
     return ByteResult{ value: state.lookahead, ok: true }
   }
-  if state.ended { return ByteResult{ end: true, ok: true } }
+  if state.input_done { return ByteResult{ end: true, ok: true } }
   byte: [1]u8
   count := stream.read(status, state.input, byte[..])
   if status.failed {
     state.finished = true
     return ByteResult{}
   }
-  state.ended = count == 0
+  state.input_done = count == 0
   if count == 0 { return ByteResult{ end: true, ok: true } }
   return ByteResult{ value: byte[0], ok: true }
 }
@@ -45,18 +46,24 @@ fn stream_fail(status: *fail.Status, state: *StreamScanner, kind: fail.Kind) Fie
     message = "the field does not fit destination"
   }
   fail.set(status, fail.make(kind, "read CSV", "", message))
+  return stream_end(state)
+}
+
+fn stream_end(state: *StreamScanner) Field {
   state.finished = true
+  state.ended = true
   return Field{}
 }
 
 // Reads one field from an arbitrarily chunked input stream.
 pub fn next_stream(status: *fail.Status, state: *StreamScanner, destination: []u8) Field {
-  if status.failed || state.finished { return Field{} }
+  if status.failed || state.finished { return stream_end(state) }
   first := stream_byte(status, state)
-  if !first.ok { return Field{} }
+  if !first.ok { return stream_end(state) }
   if first.end {
+    if state.record_ended { return stream_end(state) }
     state.finished = true
-    return Field{ text: destination[..0], end_record: true, end_input: true, found: !state.record_ended }
+    return Field{ text: destination[..0], end_record: true, end_input: true }
   }
   quoted := first.value == '"'
   if !quoted {
@@ -68,7 +75,7 @@ pub fn next_stream(status: *fail.Status, state: *StreamScanner, destination: []u
   input_ended := false
   for true {
     item := stream_byte(status, state)
-    if !item.ok { return Field{} }
+    if !item.ok { return stream_end(state) }
     if item.end {
       input_ended = true
       break
@@ -77,7 +84,7 @@ pub fn next_stream(status: *fail.Status, state: *StreamScanner, destination: []u
     if quoted {
       if byte == '"' {
         after := stream_byte(status, state)
-        if !after.ok { return Field{} }
+        if !after.ok { return stream_end(state) }
         if after.end {
           closed = true
           input_ended = true
@@ -108,7 +115,7 @@ pub fn next_stream(status: *fail.Status, state: *StreamScanner, destination: []u
   end_record := input_ended || delimiter == '\r' || delimiter == '\n'
   if delimiter == '\r' {
     after_cr := stream_byte(status, state)
-    if !after_cr.ok { return Field{} }
+    if !after_cr.ok { return stream_end(state) }
     if after_cr.end {
       input_ended = true
     } else if after_cr.value != '\n' {
@@ -119,7 +126,7 @@ pub fn next_stream(status: *fail.Status, state: *StreamScanner, destination: []u
   if input_ended {
     state.finished = true
   }
-  return Field{ text: destination[..used], end_record: end_record, end_input: state.finished, found: true }
+  return Field{ text: destination[..used], end_record: end_record, end_input: state.finished }
 }
 
 pub fn writer(destination_writer: stream.Writer) Writer {
@@ -167,11 +174,15 @@ fn fail_at(status: *fail.Status, state: *Scanner, destination: []u8, kind: fail.
   }
   fail.at(status, kind, "read CSV", message, state.offset)
   state.finished = true
+  state.ended = true
   return Field{ text: destination[..0] }
 }
 
 pub fn next(status: *fail.Status, state: *Scanner, destination: []u8) Field {
-  if status.failed || state.finished { return Field{ text: destination[..0] } }
+  if status.failed || state.finished {
+    state.ended = true
+    return Field{ text: destination[..0] }
+  }
   at := state.offset
   output_at: usize = 0
   quoted := at < #len(state.source) && state.source[at] == '"'
@@ -233,5 +244,5 @@ pub fn next(status: *fail.Status, state: *Scanner, destination: []u8) Field {
     }
   }
   state.offset = at
-  return Field{ text: destination[..output_at], end_record: end_record, end_input: state.finished, found: true }
+  return Field{ text: destination[..output_at], end_record: end_record, end_input: state.finished }
 }

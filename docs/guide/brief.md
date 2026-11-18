@@ -98,7 +98,9 @@ fn main() i32 {
    but wrong (a string where a number goes):
    `port := json.get(i64, &status, root, "port")`. Read an optional value
    with a status of its own, so a missing one stops nothing else.
-   Iterators are the exception: `next` reports the end with `found`.
+   Iterators return their value too, and set `ended` on their state at the
+   end: `line := bufio.read_line(&status, &reader)`, then
+   `if reader.ended { break }`.
 3. Check `status.failed` before you act on what you got. After the first
    failure every call given that status does nothing and returns zero, so
    one check at the end of a unit of work is enough.

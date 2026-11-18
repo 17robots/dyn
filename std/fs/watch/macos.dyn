@@ -26,14 +26,14 @@ pub const HasMoveCookies: bool = false
 pub const HasDirectoryFlag: bool = true
 pub const FixedWatchCapacity: usize = 16
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
-// found is false when no event is pending.
-pub struct Next { event: Event, found: bool }
 // Owns one bounded allocation: at most 16 streams and 63 queued names (1023 bytes).
 // Do not copy a live owner. Public operations are confined to one caller thread.
 // The caller output buffer must outlive the watcher; names expire on next Event.
 // FSEvents coalesces changes. Rename has both move bits, cookie=0 and rescan=true;
 // CloseWrite is unavailable. Rescan must rebuild/reconcile the watched snapshot.
-pub struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, failure: fail.Failure }
+// ended is set by a next call that returns no event: none is pending now,
+// and a later call may return one.
+pub struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }
 struct Context { version: isize, info: rawptr, retain: rawptr, release: rawptr, describe: rawptr }
 type Callback = fn(rawptr, rawptr, usize, rawptr, *const u32, *const u64)
 struct API {
@@ -349,26 +349,31 @@ pub fn close(watcher: *Watcher) {
   watcher.rescan_required = false
 }
 // Empty and rescan events remain protocol states.
-pub fn next(status: *fail.Status, watcher: *Watcher) Next {
-  if status.failed { return Next{} }
+fn idle(state: *Watcher) Event {
+  state.ended = true
+  return Event{}
+}
+pub fn next(status: *fail.Status, watcher: *Watcher) Event {
+  watcher.ended = false
+  if status.failed { return idle(watcher) }
   if watcher.failed {
     fail.set(status, watcher.failure)
-    return Next{}
+    return idle(watcher)
   }
   state := watcher.state
   if state == nil {
     watcher.failed = true
     _ = failure(status, "read events", "", -9)
     watcher.failure = status.failure
-    return Next{}
+    return idle(watcher)
   }
   if sync.exchange_u32(&state.lost, 0) != 0 {
     watcher.rescan_required = true
-    return Next{ found: true, event: Event{ watch: -1, name: watcher.storage[..0], rescan: true } }
+    return Event{ watch: -1, name: watcher.storage[..0], rescan: true }
   }
   for attempts in 0..64 {
     read := sync.load_u32(&state.read)
-    if read == sync.load_u32(&state.write) { return Next{} }
+    if read == sync.load_u32(&state.write) { return idle(watcher) }
     record := state.records[read]
     sync.store_u32(&state.read, (read+1)%64)
     live := false
@@ -380,7 +385,7 @@ pub fn next(status: *fail.Status, watcher: *Watcher) Next {
     if !live { continue }
     if record.length > #len(watcher.storage) {
       watcher.rescan_required = true
-      return Next{ found: true, event: Event{ watch: record.watch, name: watcher.storage[..0], rescan: true } }
+      return Event{ watch: record.watch, name: watcher.storage[..0], rescan: true }
     }
     for i in 0..record.length {
       watcher.storage[i] = record.name[i]
@@ -388,9 +393,9 @@ pub fn next(status: *fail.Status, watcher: *Watcher) Next {
     if record.rescan {
       watcher.rescan_required = true
     }
-    return Next{ found: true, event: Event{ watch: record.watch, mask: record.mask, name: watcher.storage[..record.length], rescan: record.rescan } }
+    return Event{ watch: record.watch, mask: record.mask, name: watcher.storage[..record.length], rescan: record.rescan }
   }
-  return Next{}
+  return idle(watcher)
 }
 pub fn acknowledge_rescan(watcher: *Watcher) {
   watcher.rescan_required = false

@@ -1,14 +1,14 @@
 // source and returned values borrow caller storage; keep it alive and unchanged.
 // offset advances only on success. After invalid UTF-8 the iterator stays
-// failed: next_grapheme fails the same way again.
-pub struct Graphemes { source: []const u8, offset: usize, failed: bool, error_offset: usize }
-// A grapheme cluster, found false at the end of the text.
-pub struct Grapheme { value: []const u8, found: bool }
-fn invalid(status: *fail.Status, state: *Graphemes, offset: usize) Grapheme {
+// failed: next_grapheme fails the same way again. ended turns true when
+// next_grapheme returns no cluster, at the end of the text or after a failure.
+pub struct Graphemes { source: []const u8, offset: usize, failed: bool, error_offset: usize, ended: bool }
+fn invalid(status: *fail.Status, state: *Graphemes, offset: usize) []const u8 {
   state.failed = true
   state.error_offset = offset
+  state.ended = true
   fail.at(status, fail.Kind.InvalidInput, "split graphemes", "invalid UTF-8", offset)
-  return Grapheme{}
+  return ""
 }
 pub fn graphemes(source: []const u8) Graphemes {
   return Graphemes{ source: source }
@@ -18,10 +18,12 @@ fn control(property: u32) bool {
 }
 // Extended grapheme clusters, UAX #29 Unicode 17 default rules. Invalid UTF-8 is
 // InvalidInput at its offset. Failure leaves offset unchanged.
-pub fn next_grapheme(status: *fail.Status, state: *Graphemes) Grapheme {
-  if status.failed { return Grapheme{} }
+pub fn next_grapheme(status: *fail.Status, state: *Graphemes) []const u8 {
+  if status.failed || state.offset == #len(state.source) {
+    state.ended = true
+    return ""
+  }
   if state.failed { return invalid(status, state, state.error_offset) }
-  if state.offset == #len(state.source) { return Grapheme{} }
   start := state.offset
   first := utf8.decode(state.source, start)
   if !first.valid { return invalid(status, state, start) }
@@ -85,5 +87,5 @@ pub fn next_grapheme(status: *fail.Status, state: *Graphemes) Grapheme {
     at += decoded.width
   }
   state.offset = at
-  return Grapheme{ value: state.source[start..at], found: true }
+  return state.source[start..at]
 }

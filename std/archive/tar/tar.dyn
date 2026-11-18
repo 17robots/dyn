@@ -19,14 +19,15 @@ pub struct StreamReader {
   remaining: usize,
   padding: usize,
   active: bool,
+  // Turns true when next_stream returns no entry, at the end of the archive
+  // or after a failure.
   ended: bool,
   offset: usize,
   failed: bool,
   failure: fail.Failure,
 }
 
-// typeflag is the TAR protocol byte; found is false at the end of the archive.
-// offset counts source bytes consumed.
+// typeflag is the TAR protocol byte. offset counts source bytes consumed.
 pub struct StreamEntry {
   name: []const u8,
   prefix: []const u8,
@@ -34,7 +35,6 @@ pub struct StreamEntry {
   size: u64,
   typeflag: u8,
   offset: usize,
-  found: bool,
 }
 
 // Header and metadata storage must not overlap; if they do, the first
@@ -96,6 +96,7 @@ fn mark_failed(state: *StreamReader, kind: fail.Kind) {
 fn stream_failed(status: *fail.Status, state: *StreamReader, kind: fail.Kind) StreamEntry {
   mark_failed(state, kind)
   fail.set(status, state.failure)
+  state.ended = true
   return StreamEntry{ offset: state.offset }
 }
 // Fills destination; the count read, short only at the end of the stream.
@@ -173,7 +174,10 @@ fn compact_metadata(state: *StreamReader, local: *Overrides) bool {
 // Malformed or truncated input fails with InvalidInput, metadata larger than
 // its storage with Capacity. A failed reader stays failed.
 pub fn next_stream(status: *fail.Status, state: *StreamReader) StreamEntry {
-  if status.failed { return StreamEntry{ offset: state.offset } }
+  if status.failed {
+    state.ended = true
+    return StreamEntry{ offset: state.offset }
+  }
   if state.failed { return stream_failed(status, state, fail.Kind.InvalidInput) }
   if state.ended { return StreamEntry{ offset: state.offset } }
   if #len(state.header_storage) < 512 { return stream_failed(status, state, fail.Kind.Capacity) }
@@ -217,7 +221,7 @@ pub fn next_stream(status: *fail.Status, state: *StreamReader) StreamEntry {
     if !extension {
       state.active = true
       return StreamEntry{ name: entry.name, prefix: entry.prefix, link_name: entry.link_name,
-        size: entry.size, typeflag: entry.kind, offset: state.offset, found: true }
+        size: entry.size, typeflag: entry.kind, offset: state.offset }
     }
     pending = true
     if state.remaining > #len(state.metadata) - state.metadata_used {
@@ -309,6 +313,3 @@ fn octal(data: []const u8, output: *u64) bool {
   return found
 }
 
-// An entry, found false at the end of the archive. Slices borrow the archive;
-// offset is the reader's position after the entry.
-pub struct Next { entry: Entry, offset: usize, found: bool }

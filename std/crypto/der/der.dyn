@@ -1,14 +1,19 @@
 use "std/fail"
 pub struct Element { tag: u8, content: []const u8, encoded: []const u8, constructed: bool }
 // After a failure the cursor stays failed: next fails the same way again.
-pub struct Cursor { source: []const u8, offset: usize, failed: bool, error_kind: fail.Kind, error_offset: usize }
-// An element, found false at the end of the input; offset is where it starts.
-pub struct Next { value: Element, offset: usize, found: bool }
+// start is where the last value next returned begins. ended turns true when
+// next returns no value, at the end of the input or after a failure.
+pub struct Cursor { source: []const u8, offset: usize, failed: bool, error_kind: fail.Kind, error_offset: usize, start: usize, ended: bool }
 
 pub fn cursor(source: []const u8) Cursor {
   return Cursor{ source: source }
 }
-fn failed(status: *fail.Status, state: *Cursor, kind: fail.Kind, offset: usize) Next {
+fn ended(state: *Cursor, offset: usize) Element {
+  state.start = offset
+  state.ended = true
+  return Element{}
+}
+fn failed(status: *fail.Status, state: *Cursor, kind: fail.Kind, offset: usize) Element {
   state.failed = true
   state.error_kind = kind
   state.error_offset = offset
@@ -17,15 +22,15 @@ fn failed(status: *fail.Status, state: *Cursor, kind: fail.Kind, offset: usize) 
     message = "the length exceeds usize"
   }
   fail.at(status, kind, "read DER", message, offset)
-  return Next{ offset: offset }
+  return ended(state, offset)
 }
 // Malformed input fails with InvalidInput, a length past usize with Overflow,
 // both at the offending byte.
-pub fn next(status: *fail.Status, state: *Cursor) Next {
-  if status.failed { return Next{ offset: state.offset } }
+pub fn next(status: *fail.Status, state: *Cursor) Element {
+  if status.failed { return ended(state, state.offset) }
   if state.failed { return failed(status, state, state.error_kind, state.error_offset) }
   start := state.offset
-  if start == #len(state.source) { return Next{ offset: start } }
+  if start == #len(state.source) { return ended(state, start) }
   if start > #len(state.source) || #len(state.source) - start < 2 {
     return failed(status, state, fail.Kind.InvalidInput, start)
   }
@@ -56,7 +61,8 @@ pub fn next(status: *fail.Status, state: *Cursor) Next {
   if length > #len(state.source) - at { return failed(status, state, fail.Kind.InvalidInput, at) }
   finish := at + length
   state.offset = finish
-  return Next{ value: Element{ tag: tag, content: state.source[at..finish], encoded: state.source[start..finish], constructed: (tag & 32) != 0 }, offset: start, found: true }
+  state.start = start
+  return Element{ tag: tag, content: state.source[at..finish], encoded: state.source[start..finish], constructed: (tag & 32) != 0 }
 }
 pub fn enter(element: Element) Cursor {
   return cursor(element.content)

@@ -22,11 +22,11 @@ fn element(status: *fail.Status, cursor: *der.Cursor, base: usize, tag: u8) der.
     fail.set(status, failure)
     return der.Element{}
   }
-  if !next.found || next.value.tag != tag {
+  if cursor.ended || next.tag != tag {
     _ = malformed(status, base + start)
     return der.Element{}
   }
-  return next.value
+  return next
 }
 // Malformed DER fails with InvalidInput (Overflow for an impossible length)
 // at the offending byte.

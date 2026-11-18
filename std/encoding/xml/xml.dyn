@@ -5,14 +5,13 @@ use "std/bytes" bytes
 
 pub enum Kind { Start, End, Text, Comment, Processing, Cdata }
 // Malformed text fails with InvalidInput at its offset. After a failure a
-// scanner stays failed: next returns found false.
+// scanner stays failed. A scanner's ended turns true when next returns no
+// event, at the end of the input or after a failure; that event is zero.
 pub struct Event { kind: Kind, name: []const u8, text: []const u8, attributes: []const u8, self_closing: bool }
-pub struct Scanner { source: []const u8, offset: usize, failed: bool }
-pub struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, ended: bool, failed: bool }
-// An event, found false at the end of the input.
-pub struct Next { value: Event, found: bool }
-pub struct AttributeScanner { source: []const u8, offset: usize, failed: bool }
-pub struct Attribute { name: []const u8, value: []const u8, found: bool }
+pub struct Scanner { source: []const u8, offset: usize, failed: bool, ended: bool }
+pub struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, input_done: bool, failed: bool, ended: bool }
+pub struct AttributeScanner { source: []const u8, offset: usize, failed: bool, ended: bool }
+pub struct Attribute { name: []const u8, value: []const u8 }
 pub struct Writer { sink: stream.Writer }
 
 pub fn scanner(source: []const u8) Scanner {
@@ -36,14 +35,18 @@ fn shift_stream(state: *StreamScanner) {
 
 // Events borrow storage until the next call. Text may be returned in multiple
 // events. An event larger than storage fails with Capacity.
-pub fn next_stream(status: *fail.Status, state: *StreamScanner) Next {
-  if status.failed || state.failed { return Next{} }
+fn stream_ended(state: *StreamScanner) Event {
+  state.ended = true
+  return Event{}
+}
+pub fn next_stream(status: *fail.Status, state: *StreamScanner) Event {
+  if status.failed || state.failed { return stream_ended(state) }
   shift_stream(state)
   for true {
     if state.used > 0 {
       complete := state.storage[0] != '<'
       // Delay classification until the comment prefix can be distinguished.
-      if state.used >= 9 || state.ended || (state.used >= 4 && state.storage[2] != '[') {
+      if state.used >= 9 || state.input_done || (state.used >= 4 && state.storage[2] != '[') {
         comment := starts(state.storage[..state.used], 0, "<!--")
         cdata := starts(state.storage[..state.used], 0, "<![CDATA[")
         processing := starts(state.storage[..state.used], 0, "<?")
@@ -66,32 +69,31 @@ pub fn next_stream(status: *fail.Status, state: *StreamScanner) Next {
           }
         }
       }
-      if complete || state.ended {
+      if complete || state.input_done {
         candidate := scanner(state.storage[..state.used])
         parsed := next(status, &candidate)
-        if parsed.found {
-          state.consumed = candidate.offset
-        }
         state.failed = candidate.failed
+        if candidate.ended { return stream_ended(state) }
+        state.consumed = candidate.offset
         return parsed
       }
-    } else if state.ended { return Next{} }
+    } else if state.input_done { return stream_ended(state) }
     if state.used == #len(state.storage) {
       state.failed = true
       fail.set(status, fail.make(fail.Kind.Capacity, "read XML", "", "an event does not fit storage"))
-      return Next{}
+      return stream_ended(state)
     }
     count := stream.read(status, state.input, state.storage[state.used..])
     if status.failed {
       state.failed = true
-      return Next{}
+      return stream_ended(state)
     }
     state.used += count
     if count == 0 {
-      state.ended = true
+      state.input_done = true
     }
   }
-  return Next{}
+  return stream_ended(state)
 }
 pub fn writer(destination_writer: stream.Writer) Writer {
   return Writer{ sink: destination_writer }
@@ -163,10 +165,14 @@ fn starts(source: []const u8, at: usize, expected: []const u8) bool {
   if at > #len(source) || #len(expected) > #len(source) - at { return false }
   return bytes.equal(source[at..at + #len(expected)], expected)
 }
-fn fail_at(status: *fail.Status, state: *Scanner, at: usize) Next {
+fn fail_at(status: *fail.Status, state: *Scanner, at: usize) Event {
   state.failed = true
   fail.at(status, fail.Kind.InvalidInput, "read XML", "malformed XML", at)
-  return Next{}
+  return scan_ended(state)
+}
+fn scan_ended(state: *Scanner) Event {
+  state.ended = true
+  return Event{}
 }
 
 // XML 1.0 Fifth Edition NameStartChar/NameChar, decoded as Unicode scalars.
@@ -257,8 +263,8 @@ fn valid_text(text: []const u8, attribute: bool) bool {
   return true
 }
 
-pub fn next(status: *fail.Status, state: *Scanner) Next {
-  if status.failed || state.failed || state.offset == #len(state.source) { return Next{} }
+pub fn next(status: *fail.Status, state: *Scanner) Event {
+  if status.failed || state.failed || state.offset == #len(state.source) { return scan_ended(state) }
   start := state.offset
   if state.source[start] != '<' {
     text_end := start
@@ -266,7 +272,7 @@ pub fn next(status: *fail.Status, state: *Scanner) Next {
       text_end += 1
     }
     state.offset = text_end
-    return Next{ value: Event{ kind: Kind.Text, text: state.source[start..text_end] }, found: true }
+    return Event{ kind: Kind.Text, text: state.source[start..text_end] }
   }
   if starts(state.source, start, "<![CDATA[") {
     cdata_end := start + 9
@@ -275,7 +281,7 @@ pub fn next(status: *fail.Status, state: *Scanner) Next {
     }
     if cdata_end + 3 > #len(state.source) { return fail_at(status, state, start) }
     state.offset = cdata_end + 3
-    return Next{ value: Event{ kind: Kind.Cdata, text: state.source[start + 9..cdata_end] }, found: true }
+    return Event{ kind: Kind.Cdata, text: state.source[start + 9..cdata_end] }
   }
   if starts(state.source, start, "<!--") {
     comment_end := start + 4
@@ -284,7 +290,7 @@ pub fn next(status: *fail.Status, state: *Scanner) Next {
     }
     if comment_end + 3 > #len(state.source) { return fail_at(status, state, start) }
     state.offset = comment_end + 3
-    return Next{ value: Event{ kind: Kind.Comment, text: state.source[start + 4..comment_end] }, found: true }
+    return Event{ kind: Kind.Comment, text: state.source[start + 4..comment_end] }
   }
   processing := starts(state.source, start, "<?")
   closing := starts(state.source, start, "</")
@@ -302,7 +308,7 @@ pub fn next(status: *fail.Status, state: *Scanner) Next {
     }
     if at >= #len(state.source) || state.source[at] != '>' { return fail_at(status, state, at) }
     state.offset = at + 1
-    return Next{ value: Event{ kind: Kind.End, name: name }, found: true }
+    return Event{ kind: Kind.End, name: name }
   }
   attributes_start := at
   quote: u8 = 0
@@ -339,7 +345,7 @@ pub fn next(status: *fail.Status, state: *Scanner) Next {
   if processing {
     event_kind = Kind.Processing
   }
-  return Next{ value: Event{ kind: event_kind, name: name, attributes: state.source[attributes_start..attributes_end], self_closing: self_closing }, found: true }
+  return Event{ kind: event_kind, name: name, attributes: state.source[attributes_start..attributes_end], self_closing: self_closing }
 }
 
 pub fn attributes(event: Event) AttributeScanner {
@@ -348,17 +354,21 @@ pub fn attributes(event: Event) AttributeScanner {
 fn attribute_error(status: *fail.Status, state: *AttributeScanner) Attribute {
   state.failed = true
   fail.at(status, fail.Kind.InvalidInput, "read XML attributes", "malformed attribute", state.offset)
+  return attribute_ended(state)
+}
+fn attribute_ended(state: *AttributeScanner) Attribute {
+  state.ended = true
   return Attribute{}
 }
 pub fn next_attribute(status: *fail.Status, state: *AttributeScanner) Attribute {
-  if status.failed || state.failed { return Attribute{} }
+  if status.failed || state.failed { return attribute_ended(state) }
   at := state.offset
   for at < #len(state.source) && whitespace(state.source[at]) {
     at += 1
   }
   if at == #len(state.source) {
     state.offset = at
-    return Attribute{}
+    return attribute_ended(state)
   }
   if at == state.offset { return attribute_error(status, state) }
   start := at
@@ -386,7 +396,7 @@ pub fn next_attribute(status: *fail.Status, state: *AttributeScanner) Attribute 
   value := state.source[value_start..at]
   if !valid_text(value, true) { return attribute_error(status, state) }
   state.offset = at + 1
-  return Attribute{ name: name, value: value, found: true }
+  return Attribute{ name: name, value: value }
 }
 fn valid_attributes(event: Event) bool {
   scan := attributes(event)
@@ -394,11 +404,11 @@ fn valid_attributes(event: Event) bool {
   for {
     before := scan.offset
     item := next_attribute(&status, &scan)
-    if !item.found { return !status.failed }
+    if scan.ended { return !status.failed }
     previous := attributes(event)
     for previous.offset < before {
       other := next_attribute(&status, &previous)
-      if !other.found { break }
+      if previous.ended { break }
       if bytes.equal(other.name, item.name) { return false }
     }
   }
@@ -412,39 +422,39 @@ pub fn valid(source: []const u8, stack: [][]const u8) bool {
   status: fail.Status
   for {
     item := next(&status, &state)
-    if !item.found { return !status.failed && depth == 0 && roots == 1 }
-    if item.value.kind == Kind.Text && !valid_text(item.value.text, false) { return false }
-    if item.value.kind == Kind.Cdata || item.value.kind == Kind.Comment {
-      if !valid_characters(item.value.text) { return false }
-      if item.value.kind == Kind.Cdata && depth == 0 { return false }
+    if state.ended { return !status.failed && depth == 0 && roots == 1 }
+    if item.kind == Kind.Text && !valid_text(item.text, false) { return false }
+    if item.kind == Kind.Cdata || item.kind == Kind.Comment {
+      if !valid_characters(item.text) { return false }
+      if item.kind == Kind.Cdata && depth == 0 { return false }
     }
-    if item.value.kind == Kind.Comment {
+    if item.kind == Kind.Comment {
       i: usize = 0
-      for i < #len(item.value.text) {
-        if i + 1 < #len(item.value.text) && item.value.text[i] == '-' && item.value.text[i + 1] == '-' {
+      for i < #len(item.text) {
+        if i + 1 < #len(item.text) && item.text[i] == '-' && item.text[i + 1] == '-' {
           return false
         }
         i += 1
       }
-      if #len(item.value.text) > 0 && item.value.text[#len(item.value.text) - 1] == '-' {
+      if #len(item.text) > 0 && item.text[#len(item.text) - 1] == '-' {
         return false
       }
     }
-    if item.value.kind == Kind.Start {
-      if !valid_attributes(item.value) { return false }
+    if item.kind == Kind.Start {
+      if !valid_attributes(item) { return false }
       if depth == 0 {
         roots += 1
       }
-      if !item.value.self_closing {
+      if !item.self_closing {
         if depth == #len(stack) { return false }
-        stack[depth] = item.value.name
+        stack[depth] = item.name
         depth += 1
       }
-    } else if item.value.kind == Kind.End {
-      if depth == 0 || !bytes.equal(stack[depth - 1], item.value.name) { return false }
+    } else if item.kind == Kind.End {
+      if depth == 0 || !bytes.equal(stack[depth - 1], item.name) { return false }
       depth -= 1
-    } else if item.value.kind == Kind.Text && depth == 0 {
-      for byte in item.value.text {
+    } else if item.kind == Kind.Text && depth == 0 {
+      for byte in item.text {
         if !whitespace(byte) { return false }
       }
     }

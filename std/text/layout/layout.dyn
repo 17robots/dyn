@@ -71,9 +71,9 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
   iterator := unicode.graphemes(text)
   for iterator.offset < #len(text) {
     start := iterator.offset
-    run := unicode.next_grapheme(status, &iterator)
+    _ = unicode.next_grapheme(status, &iterator)
     if status.failed { return Layout{} }
-    if !run.found { break }
+    if iterator.ended { break }
     first := utf8.decode(text, start).codepoint
     cluster := Cluster{ start: start, end: iterator.offset, first: used, space: first == 32 || first == 9 || first == 0x200b,
       tab: first == 9, soft: first == 0xad,

@@ -8,9 +8,9 @@ use "std/mem"
 pub enum Kind { Section, Pair }
 pub struct Entry { section: []const u8, key: []const u8, value: []const u8, kind: Kind, line: usize }
 // line counts the lines read so far, so a zero Scanner{ source: text } is ready to use.
-pub struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, failed: bool, error_offset: usize, error_line: usize }
-// found is false at the end of the input.
-pub struct Next { value: Entry, found: bool }
+// ended turns true when next returns no entry, at the end of the input or
+// after a failure.
+pub struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, failed: bool, error_offset: usize, error_line: usize, ended: bool }
 
 pub fn scanner(source: []const u8) Scanner {
   return Scanner{ source: source }
@@ -30,18 +30,23 @@ fn trim(source: []const u8) []const u8 {
   return source[first..last]
 }
 
-fn record(status: *fail.Status, state: *Scanner, line: usize, offset: usize) Next {
+fn ended(state: *Scanner) Entry {
+  state.ended = true
+  return Entry{}
+}
+
+fn record(status: *fail.Status, state: *Scanner, line: usize, offset: usize) Entry {
   if !state.failed {
     state.failed = true
     state.error_offset = offset
     state.error_line = line
   }
   fail.at(status, fail.Kind.InvalidInput, "parse INI", "a line without a section name or key", state.error_offset)
-  return Next{}
+  return ended(state)
 }
 
-pub fn next(status: *fail.Status, state: *Scanner) Next {
-  if status.failed { return Next{} }
+pub fn next(status: *fail.Status, state: *Scanner) Entry {
+  if status.failed { return ended(state) }
   if state.failed { return record(status, state, state.error_line, state.error_offset) }
   for state.offset < #len(state.source) {
     start := state.offset
@@ -68,7 +73,7 @@ pub fn next(status: *fail.Status, state: *Scanner) Next {
         return record(status, state, line_number, start)
       } else {
         state.section = section_name
-        return Next{ value: Entry{ section: section_name, kind: Kind.Section, line: line_number }, found: true }
+        return Entry{ section: section_name, kind: Kind.Section, line: line_number }
       }
     } else {
       separator := #len(line)
@@ -89,11 +94,11 @@ pub fn next(status: *fail.Status, state: *Scanner) Next {
         return record(status, state, line_number, start)
       } else {
         pair_value := trim(line[separator + 1..])
-        return Next{ value: Entry{ section: state.section, key: key_name, value: pair_value, kind: Kind.Pair, line: line_number }, found: true }
+        return Entry{ section: state.section, key: key_name, value: pair_value, kind: Kind.Pair, line: line_number }
       }
     }
   }
-  return Next{}
+  return ended(state)
 }
 
 // The value of key in section, borrowing source; "" when it cannot be read,
@@ -106,9 +111,9 @@ pub fn find(status: *fail.Status, source: []const u8, section: []const u8, key: 
   for {
     item := next(status, &state)
     if status.failed { return source[..0] }
-    if !item.found { break }
-    if item.value.kind == Kind.Pair && byte_ops.equal(item.value.section, section) && byte_ops.equal(item.value.key, key) {
-      return item.value.value
+    if state.ended { break }
+    if item.kind == Kind.Pair && byte_ops.equal(item.section, section) && byte_ops.equal(item.key, key) {
+      return item.value
     }
   }
   // "\"host\" is missing", leaving the path for the caller's file.
@@ -139,14 +144,16 @@ pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) []Entr
   if status.failed { return empty }
   state := scanner(source)
   count: usize = 0
-  for next(status, &state).found {
+  for {
+    _ = next(status, &state)
+    if state.ended { break }
     count += 1
   }
   if status.failed || count == 0 { return empty }
   entries := mem.push_array(Entry, arena, count)
   state = scanner(source)
   for i in 0..count {
-    entries[i] = next(status, &state).value
+    entries[i] = next(status, &state)
   }
   return entries
 }

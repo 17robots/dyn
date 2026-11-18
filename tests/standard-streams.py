@@ -34,18 +34,15 @@ use "std/time"
 fn main() {
   clock := time.monotonic_now()
   _ = clock
-  scratch: [8]u8
+  scratch: [64]u8
   input := bufio.reader(io.stdin(), scratch[..])
-  line: [64]u8
   status: fail.Status
   for {
-    result := bufio.read_line(&status, &input, line[..])
+    line := bufio.read_line(&status, &input)
     if status.failed { #panic("input failed") }
-    if result.transferred > 0 || result.status != bufio.ReadStatus.End {
-      io.println_to(&status, io.stdout(), "[{}]", line[..result.transferred])
-      if status.failed { #panic("output failed") }
-    }
-    if result.status == bufio.ReadStatus.End { break }
+    if input.ended { break }
+    io.println_to(&status, io.stdout(), "[{}]", line)
+    if status.failed { #panic("output failed") }
   }
   io.write(&status, io.stderr(), "done\\n")
   if status.failed { #panic("stderr failed") }

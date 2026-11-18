@@ -24,8 +24,8 @@ fn certificate_failure(encoded: []const u8) fail.Failure {
 }
 fn next_failure(cursor: *der.Cursor) fail.Failure {
   status: fail.Status
-  next := der.next(&status, cursor)
-  check(status.failed && !next.found)
+  _ = der.next(&status, cursor)
+  check(status.failed && cursor.ended)
   return status.failure
 }
 fn pem_failure(arena: *mem.Arena, input: []const u8) fail.Failure {
@@ -50,14 +50,15 @@ fn main() {
   check(certificate_failure(certificate_bytes[..]).offset==8)
 
   c: der.Cursor
-  check(!der.next(&status, &c).found && der.finished(&c))
+  _ = der.next(&status, &c)
+  check(c.ended && der.finished(&c))
   c = der.cursor("\x30\x03\x02\x01\x07")
   element := der.next(&status, &c)
-  check(element.found && element.value.tag == 48 && #len(element.value.encoded) == 5 && der.finished(&c))
-  child := der.enter(element.value)
-  check(der.next(&status, &child).value.content[0] == 7 && der.finished(&child))
-  eof := der.next(&status, &c)
-  check(!eof.found && eof.offset == 5 && der.finished(&c))
+  check(!c.ended && element.tag == 48 && #len(element.encoded) == 5 && der.finished(&c))
+  child := der.enter(element)
+  check(der.next(&status, &child).content[0] == 7 && der.finished(&child))
+  _ = der.next(&status, &c)
+  check(c.ended && c.start == 5 && der.finished(&c))
   storage: [4096]u8
   arena := mem.arena_from_buffer(storage[..])
   prefix := mem.push_bytes(arena, 7)
@@ -73,9 +74,9 @@ fn main() {
   bad := pem_failure(arena, "-----BEGIN TEST-----\n!!!!\n-----END TEST-----")
   check(mem.arena_mark(arena) == mark && prefix[0] == 42 && bad.offset == 21 && bad.kind == fail.Kind.InvalidInput)
 
-  z: der.Next
+  z: der.Element
   p: pem.Block
-  check(z.offset == 0 && #len(z.value.content) == 0)
+  check(#len(z.content) == 0)
   check(#len(p.data) == 0)
   _ = der.next(&status, &c)
   malformed: [6][]const u8 = ["\x02", "\x1f\x00", "\x02\x80", "\x02\x82\x01", "\x02\x81\x00", "\x02\x03\x01"]

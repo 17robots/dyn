@@ -13,11 +13,10 @@ pub struct Entry {
   uncompressed_size: usize,
   directory: bool,
 }
-// After a failure a reader stays failed: next fails the same way again.
-pub struct ArchiveReader { source: []const u8, offset: usize, indexed: bool, directory_start: usize, directory_end: usize, remaining: usize, failed: bool, failure: fail.Failure }
-// An entry, found false at the end of the archive; offset is the reader's
-// position after it.
-pub struct Next { value: Entry, offset: usize, found: bool }
+// After a failure a reader stays failed: next fails the same way again. A
+// reader's ended turns true when next returns no entry, at the end of the
+// archive or after a failure; offset is the position after the last entry.
+pub struct ArchiveReader { source: []const u8, offset: usize, indexed: bool, directory_start: usize, directory_end: usize, remaining: usize, failed: bool, failure: fail.Failure, ended: bool }
 pub struct StreamReader {
   source_reader: stream.Reader,
   header_storage: []u8,
@@ -53,21 +52,31 @@ fn located(kind: fail.Kind, offset: usize) fail.Failure {
   return failure
 }
 // Records the first failure on the reader and reports it.
-fn stream_failed(status: *fail.Status, state: *StreamReader, kind: fail.Kind) Next {
-  if !state.failed {
-    state.failed = true
-    state.failure = located(kind, state.offset)
-  }
-  fail.set(status, state.failure)
-  return Next{ offset: state.offset }
+fn stream_ended(state: *StreamReader) Entry {
+  state.ended = true
+  return Entry{}
 }
-fn archive_failed(status: *fail.Status, state: *ArchiveReader, kind: fail.Kind) Next {
+fn archive_ended(state: *ArchiveReader) Entry {
+  state.ended = true
+  return Entry{}
+}
+fn stream_failed(status: *fail.Status, state: *StreamReader, kind: fail.Kind) Entry {
   if !state.failed {
     state.failed = true
     state.failure = located(kind, state.offset)
   }
   fail.set(status, state.failure)
-  return Next{ offset: state.offset }
+  state.ended = true
+  return Entry{}
+}
+fn archive_failed(status: *fail.Status, state: *ArchiveReader, kind: fail.Kind) Entry {
+  if !state.failed {
+    state.failed = true
+    state.failure = located(kind, state.offset)
+  }
+  fail.set(status, state.failure)
+  state.ended = true
+  return Entry{}
 }
 // Fills destination; the count read, short only at the end of the stream. A
 // stream failure is kept on the reader.
@@ -119,22 +128,22 @@ fn stream_discard(state: *StreamReader, amount: usize) bool {
 // Reads one local-file entry from a stream. Name and payload borrow caller
 // storage. Malformed input fails with InvalidInput, an entry larger than the
 // storage with Capacity, encryption or data descriptors with Unsupported.
-pub fn next_stream(status: *fail.Status, state: *StreamReader) Next {
-  if status.failed { return Next{ offset: state.offset } }
+pub fn next_stream(status: *fail.Status, state: *StreamReader) Entry {
+  if status.failed { return stream_ended(state) }
   if state.failed { return stream_failed(status, state, fail.Kind.InvalidInput) }
-  if state.ended { return Next{ offset: state.offset } }
+  if state.ended { return stream_ended(state) }
   if #len(state.header_storage) < 30 { return stream_failed(status, state, fail.Kind.Capacity) }
   first := stream_read(state, state.header_storage[..4])
   if state.failed { return stream_failed(status, state, fail.Kind.InvalidInput) }
   if first == 0 {
     state.ended = true
-    return Next{ offset: state.offset }
+    return Entry{}
   }
   if first != 4 { return stream_failed(status, state, fail.Kind.InvalidInput) }
   signature := u32le(state.header_storage, 0)
   if signature == 33639248 {
     state.ended = true
-    return Next{ offset: state.offset }
+    return Entry{}
   }
   if signature == 101010256 {
     if !stream_exact(state, state.header_storage[4..22]) {
@@ -146,7 +155,7 @@ pub fn next_stream(status: *fail.Status, state: *StreamReader) Next {
       return stream_failed(status, state, fail.Kind.InvalidInput)
     }
     state.ended = true
-    return Next{ offset: state.offset }
+    return Entry{}
   }
   if signature != 67324752 || !stream_exact(state, state.header_storage[4..30]) {
     return stream_failed(status, state, fail.Kind.InvalidInput)
@@ -168,9 +177,9 @@ pub fn next_stream(status: *fail.Status, state: *StreamReader) Next {
     return stream_failed(status, state, fail.Kind.InvalidInput)
   }
   name := state.name_storage[..name_length]
-  return Next{ value: Entry{ name: name, payload: state.payload_storage[..compressed_size], method: method,
+  return Entry{ name: name, payload: state.payload_storage[..compressed_size], method: method,
     flags: flags, checksum: checksum, compressed_size: compressed_size,
-    uncompressed_size: uncompressed_size, directory: name_length > 0 && name[name_length - 1] == '/' }, offset: state.offset, found: true }
+    uncompressed_size: uncompressed_size, directory: name_length > 0 && name[name_length - 1] == '/' }
 }
 
 fn u16le(source: []const u8, at: usize) u16 {
@@ -193,14 +202,14 @@ pub fn open(source: []const u8) ArchiveReader {
 
 // Reads the next entry of an archive in memory, with the same failures as
 // next_stream.
-pub fn next(status: *fail.Status, state: *ArchiveReader) Next {
-  if status.failed { return Next{ offset: state.offset } }
+pub fn next(status: *fail.Status, state: *ArchiveReader) Entry {
+  if status.failed { return archive_ended(state) }
   if state.failed { return archive_failed(status, state, fail.Kind.InvalidInput) }
   if #len(state.source) > (#max(usize) >> 1) { return archive_failed(status, state, fail.Kind.Overflow) }
   if state.indexed { return next_indexed(status, state) }
-  if state.offset == #len(state.source) { return Next{ offset: state.offset } }
+  if state.offset == #len(state.source) { return archive_ended(state) }
   if state.offset <= #len(state.source) && #len(state.source) - state.offset >= 4 && u32le(state.source, state.offset) == 33639248 {
-    return Next{ offset: state.offset }
+    return archive_ended(state)
   }
   start := state.offset
   if start <= #len(state.source) && #len(state.source) - start >= 4 && u32le(state.source, start) == 101010256 {
@@ -211,7 +220,7 @@ pub fn next(status: *fail.Status, state: *ArchiveReader) Next {
       return archive_failed(status, state, fail.Kind.InvalidInput)
     }
     state.offset = start + 22 + u16le(remaining, 20)
-    return Next{ offset: state.offset }
+    return archive_ended(state)
   }
   if start > #len(state.source) || #len(state.source) - start < 30 || u32le(state.source, start) != 67324752 {
     return archive_failed(status, state, fail.Kind.InvalidInput)
@@ -239,11 +248,11 @@ pub fn next(status: *fail.Status, state: *ArchiveReader) Next {
   name := state.source[data_start..data_start + name_length]
   directory := #len(name) > 0 && name[#len(name) - 1] == '/'
   state.offset = payload_end
-  return Next{ value: Entry{
+  return Entry{
     name: name, payload: state.source[payload_start..payload_end], method: method, flags: flags,
     checksum: u32le(state.source, start + 14), compressed_size: compressed_size,
     uncompressed_size: uncompressed_size, directory: directory,
-  }, offset: state.offset, found: true }
+  }
 }
 
 // The entry's bytes, decompressed and checksum-verified, in arena. Malformed

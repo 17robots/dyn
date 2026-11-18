@@ -42,16 +42,27 @@ fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
  s.offset += take
  return take
 }
+// The entry a call returned, the reader's offset after it, and whether it
+// returned one (the reader's ended, inverted).
+struct Next { value: zip.Entry, offset: usize, found: bool }
+fn archive_next(status: *fail.Status, state: *zip.ArchiveReader) Next {
+ entry := zip.next(status, state)
+ return Next{ value: entry, offset: state.offset, found: !state.ended }
+}
+fn stream_entry(status: *fail.Status, state: *zip.StreamReader) Next {
+ entry := zip.next_stream(status, state)
+ return Next{ value: entry, offset: state.offset, found: !state.ended }
+}
 fn next_failure(state: *zip.ArchiveReader) fail.Failure {
  status: fail.Status
- next := zip.next(&status, state)
+ next := archive_next(&status, state)
  check(!next.found && status.failed)
  return status.failure
 }
-struct Streamed { next: zip.Next, failure: fail.Failure }
+struct Streamed { next: Next, failure: fail.Failure }
 fn stream_next(state: *zip.StreamReader) Streamed {
  status: fail.Status
- next := zip.next_stream(&status, state)
+ next := stream_entry(&status, state)
  return Streamed{ next: next, failure: status.failure }
 }
 fn extract_failure(arena: *mem.Arena, entry: zip.Entry) fail.Failure {
@@ -81,7 +92,7 @@ fn main() {
  data: []const u8 = DATA
  arena := mem.arena_alloc(0)
  state := zip.open(data)
- first := zip.next(&status, &state)
+ first := archive_next(&status, &state)
  check(first.found && first.offset == 36)
  decoded := zip.extract(arena,&status,first.value)
  check(bytes.equal(decoded,"hello"))
@@ -89,16 +100,16 @@ fn main() {
  bad := first.value
  bad.checksum = 0
  check(extract_failure(arena,bad).kind == fail.Kind.InvalidInput && mem.arena_used(arena) == mark)
- empty := zip.next(&status, &state)
+ empty := archive_next(&status, &state)
  check(empty.found)
  _ = zip.extract(arena,&status,empty.value)
- end := zip.next(&status, &state)
+ end := archive_next(&status, &state)
  check(!end.found)
  opened := zip.open_checked(&status, data)
- indexed := zip.next(&status, &opened)
+ indexed := archive_next(&status, &opened)
  check(indexed.found && bytes.equal(indexed.value.payload,"hello"))
- check(zip.next(&status, &opened).found)
- check(!zip.next(&status, &opened).found)
+ check(archive_next(&status, &opened).found)
+ check(!archive_next(&status, &opened).found)
  broken := zip.ArchiveReader{ source: data, indexed: true, offset: 0, remaining: 1 }
  check(next_failure(&broken).kind == fail.Kind.InvalidInput)
  broken.source = data
@@ -132,8 +143,8 @@ fn main() {
  }
  cursor := io.cursor(data[..36])
  stream := zip.stream_reader(io.cursor_reader(&cursor),header[..],name[..],payload[..])
- check(zip.next_stream(&status, &stream).found)
- check(!zip.next_stream(&status, &stream).found)
+ check(stream_entry(&status, &stream).found)
+ check(!stream_entry(&status, &stream).found)
  native_input := Input{ source: data, fail: 32, native: -4 }
  native_stream := zip.stream_reader(io.Reader{ data: &native_input, read: read },header[..],name[..],payload[..])
  native_result := stream_next(&native_stream)
@@ -148,7 +159,7 @@ fn main() {
  eof_stream := zip.stream_reader(io.Reader{ data: &eof_input, read: read },header[..],name[..],payload[..])
  eof := stream_next(&eof_stream)
  check(!eof.next.found && eof.failure.kind == fail.Kind.Ok)
- check(!zip.next_stream(&status, &eof_stream).found && eof_input.calls == 1)
+ check(!stream_entry(&status, &eof_stream).found && eof_input.calls == 1)
  check(open_fails(data[#len(data)-22..]))
  empty_eocd: [22]u8
  empty_eocd[0] = 80
@@ -156,15 +167,15 @@ fn main() {
  empty_eocd[2] = 5
  empty_eocd[3] = 6
  empty_archive := zip.open_checked(&status, empty_eocd[..])
- check(!zip.next(&status, &empty_archive).found)
+ check(!archive_next(&status, &empty_archive).found)
  empty_cursor := io.cursor(empty_eocd[..])
  empty_stream := zip.stream_reader(io.cursor_reader(&empty_cursor),header[..],name[..],payload[..])
- check(!zip.next_stream(&status, &empty_stream).found && empty_stream.offset == 22)
- check(!zip.next_stream(&status, &empty_stream).found && empty_stream.offset == 22)
- zero: zip.Next
+ check(!stream_entry(&status, &empty_stream).found && empty_stream.offset == 22)
+ check(!stream_entry(&status, &empty_stream).found && empty_stream.offset == 22)
+ zero: Next
  check(!zero.found && zero.offset == 0)
  zero_reader: zip.ArchiveReader
- check(!zip.next(&status, &zero_reader).found)
+ check(!archive_next(&status, &zero_reader).found)
  check(extract_failure(arena,zip.Entry{ uncompressed_size: ~#cast(usize,0) }).kind == fail.Kind.Overflow && mem.arena_used(arena) == mark)
 }
 '''

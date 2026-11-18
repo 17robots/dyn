@@ -15,7 +15,7 @@ struct Got { value: mp.Token, offset: usize, found: bool, failure: fail.Failure 
 fn next(state: *mp.Reader) Got {
  status: fail.Status
  item := mp.next(&status, state)
- return Got{ value: item.value, offset: item.offset, found: item.found, failure: status.failure }
+ return Got{ value: item, offset: state.start, found: !state.ended, failure: status.failure }
 }
 struct Encoded { value: []u8, failure: fail.Failure }
 fn encode(arena: *mem.Arena, items: []const mp.Token) Encoded {

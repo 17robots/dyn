@@ -82,8 +82,8 @@ pub fn parse(arena: *tree_memory.Arena, status: *fail.Status, source: []const u8
   scan := scanner(source)
   for {
     start := scan.offset
-    result := next(status, &scan)
-    if !result.found {
+    event := next(status, &scan)
+    if scan.ended {
       if status.failed {
         tree_memory.arena_rewind(arena, mark)
         return &nil_node
@@ -92,7 +92,6 @@ pub fn parse(arena: *tree_memory.Arena, status: *fail.Status, source: []const u8
       if roots != 1 { return tree_failure(arena, status, mark, #len(source), "") }
       return document
     }
-    event := result.value
     if event.kind == Kind.End {
       if parent == document || !bytes.equal(parent.name, event.name) {
         return tree_failure(arena, status, mark, start, "mismatched tag")

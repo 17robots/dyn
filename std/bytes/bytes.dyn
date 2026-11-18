@@ -117,33 +117,38 @@ pub struct Splitter {
   value: []const u8,
   separator: []const u8,
   offset: usize,
+  // Set after the last piece is returned.
   done: bool,
+  // Set by the split_next call after that, which returns "".
+  ended: bool,
 }
 
 pub fn splitter(value: []const u8, separator: []const u8) Splitter {
   if #len(separator) == 0 {
     #panic("split separator must not be empty")
   }
-  return Splitter{ value: value, separator: separator, offset: 0, done: false }
+  return Splitter{ value: value, separator: separator, offset: 0, done: false, ended: false }
 }
 
-pub struct Piece { value: []const u8, found: bool }
-
-// The next piece, or found false after the last one. A value without the
-// separator is one piece; a trailing separator gives a final empty piece.
-pub fn split_next(state: *Splitter) Piece {
-  if state.done { return Piece{} }
+// The next piece. After the last one it sets state.ended and returns "". A
+// value without the separator is one piece; a trailing separator gives a
+// final empty piece.
+pub fn split_next(state: *Splitter) []const u8 {
+  if state.done {
+    state.ended = true
+    return ""
+  }
   rest := state.value[state.offset..]
   found := find(rest, state.separator)
   if found == #len(rest) {
     state.offset = #len(state.value)
     state.done = true
-    return Piece{ value: rest, found: true }
+    return rest
   }
   end := state.offset + found
   piece := state.value[state.offset..end]
   state.offset = end + #len(state.separator)
-  return Piece{ value: piece, found: true }
+  return piece
 }
 
 pub struct Cursor {

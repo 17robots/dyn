@@ -53,6 +53,22 @@ Language (2026-11-16 cleanup; see `docs/guide/rules.md`):
 
 Standard library:
 
+- Iterators return their value, with no `{value, found}` struct. The call
+  that finds nothing left sets `ended` on the state passed in, and returns
+  zero; a failure sets it too. This covers `strings.scan_*`,
+  `text/scanner.next_*`, `bytes.split_next`, `utf8.next`,
+  `path.component_next`, `next_grapheme`, `fs.directory_next`,
+  `watch.next`, `http.next_part`, the `ini`, `csv`, `xml`, `json/read`,
+  `cbor`, `msgpack`, `protobuf` and `der` readers, and `tar` and `zip`.
+  `Next.offset` becomes `state.start` (where the value began) or
+  `state.offset` (archives). `array.pop` and `ring.pop` return the value,
+  zero when empty. See the migration guide.
+- `bufio.read_line(&status, &reader)` returns the line itself, borrowed from
+  the reader's storage until the next read; `reader.ended` marks the end. A
+  line longer than the storage fails with `Capacity`, and the next read
+  with a fresh status continues after it. `read_until` keeps the
+  buffer-you-pass form.
+
 - Failure is state you pass in: new `std/fail` (`fail.Status`, `fail.Failure`,
   `fail.Kind`, `fail.make`, `fail.set`, `fail.invalid`, `fail.describe`,
   `fail.panic_on_failure`). A function that can fail takes a `*fail.Status`;
