@@ -71,7 +71,7 @@ pub fn tooltip(state: *State, label: []const u8, text: []const u8, target: *cons
   }
   push_parent(state, state.root)
   panel := build(state, DrawBackground | DrawBorder | DrawText | FloatingX | FloatingY, label)
-  copied := mem.push_bytes_uninit(state.frame, #len(text))
+  copied := mem.push_bytes(state.frame, #len(text))
   _ = mem.copy(copied, text)
   panel.text = copied
   panel.width = text_size(6.0, 1.0)

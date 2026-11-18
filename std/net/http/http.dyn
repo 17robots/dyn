@@ -695,7 +695,7 @@ pub fn decode_chunked(arena: *memory.Arena, status: *fail.Status, input: []const
     malformed(status, "decode chunked body", "malformed chunk framing", scanned.offset)
     return Chunked{}
   }
-  destination := memory.push_bytes_uninit(arena, scanned.count)
+  destination := memory.push_bytes(arena, scanned.count)
   _ = scan_chunked(input[..scanned.consumed], destination, true)
   return Chunked{ value: destination, consumed: scanned.consumed }
 }
@@ -2137,7 +2137,9 @@ fn client_failed(status: *fail.Status, message: []const u8, offset: usize) Clien
 
 fn client_receive(arena: *memory.Arena, status: *fail.Status, input: io.Reader, method: []const u8) ClientResponse {
   if status.failed { return ClientResponse{} }
-  response_storage := arena.data[..0]
+  // The response is the arena's last allocation: it grows by moving into a
+  // larger one, and completion rewinds the arena to its end.
+  response_storage: []u8
   used: usize = 0
   ended := false
   head := HttpHead{}
@@ -2193,18 +2195,21 @@ fn client_receive(arena: *memory.Arena, status: *fail.Status, input: io.Reader, 
       }
       if complete {
         total := head.header_length + body_length
-        // append_many can move the contiguous response into a later block.
-        // Its start is unrelated to the exchange's rollback entry mark.
+        // Growth can move the response into a later block, so its start is
+        // unrelated to the exchange's rollback entry mark.
         response_mark := memory.arena_mark(arena) - #len(response_storage)
         memory.arena_rewind(arena, response_mark + total)
         return ClientResponse{ raw: response_storage[..total], body: response_storage[head.header_length..total], status: head.code }
       }
     }
     if ended { return client_failed(status, "the response ends early", used) }
-    scratch: [4096]u8
-    count := io.read(status, input, scratch[..])
+    if #len(response_storage) - used < 4096 {
+      grown := memory.push_bytes(arena, 2 * #len(response_storage) + 4096)
+      _ = memory.copy(grown, response_storage[..used])
+      response_storage = grown
+    }
+    count := io.read(status, input, response_storage[used..])
     if status.failed { return ClientResponse{} }
-    memory.append_many_grow(arena, &response_storage, scratch[..count])
     used += count
     ended = count == 0
   }
@@ -2240,7 +2245,7 @@ pub fn write_request(arena: *memory.Arena, method: []const u8, target: []const u
     size += length
   }
   mark := memory.arena_mark(arena)
-  space := memory.push_bytes_uninit(arena, size)
+  space := memory.push_bytes(arena, size)
   output := request_into(space, method, target, host, body)
   memory.arena_rewind(arena, mark + #len(output))
   return output
@@ -2250,7 +2255,7 @@ pub fn write_request(arena: *memory.Arena, method: []const u8, target: []const u
 pub fn write_response(arena: *memory.Arena, code: u16, reason: []const u8, content_type: []const u8, body: []const u8) []u8 {
   size: usize = 96 + #len(reason) + #len(content_type) + #len(body)
   mark := memory.arena_mark(arena)
-  space := memory.push_bytes_uninit(arena, size)
+  space := memory.push_bytes(arena, size)
   output := response_into(space, code, reason, content_type, body)
   memory.arena_rewind(arena, mark + #len(output))
   return output

@@ -426,13 +426,13 @@ pub fn format(arena: *mem.Arena, value: Int, base: u32) []u8 {
     #panic("big.format base must be 2 through 36")
   }
   if is_zero(value) {
-    text := mem.push_bytes_uninit(arena, 1)
+    text := mem.push_bytes(arena, 1)
     text[0] = '0'
     return text
   }
   // Digits come out least significant first into scratch after the output.
   capacity := #len(value.limbs) * 32 + 2
-  output := mem.push_bytes_uninit(arena, capacity)
+  output := mem.push_bytes(arena, capacity)
   mark := mem.arena_mark(arena)
   work := mem.push_array(u32, arena, #len(value.limbs))
   _ = mem.copy(work, value.limbs)
@@ -486,7 +486,7 @@ pub fn from_bytes(arena: *mem.Arena, data: []const u8) Int {
 // The magnitude as big-endian bytes without leading zeros; zero is empty.
 pub fn to_bytes(arena: *mem.Arena, value: Int) []u8 {
   count := (bit_length(value) + 7) / 8
-  data := mem.push_bytes_uninit(arena, count)
+  data := mem.push_bytes(arena, count)
   for i in 0..count {
     position := count - 1 - i
     data[i] = value.limbs[position / 4] >> #cast(u32, 8 * (position % 4)) & 255

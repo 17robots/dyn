@@ -32,6 +32,10 @@ const ReadUnsigned: u64 = 256
 const ReadSigned: u64 = 512
 const ReadFloat: u64 = 768
 
+fn tape(arena: *memory.Arena, capacity: usize) []Value {
+  return memory.push_array(Value, arena, capacity)
+}
+
 fn read_append(state: *ReadParser, kind: u8, bits: u64) usize {
   if state.used == #len(state.values) {
     old := #len(state.values)
@@ -42,13 +46,18 @@ fn read_append(state: *ReadParser, kind: u8, bits: u64) usize {
     if capacity <= old {
       #panic("JSON compact node bound")
     }
-    if memory.arena_try_extend(state.arena, #cast(*u8, &state.values[0]), old * 16, (capacity - old) * 16) {
+    // A tape that is the arena's newest push grows in place when its block
+    // has room. Otherwise it moves: parsing retains indexes, not node
+    // pointers, so relative subtree spans survive; strings point into the
+    // stable buffer.
+    block := state.arena.current
+    cursor := #cast(usize, &block.data[0]) + block.offset
+    extra := (capacity - old) * #sizeof(Value)
+    if #cast(usize, &state.values[0]) + old * #sizeof(Value) == cursor && #len(block.data) - block.offset >= extra {
+      _ = tape(state.arena, capacity - old)
       state.values = #slice(&state.values[0], capacity)
     } else {
-      // Parsing retains indexes, not node pointers. Moving the complete tape
-      // preserves relative subtree spans; string pointers refer to stable buffer.
-      storage := memory.arena_push_uninit(state.arena, capacity * 16, 8)
-      replacement := #slice(#cast(*Value, storage), capacity)
+      replacement := tape(state.arena, capacity)
       _ = memory.copy(replacement[..state.used], state.values[..state.used])
       state.values = replacement
     }
@@ -262,8 +271,7 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *co
     fail.invalid(status, "parse JSON", "", "the input lies in the arena's free space")
     return &nil_value
   }
-  copy := memory.arena_push_uninit(arena, #len(source), 1)
-  buffer := #slice(copy, #len(source))
+  buffer := memory.push_bytes(arena, #len(source))
   _ = memory.copy(buffer, source)
   capacity := #len(source) / 2 + 1
   if capacity > 32 {
@@ -274,8 +282,7 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *co
   if probe.at < #len(buffer) && buffer[probe.at] != '[' && buffer[probe.at] != '{' {
     capacity = 1
   }
-  storage := memory.arena_push_uninit(arena, capacity * 16, 8)
-  values := #slice(#cast(*Value, storage), capacity)
+  values := tape(arena, capacity)
   state := ReadParser{ cursor: probe, buffer: buffer, values: values, limit: limit, arena: arena }
   ok := read_value(&state, 0)
   read_skip(&state.cursor)

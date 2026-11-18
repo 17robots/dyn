@@ -48,7 +48,7 @@ pub fn seal(arena: *mem.Arena, status: *fail.Status, kind: Cipher, plaintext: []
     return Sealed{}
   }
   mark := mem.arena_mark(arena)
-  output := mem.push_bytes_uninit(arena, count + 16)
+  output := mem.push_bytes(arena, count + 16)
   ciphertext := output[..count]
   tag := output[count..]
   if kind == Cipher.Chacha20Poly1305 {
@@ -81,7 +81,7 @@ pub fn open(arena: *mem.Arena, status: *fail.Status, kind: Cipher, ciphertext: [
     return empty
   }
   mark := mem.arena_mark(arena)
-  plaintext := mem.push_bytes_uninit(arena, count)
+  plaintext := mem.push_bytes(arena, count)
   if kind == Cipher.Chacha20Poly1305 {
     native.open(status, plaintext, ciphertext, tag, additional, key, nonce)
   } else {

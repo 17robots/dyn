@@ -272,10 +272,14 @@ pub fn case_fold(arena: *mem.Arena, status: *fail.Status, source: []const u8) []
     fail.at(status, fail.Kind.InvalidInput, "convert text", "invalid UTF-8", invalid)
     return empty
   }
-  capacity := mem.trial_size(arena, 2 * #len(source) + 16)
-  for capacity > 0 {
+  room := mem.arena_room(arena)
+  capacity := 2 * #len(source) + 16
+  if capacity > room {
+    capacity = room
+  }
+  for capacity <= #max(usize) / 4 {
     mark := mem.arena_mark(arena)
-    space := mem.push_bytes_uninit(arena, capacity)
+    space := mem.push_bytes(arena, capacity)
     result := case_fold_into(space, source)
     if result.ok {
       mem.arena_rewind(arena, mark + result.written)
@@ -286,9 +290,15 @@ pub fn case_fold(arena: *mem.Arena, status: *fail.Status, source: []const u8) []
       fail.set(status, fail.make(result.error, "convert text", "", "the text could not be converted"))
       return empty
     }
-    capacity = mem.trial_next(arena, capacity)
+    if capacity == room {
+      #panic("arena exhausted: the output does not fit")
+    }
+    capacity = capacity * 2
+    if capacity > room {
+      capacity = room
+    }
   }
-  #panic("arena exhausted")
+  #panic("output size overflows")
 }
 
 // source in normalization form, into arena.
@@ -300,28 +310,29 @@ pub fn normalize(arena: *mem.Arena, status: *fail.Status, source: []const u8, fo
     fail.at(status, fail.Kind.InvalidInput, "convert text", "invalid UTF-8", invalid)
     return empty
   }
-  capacity := mem.trial_size(arena, 2 * #len(source) + 16)
-  for capacity > 0 {
+  // Each output byte needs eight work bytes beside it, plus alignment.
+  room := mem.arena_room(arena)
+  if room != #max(usize) {
+    if room > 3 { room = (room - 3) / 9 } else { room = 0 }
+  }
+  capacity := 2 * #len(source) + 16
+  if capacity > room {
+    capacity = room
+  }
+  for capacity <= #max(usize) / 4 {
     mark := mem.arena_mark(arena)
-    work_size := mem.size_for(capacity, 2 * #sizeof(u32))
-    if !work_size.valid {
-      #panic("arena size overflow")
-    }
-    work_count := work_size.bytes / #sizeof(u32)
-    maximum := #max(usize)
-    alignment := #alignof(u32)
-    padding := alignment - 1
-    if work_size.bytes > maximum - capacity ||
-      work_size.bytes + capacity > maximum - padding {
-      #panic("arena size overflow")
-    }
     // One live allocation keeps scratch and output together across arena
     // blocks. Compaction must finish before rewind can release that block.
-    allocation := mem.push_bytes_uninit(arena, work_size.bytes + capacity + padding)
-    address := #cast(usize, &allocation[0])
-    skip := (alignment - (address & (alignment - 1))) & (alignment - 1)
+    if capacity > #max(usize) / 16 {
+      #panic("output size overflows")
+    }
+    work_count := 2 * capacity
+    work_bytes := work_count * #sizeof(u32)
+    padding := #alignof(u32) - 1
+    allocation := mem.push_bytes(arena, work_bytes + capacity + padding)
+    skip := (#alignof(u32) - (#cast(usize, &allocation[0]) & padding)) & padding
     work := #slice(#cast(*u32, &allocation[skip]), work_count)
-    space := allocation[skip + work_size.bytes..skip + work_size.bytes + capacity]
+    space := allocation[skip + work_bytes..skip + work_bytes + capacity]
     // Decomposition and reordering initialize their slots before reading them.
     result := normalize_into(space, source, form, work)
     if result.ok {
@@ -335,8 +346,14 @@ pub fn normalize(arena: *mem.Arena, status: *fail.Status, source: []const u8, fo
       fail.set(status, fail.make(result.error, "convert text", "", "the text could not be converted"))
       return empty
     }
-    capacity = mem.trial_next(arena, capacity)
+    if capacity == room {
+      #panic("arena exhausted: the output does not fit")
+    }
+    capacity = capacity * 2
+    if capacity > room {
+      capacity = room
+    }
   }
-  #panic("arena exhausted")
+  #panic("output size overflows")
 }
 

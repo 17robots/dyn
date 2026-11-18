@@ -377,7 +377,7 @@ pub fn build(state: *State, flags: u32, label: []const u8) *Box {
     seed = top(state).key
   }
   shown := display_text(label)
-  copied := mem.push_bytes_uninit(state.frame, #len(shown))
+  copied := mem.push_bytes(state.frame, #len(shown))
   _ = mem.copy(copied, shown)
   return build_key(state, flags, key(seed, label), copied)
 }

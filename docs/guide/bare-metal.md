@@ -91,8 +91,9 @@ Arenas are the only allocator, as on every target. `mem.arena_alloc` takes
 its capacity from one fixed region. Releasing the newest arena returns its
 memory to the region; releasing an older one keeps its memory reserved until
 every newer arena is released too. For predictable use, create long-lived
-arenas first and carve short-lived work out of them with `mem.arena_sub`, or
-give `mem.arena_from_buffer` a module-level array.
+arenas first and carve short-lived work out of them with
+`mem.arena_from_source(mem.within(parent, limit))`, or give
+`mem.arena_from_buffer` a module-level array.
 
 ## Device registers
 

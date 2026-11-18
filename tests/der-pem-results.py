@@ -60,7 +60,7 @@ fn main() {
   check(!eof.found && eof.offset == 5 && der.finished(&c))
   storage: [4096]u8
   arena := mem.arena_from_buffer(storage[..])
-  prefix := mem.push_bytes_uninit(arena, 7)
+  prefix := mem.push_bytes(arena, 7)
   prefix[0] = 42
   mark := mem.arena_mark(arena)
   valid := pem.decode(arena, &status, "prefix\n-----BEGIN TEST-----\nAQID\n-----END TEST-----\ntail")

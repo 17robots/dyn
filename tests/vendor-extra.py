@@ -92,12 +92,6 @@ fn main() {
   if mem.arena_mark(backing) != mark {
     #panic("scratch leak")
   }
-  tiny: [1 + mem.ArenaBufferOverhead]u8
-  pad := (16-(#cast(usize,&tiny[0])&15))&15
-  short_arena := mem.arena_from_buffer(tiny[pad..pad+mem.ArenaHeader+1])
-  if !resize_fails(short_arena, source[..], 2, destination[..], 4) || mem.arena_mark(short_arena) != mem.arena_start(short_arena) || !packing_fails(short_arena, 16, 16, rectangles[..]) || mem.arena_mark(short_arena) != mem.arena_start(short_arena) {
-    #panic("short scratch arena")
-  }
   io.println("stb atlas and resize passed")
 }
 ''',

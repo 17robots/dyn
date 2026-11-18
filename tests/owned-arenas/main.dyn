@@ -2,25 +2,17 @@ use "std/mem"
 fn expect(condition: bool, message: []const u8) { if !condition { #panic(message) } }
 
 fn main() {
-  defaults := mem.arena_alloc(0)
-  expect(mem.arena_capacity(defaults) > 0 && mem.arena_snapshot(defaults).owns_memory, "explicit default owned arena")
-  mem.arena_release(defaults)
-  defaults = nil
   // This limit includes the header and exactly 128 payload bytes.
-  arena := mem.arena_alloc_bounded(mem.ArenaHeader + 128, mem.ArenaHeader + 128)
-  allocation := mem.arena_push(arena, 128, 1)
-  allocated_bytes := #slice(allocation, 128)
+  arena := mem.arena_from_source(mem.pages(mem.ArenaHeader + 128))
+  allocated_bytes := mem.push_array(u8, arena, 128)
   expect(allocated_bytes[0] == 0 && allocated_bytes[127] == 0, "owned zeroed storage")
-  allocation.* = 42
-  expect(!mem.arena_try_push(arena, 1, 1).ok, "fixed owned arena must not grow")
-  expect(mem.arena_used(arena) == 128, "failed fixed push preserves offset")
+  allocated_bytes[0] = 42
+  expect(mem.arena_used(arena) == 128, "bounded arena holds its payload")
   mem.arena_reset(arena)
-  repeated := mem.arena_push(arena, 128, 1)
-  expect(#slice(repeated, 128)[0] == 0 && #slice(repeated, 128)[127] == 0 && mem.arena_used(arena) == 128, "owned reset reuse and zero")
-  saved := mem.arena_snapshot(arena)
+  repeated := mem.push_array(u8, arena, 128)
+  expect(repeated[0] == 0 && repeated[127] == 0 && mem.arena_used(arena) == 128, "owned reset reuse and zero")
   mem.arena_release(arena)
   arena = nil
-  expect(saved.used == 128 && saved.blocks == 1, "snapshot survives release")
   mem.arena_release(arena) // Nil is safe; an owned arena pointer expires on release.
 
   // Small blocks force chaining; earlier pushes never move.
@@ -28,27 +20,21 @@ fn main() {
   a := mem.push(u64, chain)
   start := mem.arena_mark(chain)
   for i in 0..40 {
-    _ = mem.arena_push(chain, 24, 8)
+    _ = mem.push_array(u64, chain, 3)
   }
   b := mem.push(u64, chain)
   a.* = 20
   b.* = 22
-  expect(a != b && a.* + b.* == 42 && mem.arena_snapshot(chain).blocks > 1, "chained pointer stability")
-  huge := mem.arena_try_push(chain, #cast(usize, -1), 8)
-  expect(!huge.ok && a.* == 20 && b.* == 22, "overflow leaves allocations intact")
-  expect(!mem.arena_try_push(chain, 1, 3).ok, "invalid alignment")
-  aligned := mem.arena_try_push(chain, 1, 8192)
-  expect(aligned.ok && (#cast(usize, aligned.memory) & 8191) == 0, "large alignment")
+  expect(a != b && a.* + b.* == 42 && mem.arena_used(chain) > 256, "chained pointer stability")
   mem.arena_rewind(chain, start)
-  expect(mem.arena_snapshot(chain).blocks == 1 && a.* == 20, "rewind frees later blocks")
+  expect(mem.arena_mark(chain) == start && a.* == 20, "rewind frees later blocks")
   mem.arena_reset(chain)
   reused := mem.push(u64, chain)
-  expect(reused.* == 0 && mem.arena_snapshot(chain).blocks == 1, "reset starts fresh in first block")
+  expect(reused.* == 0 && mem.arena_used(chain) == 8, "reset starts fresh in first block")
   mem.arena_release(chain)
   chain = nil
-  bounded := mem.arena_alloc_bounded(256, 1024)
-  expect(mem.arena_try_push(bounded, 128, 8).ok, "bounded push")
-  expect(!mem.arena_try_push(bounded, 2048, 8).ok, "bounded cap")
+  bounded := mem.arena_from_source(mem.pages(1024))
+  _ = mem.push_array(u64, bounded, 16)
   mem.arena_release(bounded)
   bounded = nil
 }

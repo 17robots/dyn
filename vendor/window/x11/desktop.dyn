@@ -772,7 +772,7 @@ fn clipboard_request(window: *Window, emit_ordered: bool) {
   desktop.owns = desktop.paste_owner == window.handle
   if desktop.owns {
     desktop.incoming_arena = clipboard_arena(desktop.owned_length)
-    _ = mem.copy(mem.push_bytes_uninit(desktop.incoming_arena, desktop.owned_length), desktop.owned[..desktop.owned_length])
+    _ = mem.copy(mem.push_bytes(desktop.incoming_arena, desktop.owned_length), desktop.owned[..desktop.owned_length])
     clipboard_finish(window, true)
     return
   }
@@ -830,9 +830,9 @@ fn clipboard_read(window: *Window, incremental: bool) {
   }
   if !desktop.incoming_failed && count != 0 {
     if desktop.incoming_arena == nil {
-      desktop.incoming_arena = mem.arena_alloc_bounded(clipboard_limit + mem.ArenaHeader, clipboard_limit + mem.ArenaHeader)
+      desktop.incoming_arena = mem.arena_from_source(mem.pages(clipboard_limit + mem.ArenaHeader))
     }
-    _ = mem.copy(mem.push_bytes_uninit(desktop.incoming_arena, count), #slice(data, count))
+    _ = mem.copy(mem.push_bytes(desktop.incoming_arena, count), #slice(data, count))
   }
   if data != nil {
     _ = free(data)
@@ -945,7 +945,7 @@ fn desktop_selection(window: *Window, event: *Event) {
             transfer := &desktop.outgoing[i]
             if transfer.requestor == 0 {
               transfer.arena = clipboard_arena(desktop.owned_length)
-              transfer.bytes = mem.push_bytes_uninit(transfer.arena, desktop.owned_length)
+              transfer.bytes = mem.push_bytes(transfer.arena, desktop.owned_length)
               _ = mem.copy(transfer.bytes, desktop.owned[..desktop.owned_length])
               transfer.requestor = request.requestor
               transfer.property = property
@@ -1008,7 +1008,7 @@ pub fn try_set_clipboard(status: *fail.Status, window: *Window, text: []const u8
     }
   }
   arena := clipboard_arena(#len(text))
-  owned := mem.push_bytes_uninit(arena, #len(text))
+  owned := mem.push_bytes(arena, #len(text))
   _ = mem.copy(owned, text)
   desktop := &window.desktop
   _ = set_owner(window.display, desktop.clipboard_atom, window.handle, 0)
@@ -1131,7 +1131,7 @@ fn clipboard_incoming_used(desktop: *Desktop) usize {
 
 fn clipboard_arena(size: usize) *mem.Arena {
   backing := math.max(size, 1) + mem.ArenaHeader
-  return mem.arena_alloc_bounded(backing, backing)
+  return mem.arena_from_source(mem.pages(backing))
 }
 fn clipboard_bytes(arena: *const mem.Arena) []u8 {
   empty: []u8

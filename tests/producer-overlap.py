@@ -16,7 +16,7 @@ fn main() {
   buffer:[4+mem.ArenaBufferOverhead]u8
   pad:=(16-(#cast(usize,&buffer[0])&15))&15
   arena:=mem.arena_from_buffer(buffer[pad..pad+mem.ArenaHeader+4])
-  _=mem.push_bytes_uninit(arena,1)
+  _=mem.push_bytes(arena,1)
   payload:=arena.data[mem.ArenaHeader..]
   _=mem.copy(payload,"abc")
   mark:=mem.arena_mark(arena)
@@ -30,11 +30,11 @@ fn main() {
   text_payload[0]='a'
   work:fail.Status
   _=text.normalize(unicodearena,&work,text_payload[..1],text.Form.NFC)
-  if !work.failed || mem.arena_mark(unicodearena)!=mem.arena_start(unicodearena) || text_payload[0]!='a' { #panic("normalization work overlap") }
+  if !work.failed || mem.arena_mark(unicodearena)!=mem.ArenaHeader || text_payload[0]!='a' { #panic("normalization work overlap") }
   text_payload[144]='A'
   output:fail.Status
   _=text.normalize(unicodearena,&output,text_payload[144..145],text.Form.NFC)
-  if !output.failed || mem.arena_mark(unicodearena)!=mem.arena_start(unicodearena) || text_payload[144]!='A' { #panic("normalization output overlap") }
+  if !output.failed || mem.arena_mark(unicodearena)!=mem.ArenaHeader || text_payload[144]!='A' { #panic("normalization output overlap") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-producer-overlap-') as directory:

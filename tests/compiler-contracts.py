@@ -10,17 +10,6 @@ import unittest
 DYN = str(Path(os.environ.get('DYN', './build/dyn')).resolve())
 
 class Contracts(unittest.TestCase):
-    def test_scratch_rejects_all_conflicting_candidates(self):
-        with tempfile.TemporaryDirectory(prefix='dyn-scratch-conflict-') as directory:
-            root = Path(directory)
-            (root / 'main.dyn').write_text('use "std/mem"\nfn main() {\nstorage: [8 + mem.ArenaBufferOverhead]u8\n'
-                'arena := mem.arena_from_buffer(storage[..])\n'
-                '_ = mem.scratch_begin(arena, arena, arena) }\n')
-            subprocess.run([DYN, 'build', directory, '--quiet', '--no-cache', '--output', str(root / 'program')], check=True)
-            result = subprocess.run([str(root / 'program')], capture_output=True, text=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn('scratch requires a non-conflicting arena', result.stderr)
-
     def test_public_entry_survives_dependency_interface_compilation(self):
         with tempfile.TemporaryDirectory(prefix='dyn-public-main-') as directory:
             root = Path(directory)

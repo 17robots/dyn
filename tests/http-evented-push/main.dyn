@@ -56,7 +56,7 @@ fn scratch(status: *fail.Status, response: *http.Response, request: *const http.
     text(status, response, 500, "no arena")
     return
   }
-  block := mem.push_bytes_uninit(arena, 4096)
+  block := mem.push_bytes(arena, 4096)
   out := json.writer(status, block)
   json.object_begin(&out)
   json.field(&out, "worker", evented.worker_index(response))
@@ -435,7 +435,7 @@ fn main() {
   config.evict_idle_milliseconds = 200
   config.compress_level = 6
   config.on_large_body = large_body
-  storage := mem.arena_sub(arena, evented.storage_size(config, WorkerCount) + mem.MiB)
+  storage := mem.arena_from_source(mem.within(arena, evented.storage_size(config, WorkerCount) + mem.MiB))
   address := net.ipv4(127, 0, 0, 1, 0)
   listener := net.tcp_listen_ipv4(&setup, &address, 64)
   _ = evented.start(storage, &setup, workers[..], &listener, config, binding.handler, binding.context)

@@ -40,7 +40,7 @@ fn good(raw: []const u8, hx: []const u8, upper: []const u8, b64: []const u8) {
   backing: [4096 + mem.ArenaBufferOverhead]u8
   mem.fill(backing[..], 99)
   a := mem.arena_from_buffer(backing[..])
-  prefix := mem.push_bytes_uninit(a, 7)
+  prefix := mem.push_bytes(a, 7)
   a.poison_on_rewind = true
   x := hd(a, hx)
   y := bd(a, b64)
@@ -48,7 +48,7 @@ fn good(raw: []const u8, hx: []const u8, upper: []const u8, b64: []const u8) {
   if x.failure.kind != fail.Kind.Ok || y.failure.kind != fail.Kind.Ok || z.failure.kind != fail.Kind.Ok || !bytes.equal(x.value, raw) || !bytes.equal(y.value, raw) || !bytes.equal(z.value, raw) { #panic("decode oracle") }
   if x.failure.offset != 0 || y.failure.offset != 0 || z.failure.offset != 0 ||
      x.failure.kind != fail.Kind.Ok || y.failure.kind != fail.Kind.Ok || z.failure.kind != fail.Kind.Ok { #panic("success diagnostics") }
-  if mem.arena_mark(a) != mem.arena_start(a) + 7 + 3 * #len(raw) { #panic("exact decode allocation") }
+  if mem.arena_mark(a) != mem.ArenaHeader + 7 + 3 * #len(raw) { #panic("exact decode allocation") }
   if !bytes.equal(h.encode(a, raw, false), hx) || !bytes.equal(h.encode(a, raw, true), upper) || !bytes.equal(b.encode(a, raw), b64) { #panic("encode oracle") }
   for c in prefix { if c != 99 { #panic("success changed prefix") } }
 }
@@ -56,7 +56,7 @@ fn bad(input: []const u8, off: usize, hex: bool) {
   backing: [128 + mem.ArenaBufferOverhead]u8
   mem.fill(backing[..], 99)
   a := mem.arena_from_buffer(backing[..])
-  prefix := mem.push_bytes_uninit(a, 7)
+  prefix := mem.push_bytes(a, 7)
   a.poison_on_rewind = true
   if hex {
     r := hd(a, input)
@@ -65,7 +65,7 @@ fn bad(input: []const u8, off: usize, hex: bool) {
     r := bd(a, input)
     if #len(r.value) != 0 || r.failure.offset != off || r.failure.kind != fail.Kind.InvalidInput { #panic("base64 invalid diagnostics") }
   }
-  if mem.arena_mark(a) != mem.arena_start(a) + 7 { #panic("invalid rollback") }
+  if mem.arena_mark(a) != mem.ArenaHeader + 7 { #panic("invalid rollback") }
   for c in a.data[mem.ArenaHeader..] { if c != 99 { #panic("invalid touched dirty arena") } }
 }
 fn overlap(hex: bool, invalid: bool, start: usize) {
@@ -79,7 +79,7 @@ fn overlap(hex: bool, invalid: bool, start: usize) {
   payload := a.data[mem.ArenaHeader..mem.ArenaHeader + 32]
   _ = mem.copy(payload[start..], input)
   _ = mem.copy(snapshot[..], payload)
-  _ = mem.push_bytes_uninit(a, 4)
+  _ = mem.push_bytes(a, 4)
   a.poison_on_rewind = true
   detail := fail.Kind.InvalidInput
   if invalid { detail = fail.Kind.InvalidInput }
@@ -90,7 +90,7 @@ fn overlap(hex: bool, invalid: bool, start: usize) {
     r := bd(a, payload[start..start + 4])
     if #len(r.value) != 0 || r.failure.offset != 0 || r.failure.kind != detail { #panic("base64 overlap preflight") }
   }
-  if mem.arena_mark(a) != mem.arena_start(a) + 4 || !bytes.equal(payload, snapshot[..]) { #panic("overlap changed source or arena") }
+  if mem.arena_mark(a) != mem.ArenaHeader + 4 || !bytes.equal(payload, snapshot[..]) { #panic("overlap changed source or arena") }
 }
 fn main() {
   z := Decoded{}
@@ -159,12 +159,12 @@ x := bd(a, "AAAA!!!!")
 y := hd(a, "6162!!")
 if x.failure.offset != 4 || y.failure.offset != 4 ||
    x.failure.kind != fail.Kind.InvalidInput || y.failure.kind != fail.Kind.InvalidInput ||
-   #len(x.value) != 0 || #len(y.value) != 0 || mem.arena_mark(a) != mem.arena_start(a) { #panic("validation before exhaustion") }
+   #len(x.value) != 0 || #len(y.value) != 0 || mem.arena_mark(a) != mem.ArenaHeader { #panic("validation before exhaustion") }
 x = bd(a, "")
 y = hd(a, "")
 if x.failure.kind != fail.Kind.Ok || y.failure.kind != fail.Kind.Ok || #len(x.value) != 0 || #len(y.value) != 0 ||
    x.failure.offset != 0 || y.failure.offset != 0 ||
-   x.failure.kind != fail.Kind.Ok || y.failure.kind != fail.Kind.Ok || mem.arena_mark(a) != mem.arena_start(a) { #panic("empty at capacity") }
+   x.failure.kind != fail.Kind.Ok || y.failure.kind != fail.Kind.Ok || mem.arena_mark(a) != mem.ArenaHeader { #panic("empty at capacity") }
 }
 '''
     return program, len(cases)

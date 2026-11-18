@@ -47,11 +47,9 @@ is reported as `ok` false; size never is.
 | HTTP and WebSocket writers, DNS queries, `time.format_iso8601`, `debug.hexdump`, `flags.usage` | Bytes in arena |
 | `process.environment`, `fs.read_link`, `fs.app_directory` | Text in arena |
 
-`mem.arena_try_push` reports exhaustion through `Allocation.error`, which distinguishes invalid
-alignment, capacity, invalid arena state and overflow. Mapping-allocation failures
-keep their native code, including zero. Header commitment currently reports the
-synthetic out-of-memory code `-12`; it does not expose the underlying Win32
-commitment diagnostic. Ordinary page-commit failures during a push still panic.
+Arena functions in this table panic when the arena is exhausted, with a
+message that says whether a buffer was full, a limit was reached or the OS
+refused memory. Size the arena from the input.
 
 Retained-result lifetimes are listed in [memory](memory.md#what-each-result-borrows).
 A numeric mark is not a generation-checked token: do not reuse marks across

@@ -67,9 +67,9 @@ pub fn write(status: *fail.Status, destination: []u8, source: []const u8, level:
 // arena and given back; only the output stays. It cannot fail: the output
 // is sized by compress_bound.
 pub fn compress(arena: *mem.Arena, source: []const u8, level: u8) []u8 {
-  output := mem.push_bytes_uninit(arena, compress_bound(#len(source)))
+  output := mem.push_bytes(arena, compress_bound(#len(source)))
   mark := mem.arena_mark(arena)
-  encoder := #cast(*Encoder, mem.arena_push_uninit(arena, #sizeof(Encoder), #alignof(Encoder)))
+  encoder := mem.push(Encoder, arena)
   status: fail.Status
   encoded := write(&status, output, source, level, encoder)
   mem.arena_rewind(arena, mark)

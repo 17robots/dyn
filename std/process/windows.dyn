@@ -53,8 +53,7 @@ fn encode_wide(destination: []u16, source: []const u8) usize {
 }
 fn wide(arena: *mem.Arena, source: []const u8) Wide {
   if #len(source) > 32766 { return Wide{} }
-  allocation := mem.arena_push_uninit(arena, (#len(source)+1)*2, 2)
-  destination := #slice(#cast(*u16, allocation), #len(source)+1)
+  destination := mem.push_array(u16, arena, #len(source)+1)
   length := encode_wide(destination, source)
   if length == 0 { return Wide{} }
   return Wide{ data: destination[..length], ok: true }
@@ -81,8 +80,7 @@ fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, argum
     }
     capacity += #len(argument)*2+3
   }
-  allocation := mem.arena_push_uninit(arena, capacity*2, 2)
-  command := #slice(#cast(*u16, allocation), capacity)
+  command := mem.push_array(u16, arena, capacity)
   used: usize = 0
   argument_index: usize = 0
   for argument_text in arguments {
@@ -143,12 +141,11 @@ fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, argum
     }
     environment_capacity += #len(item)+1
   }
-  environment_allocation := mem.arena_push(arena, environment_capacity*2, 2)
-  environment := #slice(#cast(*u16, environment_allocation), environment_capacity)
+  environment := mem.push_array(u16, arena, environment_capacity)
   environment_used: usize = 0
   // Keep a valid backing pointer even for the supported empty environment.
-  entries_allocation := mem.arena_push(arena, (#len(configuration.environment)+1)*#sizeof(Wide), #alignof(Wide))
-  entries := #slice(#cast(*Wide, entries_allocation), #len(configuration.environment))
+  entries_storage := mem.push_array(Wide, arena, #len(configuration.environment)+1)
+  entries := entries_storage[..#len(configuration.environment)]
   entry_index: usize = 0
   for entry in configuration.environment {
     converted := wide(arena, entry)
@@ -206,8 +203,9 @@ fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, argum
   }
   size: usize = 0
   _ = win_init_attributes(nil, 1, 0, &size)
-  attributes := mem.arena_push_uninit(arena, size, 8)
-  startup.attributes = attributes
+  // The attribute list holds pointers: keep it 8-byte aligned.
+  attributes := mem.push_array(u64, arena, (size + 7) / 8)
+  startup.attributes = &attributes[0]
   if win_init_attributes(startup.attributes, 1, 0, &size) == 0 {
     initialize_error := win_failure()
     return spawn_failed(status, io.from_windows("spawn", path, initialize_error))

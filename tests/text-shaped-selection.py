@@ -80,7 +80,7 @@ fn check(ok:bool) {if !ok {#panic("shaped selection")}}
 fn select(data:rawptr,text:[]const u8) layout.Face {return layout.Face{font:data,data:data}}
 struct Range {start:usize,end:usize,path:[]const u8}
 fn save(arena:*mem.Arena,rects:[]const layout.SelectionRect,path:[]const u8) {
- output:=mem.push_bytes_uninit(arena,4+#len(rects)*28)
+ output:=mem.push_bytes(arena,4+#len(rects)*28)
  binary.store_u32_le(output[..4],#cast(u32,#len(rects)))
  for i in 0..#len(rects) {
   r:=rects[i]
@@ -172,7 +172,7 @@ fn main() {
  check(!layout.cluster_at(&parity.value,10).rtl && !layout.cluster_at(&parity.value,13).rtl)
  mem.arena_reset(scratch)
  // Long lines must remain linear in glyph count, including selection queries.
- long_bytes:=mem.push_bytes_uninit(owner,20000)
+ long_bytes:=mem.push_bytes(owner,20000)
  for i in 0..#len(long_bytes) {long_bytes[i]=97}
  long_line:=layout_build(owner,long_bytes,descriptor,&h.api,&b.api,layout.Options{})
  check(!failed(long_line.failure))

@@ -124,8 +124,7 @@ fn audit_path(storage: []u8, text: []const u8) *const u8 {
 pub fn audit_callbacks() {
   allocation := mem.arena_alloc(mem.ArenaHeader + #alignof(State) + #sizeof(State))
   defer { mem.arena_release(allocation) }
-  pushed := mem.arena_push(allocation,#sizeof(State),#alignof(State))
-  state := #cast(*State, pushed)
+  state := mem.push(State, allocation)
   slot := &state.slots[0]
   slot.owner = state
   slot.id = 7

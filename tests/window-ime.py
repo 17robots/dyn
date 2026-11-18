@@ -16,7 +16,7 @@ fn ime_drain(host: *Window) { value := ordered.Event{}
 fn ime_clipboard_reply(host: *Window, text: []const u8) {
   desktop := &host.desktop
   desktop.incoming_arena = clipboard_arena(#len(text))
-  _ = mem.copy(mem.push_bytes_uninit(desktop.incoming_arena, #len(text)), text)
+  _ = mem.copy(mem.push_bytes(desktop.incoming_arena, #len(text)), text)
   desktop.paste_ordered = true
   clipboard_finish(host, true)
 }

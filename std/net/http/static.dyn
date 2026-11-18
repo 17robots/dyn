@@ -97,7 +97,7 @@ fn compressible(media: []const u8) bool {
 pub fn make_asset(arena: *memory.Arena, path: []const u8, body: []const u8) Asset {
   item := Asset{ path: path, content_type: content_type(path), body: body }
   digest := hash.hash64(body)
-  tag := memory.push_bytes_uninit(arena, 18)
+  tag := memory.push_bytes(arena, 18)
   digits := "0123456789abcdef"
   tag[0] = '"'
   for i in 0..16 {
@@ -186,11 +186,11 @@ pub fn load_directory(arena: *memory.Arena, status: *fail.Status, root: []const 
 
 fn join_path(arena: *memory.Arena, left: []const u8, right: []const u8) []u8 {
   if #len(left) == 0 {
-    joined := memory.push_bytes_uninit(arena, #len(right))
+    joined := memory.push_bytes(arena, #len(right))
     _ = memory.copy(joined, right)
     return joined
   }
-  joined := memory.push_bytes_uninit(arena, #len(left) + 1 + #len(right))
+  joined := memory.push_bytes(arena, #len(left) + 1 + #len(right))
   _ = memory.copy(joined[..#len(left)], left)
   joined[#len(left)] = '/'
   _ = memory.copy(joined[#len(left) + 1..], right)

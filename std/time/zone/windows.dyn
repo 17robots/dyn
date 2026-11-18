@@ -35,7 +35,7 @@ fn name(arena: *mem.Arena, data: []const u8, at: usize, units: usize) []const u8
     wide[count] = word(data, at + count * 2)
     count += 1
   }
-  output := mem.push_bytes_uninit(arena, count * 3)
+  output := mem.push_bytes(arena, count * 3)
   used: usize = 0
   index: usize = 0
   for index < count {

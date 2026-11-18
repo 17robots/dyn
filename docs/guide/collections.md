@@ -4,8 +4,6 @@
 | --- | --- | --- | --- |
 | Bytes or text | `std/bytes/builder` | Yes, when it grows | Only `append_grow` |
 | Everyday growing list | `array.Array(T)` (`std/container/array`) | Yes, when it grows | Yes |
-| Dense list, stable | `mem.append` | Never | Panics at the block end |
-| Dense list, growing | `mem.append_grow` | Yes | Yes |
 | Long list with stable items | Chunk list | Never | One chunk at a time |
 | Links through your own nodes | Intrusive list or tree | Never | No |
 | Lookup by key | `std/container/map` | Yes, when it grows | Yes |
@@ -51,7 +49,6 @@ shape:
 | --- | --- |
 | Fixed list | a slice from `mem.push_array(T, &arena, n)` |
 | Growing list | `array.Array(T)` with `array.init` (`std/container/array`) |
-| Growing list whose items never move | a slice that owns its arena, grown with `mem.append` |
 | Growing list on a shared arena | a chunk list (`std/container/chunk`) |
 | Trees, free lists, an item in several lists | intrusive links (`std/container/list`) |
 | Lookup by key | `map.Map(K, V)` with `map.init` (`std/container/map`) |
@@ -102,42 +99,6 @@ fn main() {
 - `get` returns nil past the end.
 - A full array moves to storage twice the size, so element pointers and copies
   of `items` go stale at the next push. The old storage stays in the arena.
-
-## Growing lists whose items never move
-
-A growing list can also be a slice whose elements are the newest allocation on its own
-arena. `mem.append` pushes the next element directly after the last one, so
-nothing is copied and element addresses never change:
-
-```dyn
-use "std/mem"
-
-struct Level {
-  enemy_arena: mem.Arena,
-  enemies: []Enemy,
-}
-
-fn spawn(level: *Level) {
-  enemy := mem.append(&level.enemy_arena, &level.enemies, Enemy{hp: 10})
-  enemy.hp += 1
-  for e in level.enemies {
-    _ = e.hp
-  }
-}
-```
-
-- `append` returns the new element. `append_many` appends a slice.
-- `append` panics when something else was pushed on that arena after the list,
-  which means the list does not own its arena. A list can also share an arena
-  if it is built completely before anything else is pushed.
-- Use `arena := mem.arena_alloc(0)` for an explicit default arena. One arena
-  per list reserves address space cheaply on 64-bit hosts. A list never moves;
-  it panics at the end of its block, and `try_append` returns a stub instead. `append_grow` moves the list to a new block, for a list nothing else holds, such as a result built on a caller's arena.
-  `append_grow` copies the whole list whenever anything else was pushed after
-  it, so two lists growing in turn on one arena copy on every append: give each
-  growing list its own arena, or use a chunk list. Fixed-buffer arenas never
-  chain and require header space. Reset invalidates their allocations too.
-- Resetting the arena empties the list; set the slice back to empty as well.
 
 ## Chunk lists
 

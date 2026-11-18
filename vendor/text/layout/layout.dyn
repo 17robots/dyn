@@ -69,7 +69,7 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
   context_text:=text[context_start..context_end]
   soft:=show_soft && #len(context_text)>=2 && context_text[#len(context_text)-2]==194 && context_text[#len(context_text)-1]==173
   if soft {
-    visible:=mem.push_bytes_uninit(arena, #len(context_text)-1)
+    visible:=mem.push_bytes(arena, #len(context_text)-1)
     _=mem.copy(visible[..#len(visible)-1], context_text[..#len(context_text)-2])
     visible[#len(visible)-1]=45
     context_text=visible
@@ -480,7 +480,7 @@ pub fn build(arena:*mem.Arena, status:*fail.Status, source:[]const u8, font:Font
   }
   kind:=paragraph(&output, api, bidi_api, source[begin..], begin, font, options)
   if kind!=fail.Kind.Ok { return paragraph_failed(status, kind, begin) }
-  text:=mem.push_bytes_uninit(arena, #len(source))
+  text:=mem.push_bytes(arena, #len(source))
   _=mem.copy(text, source)
   glyphs:=mem.push_array(Glyph, arena, output.glyph_count)
   lines:=mem.push_array(Line, arena, output.line_count)

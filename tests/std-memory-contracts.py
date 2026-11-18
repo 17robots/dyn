@@ -16,58 +16,7 @@ use "std/container/list" list
 struct Slot { free_next: *Slot, value: u64 }
 const nil_slot: Slot = Slot{}
 fn expect(ok: bool) { if !ok { #panic("std memory contract") } }
-fn fixed_empty(arena: *mem.Arena) {
-  before := mem.arena_snapshot(arena)
-  empty := mem.arena_try_push(arena, 0, 1)
-  expect(empty.ok && empty.memory == nil && empty.size == 0)
-  for i in 0..2 {
-    failed := mem.arena_try_push(arena, 1, 1)
-    expect(!failed.ok && failed.error == mem.ErrorKind.Capacity)
-    after := mem.arena_snapshot(arena)
-    expect(after.capacity == 0 && after.used == 0 && !after.owns_memory)
-    expect(after.peak_used == before.peak_used)
-    expect(after.allocation_failures == before.allocation_failures + i + 1)
-    mem.arena_reset(arena)
-    mem.arena_rewind(arena, 0)
-  }
-}
 fn main() {
-  no_payload: [mem.ArenaBufferOverhead]u8
-  empty_fixed := mem.arena_from_buffer(no_payload[..])
-  empty_fixed = mem.arena_from_buffer(empty_fixed.data[..mem.ArenaHeader])
-  fixed_empty(empty_fixed)
-  // Pointer ownership transfers explicitly; the old owner becomes inactive.
-  moved := empty_fixed
-  empty_fixed = nil
-  expect(empty_fixed == nil)
-  fixed_empty(moved)
-  mem.arena_release(moved)
-  moved = nil
-  mem.arena_release(moved)
-  // Reconstruct a released borrowed header before reusing its caller storage.
-  empty_fixed = mem.arena_from_buffer(no_payload[..])
-  empty_fixed = mem.arena_from_buffer(empty_fixed.data[..mem.ArenaHeader])
-  fixed_empty(empty_fixed)
-  mem.arena_release(empty_fixed)
-  sentinel: [mem.ArenaBufferOverhead + 2]u8
-  mem.fill(sentinel[..], 91)
-  empty_view := mem.arena_from_buffer(sentinel[1..#len(sentinel)-1])
-  empty_view = mem.arena_from_buffer(empty_view.data[..mem.ArenaHeader])
-  fixed_empty(empty_view)
-  expect(sentinel[0] == 91 && sentinel[#len(sentinel)-1] == 91)
-  parent_storage: [mem.ArenaHeader + 1 + mem.ArenaBufferOverhead]u8
-  parent := mem.arena_from_buffer(parent_storage[..])
-  parent = mem.arena_from_buffer(parent.data[..2 * mem.ArenaHeader + 1])
-  child := mem.arena_sub(parent, mem.ArenaHeader)
-  fixed_empty(child)
-  expect(mem.arena_used(parent) == mem.ArenaHeader)
-  allocated := mem.arena_try_push(parent, 1, 1)
-  expect(allocated.ok)
-  allocated.memory.* = 91
-  full := mem.arena_try_push(parent, 1, 1)
-  expect(!full.ok && full.error == mem.ErrorKind.Capacity)
-  expect(!parent.owns_memory && mem.arena_capacity(parent) == mem.ArenaHeader + 1 && mem.arena_used(parent) == mem.ArenaHeader + 1)
-  expect(allocated.memory.* == 91)
   storage: [8 * mem.KiB + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(storage[..])
   expect(bytes.equal(strings.clone(arena, "retained"), "retained"))
@@ -100,17 +49,19 @@ fn main() {
   list.free_push(&first_free, one)
   expect(list.free_pop(&first_free, &nil_slot) == one && first_free == nil)
 
-  growing := mem.arena_alloc_bounded(256, mem.KiB)
-  initial := #slice(mem.arena_push(growing, 32, 1), 32)
+  source := mem.pages(mem.KiB)
+  source.block_size = 256
+  growing := mem.arena_from_source(source)
+  initial := mem.push_array(u8, growing, 32)
   expect(initial[0] == 0 && initial[31] == 0)
   for i in 0..#len(initial) { initial[i] = 165 }
   mem.arena_reset(growing)
-  reused := #slice(mem.arena_push_uninit(growing, 32, 1), 32)
+  reused := mem.push_bytes(growing, 32)
   expect(reused[0] == 165 && reused[31] == 165)
   mem.arena_reset(growing)
-  cleared := #slice(mem.arena_push(growing, 32, 1), 32)
+  cleared := mem.push_array(u8, growing, 32)
   expect(cleared[0] == 0 && cleared[31] == 0)
-  expect(mem.arena_snapshot(growing).blocks == 1)
+  expect(growing.current == growing)
   mem.arena_release(growing)
 }
 '''

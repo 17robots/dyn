@@ -9,6 +9,15 @@ use "std/mem"
 use "std/bytes"
 use "std/process"
 fn require(value: bool, message: []const u8) { if !value { #panic(message) } }
+fn blocks(arena: *const mem.Arena) usize {
+ count: usize = 0
+ block := arena.current
+ for block != nil {
+  count += 1
+  block = block.previous
+ }
+ return count
+}
 fn main() {
  zero := mem.arena_alloc(0)
  defer mem.arena_release(zero)
@@ -24,7 +33,7 @@ fn main() {
  result_file: fail.Status
  result := fs.read_all(zero, &result_file, "DIR/small", 6)
  require(!result_file.failed && bytes.equal(result,"abcdef"),"lazy read")
- require(mem.arena_mark(zero)==mem.arena_start(zero)+6,"exact mark")
+ require(mem.arena_mark(zero)==mem.ArenaHeader+6,"exact mark")
  argv := mem.arena_alloc(0)
  defer mem.arena_release(argv)
  arguments_status: fail.Status
@@ -42,47 +51,34 @@ fn main() {
  require(!large_file.failed && #len(large)==131073,"large extent")
  for i in 0..#len(large) { require(large[i]==#cast(u8,i%251),"large payload") }
  storage: [5 + mem.ArenaBufferOverhead]u8
- fixed := mem.arena_from_buffer(storage[..])
- fixed.data = fixed.data[..mem.ArenaHeader + 5]
- short_file: fail.Status
- short := fs.read_all(fixed, &short_file, "DIR/small", 100)
- require(short_file.failed && short_file.failure.kind==fail.Kind.Capacity && mem.arena_mark(fixed)== mem.arena_start(fixed),"fixed rollback")
  fixed_empty := mem.arena_from_buffer(storage[..])
  fixed_empty.data = fixed_empty.data[..mem.ArenaHeader]
  empty_file: fail.Status
  empty := fs.read_all(fixed_empty, &empty_file, "DIR/empty", 100)
  require(!empty_file.failed && #len(empty)==0 && fixed_empty.fixed_buffer && !fixed_empty.owns_memory,"fixed empty")
- full_file: fail.Status
- full := fs.read_all(fixed_empty, &full_file, "DIR/small", 100)
- require(full_file.failed && full_file.failure.kind==fail.Kind.Capacity && fixed_empty.fixed_buffer && !fixed_empty.owns_memory,"fixed empty capacity")
- bounded := mem.arena_alloc_bounded(160,160)
+ bounded := mem.arena_from_source(mem.pages(160))
  defer mem.arena_release(bounded)
  bounded_small_file: fail.Status
  bounded_small := fs.read_all(bounded, &bounded_small_file, "DIR/small", 100)
  require(!bounded_small_file.failed && bytes.equal(bounded_small,"abcdef"),"bounded preferred capacity")
- bounded_mark:=mem.arena_mark(bounded)
- bounded_large_file: fail.Status
- bounded_large := fs.read_all(bounded, &bounded_large_file, "DIR/large", 100)
- require(bounded_large_file.failed && bounded_large_file.failure.kind==fail.Kind.Capacity && mem.arena_mark(bounded)==bounded_mark,"bounded rollback")
- require(bytes.equal(bounded_small,"abcdef"),"bounded retained payload")
  chained := mem.arena_alloc(160)
  defer mem.arena_release(chained)
- first := mem.push_bytes_uninit(chained,16)
+ first := mem.push_bytes(chained,16)
  for *byte in first { byte.*=71 }
- forced := mem.push_bytes_uninit(chained,17)
+ forced := mem.push_bytes(chained,17)
  for *byte in forced { byte.*=82 }
- require(mem.arena_snapshot(chained).blocks==2,"prior forced chain")
+ require(blocks(chained)==2,"prior forced chain")
  chain_mark:=mem.arena_mark(chained)
- chain_blocks:=mem.arena_snapshot(chained).blocks
+ chain_blocks:=blocks(chained)
  chain_empty_file: fail.Status
  chain_empty := fs.read_all(chained, &chain_empty_file, "DIR/empty", 100)
  require(!chain_empty_file.failed && #len(chain_empty)==0 && mem.arena_mark(chained)==chain_mark,"chain empty")
  chain_overflow_file: fail.Status
  chain_overflow := fs.read_all(chained, &chain_overflow_file, "DIR/large", 65537)
- require(chain_overflow_file.failed && chain_overflow_file.failure.kind==fail.Kind.Overflow && mem.arena_mark(chained)==chain_mark && mem.arena_snapshot(chained).blocks==chain_blocks,"chain rollback")
+ require(chain_overflow_file.failed && chain_overflow_file.failure.kind==fail.Kind.Overflow && mem.arena_mark(chained)==chain_mark && blocks(chained)==chain_blocks,"chain rollback")
  directory_error_file: fail.Status
  directory_error := fs.read_all(chained, &directory_error_file, "DIR", 100)
- require(directory_error_file.failed && mem.arena_mark(chained)==chain_mark && mem.arena_snapshot(chained).blocks==chain_blocks,"I/O error rollback")
+ require(directory_error_file.failed && mem.arena_mark(chained)==chain_mark && blocks(chained)==chain_blocks,"I/O error rollback")
  chain_small_file: fail.Status
  chain_small := fs.read_all(chained, &chain_small_file, "DIR/small", 6)
  require(!chain_small_file.failed && bytes.equal(chain_small,"abcdef"),"chain small payload")
@@ -91,21 +87,21 @@ fn main() {
  require(!chain_large_file.failed && #len(chain_large)==131073,"chain large extent")
  for i in 0..#len(chain_large) { require(chain_large[i]==#cast(u8,i%251),"chain large payload") }
  // Another block must not move earlier output or overwrite independent data.
- tail:=mem.push_bytes_uninit(chained,4096)
+ tail:=mem.push_bytes(chained,4096)
  for *byte in tail { byte.*=99 }
  require(bytes.equal(chain_small,"abcdef"),"chain output lifetime")
  for byte in first { require(byte==71,"first block canary") }
  for byte in forced { require(byte==82,"prior block canary") }
  fifo_arena:=mem.arena_alloc(160)
  defer mem.arena_release(fifo_arena)
- fifo_prefix:=mem.push_bytes_uninit(fifo_arena,16)
+ fifo_prefix:=mem.push_bytes(fifo_arena,16)
  for *byte in fifo_prefix { byte.*=83 }
- _=mem.push_bytes_uninit(fifo_arena,17)
+ _=mem.push_bytes(fifo_arena,17)
  pipe_file: fail.Status
  pipe := fs.read_all(fifo_arena, &pipe_file, "DIR/pipe", 70003)
  require(!pipe_file.failed && #len(pipe)==70003,"FIFO short reads")
  for i in 0..#len(pipe) { require(pipe[i]==#cast(u8,i%239),"FIFO payload") }
- _=mem.push_bytes_uninit(fifo_arena,4096)
+ _=mem.push_bytes(fifo_arena,4096)
  for i in 0..#len(pipe) { require(pipe[i]==#cast(u8,i%239),"FIFO output lifetime") }
  for byte in fifo_prefix { require(byte==83,"FIFO prefix canary") }
  // Regular files are sized once: no geometric copies stay pinned in the arena.
@@ -115,8 +111,7 @@ fn main() {
  sized_large := fs.read_all(sized, &sized_large_file, "DIR/large", 1048576)
  require(!sized_large_file.failed && #len(sized_large)==131073,"sized extent")
  for i in 0..#len(sized_large) { require(sized_large[i]==#cast(u8,i%251),"sized payload") }
- sized_state:=mem.arena_snapshot(sized)
- require(sized_state.used==131073 && sized_state.peak_used==131073,"sized single allocation")
+ require(mem.arena_used(sized)==131073,"sized single allocation")
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-read-all-') as tmp:
@@ -145,4 +140,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-read-all-') as tmp:
   t.join(timeout=16)
   assert completed.returncode==0,(mode,completed.stdout,completed.stderr)
   assert not t.is_alive() and not failures,failures
-  print('PASS file read',mode,': pointer args/read, EOF/max/capacity rollback, prior chained prefixes, contiguous 131073-byte file and 70003-byte FIFO lifetimes')
+  print('PASS file read',mode,': pointer args/read, EOF/max rollback, prior chained prefixes, contiguous 131073-byte file and 70003-byte FIFO lifetimes')

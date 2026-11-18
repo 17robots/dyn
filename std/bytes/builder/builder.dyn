@@ -19,23 +19,32 @@ pub fn clear(state: *Builder) {
   state.length = 0
 }
 
-// Exact capacity reservation. Panics when the arena is exhausted.
-// Extends the arena's most recent buffer in place when possible. Otherwise old
-// arena buffers remain allocated until the caller rewinds or resets.
+// Exact capacity reservation. Panics when the arena is exhausted. Storage
+// that is the arena's newest push grows in place when its block has room;
+// otherwise the bytes move and the old buffer stays allocated until the
+// caller rewinds or resets the arena.
 pub fn reserve(arena: *memory.Arena, state: *Builder, capacity: usize) {
   if state.length > #len(state.storage) {
     #panic("builder length is past its storage")
   }
   if capacity <= #len(state.storage) { return }
-  if #len(state.storage) > 0 && memory.arena_try_extend(arena, &state.storage[0],
-    #len(state.storage), capacity - #len(state.storage)) {
+  if at_cursor(arena, state.storage, capacity - #len(state.storage)) {
+    _ = memory.push_bytes(arena, capacity - #len(state.storage))
     state.storage = #slice(&state.storage[0], capacity)
     return
   }
-  allocated := memory.arena_push_uninit(arena, capacity, 1)
-  storage := #slice(allocated, capacity)
+  storage := memory.push_bytes(arena, capacity)
   _ = memory.move(storage, state.storage[..state.length])
   state.storage = storage
+}
+
+// Whether bytes end at the arena's cursor with extra more bytes free in the
+// same block, so push_bytes(arena, extra) continues them.
+fn at_cursor(arena: *const memory.Arena, bytes: []const u8, extra: usize) bool {
+  if #len(bytes) == 0 { return false }
+  block := arena.current
+  cursor := #cast(usize, &block.data[0]) + block.offset
+  return #cast(usize, &bytes[0]) + #len(bytes) == cursor && #len(block.data) - block.offset >= extra
 }
 
 // Bounded append supports overlap/self-append. Fails with Capacity, writing

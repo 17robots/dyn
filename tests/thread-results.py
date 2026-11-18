@@ -45,7 +45,7 @@ fn main() {
   joined(&empty)
   storage: [4096]u8
   arena := mem.arena_from_buffer(storage[..])
-  _ = mem.push_bytes_uninit(arena, 7)
+  _ = mem.push_bytes(arena, 7)
   mark := mem.arena_mark(arena)
   stack: [131072]u8
   for size in [0, 1, 255] {
@@ -78,7 +78,7 @@ fn main() {
   nodes := mem.arena_mark(arena)
   if nodes <= owned_mark { #panic("second node allocation") }
   // A later arena allocation must neither move nor overwrite either descriptor.
-  tail := mem.push_bytes_uninit(arena, 64)
+  tail := mem.push_bytes(arena, 64)
   for *byte in tail { byte.* = 99 }
   retained := mem.arena_mark(arena)
   sync.store_u32(&first.gate, 1)
@@ -136,7 +136,7 @@ def main():
                 output = build(work, EXHAUSTION.replace('SPAWN\n', 'status: fail.Status\n  _ = ' + call + '\n'), mode)
                 result = subprocess.run([str(output)], capture_output=True, timeout=10)
                 diagnostic = result.stdout + result.stderr
-                assert result.returncode == 101 and b'arena exhausted or alignment invalid' in diagnostic, (mode, diagnostic)
+                assert result.returncode == 101 and b'arena exhausted' in diagnostic, (mode, diagnostic)
                 assert b'WORKER_STARTED' not in diagnostic and b'SPAWN_RETURNED' not in diagnostic, diagnostic
             print('PASS native thread results and arena exhaustion ' + mode, flush=True)
             if args.cross:

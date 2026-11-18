@@ -9,8 +9,7 @@ search for a word finds the function that does it.
 ## Conventions
 
 - **No hidden allocation.** A function that needs memory takes a `*mem.Arena`
-  or a caller slice. Ordinary arena pushes panic when exhausted (`mem.try_push`
-  reports it instead); caller-slice functions report `Capacity` with the exact
+  or a caller slice. Arena pushes panic when exhausted; caller-slice functions report `Capacity` with the exact
   size `required`. See [memory](memory.md) and
   [buffer contracts](buffer-contracts.md).
 - **Borrowing is the default.** Returned slices borrow the input, the caller's
@@ -157,7 +156,7 @@ search for a word finds the function that does it.
 | --- | --- |
 | `std/testing` | Expectations, benchmarks, temporary paths, property checks with shrinking, mutation fuzzing and structured fuzz input |
 | `std/profile` | Monotonic spans recorded into caller storage |
-| `std/observe` | Optional allocation-free event log used by arenas and other packages |
+| `std/observe` | Optional allocation-free event log for file capabilities and application code |
 | `std/progress` | Nested progress counters in caller storage |
 | `std/log` | Logging to an explicit writer |
 | `std/debug` | Hex dumps |

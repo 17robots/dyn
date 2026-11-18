@@ -47,7 +47,7 @@ fn error_write(raw: rawptr, status: *fail.Status, data: []const u8) usize {
 }
 fn io_check(write_failure: bool) {
   arena := mem.arena_alloc(0)
-  _ = mem.push_bytes_uninit(arena, 7)
+  _ = mem.push_bytes(arena, 7)
   mark := mem.arena_mark(arena)
   writer := io.Writer{ write: sink }
   if write_failure { writer.write = error_write }
@@ -78,7 +78,7 @@ fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8
     for step in [1, 7, 65536] {
       feed := Feed{ data: wire, cut: cut, step: #cast(usize, step) }
       arena := mem.arena_alloc(0)
-      _ = mem.push_bytes_uninit(arena, 3)
+      _ = mem.push_bytes(arena, 3)
       mark := mem.arena_mark(arena)
       _ = capacity
       status: fail.Status
@@ -95,13 +95,13 @@ fn chain_check(wire: []const u8, expected: []const u8, valid: bool) {
   for block in [160,176] {
     for step in [1,7,65536] {
       arena := mem.arena_alloc(#cast(usize,block))
-      first := mem.push_bytes_uninit(arena,16)
+      first := mem.push_bytes(arena,16)
       for *byte in first { byte.*=71 }
-      forced := mem.push_bytes_uninit(arena,33)
+      forced := mem.push_bytes(arena,33)
       for *byte in forced { byte.*=82 }
       mark := mem.arena_mark(arena)
-      blocks := mem.arena_snapshot(arena).blocks
-      if blocks!=2 { #panic("prior forced chain") }
+      if arena.current.previous!=arena { #panic("prior forced chain") }
+      current := arena.current
       feed := Feed{data:wire,step:#cast(usize,step)}
       status: fail.Status
       got := http.client_do(arena, &status, io.Reader{data:&feed,read:read_feed},io.Writer{write:sink},"GET","/","host","")
@@ -111,12 +111,12 @@ fn chain_check(wire: []const u8, expected: []const u8, valid: bool) {
         checksum:usize=0
         for byte in got.raw { checksum+=#cast(usize,byte) }
         // An independent allocation must not reclaim or overwrite the result.
-        tail := mem.push_bytes_uninit(arena,4096)
+        tail := mem.push_bytes(arena,4096)
         for *byte in tail { byte.*=99 }
         after:usize=0
         for byte in got.raw { after+=#cast(usize,byte) }
         if !bytes.equal(got.body,expected) || #len(got.raw)<#len(expected) || after!=checksum { #panic("chain retained response") }
-      } else if status.failure.kind!=fail.Kind.InvalidInput || mem.arena_mark(arena)!=mark || mem.arena_snapshot(arena).blocks!=blocks || #len(got.raw)!=0 || #len(got.body)!=0 {
+      } else if status.failure.kind!=fail.Kind.InvalidInput || mem.arena_mark(arena)!=mark || arena.current!=current || #len(got.raw)!=0 || #len(got.body)!=0 {
         #panic("chain failure rollback")
       }
       for byte in first { if byte!=71 { #panic("chain first prefix") } }
@@ -127,7 +127,7 @@ fn chain_check(wire: []const u8, expected: []const u8, valid: bool) {
 }
 fn decode_check(wire: []const u8, expected: []const u8, valid: bool, offset: usize) {
   arena := mem.arena_alloc(0)
-  _ = mem.push_bytes_uninit(arena, 5)
+  _ = mem.push_bytes(arena, 5)
   mark := mem.arena_mark(arena)
   status: fail.Status
   got := http.decode_chunked(arena, &status, wire)
@@ -139,12 +139,12 @@ fn decode_check(wire: []const u8, expected: []const u8, valid: bool, offset: usi
 fn live_alias_check() {
   arena := mem.arena_alloc(0)
   wire: []const u8 = "3\r\nabc\r\n0\r\n\r\nrest"
-  borrowed := mem.push_bytes_uninit(arena, #len(wire))
+  borrowed := mem.push_bytes(arena, #len(wire))
   _ = mem.copy(borrowed, wire)
   decoding: fail.Status
   got := http.decode_chunked(arena, &decoding, borrowed)
   if decoding.failed || got.consumed != 13 || #len(got.value) != 3 || !bytes.equal(got.value, "abc") || !bytes.equal(borrowed, wire) { #panic("live decode alias") }
-  method := mem.push_bytes_uninit(arena, 4)
+  method := mem.push_bytes(arena, 4)
   _ = mem.copy(method, "HEAD")
   feed := Feed{ data: "HTTP/1.1 200 OK\r\nContent-Length: 999999\r\n\r\n", step: 1 }
   status: fail.Status

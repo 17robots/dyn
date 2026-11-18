@@ -239,19 +239,19 @@ fn h2_start(arena: *mem.Arena, worker: *Worker) {
   pool.free_count = config.http2_connections
   pool.slots = mem.push_array(Slot, arena, config.http2_slots)
   pool.slot_free = mem.push_array(usize, arena, config.http2_slots)
-  slot_bytes := mem.push_bytes_uninit(arena, config.http2_slots * config.receive_size)
+  slot_bytes := mem.push_bytes(arena, config.http2_slots * config.receive_size)
   for i in 0..config.http2_slots {
     pool.slots[i].bytes = slot_bytes[i * config.receive_size..(i + 1) * config.receive_size]
-    pool.slots[i].jobs = mem.arena_from_buffer(mem.push_bytes_uninit(arena, config.job_size + mem.ArenaBufferOverhead))
+    pool.slots[i].jobs = mem.arena_from_buffer(mem.push_bytes(arena, config.job_size + mem.ArenaBufferOverhead))
     pool.slots[i].index = i
     pool.slot_free[i] = config.http2_slots - 1 - i
   }
   pool.slot_free_count = config.http2_slots
-  pool.block = mem.push_bytes_uninit(arena, config.receive_size)
-  pool.fields = mem.push_bytes_uninit(arena, config.receive_size)
-  pool.head = mem.push_bytes_uninit(arena, MaxFrame + 1024)
-  pool.encoded = mem.push_bytes_uninit(arena, MaxFrame + 1024)
-  pool.body = mem.push_bytes_uninit(arena, h2_body_size(config))
+  pool.block = mem.push_bytes(arena, config.receive_size)
+  pool.fields = mem.push_bytes(arena, config.receive_size)
+  pool.head = mem.push_bytes(arena, MaxFrame + 1024)
+  pool.encoded = mem.push_bytes(arena, MaxFrame + 1024)
+  pool.body = mem.push_bytes(arena, h2_body_size(config))
 }
 
 // ---------------------------------------------------------------- frames

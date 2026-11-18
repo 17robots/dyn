@@ -8,10 +8,10 @@ use "std/mem" mem
 pub struct Chunk(T) { next: *Chunk(T), count: usize, items: [64]T }
 pub struct List(T) { first: *Chunk(T), last: *Chunk(T), total: usize }
 
-// Same pointer, typed like the like argument. Lets push allocate a chunk
-// without naming the chunk type.
-fn typed_like(memory: *u8, like: *$C) *C {
-  return #cast(*C, memory)
+// Pushes a zeroed value typed like the like argument. Lets push allocate a
+// chunk without naming the chunk type.
+fn push_like(arena: *mem.Arena, like: *$C) *C {
+  return mem.push(C, arena)
 }
 
 // Appends value and returns its stable address. Pushes a new chunk from arena
@@ -19,8 +19,7 @@ fn typed_like(memory: *u8, like: *$C) *C {
 pub fn push(arena: *mem.Arena, list: *$L, value: $E) *E {
   chunk := list.last
   if chunk == nil || chunk.count == #len(chunk.items) {
-    memory := mem.arena_push(arena, #sizeof(list.last.*), #alignof(list.last.*))
-    chunk = typed_like(memory, list.last)
+    chunk = push_like(arena, list.last)
     if list.last == nil { list.first = chunk } else { list.last.next = chunk }
     list.last = chunk
   }

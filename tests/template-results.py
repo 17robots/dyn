@@ -53,7 +53,7 @@ fn main() {
     tiny_storage: [1 + mem.ArenaBufferOverhead]u8
     tiny := mem.arena_from_buffer(tiny_storage[..])
     tiny = mem.arena_from_buffer(tiny.data[..mem.ArenaHeader + 1])
-    _ = mem.arena_push(tiny, 1, 1)
+    _ = mem.push(u8, tiny)
     tiny_mark := mem.arena_mark(tiny)
     tiny_result := parse(mode, tiny, "")
     check(tiny_result.failure.kind == fail.Kind.Ok && #len(tiny_result.value.source) == 0 && mem.arena_mark(tiny) == tiny_mark)

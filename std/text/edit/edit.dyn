@@ -139,7 +139,7 @@ pub fn apply(scratch: *mem.Arena, status: *fail.Status, buffer: *Buffer, replace
   defer {
     mem.arena_rewind(scratch, mark)
   }
-  copied := mem.push_bytes_uninit(scratch, #len(replacement.text))
+  copied := mem.push_bytes(scratch, #len(replacement.text))
   _ = mem.move(copied, replacement.text)
   suffix := buffer.length - replacement.end
   destination := replacement.start + #len(copied)

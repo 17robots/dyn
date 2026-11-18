@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Copied arena core: native growth diagnostics and transactional failure state.
+"""Copied arena core: growth through mocked OS mappings, and the panics when
+the OS refuses a mapping or a commit.
 
-Mappings are deterministic in-process buffers, not real OS failures. A failed
-header commitment reports the current synthetic -12 mapping code; this test does
-not claim preservation of a real Windows GetLastError value for commitment.
+Mappings are deterministic in-process buffers, not real OS failures.
 """
 import os
 import shlex
@@ -53,99 +52,57 @@ fn mapping_release(bytes: []u8) isize { mock_releases += 1
  return 0 }
 '''
 SOURCE = r'''use "./model" mem
-fn require(ok: bool) { if !ok { #panic("arena native error contract") } }
-fn unchanged(arena: *mem.Arena, before: mem.ArenaSnapshot, mark: usize,
- backing: usize, current: *mem.Arena, prefix: []const u8) {
- after := mem.arena_snapshot(arena)
- require(mem.arena_mark(arena) == mark && arena.backing == backing && arena.current == current)
- require(after.blocks == before.blocks && after.used == before.used && after.capacity == before.capacity)
- require(after.remaining == before.remaining && after.peak_used == before.peak_used)
- require(after.allocation_failures == before.allocation_failures + 1)
- for i in 0..#len(prefix) { require(prefix[i] == #cast(u8, i + 17)) }
+fn require(ok: bool) { if !ok { #panic("arena native contract") } }
+fn bounded() *mem.Arena {
+ source := mem.pages(4096)
+ source.block_size = 160
+ return mem.arena_from_source(source)
 }
-fn native_failure(code: isize) {
- arena := mem.arena_alloc_bounded(160, 4096)
+fn growth() {
+ arena := bounded()
  defer mem.arena_release(arena)
- prefix := mem.push_bytes_uninit(arena, 16)
+ prefix := mem.push_bytes(arena, 16)
  for i in 0..16 { prefix[i] = #cast(u8, i + 17) }
- before := mem.arena_snapshot(arena)
- mark := mem.arena_mark(arena)
- backing := arena.backing
- current := arena.current
  calls := mem.allocation_calls()
- releases := mem.release_calls()
- mem.inject_failure(code)
- result := mem.arena_try_push(arena, 1, 1)
- require(!result.ok && result.error == mem.ErrorKind.System && result.code == code)
- require(result.memory == nil && result.size == 0)
- require(mem.allocation_calls() == calls + 1 && mem.release_calls() == releases)
- unchanged(arena, before, mark, backing, current, prefix)
- mem.clear_failure()
- retry := mem.arena_try_push(arena, 1, 1)
- require(retry.ok && retry.error == mem.ErrorKind.None && retry.code == 0)
- require(mem.arena_snapshot(arena).blocks == 2 && retry.memory.* == 0)
+ grown := mem.push(u8, arena)
+ require(mem.allocation_calls() == calls + 1 && grown.* == 0 && arena.current != arena)
  for i in 0..16 { require(prefix[i] == #cast(u8, i + 17)) }
+ releases := mem.release_calls()
+ mem.arena_reset(arena)
+ require(mem.release_calls() == releases + 1 && arena.current == arena)
 }
-fn local_failures() {
- arena := mem.arena_alloc_bounded(160, 160)
- defer mem.arena_release(arena)
- _ = mem.push_bytes_uninit(arena, 16)
- calls := mem.allocation_calls()
- mark := mem.arena_mark(arena)
- capacity := mem.arena_try_push(arena, 1, 1)
- require(!capacity.ok && capacity.error == mem.ErrorKind.Capacity && capacity.code == 0)
- overflow := mem.arena_try_push(arena, #max(usize), 1)
- require(!overflow.ok && overflow.error == mem.ErrorKind.Overflow && overflow.code == 0)
- alignment := mem.arena_try_push(arena, 1, 3)
- require(!alignment.ok && alignment.error == mem.ErrorKind.InvalidAlignment && alignment.code == 0)
- require(mem.allocation_calls() == calls && mem.arena_mark(arena) == mark)
- require(mem.arena_snapshot(arena).allocation_failures == 3)
+fn native_failure() {
+ arena := bounded()
+ _ = mem.push_bytes(arena, 16)
+ mem.inject_failure(-123)
+ _ = mem.push(u8, arena)
 }
 fn commitment_failure() {
- arena := mem.arena_alloc_bounded(160, 4096)
- defer mem.arena_release(arena)
- prefix := mem.push_bytes_uninit(arena, 16)
- for i in 0..16 { prefix[i] = #cast(u8, i + 17) }
- before := mem.arena_snapshot(arena)
- mark := mem.arena_mark(arena)
- backing := arena.backing
- current := arena.current
- calls := mem.allocation_calls()
- releases := mem.release_calls()
+ arena := bounded()
+ _ = mem.push_bytes(arena, 16)
  mem.inject_commit_failure()
- result := mem.arena_try_push(arena, 1, 1)
- // mapping_commit is boolean; -12 is synthetic, not an actual Win32 code.
- require(!result.ok && result.error == mem.ErrorKind.System && result.code == -12)
- require(mem.allocation_calls() == calls + 1 && mem.release_calls() == releases + 1)
- unchanged(arena, before, mark, backing, current, prefix)
- mem.clear_failure()
- retry := mem.arena_try_push(arena, 1, 1)
- require(retry.ok && retry.code == 0)
+ _ = mem.push(u8, arena)
 }
 fn payload_commitment_failure() {
- arena := mem.arena_alloc_bounded(512, 512)
- defer mem.arena_release(arena)
- bytes := mem.arena_push(arena, 8, 1)
- bytes.* = 91
+ source := mem.pages(512)
+ source.block_size = 512
+ arena := mem.arena_from_source(source)
+ _ = mem.push_bytes(arena, 8)
  arena.current.committed = mem.ArenaHeader
- mark := mem.arena_mark(arena)
  mem.inject_commit_failure()
- failed := mem.arena_try_push_uninit(arena, 8, 1)
- require(!failed.ok && failed.error == mem.ErrorKind.System && failed.code == -12)
- require(mem.arena_mark(arena) == mark && bytes.* == 91)
- require(!mem.arena_try_extend(arena, bytes, 8, 8))
- require(mem.arena_mark(arena) == mark && bytes.* == 91)
- mem.clear_failure()
- require(mem.arena_try_push_uninit(arena, 8, 1).ok)
+ _ = mem.push_bytes(arena, 8)
 }
 fn main() {
- payload_commitment_failure()
- native_failure(-123)
- native_failure(0)
- local_failures()
- commitment_failure()
+ CASE()
 }
 '''
+# Each case and what it must print; an empty message means a clean exit.
+CASES = [
+    ('growth', ''),
+    ('native_failure', 'cannot reserve arena memory'),
+    ('commitment_failure', 'cannot reserve arena memory'),
+    ('payload_commitment_failure', 'cannot commit arena memory'),
+]
 
 with tempfile.TemporaryDirectory(prefix='dyn-arena-native-errors-') as temporary:
     work = Path(temporary)
@@ -154,19 +111,25 @@ with tempfile.TemporaryDirectory(prefix='dyn-arena-native-errors-') as temporary
     (model / 'mem.dyn').write_text((ROOT / 'std/mem/mem.dyn').read_text())
     (model / 'sizes.dyn').write_text((ROOT / 'std/mem/sizes.dyn').read_text())
     (model / 'mapping.dyn').write_text(MOCK)
-    (work / 'main.dyn').write_text(SOURCE)
-    for mode in ('debug', 'release'):
-        for tree in (False, True):
-            env = dict(os.environ, DYN_SDK=str(ROOT))
-            if tree:
-                env['DYN_NO_SSA'] = '1'
-            else:
-                env.pop('DYN_NO_SSA', None)
-            output = work / 'run'
-            subprocess.run([DYN, 'build', str(work), '--' + mode, '--no-cache', '--quiet',
-                            '--output', str(output)], env=env, check=True, timeout=120)
-            subprocess.run([str(output)], env=env, check=True, capture_output=True, timeout=15)
-            print(f'PASS arena native errors {mode} {"tree" if tree else "SSA"}: -123/zero, state/counters, local failures, synthetic header commitment code', flush=True)
+    for case, message in CASES:
+        (work / 'main.dyn').write_text(SOURCE.replace('CASE', case))
+        for mode in ('debug', 'release'):
+            for tree in (False, True):
+                env = dict(os.environ, DYN_SDK=str(ROOT))
+                if tree:
+                    env['DYN_NO_SSA'] = '1'
+                else:
+                    env.pop('DYN_NO_SSA', None)
+                output = work / 'run'
+                subprocess.run([DYN, 'build', str(work), '--' + mode, '--no-cache', '--quiet',
+                                '--output', str(output)], env=env, check=True, timeout=120)
+                result = subprocess.run([str(output)], env=env, capture_output=True, text=True, timeout=15)
+                if message:
+                    assert result.returncode == 101 and message in result.stderr, (case, mode, result.returncode, result.stderr)
+                else:
+                    assert result.returncode == 0, (case, mode, result.returncode, result.stderr)
+                print(f'PASS arena native {case} {mode} {"tree" if tree else "SSA"}', flush=True)
+    (work / 'main.dyn').write_text(SOURCE.replace('CASE', 'growth'))
 
     targets = [
         ('riscv32-none-soft', 'DYN_QEMU_RISCV32', 'qemu-system-riscv32',
@@ -199,4 +162,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-arena-native-errors-') as temporary
                 process.communicate(timeout=5)
                 raise AssertionError(f'arena native errors guest timed out: {target} {mode}')
             assert process.returncode == 0 and output == b'', (target, mode, process.returncode, output[:65536])
-            print(f'PASS arena native errors {target} {mode}: private Growth return ABI and exact diagnostics', flush=True)
+            print(f'PASS arena native growth {target} {mode}', flush=True)

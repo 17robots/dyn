@@ -459,7 +459,7 @@ fn put_offset(output: []u8, used: *usize, offset: i32, colon: bool) bool {
 pub fn format(arena: *mem.Arena, pattern: []const u8, value: *const Local) []u8 {
   mark := mem.arena_mark(arena)
   capacity := #len(pattern) * (12 + #len(value.abbreviation)) + 16
-  output := mem.push_bytes_uninit(arena, capacity)
+  output := mem.push_bytes(arena, capacity)
   used: usize = 0
   date := &value.value
   at: usize = 0

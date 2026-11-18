@@ -96,9 +96,9 @@ fn json_document(source: []const u8, expected: bool) {
   // Arena exhaustion panics, so one roomy arena covers acceptance and rollback.
   backing: [4096]u8
   arena := mem.arena_from_buffer(backing[..])
-  prefix := mem.arena_push(arena, 7, 1)
+  prefix := mem.push_bytes(arena, 7)
   for i in 0..7 {
-    #slice(prefix, 7)[i] = 91
+    prefix[i] = 91
   }
   mark := mem.arena_mark(arena)
   parsing: fail.Status
@@ -109,7 +109,7 @@ fn json_document(source: []const u8, expected: bool) {
   if parsing.failed && mem.arena_mark(arena) != mark {
     #panic("JSON allocation rollback")
   }
-  for byte in #slice(prefix, 7) {
+  for byte in prefix {
     if byte != 91 {
       #panic("JSON clobbered prior allocation")
     }

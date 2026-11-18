@@ -32,14 +32,12 @@ fn c_string(arena: *mem.Arena, value: []const u8) *const u8 {
 }
 fn c_vector(arena: *mem.Arena, values: [][]const u8) *CString {
   if #len(values) > 2305843009213693950 { return nil }
-  allocation := mem.arena_push(arena, (#len(values)+1)*#sizeof(CString), #alignof(CString))
-  pointer := #cast(*CString, allocation)
-  slots := #slice(pointer, #len(values)+1)
+  slots := mem.push_array(CString, arena, #len(values)+1)
   for at in 0..#len(values) {
     slots[at].value = c_string(arena, values[at])
     if slots[at].value == nil { return nil }
   }
-  return pointer
+  return &slots[0]
 }
 fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, configuration: Options) Child {
   mark := mem.arena_mark(arena)
@@ -258,11 +256,7 @@ fn arguments_native(arena: *mem.Arena, status: *fail.Status) [][]const u8 {
   for at < #cast(usize, count) {
     source := vector[at]
     size := argument_length(source)
-    allocation := mem.arena_push_uninit(arena, size, 1)
-    destination := arena.data[..0]
-    if size > 0 {
-      destination = #slice(allocation, size)
-    }
+    destination := mem.push_bytes(arena, size)
     _ = mem.copy(destination, #slice(source, size))
     result[at] = destination
     at += 1

@@ -42,7 +42,7 @@ deep = b'[' * 257 + b'"plain"' + b']' * 257
 checks.append(f'''  if true {{
     data: [{len(deep)}]u8{initializer(deep)}
     result := parse(arena, data[..])
-    require(result.failure.kind != fail.Kind.Ok && result.failure.kind == fail.Kind.InvalidInput && mem.arena_mark(arena) == mem.arena_start(arena), "depth rollback")
+    require(result.failure.kind != fail.Kind.Ok && result.failure.kind == fail.Kind.InvalidInput && mem.arena_mark(arena) == mem.ArenaHeader, "depth rollback")
   }}''')
 for n, (raw, expected) in enumerate(valid):
     # Both object keys and values must survive mutation of all source bytes.
@@ -80,7 +80,7 @@ fn main() {
   defer mem.arena_release(arena)
 ''' + '\n'.join(checks) + '''
   trailing := parse(arena, "\\\"abc\\\" x")
-  require(trailing.failure.kind != fail.Kind.Ok && trailing.offset == 6 && mem.equal(fail.message_text(&trailing.failure), "trailing data") && mem.arena_mark(arena) == mem.arena_start(arena), "trailing rollback")
+  require(trailing.failure.kind != fail.Kind.Ok && trailing.offset == 6 && mem.equal(fail.message_text(&trailing.failure), "trailing data") && mem.arena_mark(arena) == mem.ArenaHeader, "trailing rollback")
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-json-string-') as directory:

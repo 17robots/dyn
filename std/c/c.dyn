@@ -95,8 +95,8 @@ pub fn string_from_bytes(arena: *memory.Arena, status: *fail.Status, source: []c
     return nil
   }
   mark := memory.arena_mark(arena)
-  allocation := memory.arena_push_uninit(arena, #len(source) + 1, 1)
-  result := string_into(status, #slice(allocation, #len(source) + 1), source)
+  allocation := memory.push_bytes(arena, #len(source) + 1)
+  result := string_into(status, allocation, source)
   if status.failed {
     memory.arena_rewind(arena, mark)
   }

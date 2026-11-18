@@ -1,28 +1,21 @@
-use "std/observe" observe
-
 // Arenas and typed pushes.
 //
-// An arena owns chained OS blocks or lives in a caller buffer; handles are *Arena.
-// Reset or rewind invalidates affected allocations.
-// Reuse of individual objects is intrusive: see std/container/list free lists.
-
-pub enum ErrorKind { None, InvalidAlignment, Capacity, InvalidState, Overflow, System }
-
-pub struct Allocation {
-  error: ErrorKind,
-  code: isize,
-  memory: *u8,
-  size: usize,
-  ok: bool,
-}
+// An arena hands out memory by moving a cursor forward, and takes it back all
+// at once: rewind to a mark, reset, or release. Its blocks come from a
+// Source: OS pages (arena_alloc), a caller buffer (arena_from_buffer), or
+// blocks carved from another arena (within). Pushes zero what they return,
+// except push_bytes. Running out of memory panics, a fixed buffer included,
+// like an index out of range: size arenas for their work.
+//
+// Reset or rewind invalidates affected allocations. Reuse of individual
+// objects is intrusive: see std/container/list free lists.
 
 // An arena is a chain of blocks. Each block starts with an Arena header, so a
 // *Arena refers to its backing header. Do not copy the public header or use
-// an owning handle after release. The first
-// block's header is the handle: it records the newest block and the
-// arena-wide settings and statistics. A position is a byte offset in the
-// arena's position space, where each block begins where the previous one
-// ended; marks are positions.
+// an owning handle after release. The first block's header is the handle: it
+// records the newest block and the arena-wide settings. A position is a byte
+// offset in the arena's position space, where each block begins where the
+// previous one ended; marks are positions.
 pub struct Arena {
   // First block only: the newest block, where pushes go.
   current: *Arena,
@@ -41,23 +34,29 @@ pub struct Arena {
   owns_memory: bool,
   // First block only. Never add blocks: set for arena_from_buffer.
   fixed_buffer: bool,
-  // First block only: preferred size of each new block.
-  block_size: usize,
-  // First block only: cap on backing bytes across all blocks; zero means none.
-  limit: usize,
+  // First block only: where new blocks come from.
+  source: Source,
   // First block only: backing bytes across all blocks.
   backing: usize,
   // First block only. Opt-in diagnostic scribble; does not make expired pointers safe.
   poison_on_rewind: bool,
-  peak_used: usize,
-  allocation_failures: usize,
-  // First block only. Optional borrowed event sink; keep it alive until release.
-  events: *observe.Log,
-  event_resource: u64,
+}
+
+// Where an arena's blocks come from. With take nil, blocks are OS pages,
+// committed as they are used. Otherwise take returns a 16-byte aligned block
+// of at least size bytes (empty when it has none, and the arena panics) and
+// give, when set, takes a block back on rewind or release.
+pub struct Source {
+  context: rawptr,
+  take: fn(rawptr, usize) []u8,
+  give: fn(rawptr, []u8),
+  // Preferred size of each block; zero picks the default for the source.
+  block_size: usize,
+  // Cap on backing bytes across all blocks, headers included; zero means none.
+  limit: usize,
 }
 
 struct Mapping { bytes: []u8, committed: usize, error: isize, ok: bool }
-struct Growth { error: ErrorKind, code: isize }
 
 // Bytes the arena header takes at the start of each block, and of every
 // arena_from_buffer buffer. See ArenaBufferOverhead for unaligned caller buffers.
@@ -95,11 +94,31 @@ fn block_init(bytes: []u8, base: usize, owns_memory: bool, committed: usize) *Ar
   return block
 }
 
+// OS pages for an arena, at most limit bytes in all (zero: no cap). A pushed
+// block that would pass the limit panics.
+pub fn pages(limit: usize) Source {
+  return Source{ limit: limit }
+}
+
+// Blocks carved from parent, at most limit bytes in all (zero: no cap). A
+// rewind or reset of parent that takes back those bytes invalidates the
+// arena and everything pushed into it.
+pub fn within(parent: *Arena, limit: usize) Source {
+  return Source{ context: parent, take: take_within, limit: limit, block_size: 64 * KiB }
+}
+fn take_within(context: rawptr, size: usize) []u8 {
+  if size > #max(usize) - 15 {
+    #panic("arena size overflow")
+  }
+  bytes := push_bytes(#cast(*Arena, context), size + 15)
+  skip := align_size(#cast(usize, &bytes[0]), 16) - #cast(usize, &bytes[0])
+  return bytes[skip..skip + size]
+}
+
 // Places an arena in caller storage. The header takes the first ArenaHeader
 // bytes of backing (plus up to 15 to align it), and the arena never grows past
-// backing. Panics when backing
-// cannot hold the header. Release clears it; reuse the storage by calling this
-// again.
+// backing. Panics when backing cannot hold the header. Release clears it;
+// reuse the storage by calling this again.
 pub fn arena_from_buffer(backing: []u8) *Arena {
   if #len(backing) == 0 {
     #panic("arena buffer cannot hold the arena header")
@@ -116,58 +135,69 @@ pub fn arena_from_buffer(backing: []u8) *Arena {
   return arena
 }
 
-// Creates an owning arena. block_size is the reservation for each block; zero
-// picks the target default (64 GiB of address space on 64-bit hosts, where only
-// touched pages cost memory). When a block fills up, the arena adds another, so
-// earlier allocations never move. Panics when the OS refuses the reservation.
-// Release with arena_release.
+// An arena on OS pages. block_size is the reservation for each block; zero
+// picks the target default (64 GiB of address space on 64-bit hosts, where
+// only touched pages cost memory). When a block fills up, the arena adds
+// another, so earlier allocations never move. Panics when the OS refuses the
+// reservation. Release with arena_release.
 pub fn arena_alloc(block_size: usize) *Arena {
-  return arena_alloc_bounded(block_size, 0)
+  source := pages(0)
+  source.block_size = block_size
+  return arena_from_source(source)
 }
 
-pub struct ArenaAllocation { arena: *Arena, error: ErrorKind, code: isize, ok: bool }
-
-// Like arena_alloc, returning an absent handle on reservation failure.
-// Zero selects the target default, just as for arena_alloc.
-pub fn arena_try_alloc(block_size: usize) ArenaAllocation {
-  return arena_try_alloc_bounded(block_size, 0)
-}
-
-// Like arena_alloc, with a cap on backing bytes across all blocks, headers
-// included. Pushes that would pass it fail like an exhausted fixed arena. A zero
-// limit means no cap.
-pub fn arena_alloc_bounded(block_size: usize, limit: usize) *Arena {
-  result := arena_try_alloc_bounded(block_size, limit)
-  if !result.ok {
-    if result.error == ErrorKind.Capacity {
-      #panic("arena backing limit cannot hold the header")
-    }
-    #panic("cannot reserve arena memory")
-  }
-  return result.arena
-}
-
-// Fallible bounded construction. Failed construction owns no backing.
-pub fn arena_try_alloc_bounded(block_size: usize, limit: usize) ArenaAllocation {
-  if limit != 0 && limit < header_size() { return ArenaAllocation{ error: ErrorKind.Capacity } }
-  size := block_size
+// An arena whose blocks come from source. Panics when the source cannot give
+// the first block.
+pub fn arena_from_source(source: Source) *Arena {
+  size := source.block_size
   if size == 0 {
     size = DefaultBlock
   }
-  if limit != 0 && size > limit {
-    size = limit
+  if source.limit != 0 && size > source.limit {
+    size = source.limit
   }
   if size < header_size() {
     size = header_size()
   }
-  mapping := mapping_with_header(size)
-  if !mapping.ok { return ArenaAllocation{ error: ErrorKind.System, code: mapping.error } }
-  arena := block_init(mapping.bytes, 0, true, mapping.committed)
+  if source.limit != 0 && size > source.limit {
+    #panic("arena limit cannot hold the arena header")
+  }
+  arena := new_block(&source, size, 0)
   arena.current = arena
-  arena.block_size = size
-  arena.limit = limit
-  arena.backing = size
-  return ArenaAllocation{ arena: arena, ok: true }
+  arena.source = source
+  arena.backing = #len(arena.data)
+  return arena
+}
+
+// A block of size bytes at position base, from source.
+fn new_block(source: *const Source, size: usize, base: usize) *Arena {
+  if source.take == nil {
+    mapping := mapping_with_header(size)
+    if !mapping.ok {
+      #panic("cannot reserve arena memory")
+    }
+    return block_init(mapping.bytes, base, true, mapping.committed)
+  }
+  bytes := source.take(source.context, size)
+  if #len(bytes) < size || #len(bytes) < header_size() {
+    #panic("arena exhausted: its source has no more memory")
+  }
+  if (#cast(usize, &bytes[0]) & 15) != 0 {
+    #panic("arena source block is not 16-byte aligned")
+  }
+  return block_init(bytes, base, false, #len(bytes))
+}
+
+// Returns a block to where it came from.
+fn give_block(arena: *const Arena, block: *Arena) {
+  bytes := block.data
+  if block.owns_memory {
+    if mapping_release(bytes) != 0 {
+      #panic("cannot release arena memory")
+    }
+  } else if arena.source.give != nil {
+    arena.source.give(arena.source.context, bytes)
+  }
 }
 
 // Frees every block that is not the first. Release with the newest first, so a
@@ -177,25 +207,19 @@ fn release_blocks_after(arena: *Arena, keep: *Arena) {
     block := arena.current
     arena.current = block.previous
     arena.backing -= #len(block.data)
-    bytes := block.data
-    if block.owns_memory && mapping_release(bytes) != 0 {
-      #panic("cannot release arena memory")
-    }
+    give_block(arena, block)
   }
 }
 
-// Returns owned blocks to the OS. A buffer arena is cleared and its storage is
-// left to the caller. Releasing nil does nothing, so zero-valued owners can be
-// released. Invalidation: everything pushed, and the arena itself.
+// Returns owned blocks to where they came from. A buffer arena is cleared and
+// its storage is left to the caller. Releasing nil does nothing, so
+// zero-valued owners can be released. Invalidation: everything pushed, and
+// the arena itself.
 pub fn arena_release(arena: *Arena) {
   if arena == nil { return }
-  arena_event(arena, observe.Kind.Released, arena_used(arena))
   release_blocks_after(arena, arena)
-  if arena.owns_memory {
-    bytes := arena.data
-    if mapping_release(bytes) != 0 {
-      #panic("cannot release arena memory")
-    }
+  if arena.owns_memory || arena.source.give != nil {
+    give_block(arena, arena)
     return
   }
   arena.* = Arena{}
@@ -214,11 +238,6 @@ fn arena_commit(block: *Arena, end: usize) bool {
   return true
 }
 
-// Bytes the arena can hold without adding a block: everything in its blocks
-// except headers.
-pub fn arena_capacity(arena: *const Arena) usize {
-  return arena.backing - arena_blocks(arena) * header_size()
-}
 // Bytes pushed, padding included, headers excluded.
 pub fn arena_used(arena: *const Arena) usize {
   total: usize = 0
@@ -229,13 +248,26 @@ pub fn arena_used(arena: *const Arena) usize {
   }
   return total
 }
-// Bytes left in the newest block. An owning arena adds blocks past this.
-pub fn arena_remaining(arena: *const Arena) usize {
-  return #len(arena.current.data) - arena.current.offset
+// The largest push that cannot run out: what is left of a buffer arena, or
+// of a limit, or #max(usize). Producers that guess an output size cap the
+// guess with it, so a small buffer arena still holds output that fits.
+// Alignment padding can take up to 15 more bytes from a typed push.
+pub fn arena_room(arena: *const Arena) usize {
+  block := arena.current
+  tail := #len(block.data) - block.offset
+  if arena.fixed_buffer { return tail }
+  limit := arena.source.limit
+  if limit == 0 { return #max(usize) }
+  fresh: usize = 0
+  if limit > arena.backing && limit - arena.backing > header_size() {
+    fresh = limit - arena.backing - header_size()
+  }
+  if tail > fresh { return tail }
+  return fresh
 }
-// Reports whether source borrows unused backing in any block. These bytes are
-// not live allocations and must not be used as producer inputs on this arena.
-// Allocation: none. Cost: linear in the number of arena blocks.
+// Whether source borrows unused backing in any block of arena: bytes that are
+// not live allocations, which the next push may overwrite. Producers that
+// write into arena refuse such inputs. Cost: linear in the arena's blocks.
 pub fn arena_overlaps_unallocated(arena: *const Arena, source: []const u8) bool {
   if arena == nil || #len(source) == 0 { return false }
   input := #cast(usize, &source[0])
@@ -253,68 +285,31 @@ pub fn arena_overlaps_unallocated(arena: *const Arena, source: []const u8) bool 
   return false
 }
 
+// The arena's current position, for arena_rewind.
 pub fn arena_mark(arena: *const Arena) usize {
   return arena.current.base + arena.current.offset
 }
-// The peak usage. Fast pushes leave peak_used behind, so it counts the
-// current usage too; whatever lowers usage stores it first.
-fn arena_peak(arena: *const Arena) usize {
-  used := arena_mark(arena) - header_size()
-  if used > arena.peak_used { return used }
-  return arena.peak_used
-}
-fn arena_blocks(arena: *const Arena) usize {
-  count: usize = 0
-  block := arena.current
-  for block != nil {
-    count += 1
-    block = block.previous
-  }
-  return count
-}
 
-pub struct ArenaSnapshot {
-  capacity: usize, used: usize, remaining: usize, blocks: usize, owns_memory: bool,
-  poison_on_rewind: bool, peak_used: usize, allocation_failures: usize,
-}
-
-// Allocation-free value snapshot. Contains no borrowed pointers and survives reset/release.
-// Includes peak usage and allocation failures since creation. No synchronization.
-pub fn arena_snapshot(arena: *const Arena) ArenaSnapshot {
-  return ArenaSnapshot{ capacity: arena_capacity(arena), used: arena_used(arena),
-    remaining: arena_remaining(arena), blocks: arena_blocks(arena), owns_memory: arena.owns_memory,
-    poison_on_rewind: arena.poison_on_rewind, peak_used: arena_peak(arena),
-    allocation_failures: arena.allocation_failures }
-}
-
+// Takes back everything pushed.
 pub fn arena_reset(arena: *Arena) {
-  arena_rewind(arena, arena_start(arena))
+  arena_rewind(arena, header_size())
 }
 
-// The mark of an empty arena.
-pub fn arena_start(arena: *const Arena) usize {
-  return header_size()
-}
-
-// Frees the blocks added after mark and returns the newest remaining block to it.
+// Takes back everything pushed after mark, and frees the blocks added since.
 pub fn arena_rewind(arena: *Arena, mark: usize) {
   if mark > arena_mark(arena) {
     #panic("arena mark is ahead of current position")
   }
-  arena.peak_used = arena_peak(arena)
   // Marks below the start, such as 0, rewind to the start.
   target := mark
   if target < header_size() {
     target = header_size()
   }
-  reclaimed := arena_mark(arena) - target
   for arena.current != arena && target <= arena.current.base + header_size() {
     block := arena.current
     arena.current = block.previous
     arena.backing -= #len(block.data)
-    if block.owns_memory && mapping_release(block.data) != 0 {
-      #panic("cannot release arena memory")
-    }
+    give_block(arena, block)
   }
   block := arena.current
   at := target - block.base
@@ -326,7 +321,6 @@ pub fn arena_rewind(arena: *Arena, mark: usize) {
     }
   }
   block.offset = at
-  arena_event(arena, observe.Kind.Reclaimed, reclaimed)
 }
 
 fn align_size(size: usize, alignment: usize) usize {
@@ -336,24 +330,6 @@ fn align_size(size: usize, alignment: usize) usize {
   maximum := #max(usize)
   if size > maximum - padding { return 0 }
   return size + padding
-}
-
-fn valid_alignment(alignment: usize) bool {
-  return alignment != 0 && (alignment & (alignment - 1)) == 0
-}
-
-fn arena_event(arena: *Arena, kind: observe.Kind, value: usize) {
-  if arena.events != nil {
-    observe.record(arena.events, observe.Event{kind: kind, resource: arena.event_resource,
-      value: value, source: "std/mem"})
-  }
-}
-fn arena_failure(arena: *Arena, error: ErrorKind) Allocation {
-  if arena.allocation_failures < #cast(usize, -1) {
-    arena.allocation_failures += 1
-  }
-  arena_event(arena, observe.Kind.AllocationFailed, arena_mark(arena))
-  return Allocation{error: error}
 }
 
 // Zero only payload bytes: align with scalar stores, then use bounded machine words.
@@ -373,51 +349,54 @@ fn zero_bytes_fast(items: []u8) {
   }
 }
 
-// Adds a block large enough for size bytes at alignment.
-fn arena_grow(arena: *Arena, size: usize, alignment: usize) Growth {
-  if arena.fixed_buffer || arena.block_size == 0 { return Growth{error: ErrorKind.Capacity} }
+// Adds a block large enough for size bytes at alignment. Panics when the
+// arena cannot grow.
+fn arena_grow(arena: *Arena, size: usize, alignment: usize) {
+  if arena.fixed_buffer {
+    #panic("arena exhausted: its buffer is full")
+  }
   maximum := #max(usize)
-  // Worst-case alignment padding is alignment - 1, not alignment.
-  if alignment - 1 > maximum - header_size() { return Growth{error: ErrorKind.Overflow} }
-  overhead := header_size() + alignment - 1
-  if size > maximum - overhead { return Growth{error: ErrorKind.Overflow} }
-  wanted := arena.block_size
+  // Blocks and their payloads start 16-aligned, so only larger alignments
+  // can need padding.
+  overhead := header_size()
+  if alignment > 16 {
+    overhead += alignment - 16
+  }
+  if size > maximum - overhead {
+    #panic("arena size overflow")
+  }
+  wanted := arena.source.block_size
+  if wanted == 0 {
+    wanted = DefaultBlock
+  }
   if wanted < size + overhead {
     wanted = size + overhead
   }
-  if arena.limit != 0 {
-    if arena.backing > arena.limit { return Growth{error: ErrorKind.Capacity} }
-    remaining := arena.limit - arena.backing
-    if wanted > remaining {
-      wanted = remaining
+  limit := arena.source.limit
+  if limit != 0 {
+    if arena.backing >= limit || limit - arena.backing < size + overhead {
+      #panic("arena exhausted: it reached its limit")
     }
-    // The actual mapping may need less padding than the worst-case plan.
-    if wanted < size + header_size() { return Growth{error: ErrorKind.Capacity} }
+    if wanted > limit - arena.backing {
+      wanted = limit - arena.backing
+    }
   }
-  if wanted > maximum - arena.backing { return Growth{error: ErrorKind.Overflow} }
-  mapping := mapping_with_header(wanted)
-  if !mapping.ok { return Growth{error: ErrorKind.System, code: mapping.error} }
-  payload := #cast(usize, &mapping.bytes[header_size()])
-  remainder := payload & (alignment - 1)
-  padding: usize = 0
-  if remainder != 0 {
-    padding = alignment - remainder
+  if wanted > maximum - arena.backing {
+    #panic("arena size overflow")
   }
-  if padding > wanted - header_size() || size > wanted - header_size() - padding {
-    _ = mapping_release(mapping.bytes)
-    return Growth{error: ErrorKind.Capacity}
-  }
-  block := block_init(mapping.bytes, arena_mark(arena) - header_size(), true, mapping.committed)
+  block := new_block(&arena.source, wanted, arena_mark(arena) - header_size())
   block.previous = arena.current
   arena.current = block
-  arena.backing += wanted
-  return Growth{error: ErrorKind.None}
+  arena.backing += #len(block.data)
 }
 
-fn arena_try_push_impl(arena: *Arena, size: usize, alignment: usize, zero_memory: bool) Allocation {
-  if !valid_alignment(alignment) { return arena_failure(arena, ErrorKind.InvalidAlignment) }
-  if size == 0 { return Allocation{ memory: nil, size: 0, ok: true } }
-  original := arena.current
+// Pushes size bytes at alignment, zeroed when zero_memory. Grows the arena,
+// or panics when it cannot.
+fn arena_push_slow(arena: *Arena, size: usize, alignment: usize, zero_memory: bool) *u8 {
+  if alignment == 0 || (alignment & (alignment - 1)) != 0 {
+    #panic("arena alignment is not a power of two")
+  }
+  if size == 0 { return nil }
   grew := false
   for {
     block := arena.current
@@ -431,112 +410,47 @@ fn arena_try_push_impl(arena: *Arena, size: usize, alignment: usize, zero_memory
       }
       if padding <= #len(available) && size <= #len(available) - padding {
         end := block.offset + padding + size
-        if block.owns_memory && end > block.committed {
-          if !arena_commit(block, end) {
-            if grew {
-              release_blocks_after(arena, original)
-            }
-            failed := arena_failure(arena, ErrorKind.System)
-            failed.code = -12
-            return failed
-          }
+        if block.owns_memory && end > block.committed && !arena_commit(block, end) {
+          #panic("cannot commit arena memory")
         }
         memory := &available[padding]
         block.offset = end
-        used := block.base + end - header_size()
-        if used > arena.peak_used {
-          arena.peak_used = used
-        }
-        arena_event(arena, observe.Kind.Allocated, size)
         if zero_memory {
           zero_bytes_fast(#slice(memory, size))
         }
-        return Allocation{ memory: memory, size: size, ok: true }
+        return memory
       }
     }
-    // Retry once after growth, preserving the failure result if it still lacks room.
-    if grew { return Allocation{error: ErrorKind.Capacity} }
-    grown := arena_grow(arena, size, alignment)
-    if grown.error != ErrorKind.None {
-      failed := arena_failure(arena, grown.error)
-      failed.code = grown.code
-      return failed
+    if grew {
+      #panic("arena exhausted")
     }
+    arena_grow(arena, size, alignment)
     grew = true
   }
   #panic("unreachable arena push exit")
 }
 
-// Grows the newest allocation in place: when the size bytes at memory end at
-// the arena's current position, adds extra zeroed bytes after them and returns
-// true. Returns false, changing nothing, when memory is not the newest
-// allocation or its block lacks room. Costs no copy.
-pub fn arena_try_extend(arena: *Arena, memory: *u8, size: usize, extra: usize) bool {
-  block := arena.current
-  if memory == nil { return false }
-  base := #cast(usize, &block.data[0])
-  start := #cast(usize, memory)
-  if start < base || start - base > block.offset || block.offset - (start - base) != size {
-    return false
-  }
-  if extra > #len(block.data) - block.offset { return false }
-  end := block.offset + extra
-  if block.owns_memory && end > block.committed {
-    if !arena_commit(block, end) { return false }
-  }
-  zero_bytes_fast(block.data[block.offset..end])
-  block.offset = end
-  used := block.base + end - header_size()
-  if used > arena.peak_used {
-    arena.peak_used = used
-  }
-  arena_event(arena, observe.Kind.Allocated, extra)
-  return true
-}
-
-// Ownership: result borrows arena backing; zero size returns nil.
-// Invalidation: applicable rewind, reset, or release.
-// Allocation: zeroes the payload bytes; an owning arena adds a block when full.
-// Failure: panics when a buffer or bounded arena is exhausted or the alignment is invalid.
-// Thread safety: caller synchronizes access to the arena.
-pub fn arena_push(arena: *Arena, size: usize, alignment: usize) *u8 {
-  memory := arena_push_fast(arena, size, alignment)
-  if memory != nil {
-    zero_bytes_fast(#slice(memory, size))
-    return memory
-  }
-  return arena_must(arena_try_push_impl(arena, size, alignment, true))
-}
-
 // The common push, small enough to inline: room in the current block, already
-// committed, valid alignment, and no observer. Returns nil for anything else,
-// which arena_try_push_impl then handles with the same result.
-// It leaves peak_used behind; see arena_peak.
+// committed, alignment at most 16. Returns nil for anything else, which
+// arena_push_slow then handles with the same result.
 fn arena_push_fast(arena: *Arena, size: usize, alignment: usize) *u8 {
   block := arena.current
   // Blocks start 16-aligned, so up to 16 an aligned offset is an aligned
   // address. Alignments of 0 and above 16 take the slow path.
   mask := alignment - 1
   start := (block.offset + mask) & ~mask
-  if arena.events != nil || size == 0 || mask >= 16 || (alignment & mask) != 0 || start > block.committed ||
-    size > block.committed - start {
+  if size == 0 || mask >= 16 || (alignment & mask) != 0 || start > block.committed || size > block.committed - start {
     return nil
   }
   block.offset = start + size
   return &block.data[start]
 }
 
-// Ownership: result borrows arena backing; cast memory to the requested element type.
-// Invalidation: applicable rewind, reset, or release.
-// Allocation: checked count * element_size, aligned and zeroed; no heap fallback.
-// Failure: panics like arena_push, and when the size overflows.
-// Thread safety: caller synchronizes access to the arena.
-pub fn arena_push_array(arena: *Arena, count: usize, element_size: usize, alignment: usize) *u8 {
-  size := size_for(count, element_size)
-  if !size.valid {
-    #panic("arena size overflow")
-  }
-  return arena_push(arena, size.bytes, alignment)
+// Uninitialized bytes; see push_bytes.
+fn push_raw(arena: *Arena, size: usize, alignment: usize) *u8 {
+  memory := arena_push_fast(arena, size, alignment)
+  if memory != nil { return memory }
+  return arena_push_slow(arena, size, alignment, false)
 }
 
 // Tells the OS that bytes will be touched sparsely, such as one receive
@@ -547,315 +461,52 @@ pub fn advise_sparse(bytes: []u8) {
   mapping_sparse(bytes)
 }
 
-// Like arena_push, without zeroing, for bytes that are overwritten right away.
-pub fn arena_push_uninit(arena: *Arena, size: usize, alignment: usize) *u8 {
-  memory := arena_push_fast(arena, size, alignment)
-  if memory != nil { return memory }
-  return arena_must(arena_try_push_impl(arena, size, alignment, false))
-}
-
-// The one fallible push, for code with a strict budget.
-// Failure leaves the position and existing bytes unchanged.
-pub fn arena_try_push(arena: *Arena, size: usize, alignment: usize) Allocation {
-  return arena_try_push_impl(arena, size, alignment, true)
-}
-
-// Fallible allocation without initializing the returned bytes.
-pub fn arena_try_push_uninit(arena: *Arena, size: usize, alignment: usize) Allocation {
-  return arena_try_push_impl(arena, size, alignment, false)
-}
-
-// Pushes one fresh T: zeroed, then T's field defaults. Panics when the arena
-// is exhausted. #init fills the memory in place, with stores of T's size.
+// Pushes one fresh T: zeroed, then T's field defaults. #init fills the
+// memory in place, with stores of T's size.
+// Ownership: result borrows arena backing.
+// Invalidation: applicable rewind, reset, or release.
+// Allocation: aligned for T; an owning arena adds a block when full.
+// Failure: panics when the arena is exhausted.
+// Thread safety: caller synchronizes access to the arena.
 pub fn push(T: type, arena: *Arena) *T {
-  value := #cast(*T, arena_push_uninit(arena, #sizeof(T), #alignof(T)))
+  value := #cast(*T, push_raw(arena, #sizeof(T), #alignof(T)))
   #init(value)
   return value
 }
 
-// Pushes count zeroed elements. Panics when the arena is exhausted or the size overflows.
+// Pushes count zeroed elements.
+// Ownership: result borrows arena backing; zero count returns an empty slice.
+// Invalidation: applicable rewind, reset, or release.
+// Allocation: checked count * #sizeof(T), aligned and zeroed; no heap fallback.
+// Failure: panics when the arena is exhausted or the size overflows.
+// Thread safety: caller synchronizes access to the arena.
 pub fn push_array(T: type, arena: *Arena, count: usize) []T {
   if count == 0 {
     empty: []T
     return empty
   }
-  size := size_for(count, #sizeof(T))
-  if !size.valid {
+  if #sizeof(T) != 0 && count > #max(usize) / #sizeof(T) {
     #panic("arena size overflow")
   }
-  return #slice(#cast(*T, arena_push(arena, size.bytes, #alignof(T))), count)
+  size := count * #sizeof(T)
+  memory := arena_push_fast(arena, size, #alignof(T))
+  if memory == nil {
+    return #slice(#cast(*T, arena_push_slow(arena, size, #alignof(T), true)), count)
+  }
+  zero_bytes_fast(#slice(memory, size))
+  return #slice(#cast(*T, memory), count)
 }
 
-// Pushes count elements, each zeroed and then given T's field defaults. The
-// loop over the elements is the cost push_array leaves out.
-pub fn push_array_init(T: type, arena: *Arena, count: usize) []T {
-  items := push_array(T, arena, count)
-  for i in 0..count {
-    #init(&items[i])
-  }
-  return items
-}
-
-// Pushes one fresh T, zeroed and then given T's field defaults, or returns nil when the arena is exhausted. Never panics
-// on exhaustion; on failure the offset and existing bytes are unchanged.
-pub fn try_push(T: type, arena: *Arena) *T {
-  allocation := arena_try_push_uninit(arena, #sizeof(T), #alignof(T))
-  if !allocation.ok { return nil }
-  value := #cast(*T, allocation.memory)
-  #init(value)
-  return value
-}
-
-// Pushes count zeroed elements, or returns an empty slice when the arena is
-// exhausted or the size overflows. A nonzero count with an empty result is failure.
-pub fn try_push_array(T: type, arena: *Arena, count: usize) []T {
-  empty: []T
-  size := size_for(count, #sizeof(T))
-  if count == 0 || !size.valid { return empty }
-  allocation := arena_try_push(arena, size.bytes, #alignof(T))
-  if !allocation.ok { return empty }
-  return #slice(#cast(*T, allocation.memory), count)
-}
-
-// Appends value to items, a slice that owns the rest of arena: its elements
-// must be the newest allocation on arena, so give each growing list its own
-// arena. The new element goes directly after the last one, so nothing is copied
-// and element addresses never change. The default block reserves 64 GiB of
-// address space on 64-bit hosts, so one arena per list is cheap, for dozens of
-// lists; use a chunk list for many. Returns the new element.
-// Panics when something else was pushed onto arena after items, or when the
-// list reaches the end of its block.
-pub fn append(arena: *Arena, items: *[]$T, value: $T) *T {
-  count := #len(items.*)
-  if count == 0 {
-    items.* = push_array(T, arena, 1)
-  } else if !arena_try_extend(arena, #cast(*u8, &items.*[0]), count * #sizeof(T), #sizeof(T)) {
-    append_check_newest(arena, #cast(*u8, &items.*[0]), count * #sizeof(T))
-    #panic("list reached the end of its arena block")
-  } else {
-    items.* = #slice(&items.*[0], count + 1)
-  }
-  slot := &items.*[count]
-  slot.* = value
-  return slot
-}
-
-// Like append and append_many, but when the block fills the list moves to a new
-// block. Earlier element pointers and copies of the slice then go stale. Use
-// these when the arena is the caller's and nothing else holds the list.
-pub fn append_grow(arena: *Arena, items: *[]$T, value: $T) *T {
-  count := #len(items.*)
-  if count == 0 {
-    items.* = push_array(T, arena, 1)
-  } else if !arena_try_extend(arena, #cast(*u8, &items.*[0]), count * #sizeof(T), #sizeof(T)) {
-    append_check_newest(arena, #cast(*u8, &items.*[0]), count * #sizeof(T))
-    moved := push_array(T, arena, count + 1)
-    _ = copy(moved, items.*)
-    items.* = moved
-  } else {
-    items.* = #slice(&items.*[0], count + 1)
-  }
-  slot := &items.*[count]
-  slot.* = value
-  return slot
-}
-pub fn append_many_grow(arena: *Arena, items: *[]$T, values: []const $T) {
-  count := #len(items.*)
-  extra := #len(values)
-  if extra == 0 { return }
-  if count == 0 {
-    items.* = push_array(T, arena, extra)
-  } else if !arena_try_extend(arena, #cast(*u8, &items.*[0]), count * #sizeof(T), extra * #sizeof(T)) {
-    append_check_newest(arena, #cast(*u8, &items.*[0]), count * #sizeof(T))
-    moved := push_array(T, arena, count + extra)
-    _ = copy(moved, items.*)
-    items.* = moved
-  } else {
-    items.* = #slice(&items.*[0], count + extra)
-  }
-  for i in 0..extra {
-    items.*[count + i] = values[i]
-  }
-}
-
-// Like append, but returns stub instead of panicking when the list cannot grow.
-pub fn try_append(arena: *Arena, items: *[]$T, value: $T, stub: *const $T) *T {
-  count := #len(items.*)
-  if count == 0 {
-    fresh := try_push_array(T, arena, 1)
-    if #len(fresh) == 0 { return #cast(*T, stub) }
-    items.* = fresh
-  } else if arena_try_extend(arena, #cast(*u8, &items.*[0]), count * #sizeof(T), #sizeof(T)) {
-    items.* = #slice(&items.*[0], count + 1)
-  } else {
-    return #cast(*T, stub)
-  }
-  slot := &items.*[count]
-  slot.* = value
-  return slot
-}
-
-// Appends every element of values to items, under the same rules as append.
-pub fn append_many(arena: *Arena, items: *[]$T, values: []const $T) {
-  count := #len(items.*)
-  extra := #len(values)
-  if extra == 0 { return }
-  if count == 0 {
-    items.* = push_array(T, arena, extra)
-  } else if !arena_try_extend(arena, #cast(*u8, &items.*[0]), count * #sizeof(T), extra * #sizeof(T)) {
-    append_check_newest(arena, #cast(*u8, &items.*[0]), count * #sizeof(T))
-    #panic("list reached the end of its arena block")
-  } else {
-    items.* = #slice(&items.*[0], count + extra)
-  }
-  for i in 0..extra {
-    items.*[count + i] = values[i]
-  }
-}
-
-fn append_check_newest(arena: *Arena, memory: *u8, size: usize) {
-  block := arena.current
-  base := #cast(usize, &block.data[0])
-  start := #cast(usize, memory)
-  if start < base || start - base + size != block.offset {
-    #panic("append: items are not the newest allocation on this arena; give the list its own arena")
-  }
-}
-
-// For producers that cannot know their output size in advance: they push a
-// trial block, write into it, and on overflow rewind and try a bigger one.
-// trial_size gives the first block size, capped at what a fixed-buffer arena
-// has left. trial_next gives the next size, or panics when a fixed-buffer
-// arena cannot give more.
-pub fn trial_size(arena: *const Arena, wanted: usize) usize {
-  if arena.fixed_buffer && wanted > arena_remaining(arena) { return arena_remaining(arena) }
-  return wanted
-}
-
-pub fn trial_next(arena: *const Arena, current: usize) usize {
-  if arena.fixed_buffer {
-    if current >= arena_remaining(arena) {
-      #panic("arena exhausted")
-    }
-    return trial_size(arena, current * 2 + 1)
-  }
-  if current > #max(usize) / 4 {
-    #panic("output size overflows")
-  }
-  return current * 2 + 1
-}
-
-// Pushes count uninitialized bytes, for buffers that are overwritten right away.
-// Panics when the arena is exhausted.
-pub fn push_bytes_uninit(arena: *Arena, count: usize) []u8 {
+// Pushes count uninitialized bytes, for buffers that are written before they
+// are read. The bytes start right at the cursor, with no alignment padding,
+// so a mark taken before the push plus a length is a position inside them:
+// arena_rewind(arena, mark + used) keeps the first used bytes.
+pub fn push_bytes(arena: *Arena, count: usize) []u8 {
   if count == 0 {
     empty: []u8
     return empty
   }
-  return #slice(arena_push_uninit(arena, count, 1), count)
-}
-
-fn arena_must(allocation: Allocation) *u8 {
-  if !allocation.ok {
-    #panic("arena exhausted or alignment invalid")
-  }
-  return allocation.memory
-}
-
-// A fixed arena placed in capacity bytes pushed from parent, header included.
-// Rewind/reset of parent invalidates the child and everything pushed into it.
-// Panics when the parent is exhausted or capacity cannot hold the header.
-pub fn arena_sub(parent: *Arena, capacity: usize) *Arena {
-  return arena_from_buffer(#slice(#cast(*u8, arena_push_uninit(parent, capacity, 16)), capacity))
-}
-
-pub struct Scratch {
-  arena: *Arena,
-  mark: usize,
-  active: bool,
-}
-
-// Chooses first unless its backing overlaps a live caller arena. Scratch does not
-// own either arena and must end before either arena is reset or released.
-fn arena_conflicts(candidate: *const Arena, conflict: *const Arena) bool {
-  if candidate == nil { return true }
-  if conflict == nil { return false }
-  if candidate == conflict { return true }
-  // Any overlap between a block of one and a block of the other, which also
-  // catches a child placed inside the other arena.
-  left := candidate.current
-  for left != nil {
-    right := conflict.current
-    for right != nil {
-      if blocks_overlap(left, right) { return true }
-      right = right.previous
-    }
-    left = left.previous
-  }
-  return false
-}
-fn blocks_overlap(left: *const Arena, right: *const Arena) bool {
-  if #len(left.data) == 0 || #len(right.data) == 0 { return false }
-  a := #cast(usize, &left.data[0])
-  b := #cast(usize, &right.data[0])
-  if a <= b { return b - a < #len(left.data) }
-  return a - b < #len(right.data)
-}
-// Ownership: borrows a non-conflicting arena and records its current mark.
-// Invalidation: scratch_end expires allocations made after that mark.
-// Allocation: none; no implicit thread-local arena or heap fallback.
-// Failure: panics if neither candidate has non-conflicting backing.
-// Thread safety: candidates must be exclusively accessible for the scratch scope.
-pub fn scratch_begin(first: *Arena, second: *Arena, conflict: *const Arena) Scratch {
-  selected := first
-  if arena_conflicts(selected, conflict) {
-    selected = second
-  }
-  if arena_conflicts(selected, conflict) {
-    #panic("scratch requires a non-conflicting arena")
-  }
-  return Scratch{ arena: selected, mark: arena_mark(selected), active: true }
-}
-
-pub fn scratch_end(scratch: *Scratch) {
-  if !scratch.active {
-    #panic("scratch scope already ended")
-  }
-  arena_rewind(scratch.arena, scratch.mark)
-  scratch.active = false
-}
-
-// Two arenas swapped by frame_advance. Data pushed during frame N stays
-// readable during frame N + 1 through frame_previous, then is reset.
-pub struct Frames {
-  arenas: [2]*Arena,
-  index: usize,
-}
-
-// Ownership: returns two owning arenas reserving capacity bytes each.
-// Panics like arena_alloc.
-pub fn frames_create(capacity: usize) Frames {
-  return Frames{ arenas: [arena_alloc(capacity), arena_alloc(capacity)] }
-}
-
-pub fn frame_current(frames: *Frames) *Arena {
-  return frames.arenas[frames.index]
-}
-
-pub fn frame_previous(frames: *Frames) *Arena {
-  return frames.arenas[frames.index ^ 1]
-}
-
-// Invalidation: resets the arena that held the frame before the previous one.
-pub fn frame_advance(frames: *Frames) {
-  frames.index ^= 1
-  arena_reset(frames.arenas[frames.index])
-}
-
-pub fn frames_release(frames: *Frames) {
-  for i in 0..2 {
-    arena_release(frames.arenas[i])
-  }
+  return #slice(push_raw(arena, count, 1), count)
 }
 
 // Copies source into the start of destination and returns the element count.

@@ -5,6 +5,7 @@ use "std/embedded/interrupt" interrupt
 use "std/fmt"
 use "std/io"
 use "std/mem"
+use "std/container/array"
 
 struct Particle {
   x: f64,
@@ -23,12 +24,13 @@ fn main() {
   io.print("hello from bare metal\n")
   arena := mem.arena_alloc(256 * mem.KiB)
   defer mem.arena_release(arena)
-  values: []u64
+  values: array.Array(u64)
+  array.init(&values, arena)
   for i in 0..1000 {
-    _ = mem.append(arena, &values, #cast(u64, i) * 3)
+    array.push(&values, #cast(u64, i) * 3)
   }
   sum: u64 = 0
-  for value in values {
+  for value in values.items {
     sum += value
   }
   print_number("sum ", sum)
@@ -42,7 +44,7 @@ fn main() {
     }
   }
   print_number("position ", #cast(u64, particles[3].x))
-  scratch := mem.arena_sub(arena, 4 * mem.KiB + mem.ArenaBufferOverhead)
+  scratch := mem.arena_from_source(mem.within(arena, 4 * mem.KiB + mem.ArenaBufferOverhead))
   bytes := mem.push_array(u8, scratch, 4096)
   bytes[4095] = 7
   print_number("scratch ", #cast(u64, bytes[4095]))

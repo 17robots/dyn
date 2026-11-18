@@ -59,27 +59,19 @@ pub fn arguments(arena: *mem.Arena, status: *fail.Status) [][]const u8 {
   if error != 0 { return arguments_failed(status, error) }
   if count == 0 { return empty }
   maximum := #max(usize)
-  if count > maximum / #sizeof([]const u8) || count > maximum / #sizeof(*u8) {
+  if count > maximum / #sizeof([]const u8) || count > maximum / #sizeof(*u8) || size == 0 {
     return arguments_failed(status, 48)
   }
   mark := mem.arena_mark(arena)
-  pointer_allocation := mem.arena_try_push(arena, count * #sizeof(*u8), #alignof(*u8))
-  byte_allocation := mem.arena_try_push(arena, size, 1)
-  slice_allocation := mem.arena_try_push(arena, count * #sizeof([]const u8), #alignof([]const u8))
-  if !pointer_allocation.ok || !byte_allocation.ok || !slice_allocation.ok {
-    mem.arena_rewind(arena, mark)
-    return arguments_failed(status, 48)
-  }
-  pointers := pointer_allocation.memory
-  bytes := byte_allocation.memory
-  slices := slice_allocation.memory
-  error = native_args(pointers, bytes)
+  raw := mem.push_array(*u8, arena, count)
+  storage := mem.push_bytes(arena, size)
+  bytes := &storage[0]
+  values := mem.push_array([]const u8, arena, count)
+  error = native_args(#cast(*u8, &raw[0]), bytes)
   if error != 0 {
     mem.arena_rewind(arena, mark)
     return arguments_failed(status, error)
   }
-  raw := #slice(#cast(**u8, pointers), count)
-  values := #slice(#cast(*[]const u8, slices), count)
   i: usize = 0
   for i < count {
     offset := #cast(usize, raw[i]) - #cast(usize, bytes)

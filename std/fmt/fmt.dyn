@@ -366,7 +366,7 @@ fn put_u64_width(state: *Buffer, value: u64, width: usize, padding: u8) bool {
 }
 
 fn copy_out(arena: *mem.Arena, text: []const u8) []u8 {
-  output := mem.push_bytes_uninit(arena, #len(text))
+  output := mem.push_bytes(arena, #len(text))
   _ = mem.copy(output, text)
   return output
 }

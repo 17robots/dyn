@@ -5,8 +5,8 @@ use "std/fail"
 // rewound before return. Inputs must not overlap newly allocated scratch storage.
 pub struct Rectangle { width: i32, height: i32, x: i32, y: i32, was_packed: i32 }
 // The count packed; was_packed marks each one. A partial fit is not a
-// failure: compare the count. Bad sizes fail with InvalidInput, too little
-// scratch with Capacity.
+// failure: compare the count. Bad sizes fail with InvalidInput. An exhausted
+// scratch arena panics.
 pub fn pack(scratch: *mem.Arena, status: *fail.Status, width: i32, height: i32, rectangles: []Rectangle) usize {
   if status.failed { return 0 }
   if scratch == nil {
@@ -20,16 +20,12 @@ pub fn pack(scratch: *mem.Arena, status: *fail.Status, width: i32, height: i32, 
   }
   mark := mem.arena_mark(scratch)
   defer mem.arena_rewind(scratch, mark)
-  work := mem.arena_try_push(scratch, size, 64)
-  if !work.ok {
-    fail.set(status, fail.make(fail.Kind.Capacity, "pack rectangles", "", "the scratch arena is full"))
-    return 0
-  }
+  work := aligned_work(scratch, size)
   data: *Rectangle = nil
   if #len(rectangles) != 0 {
     data = &rectangles[0]
   }
-  code := native_pack(width, height, data, #len(rectangles), #cast(rawptr, work.memory), size)
+  code := native_pack(width, height, data, #len(rectangles), #cast(rawptr, &work[0]), size)
   if code < 0 {
     fail.invalid(status, "pack rectangles", "", "bad rectangle sizes")
     return 0
@@ -44,3 +40,13 @@ pub fn pack(scratch: *mem.Arena, status: *fail.Status, width: i32, height: i32, 
 }
 extern fn native_size "dyn_stb_pack_size"(width: i32, count: usize) usize
 extern fn native_pack "dyn_stb_pack"(width: i32, height: i32, rectangles: *Rectangle, count: usize, work: rawptr, size: usize) i32
+
+// size bytes from arena at a 64-byte boundary, for provider work memory.
+fn aligned_work(arena: *mem.Arena, size: usize) []u8 {
+  if size > #max(usize) - 63 {
+    #panic("work size overflow")
+  }
+  storage := mem.push_bytes(arena, size + 63)
+  skip := (64 - (#cast(usize, &storage[0]) & 63)) & 63
+  return storage[skip..skip + size]
+}

@@ -551,7 +551,7 @@ pub fn validate_upgrade_request(status: *fail.Status, request: []const u8) []con
 // The 101 Switching Protocols response for key, in arena.
 pub fn write_upgrade_response(arena: *mem.Arena, key: []const u8) []u8 {
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes_uninit(arena, 160)
+  space := mem.push_bytes(arena, 160)
   output := websocket_write_upgrade_response(space, key)
   mem.arena_rewind(arena, mark + #len(output))
   return output
@@ -568,7 +568,7 @@ pub fn validate_upgrade_response(status: *fail.Status, response: []const u8, key
 // One encoded frame, in arena.
 pub fn write_frame(arena: *mem.Arena, opcode: u8, payload: []const u8, final: bool, masked: bool, mask: u32) []u8 {
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes_uninit(arena, #len(payload) + 14)
+  space := mem.push_bytes(arena, #len(payload) + 14)
   output := websocket_write(space, opcode, payload, final, masked, mask)
   mem.arena_rewind(arena, mark + #len(output))
   return output
@@ -588,7 +588,7 @@ pub fn parse_frame(status: *fail.Status, input: []const u8) WebSocketFrame {
 // The frame's payload, unmasked, in arena.
 pub fn decode_frame(arena: *mem.Arena, frame: WebSocketFrame) []u8 {
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes_uninit(arena, #len(frame.payload))
+  space := mem.push_bytes(arena, #len(frame.payload))
   output := websocket_decode(space, frame)
   mem.arena_rewind(arena, mark + #len(output))
   return output

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Growth, reuse/coalescing, fixed buffers and allocation failure in real Wasm."""
+"""Growth, reuse/coalescing, fixed buffers and out-of-memory traps in real Wasm."""
 import os, subprocess, tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -10,7 +10,7 @@ arenas: [8]*mem.Arena
 pub fn allocate(slot: usize, size: usize) usize {
   made := mem.arena_alloc(size + mem.ArenaHeader)
   arenas[slot] = made
-  return #cast(usize, mem.arena_push(arenas[slot], size, 1))
+  return #cast(usize, &mem.push_bytes(arenas[slot], size)[0])
 }
 pub fn release(slot: usize) bool {
   mem.arena_release(arenas[slot])
@@ -21,19 +21,19 @@ pub fn fixed() bool {
   bytes: [8 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(bytes[..])
   arena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 8])
-  _ = mem.arena_push(arena, 8, 1)
-  return !mem.arena_try_push(arena, 1, 1).ok
+  _ = mem.push_bytes(arena, 8)
+  return mem.arena_used(arena) == 8
 }
 pub fn growing() bool {
   arena := mem.arena_alloc(65536 + mem.ArenaHeader)
-  first := mem.arena_push(arena, 65536, 8)
-  first.* = 42
-  second := mem.arena_push(arena, 65536, 8)
-  second.* = 17
-  if first.* != 42 || mem.arena_snapshot(arena).blocks != 2 { return false }
+  first := mem.push_array(u64, arena, 8192)
+  first[0] = 42
+  second := mem.push_array(u64, arena, 8192)
+  second[0] = 17
+  if first[0] != 42 || arena.current == arena || arena.current.previous != arena { return false }
   mem.arena_reset(arena)
-  reused := mem.arena_push(arena, 65536, 8)
-  ok := mem.arena_snapshot(arena).blocks == 1 && reused.* == 0
+  reused := mem.push_array(u64, arena, 8192)
+  ok := arena.current == arena && reused[0] == 0
   mem.arena_release(arena)
   return ok
 }

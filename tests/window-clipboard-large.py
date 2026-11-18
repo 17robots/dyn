@@ -79,7 +79,7 @@ fn main() {
  defer { window.close(&reader) }
  arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
- large := mem.push_bytes_uninit(arena, 1200000)
+ large := mem.push_bytes(arena, 1200000)
  for i in 0..#len(large) { large[i] = #cast(u8, 32 + i % 90) }
  check(window_try_set_clipboard(&owner,large).kind == fail.Kind.Ok,34)
  window.request_paste(&owner)
@@ -124,7 +124,7 @@ fn main() {
  check(found_wake,1010)
  check(window_try_set_clipboard(&owner,"new offer").kind == fail.Kind.Ok,57)
  // Rejection leaves current offer unchanged.
- oversized := mem.push_bytes_uninit(arena,16777217)
+ oversized := mem.push_bytes(arena,16777217)
  check(window_try_set_clipboard(&owner,oversized).kind==fail.Kind.Capacity,60)
  window.request_paste(&reader)
  complete(&owner,&reader)

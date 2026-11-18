@@ -247,6 +247,55 @@ Standard library:
     and `sessions.forget` return an `http.Cookie`.
   - `http.page_writer(&status, response, storage)` takes the handler's status
     again: a page that does not fit fails it, and the server answers 500.
+- Arenas (`std/mem`) keep a small core. Running out always panics, a fixed
+  buffer included, with a message that says whether the buffer was full, a
+  limit was reached or the source had no more memory:
+  - Create with `arena_alloc(block_size)`, `arena_from_buffer(storage)` or
+    `arena_from_source(source)`. A `mem.Source` says where blocks come from
+    and caps them: `mem.pages(limit)` for OS pages, `mem.within(parent,
+    limit)` for blocks pushed onto another arena, or your own `take` and
+    `give` (16-byte aligned blocks).
+  - Push with `push(T, arena)`, `push_array(T, arena, count)` (both zeroed)
+    and `push_bytes(arena, count)` (uninitialized, unaligned; it was
+    `push_bytes_uninit`).
+  - Take back with `arena_mark`/`arena_rewind`, `arena_reset` and
+    `arena_release`; measure with `arena_used`. `arena_room` is the largest
+    push that cannot run out; std producers that guess an output size cap
+    the guess with it, so output that fits a small buffer arena still lands
+    there.
+  - Removed, with what to use instead:
+    - `try_push`, `try_push_array`, `arena_try_push*`, `arena_try_alloc*`,
+      `ErrorKind` and `Allocation`: the plain push; size the arena for the
+      work.
+    - `arena_push`, `arena_push_uninit`, `arena_push_array`: `push(T)`,
+      `push_array(T, n)` or `push_bytes(n)`.
+    - `arena_alloc_bounded(block, limit)`: `arena_from_source(source)` with
+      `source := mem.pages(limit)` and `source.block_size = block`.
+    - `arena_sub(parent, size)`: `arena_from_source(mem.within(parent,
+      size))`.
+    - `arena_snapshot`, `arena_capacity`, `arena_start`, `peak_used`,
+      `allocation_failures`: `arena_used`; an arena's first position is
+      `mem.ArenaHeader`. `arena_remaining` becomes `arena_room`, which also
+      counts what a limit still allows.
+    - `append`, `append_many`, `append_grow`, `append_many_grow`,
+      `try_append`, `arena_try_extend`: `std/container/array` or
+      `std/bytes/builder`, which double when full (a builder that is the
+      arena's newest push grows in place).
+    - `scratch_begin`/`scratch_end` and `Frames`: a mark and a rewind on a
+      second arena; two arenas swapped each frame.
+    - `trial_size`/`trial_next`, `size_for`: gone; `push_array` checks its
+      size.
+    - `arena.events`: `std/observe` logs stay for file capabilities and your
+      own events.
+  - `fs.read_all` no longer fails with `Capacity`: an arena that cannot hold
+    the file panics.
+
+Compiler:
+
+- Fixed: on x86-64 release builds, a call in a function the program never
+  reaches could stop a constant argument from being folded into a function
+  it does reach, so importing an unused module could change the code of
+  used ones.
 
 Tools:
 

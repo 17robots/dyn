@@ -343,7 +343,7 @@ pub fn read_link(arena: *mem.Arena, status: *fail.Status, path: []const u8) []u8
   empty: []u8
   if status.failed { return empty }
   mark := mem.arena_mark(arena)
-  destination := mem.push_bytes_uninit(arena, 4096)
+  destination := mem.push_bytes(arena, 4096)
   storage: [4096 + mem.ArenaBufferOverhead]u8
   raw := terminated(path, storage[..])
   value := destination[..0]
@@ -364,6 +364,6 @@ pub fn app_directory(arena: *mem.Arena, status: *fail.Status, kind: AppDirectory
   empty: []u8
   if status.failed { return empty }
   mark := mem.arena_mark(arena)
-  value := app_directory_into(status, kind, mem.push_bytes_uninit(arena, 4096))
+  value := app_directory_into(status, kind, mem.push_bytes(arena, 4096))
   return kept(arena, status, mark, value)
 }

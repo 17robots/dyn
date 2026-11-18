@@ -1408,22 +1408,22 @@ fn start_worker(outer: *mem.Arena, status: *fail.Status, worker: *Worker) {
   // Most of a worker's storage is per-slot buffers of which few are busy.
   // Advise before anything touches it: with transparent huge pages, a first
   // touch would otherwise make a whole 2 MiB page resident.
-  backing := mem.push_bytes_uninit(outer, worker_storage(config))
+  backing := mem.push_bytes(outer, worker_storage(config))
   mem.advise_sparse(backing)
   arena := mem.arena_from_buffer(backing)
   worker.connections = mem.push_array(Connection, arena, count)
   worker.free = mem.push_array(usize, arena, count)
   worker.later = mem.push_array(usize, arena, count)
-  receive := mem.push_bytes_uninit(arena, count * config.receive_size)
-  send := mem.push_bytes_uninit(arena, count * config.send_size)
-  worker.send_pool.backing = mem.push_bytes_uninit(arena, config.overflow_send_count * config.overflow_send_size)
+  receive := mem.push_bytes(arena, count * config.receive_size)
+  send := mem.push_bytes(arena, count * config.send_size)
+  worker.send_pool.backing = mem.push_bytes(arena, config.overflow_send_count * config.overflow_send_size)
   worker.send_pool.free = mem.push_array(usize, arena, config.overflow_send_count)
   worker.send_pool.free_count = config.overflow_send_count
   worker.send_pool.block_size = config.overflow_send_size
   for i in 0..config.overflow_send_count {
     worker.send_pool.free[i] = config.overflow_send_count - 1 - i
   }
-  worker.upload_pool.backing = mem.push_bytes_uninit(arena, config.upload_count * config.upload_size)
+  worker.upload_pool.backing = mem.push_bytes(arena, config.upload_count * config.upload_size)
   worker.upload_pool.free = mem.push_array(usize, arena, config.upload_count)
   worker.upload_pool.free_count = config.upload_count
   worker.upload_pool.block_size = config.upload_size
@@ -1431,7 +1431,7 @@ fn start_worker(outer: *mem.Arena, status: *fail.Status, worker: *Worker) {
     worker.upload_pool.free[i] = config.upload_count - 1 - i
   }
   job_stride := config.job_size + mem.ArenaBufferOverhead
-  job_bytes := mem.push_bytes_uninit(arena, count * job_stride)
+  job_bytes := mem.push_bytes(arena, count * job_stride)
   for c in 0..count {
     worker.connections[c].input = receive[c * config.receive_size..(c + 1) * config.receive_size]
     worker.connections[c].base_input = worker.connections[c].input
@@ -1452,16 +1452,16 @@ fn start_worker(outer: *mem.Arena, status: *fail.Status, worker: *Worker) {
   worker.free_count = count
   for half in 0..2 {
     worker.inbox.posts[half] = mem.push_array(Post, arena, config.inbox_messages)
-    worker.inbox.bytes[half] = mem.push_bytes_uninit(arena, config.inbox_bytes)
+    worker.inbox.bytes[half] = mem.push_bytes(arena, config.inbox_bytes)
     worker.inbox.done[half] = mem.push_array(usize, arena, count)
   }
-  worker.scratch = mem.arena_from_buffer(mem.push_bytes_uninit(arena, scratch_size(config)))
+  worker.scratch = mem.arena_from_buffer(mem.push_bytes(arena, scratch_size(config)))
   if config.compress_level > 0 {
-    worker.encoder = #cast(*gzip.Encoder, mem.arena_push_uninit(arena, #sizeof(gzip.Encoder), #alignof(gzip.Encoder)))
+    worker.encoder = mem.push(gzip.Encoder, arena)
   }
   h2_start(arena, worker)
   if config.request_arena_size > 0 {
-    worker.request_arena = mem.arena_from_buffer(mem.push_bytes_uninit(arena, config.request_arena_size + mem.ArenaBufferOverhead))
+    worker.request_arena = mem.arena_from_buffer(mem.push_bytes(arena, config.request_arena_size + mem.ArenaBufferOverhead))
   }
   network.nonblocking(status, worker.listener.descriptor, true)
   worker.queue = event.open(arena, status, count + 2)
@@ -1477,7 +1477,7 @@ fn start_worker(outer: *mem.Arena, status: *fail.Status, worker: *Worker) {
       fail.set(status, fail.make(fail.Kind.System, "start server", "", "the spawner could not start a worker"))
     }
   } else if !status.failed {
-    stack := mem.push_bytes_uninit(arena, config.stack_size)
+    stack := mem.push_bytes(arena, config.stack_size)
     worker.thread = threading.spawn(arena, status, stack, worker_main, worker)
   }
   if status.failed {
@@ -1923,14 +1923,14 @@ pub fn job(T: type, response: *http.Response) *T {
     jobs := h2_job(connection)
     if jobs == nil { return nil }
     mem.arena_reset(jobs)
-    return mem.try_push(T, jobs)
+    return mem.push(T, jobs)
   }
   if connection == nil || connection.jobs == nil || connection.job_running { return nil }
   // In Config.on_large_body, before receive_body: storage for the reader.
   large_head := connection.mode == Mode.Body && !connection.body_started
   if connection.mode != Mode.Http && !large_head { return nil }
   mem.arena_reset(connection.jobs)
-  return mem.try_push(T, connection.jobs)
+  return mem.push(T, connection.jobs)
 }
 
 fn job_too_large(name: []const u8, size: usize, limit: usize) {

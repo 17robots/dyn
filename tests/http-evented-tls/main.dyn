@@ -95,7 +95,7 @@ fn main() i32 {
     return 1
   }
   app := mem.push(App, arena)
-  app.big = mem.push_bytes_uninit(arena, BigSize)
+  app.big = mem.push_bytes(arena, BigSize)
   for i in 0..BigSize {
     app.big[i] = #cast(u8, 'a' + i % 26)
   }

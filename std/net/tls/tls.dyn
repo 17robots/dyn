@@ -53,7 +53,7 @@ pub fn certificate_subject(arena: *memory.Arena, status: *fail.Status, certifica
   for (#cast(*const u8, #cast(usize, formatted) + length)).* != 0 {
     length += 1
   }
-  output := memory.push_bytes_uninit(arena, length)
+  output := memory.push_bytes(arena, length)
   source := #slice(formatted, length)
   for i in 0..length {
     output[i] = source[i]
@@ -84,7 +84,7 @@ pub fn shutdown(status: *fail.Status, connection: Connection) Want {
 // The provider's text for an error code, in arena.
 pub fn error_string(arena: *memory.Arena, code: u64) []u8 {
   mark := memory.arena_mark(arena)
-  space := memory.push_bytes_uninit(arena, 256)
+  space := memory.push_bytes(arena, 256)
   output := provider.error_string(space, code)
   memory.arena_rewind(arena, mark + #len(output))
   return output

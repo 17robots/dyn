@@ -384,8 +384,7 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
     return source[start..end]
   }
   mark := memory.arena_mark(arena)
-  allocation := memory.arena_push_uninit(arena, end - start, 1)
-  output := #slice(allocation, end - start)
+  output := memory.push_bytes(arena, end - start)
   if !has_escape {
     _ = memory.copy(output, source[start..end])
     cursor.at = end + 1
@@ -986,10 +985,14 @@ pub fn write(status: *fail.Status, destination: stream.Writer, value: *const Val
 fn encode_arena(arena: *memory.Arena, value: *const Value, indent: usize, string: []const u8, quote: bool) []u8 {
   empty: []u8
   if (quote && !utf8.valid(string)) || (!quote && !encodable(value, 0)) { return empty }
-  capacity := memory.trial_size(arena, 256)
-  for capacity > 0 {
+  room := memory.arena_room(arena)
+  capacity := #cast(usize, 256)
+  if capacity > room {
+    capacity = room
+  }
+  for capacity <= #max(usize) / 4 {
     mark := memory.arena_mark(arena)
-    space := memory.push_bytes_uninit(arena, capacity)
+    space := memory.push_bytes(arena, capacity)
     output: []u8
     if quote {
       output = write_string_into(space, string)
@@ -1001,9 +1004,15 @@ fn encode_arena(arena: *memory.Arena, value: *const Value, indent: usize, string
       return output
     }
     memory.arena_rewind(arena, mark)
-    capacity = memory.trial_next(arena, capacity)
+    if capacity == room {
+      #panic("arena exhausted: the output does not fit")
+    }
+    capacity = capacity * 2
+    if capacity > room {
+      capacity = room
+    }
   }
-  #panic("arena exhausted")
+  #panic("output size overflows")
 }
 
 // Whether every string and key is UTF-8 and nesting stays within

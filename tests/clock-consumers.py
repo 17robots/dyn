@@ -47,7 +47,7 @@ fn main() {
   server := net.ipv4(127,0,0,1,53)
   resolving: fail.Status
   resolved := dns.resolve_ipv4(arena, &resolving, "example.test", &server, 10)
-  require(resolving.failed && #len(resolved) == 0 && mem.arena_mark(arena) == mem.arena_start(arena))
+  require(resolving.failed && #len(resolved) == 0 && mem.arena_mark(arena) == mem.ArenaHeader)
   arguments: [3][]const u8 = ["sh", "-c", "exit 0"]
   captured := process.capture(arena, &status, "/bin/sh", arguments[..], process.Options{}, process.CaptureOptions{timeout_milliseconds:1000})
   require(!status.failed && captured.exit.finished && captured.exit.code == 0)

@@ -12,28 +12,26 @@ SOURCE = '''use "std/mem"
 fn expect(ok: bool) { if !ok { #panic("Windows arena header contract") } }
 fn main() {
   for cycle in 0..3 {
-    arena := mem.arena_alloc_bounded(4096, 12288)
-    first := mem.arena_push(arena, 3952, 1)
-    first.* = 91
+    source := mem.pages(12288)
+    source.block_size = 4096
+    arena := mem.arena_from_source(source)
+    first := mem.push_array(u8, arena, 3952)
+    first[0] = 91
     mark := mem.arena_mark(arena)
-    second := mem.arena_push(arena, 3952, 1)
-    second.* = 72
-    expect(mem.arena_snapshot(arena).blocks == 2)
-    expect(first.* == 91 && second.* == 72)
+    second := mem.push_array(u8, arena, 3952)
+    second[0] = 72
+    expect(arena.current != arena && arena.current.previous == arena)
+    expect(first[0] == 91 && second[0] == 72)
     mem.arena_rewind(arena, mark)
-    expect(mem.arena_snapshot(arena).blocks == 1 && first.* == 91)
-    second = mem.arena_push(arena, 3952, 1)
-    expect(second.* == 0 && first.* == 91)
-    _ = mem.arena_push(arena, 3952, 1)
-    before := mem.arena_snapshot(arena)
-    failed := mem.arena_try_push(arena, 1, 1)
-    expect(!failed.ok && failed.error == mem.ErrorKind.Capacity)
-    after := mem.arena_snapshot(arena)
-    expect(after.blocks == 3 && after.used == before.used && first.* == 91)
+    expect(arena.current == arena && first[0] == 91)
+    second = mem.push_array(u8, arena, 3952)
+    expect(second[0] == 0 && first[0] == 91)
+    _ = mem.push_array(u8, arena, 3952)
+    expect(arena.backing == 12288 && first[0] == 91)
     mem.arena_reset(arena)
-    expect(mem.arena_snapshot(arena).blocks == 1 && mem.arena_used(arena) == 0)
-    _ = mem.arena_push(arena, 3952, 1)
-    _ = mem.arena_push(arena, 3952, 1)
+    expect(arena.current == arena && mem.arena_used(arena) == 0)
+    _ = mem.push_array(u8, arena, 3952)
+    _ = mem.push_array(u8, arena, 3952)
     mem.arena_release(arena)
   }
 }
@@ -51,5 +49,5 @@ with tempfile.TemporaryDirectory(prefix='dyn-arena-windows-header-') as temporar
                        cwd=ROOT, check=True, timeout=120)
         if runner is not None:
             subprocess.run([*runner, str(output)], env=env, check=True, timeout=45)
-print('PASS Windows arena headers, growth, rewind/reuse, bounded failure (debug/release)' +
+print('PASS Windows arena headers, growth, rewind/reuse to the limit (debug/release)' +
       ('; runtime SKIP: Wine unavailable' if runner is None else ''))

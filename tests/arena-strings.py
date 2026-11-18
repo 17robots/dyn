@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Arena formatting, string lists and frame arenas, debug/release."""
+"""Arena formatting, string lists and reset, debug/release."""
 import os
 from pathlib import Path
 import subprocess
@@ -12,11 +12,9 @@ use "std/strings" strings
 use "std/bytes"
 
 fn main() {
-  created := mem.frames_create(4096)
-  frames := &created
-  defer { mem.frames_release(frames) }
+  arena := mem.arena_alloc(4096)
+  defer { mem.arena_release(arena) }
 
-  arena := mem.frame_current(frames)
   greeting := strings.format(arena, "{} + {} = {}", 2, 3, 5)
   if !bytes.equal(greeting, "2 + 3 = 5") { #panic("format") }
   braces := strings.format(arena, "{{{}}}", "x")
@@ -36,12 +34,8 @@ fn main() {
   copied := strings.clone(arena, "copy")
   if !bytes.equal(copied, "copy") { #panic("clone") }
 
-  kept := greeting
-  mem.frame_advance(frames)
-  if mem.frame_previous(frames) != arena { #panic("previous") }
-  if !bytes.equal(kept, "2 + 3 = 5") { #panic("survives one frame") }
-  mem.frame_advance(frames)
-  if mem.frame_current(frames) != arena || mem.arena_used(arena) != 0 { #panic("reset") }
+  mem.arena_reset(arena)
+  if mem.arena_used(arena) != 0 { #panic("reset") }
 }
 '''
 
@@ -73,4 +67,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-arena-strings-') as temporary:
                         '--output', str(output), *(['--release'] if release else [])],
                        cwd=ROOT, check=True, timeout=120)
         subprocess.run([str(output)], check=True, timeout=10)
-print('PASS arena formatting, string lists and frame arenas (debug/release)')
+print('PASS arena formatting, string lists and reset (debug/release)')

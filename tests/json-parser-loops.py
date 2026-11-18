@@ -70,7 +70,7 @@ fn parse(arena: *mem.Arena, source: []const u8) Parsed {
 fn main() {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  _ = mem.push_bytes_uninit(arena, 7)
+  _ = mem.push_bytes(arena, 7)
   mark := mem.arena_mark(arena)
   for item in 0..256 {
     byte := #cast(u8, item)
@@ -105,7 +105,7 @@ fn main() {
   }
 ''' + '\n'.join(checks) + '''
   if true {
-    whitespace := mem.push_bytes_uninit(arena, 262144)
+    whitespace := mem.push_bytes(arena, 262144)
     for i in 0..#len(whitespace) { whitespace[i] = 32 }
     whitespace[131071] = '0'
     hold := mem.arena_mark(arena)
@@ -118,7 +118,7 @@ fn main() {
     mem.arena_rewind(arena, mark)
   }
   if true {
-    digits := mem.push_bytes_uninit(arena, 65536)
+    digits := mem.push_bytes(arena, 65536)
     for i in 0..#len(digits) { digits[i] = '9' }
     hold := mem.arena_mark(arena)
     result := parse(arena, digits)

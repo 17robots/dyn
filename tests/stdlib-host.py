@@ -119,9 +119,6 @@ fn main() {
   bounded_file: fail.Status
   bounded := fs.read_all(arena, &bounded_file, "café-😀.txt", 5)
   require(bounded_file.failed && bounded_file.failure.kind == fail.Kind.Overflow && mem.arena_mark(arena) == mark, "stdlib assertion 90")
-  exhausted_file: fail.Status
-  exhausted := fs.read_all(tiny, &exhausted_file, "café-😀.txt", 100)
-  require(exhausted_file.failed && exhausted_file.failure.kind == fail.Kind.Capacity && mem.arena_mark(tiny) == mem.arena_start(tiny), "stdlib assertion 92")
   all_file: fail.Status
   all := fs.read_all(arena, &all_file, "café-😀.txt", 6)
   require(!all_file.failed && bytes.equal(all, "abcdef"), "stdlib assertion 94")

@@ -69,7 +69,7 @@ fn do_work(scratch: *mem.Arena) {
   mark := mem.arena_mark(scratch)
   defer { mem.arena_rewind(scratch, mark) }
 
-  bytes := mem.push_bytes_uninit(scratch, 1024)
+  bytes := mem.push_bytes(scratch, 1024)
   _ = bytes
   // bytes becomes invalid when this function rewinds scratch.
 }
@@ -84,9 +84,8 @@ fn main() {
 An arena is a `*mem.Arena`, with its header in its first backing block. Create it
 explicitly: `mem.arena_alloc(0)` chooses the target's default block size. Owned
 arenas add blocks when needed without moving earlier allocations. For a backing
-budget, use `mem.arena_alloc_bounded(block_size, limit)`; the limit includes every
-block's header. Ordinary pushes succeed or panic; `arena_try_push` reports
-exhaustion when caller code needs a recoverable result.
+budget, use `mem.arena_from_source(mem.pages(limit))`; the limit includes every
+block's header. Pushes succeed or panic, like an index out of range.
 
 A nil owner pointer is inactive, not a lazily allocating arena. Pass the pointer
 directly. Never copy or reconstruct a live header through `arena.*`; pointer
@@ -106,20 +105,19 @@ For long-running programs, partition one root arena by lifetime:
 ```dyn
 root := mem.arena_alloc(mem.MiB)
 defer mem.arena_release(root)
-permanent := mem.arena_sub(root, 512 * mem.KiB)
-frame := mem.arena_sub(root, 256 * mem.KiB)
-scratch := mem.arena_sub(root, 256 * mem.KiB)
+permanent := mem.arena_from_source(mem.within(root, 512 * mem.KiB))
+frame := mem.arena_from_source(mem.within(root, 256 * mem.KiB))
+scratch := mem.arena_from_source(mem.within(root, 256 * mem.KiB))
 ```
 
 Store application state in `permanent`, reset `frame` once per loop/request, and rewind `scratch`
-inside temporary operations. Each child capacity includes its own header, and the
-parent also reserves a header. These three child regions can therefore require a
-second parent block. A result returned from a scratch operation must be copied
+inside temporary operations. Each child takes its blocks from the parent as it
+grows, and each child limit includes its blocks' headers. A result returned from a scratch operation must be copied
 into storage that lives long enough.
 
 `mem.KiB`, `mem.MiB`, and `mem.GiB` express binary byte units, not recommended
 budgets. The capacities above are illustrative. Name application limits and measure
-peak usage before selecting budgets. For an input-dependent array count, use
+use with `mem.arena_used` before selecting budgets. For an input-dependent array count, use
 `mem.push_array(Item, arena, count)`: it checks the size multiplication and returns
 zeroed `[]Item`.
 

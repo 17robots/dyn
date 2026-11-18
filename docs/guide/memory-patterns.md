@@ -1,9 +1,10 @@
 # Memory patterns
 
 Choose fixed caller storage or an owned, chained arena according to the
-application lifetime and budget. Measure actual use with `arena_snapshot`. A
+application lifetime and budget. Measure actual use with `arena_used`. A
 byte unit makes a budget readable; it does not choose the budget for you. Owned
-arenas grow automatically; use `arena_alloc_bounded` to cap their backing.
+arenas grow automatically; give `arena_from_source` a source with a limit to
+cap their backing.
 
 Every Dyn block in this document is a complete program. The documentation test
 builds and runs them in debug and release modes. They use the matching source
@@ -28,8 +29,7 @@ fn main() {
   items := mem.push_array(Item, arena, 10)
   items[9].value = 42
   if items[0].value != 0 || items[9].value != 42 { #panic("array contents") }
-  snapshot := mem.arena_snapshot(arena)
-  if snapshot.used > WorkspaceBytes { #panic("budget") }
+  if mem.arena_used(arena) > WorkspaceBytes { #panic("budget") }
 }
 ```
 
@@ -43,22 +43,20 @@ Its recursion limit is 64 and evaluation budget is 4096 expression visits.
 
 ## Scratch and retained output
 
-Scratch borrows an arena and records a mark. End scopes in reverse order. Passing
-the output arena as a conflict keeps temporary allocations out of its backing.
-The copied result survives scratch reset; copying a slice descriptor would not.
+A function that needs temporary memory takes a scratch arena next to its
+output arena, marks scratch on entry and rewinds it on exit. The copied result
+survives the rewind; copying a slice descriptor would not.
 
 ```dyn
 use "std/mem"
 use "std/strings"
 use "std/bytes"
 
-fn make_label(output: *mem.Arena, first: *mem.Arena, second: *mem.Arena) []u8 {
-  temporary := mem.scratch_begin(first, second, output)
-  defer mem.scratch_end(&temporary)
-  text := strings.clone(temporary.arena, "retained")
-  nested := mem.scratch_begin(first, second, output)
-  _ = mem.arena_push(nested.arena, 16, 1)
-  mem.scratch_end(&nested)
+fn make_label(output: *mem.Arena, scratch: *mem.Arena) []u8 {
+  mark := mem.arena_mark(scratch)
+  defer mem.arena_rewind(scratch, mark)
+  text := strings.clone(scratch, "retained")
+  _ = mem.push_bytes(scratch, 16)
   return strings.clone(output, text)
 }
 
@@ -67,15 +65,15 @@ fn main() {
   scratch_storage: [mem.KiB + mem.ArenaBufferOverhead]u8
   output := mem.arena_from_buffer(output_storage[..])
   scratch := mem.arena_from_buffer(scratch_storage[..])
-  label := make_label(output, output, scratch)
+  label := make_label(output, scratch)
   if mem.arena_used(scratch) != 0 { #panic("scratch contract") }
   mem.zero(scratch.data[mem.ArenaHeader..])
   if !bytes.equal(label, "retained") { #panic("retained output") }
 }
 ```
 
-Scratch conflicts are programming errors. Both conflicting candidates cause
-`scratch_begin` to panic, as does exhausting an arena. No implicit thread-local
+Scratch must not share backing with the output: rewinding it would take the
+result back too. Exhausting either arena panics. No implicit thread-local
 scratch storage is installed.
 
 ## Bounded text construction
@@ -110,9 +108,8 @@ fn main() {
 `strings.format(arena, template, ...)` writes exactly the formatted bytes into
 an arena, using the `io.print` template language. `strings.List` collects views
 in arena-allocated nodes; `list_join` produces one allocation at the end. For
-per-frame work, `mem.frames_create` makes two arenas: `frame_advance` swaps them
-and resets the new current one, so last frame's data stays readable through
-`frame_previous` for one more frame.
+per-frame work, keep two arenas and swap them each frame, resetting the one
+that becomes current, so last frame's data stays readable for one more frame.
 
 ```dyn
 use "std/mem"
@@ -120,16 +117,19 @@ use "std/strings"
 use "std/bytes"
 
 fn main() {
-  storage := mem.frames_create(mem.MiB)
-  frames := &storage
-  defer mem.frames_release(frames)
+  current := mem.arena_alloc(mem.MiB)
+  previous := mem.arena_alloc(mem.MiB)
+  defer mem.arena_release(current)
+  defer mem.arena_release(previous)
   for frame in 0..3 {
-    mem.frame_advance(frames)
-    arena := mem.frame_current(frames)
+    older := previous
+    previous = current
+    current = older
+    mem.arena_reset(current)
     parts: strings.List
-    strings.list_push_format(arena, &parts, "frame {}", frame)
-    strings.list_push(arena, &parts, "ok")
-    line := strings.list_join(arena, &parts, ": ")
+    strings.list_push_format(current, &parts, "frame {}", frame)
+    strings.list_push(current, &parts, "ok")
+    line := strings.list_join(current, &parts, ": ")
     if #len(line) == 0 { #panic("join") }
   }
 }
@@ -137,7 +137,7 @@ fn main() {
 
 ## Bounded growth and reclamation
 
-`arena_alloc_bounded` limits backing bytes across all blocks, headers included.
+A source's `limit` caps backing bytes across all blocks, headers included.
 The limit is not an RSS measurement. A large allocation can request a block
 larger than the preferred size; the last block can be smaller when necessary to
 fit the remaining budget. Earlier allocation addresses stay stable.
@@ -146,17 +146,19 @@ fit the remaining budget. Earlier allocation addresses stay stable.
 use "std/mem"
 
 fn main() {
-  workspace := mem.arena_alloc_bounded(mem.KiB, 16 * mem.KiB)
+  source := mem.pages(16 * mem.KiB)
+  source.block_size = mem.KiB
+  workspace := mem.arena_from_source(source)
   defer mem.arena_release(workspace)
-  prefix := mem.push_bytes_uninit(workspace, 8)
+  prefix := mem.push_bytes(workspace, 8)
   prefix[0] = 42
   mark := mem.arena_mark(workspace)
-  _ = mem.push_bytes_uninit(workspace, 8 * mem.KiB)
-  if mem.arena_snapshot(workspace).blocks != 2 { #panic("expected growth") }
+  _ = mem.push_bytes(workspace, 8 * mem.KiB)
+  if workspace.current == workspace { #panic("expected growth") }
   mem.arena_rewind(workspace, mark)
-  if mem.arena_snapshot(workspace).blocks != 1 || prefix[0] != 42 { #panic("rewind contract") }
+  if workspace.current != workspace || prefix[0] != 42 { #panic("rewind contract") }
   mem.arena_reset(workspace)
-  if mem.arena_used(workspace) != 0 || mem.arena_snapshot(workspace).blocks != 1 { #panic("reset contract") }
+  if mem.arena_used(workspace) != 0 { #panic("reset contract") }
 }
 ```
 
@@ -184,9 +186,7 @@ a second time. OS release failure is not exercised by these examples.
   libc/pthread TLS; use an appropriate native thread provider for libraries needing it.
 - Prefer existing enum outcomes where alternatives matter. Retain useful partial
   I/O counts and native errors. A universal result type is not required.
-- Use fixed capacity to exercise exhaustion deterministically. Poisoning and
-  counters aid diagnosis but do not establish memory safety. Label snapshots at
-  the call site rather than retaining borrowed labels in allocation owners.
+- Poisoning aids diagnosis but does not establish memory safety.
 
 ## Diagnostics and contracts
 
@@ -212,14 +212,11 @@ mean unspecified, not safe or allocation-free.
 ## Typed arena pushes
 
 `mem.push(T, arena)` returns a `*T` that is zeroed and then given the type's field
-defaults. `mem.push_array(T, arena, count)` returns a zeroed `[]T`, and
-`mem.push_array_init(T, arena, count)` also writes the defaults into every element.
-All use the type's size and alignment, so call sites need no casts.
-`mem.push_bytes_uninit(arena, count)` returns uninitialized `[]u8` for buffers
-that are overwritten right away. All three panic when the arena is full, like
-`mem.arena_push`. Code with a strict budget on a fixed arena can use
-`mem.arena_try_push`, `mem.try_push`, or `mem.try_push_array` to report
-exhaustion instead.
+defaults. `mem.push_array(T, arena, count)` returns a zeroed `[]T`. Both use
+the type's size and alignment, so call sites need no casts.
+`mem.push_bytes(arena, count)` returns uninitialized `[]u8`, with no
+alignment padding, for buffers that are overwritten right away. All three panic when the arena is
+full; there is no fallible form.
 
 ## Threads
 
