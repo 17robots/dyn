@@ -1,10 +1,8 @@
 // Freestanding runtime compiled by Dyn's independent backend.
 // No std imports, allocations, defer, or tracing may be introduced here.
-struct Unwind { previous: *Unwind }
-// trace holds the frames of the panic being unwound (see trace_walk).
+// A thread's slot: trace holds the frames of its panic (see trace_walk).
 struct UnwindSlot {
-  tid: u64, top: *Unwind, message: *const u8, length: u64, unwinding: u64,
-  storage: [4096]u8, trace_total: u64, trace: [trace_frames]usize
+  tid: u64, trace_total: u64, trace: [trace_frames]usize
 }
 // Slots live in chunks obtained from the platform on first use, so programs
 // that never register a cleanup frame reserve nothing. Chunks are never
@@ -26,7 +24,6 @@ fn unwind_remember(tid: u64, index: usize) {
 extern fn atomic_load "dyn_atomic_load_u64"(p: *const u64) u64
 extern fn atomic_store "dyn_atomic_store_u64"(p: *u64, value: u64)
 extern fn atomic_claim "dyn_atomic_compare_exchange_u64"(p: *u64, expected: u64, desired: u64) bool
-extern fn jump "dyn_unwind_jump"(frame: *Unwind)
 extern fn panic_raw "dyn_panic"(message: *const u8, length: u64)
 
 fn chunk_at(address: u64) *UnwindChunk {
@@ -106,43 +103,6 @@ fn unwind_slot(claim: bool) *UnwindSlot {
   }
   return nil
 }
-pub fn dyn_unwind_link(frame: *Unwind) {
-  slot := unwind_slot(true)
-  if slot == nil {
-    message: []const u8 = "runtime unwind storage unavailable"
-    panic_raw(&message[0], #len(message))
-    return
-  }
-  // A target may reserve a private word beyond its saved register bank.
-  // Only the thread that linked this activation may unlink it.
-  offset := unwind_owner_offset()
-  if offset != 0 {
-    owner := #cast(*usize, #cast(usize, frame) + offset)
-    owner.* = #cast(usize, slot)
-  }
-  frame.previous = slot.top
-  slot.top = frame
-}
-pub fn dyn_unwind_unlink(frame: *Unwind) {
-  slot: *UnwindSlot = nil
-  offset := unwind_owner_offset()
-  if offset != 0 {
-    owner := #cast(*usize, #cast(usize, frame) + offset)
-    slot = #cast(*UnwindSlot, owner.*)
-  } else {
-    slot = unwind_slot(false)
-  }
-  if slot != nil && slot.top == frame {
-    if offset != 0 {
-      owner := #cast(*usize, #cast(usize, frame) + offset)
-      owner.* = 0
-    }
-    slot.top = frame.previous
-    if slot.top == nil && slot.unwinding == 0 {
-      atomic_store(&slot.tid, 0)
-    }
-  }
-}
 // The process panic hook, set through std/process.on_panic. It runs once,
 // after cleanups, right before an unhandled panic reports and exits.
 panic_hook: fn(*const u8, u64)
@@ -161,40 +121,6 @@ fn run_panic_hook(message: *const u8, length: u64) {
 pub fn dyn_unwind_begin(message: *const u8, length: u64) {
   run_panic_hook(message, length)
 }
-// Marks the slot as unwinding and keeps a copy of the message, which may live
-// in a frame the unwind discards.
-fn unwind_store_message(slot: *UnwindSlot, message: *const u8, length: u64) {
-  slot.unwinding = 1
-  truncated: []const u8 = " [truncated]"
-  copied := length
-  total := length
-  if message == nil {
-    copied = 0
-    total = 0
-  }
-  if copied > 4096 {
-    copied = 4096 - #cast(u64, #len(truncated))
-    bytes := #slice(message, #cast(usize, total))
-    for copied != 0 && (bytes[copied] & 0xc0) == 0x80 {
-      copied -= 1
-    }
-  }
-  if copied != 0 {
-    bytes := #slice(message, #cast(usize, total))
-    for i in 0..copied {
-      slot.storage[i] = bytes[i]
-    }
-  }
-  if copied < total {
-    for i in 0..#len(truncated) {
-      slot.storage[copied + i] = truncated[i]
-    }
-    total = copied + #len(truncated)
-  }
-  slot.message = &slot.storage[0]
-  slot.length = total
-}
-
 fn check_name(kind: u64) []const u8 {
   case kind {
     0 => {

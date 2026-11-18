@@ -34,32 +34,6 @@ _dyn_panic:
     mov $101, %edi
     call __exit
     ud2
-.global _dyn_unwind_set
-_dyn_unwind_set:
-    mov %rbx, 8(%rdi)
-    mov %rbp, 16(%rdi)
-    mov %r12, 24(%rdi)
-    mov %r13, 32(%rdi)
-    mov %r14, 40(%rdi)
-    mov %r15, 48(%rdi)
-    lea 8(%rsp), %rax
-    mov %rax, 56(%rdi)
-    mov (%rsp), %rax
-    mov %rax, 64(%rdi)
-    xor %eax, %eax
-    ret
-.global _dyn_unwind_jump
-_dyn_unwind_jump:
-    mov 8(%rdi), %rbx
-    mov 16(%rdi), %rbp
-    mov 24(%rdi), %r12
-    mov 32(%rdi), %r13
-    mov 40(%rdi), %r14
-    mov 48(%rdi), %r15
-    mov 56(%rdi), %rsp
-    mov 64(%rdi), %rdx
-    mov $1, %eax
-    jmp *%rdx
 .global _dyn_atomic_load_u32
 _dyn_atomic_load_u32:
     mov (%rdi), %eax

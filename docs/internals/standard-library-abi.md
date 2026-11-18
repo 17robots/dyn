@@ -53,7 +53,7 @@ Core runtime symbols currently reserved for generated code are:
 
 - `_start`
 - `dyn_panic`
-- `dyn_unwind_set`, `dyn_unwind_link`, `dyn_unwind_unlink`, `dyn_unwind_continue`
+- `dyn_unwind_begin` (runs the `panic.set_handler` handler)
 - `dyn_syscall6`
 - `__dyn_init_*`
 

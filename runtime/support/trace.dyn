@@ -176,12 +176,12 @@ fn trace_print(frames: []usize, total: u64) {
   }
 }
 // dyn_panic, as a panic begins: pc is the return address dyn_panic was called
-// with and fp the caller's frame pointer. A panic raised again at the end of
-// unwinding keeps the trace of the first.
+// with and fp the caller's frame pointer. A panic raised again by the panic
+// handler keeps the trace of the first.
 pub fn dyn_trace_capture(pc: usize, fp: usize) {
   if trace_table() == 0 { return }
   slot := unwind_slot(true)
-  if slot == nil || slot.unwinding != 0 { return }
+  if slot == nil || slot.trace_total != 0 { return }
   slot.trace_total = trace_walk(pc, fp, false, slot.trace[..])
 }
 pub fn dyn_trace_dump() {

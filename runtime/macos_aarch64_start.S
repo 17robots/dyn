@@ -49,43 +49,6 @@ _dyn_panic:
     svc #0x80
     brk #0
 
-.global _dyn_unwind_set
-_dyn_unwind_set:
-    stp x19, x20, [x0, #8]
-    stp x21, x22, [x0, #24]
-    stp x23, x24, [x0, #40]
-    stp x25, x26, [x0, #56]
-    stp x27, x28, [x0, #72]
-    stp x29, x30, [x0, #88]
-    mov x1, sp
-    str x1, [x0, #104]
-    // The Apple arm64 ABI preserves the low 64 bits of v8-v15.
-    stp d8, d9, [x0, #112]
-    stp d10, d11, [x0, #128]
-    stp d12, d13, [x0, #144]
-    stp d14, d15, [x0, #160]
-    mov x0, #0
-    ret
-
-.global _dyn_unwind_jump
-_dyn_unwind_jump:
-    mov x9, x0
-    ldp x19, x20, [x9, #8]
-    ldp x21, x22, [x9, #24]
-    ldp x23, x24, [x9, #40]
-    ldp x25, x26, [x9, #56]
-    ldp x27, x28, [x9, #72]
-    ldp x29, x30, [x9, #88]
-    ldr x10, [x9, #104]
-    ldp d8, d9, [x9, #112]
-    ldp d10, d11, [x9, #128]
-    ldp d12, d13, [x9, #144]
-    ldp d14, d15, [x9, #160]
-    mov sp, x10
-    mov x0, #1
-    ret
-
-
 // Darwin arm64 syscall shim. Dyn passes Darwin's unclassed syscall number;
 // x16 selects the Unix syscall class. Kernel errno is normalized to -errno.
 .global _dyn_syscall6

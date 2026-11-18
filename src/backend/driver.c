@@ -250,7 +250,6 @@ static bool ladder_cleanup(BackendContext *ctx, const DynIrProgram *ir, const Dy
   return true;
 }
 #define backend_report(ctx, ...) do { if ((ctx)->report) fprintf(stderr, __VA_ARGS__); } while (0)
-/* Words in the runtime's DynUnwind for this target (runtime/reference_support.c). */
 static void byte(BackendContext *ctx, unsigned x) {
   if (ctx->text.n < ctx->text.capacity || reserve(&ctx->text, ctx->text.n + 1))
     ctx->text.data[ctx->text.n++] = (unsigned char)x;

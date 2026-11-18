@@ -81,36 +81,6 @@ dyn_panic:
     mov $231, %eax
     syscall
     ud2
-.section .text.dyn_unwind_set,"ax",@progbits
-.global dyn_unwind_set
-.type dyn_unwind_set,@function
-dyn_unwind_set:
-    # Bytes 72..79 are private owner storage for support.dyn link/unlink.
-    mov %rbx, 8(%rdi)
-    mov %rbp, 16(%rdi)
-    mov %r12, 24(%rdi)
-    mov %r13, 32(%rdi)
-    mov %r14, 40(%rdi)
-    mov %r15, 48(%rdi)
-    lea 8(%rsp), %rax
-    mov %rax, 56(%rdi)
-    mov (%rsp), %rax
-    mov %rax, 64(%rdi)
-    xor %eax, %eax
-    ret
-.global dyn_unwind_jump
-.type dyn_unwind_jump,@function
-dyn_unwind_jump:
-    mov 8(%rdi), %rbx
-    mov 16(%rdi), %rbp
-    mov 24(%rdi), %r12
-    mov 32(%rdi), %r13
-    mov 40(%rdi), %r14
-    mov 48(%rdi), %r15
-    mov 56(%rdi), %rsp
-    mov 64(%rdi), %rdx
-    mov $1, %eax
-    jmp *%rdx
 .section .rodata
 .Ldyn_panic_newline:
     .byte 10

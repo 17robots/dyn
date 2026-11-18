@@ -6,76 +6,8 @@
 int _fltused = 0;
 #endif
 
-typedef struct DynUnwind DynUnwind;
-/* Keep these context sizes in sync with codegen.c and the native assembly. */
-#if defined(_WIN32)
-/* XMM6-XMM15 occupy bytes 96 through 255. */
-struct DynUnwind { DynUnwind *previous; uintptr_t saved[31]; };
-#elif defined(__aarch64__) || defined(DYN_AARCH64)
-/* d8-d15 occupy bytes 112 through 175. */
-struct DynUnwind { DynUnwind *previous; uintptr_t saved[21]; };
-#else
-struct DynUnwind { DynUnwind *previous; uintptr_t saved[15]; };
-#endif
-typedef struct {
-  uint64_t tid;
-  DynUnwind *top;
-  const unsigned char *message;
-  uint64_t length;
-  uint64_t unwinding;
-  unsigned char message_storage[4096];
-} DynUnwindSlot;
-static DynUnwindSlot unwind_slots[64];
 long dyn_syscall6(long, long, long, long, long, long, long);
-void dyn_unwind_jump(DynUnwind *);
 void dyn_panic(const unsigned char *, uint64_t);
-#ifdef _WIN32
-__declspec(dllimport) unsigned long __stdcall GetCurrentThreadId(void);
-#elif defined(__APPLE__)
-extern void *pthread_self(void);
-#endif
-
-static DynUnwindSlot *unwind_slot(int claim) {
-#if defined(_WIN32)
-  uint64_t tid = (uint64_t)GetCurrentThreadId();
-#elif defined(__APPLE__)
-  uint64_t tid = (uint64_t)(uintptr_t)pthread_self();
-#elif defined(DYN_AARCH64)
-  uint64_t tid = (uint64_t)dyn_syscall6(178, 0, 0, 0, 0, 0, 0);
-#else
-  uint64_t tid = (uint64_t)dyn_syscall6(186, 0, 0, 0, 0, 0, 0);
-#endif
-  for (;;) {
-    DynUnwindSlot *empty = 0;
-    for (size_t i = 0; i < 64; ++i) {
-      uint64_t seen = __atomic_load_n(&unwind_slots[i].tid, __ATOMIC_ACQUIRE);
-      if (seen == tid) return &unwind_slots[i];
-      if (!seen && !empty) empty = &unwind_slots[i];
-    }
-    if (!claim || !empty) return 0;
-    uint64_t expected = 0;
-    if (__atomic_compare_exchange_n(&empty->tid, &expected, tid, 0,
-        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return empty;
-  }
-}
-void dyn_unwind_link(DynUnwind *frame) {
-  DynUnwindSlot *slot = unwind_slot(1);
-  if (!slot) {
-    static const unsigned char message[] = "runtime unwind thread capacity exceeded";
-    dyn_panic(message, sizeof(message) - 1);
-    return;
-  }
-  frame->previous = slot->top;
-  slot->top = frame;
-}
-void dyn_unwind_unlink(DynUnwind *frame) {
-  DynUnwindSlot *slot = unwind_slot(0);
-  if (slot && slot->top == frame) {
-    slot->top = frame->previous;
-    if (!slot->top && !slot->unwinding)
-      __atomic_store_n(&slot->tid, 0, __ATOMIC_RELEASE);
-  }
-}
 static void (*dyn_panic_hook)(const unsigned char *, uint64_t);
 void dyn_set_panic_hook(void (*hook)(const unsigned char *, uint64_t)) { dyn_panic_hook = hook; }
 static void run_panic_hook(const unsigned char *message, uint64_t length) {
@@ -86,16 +18,6 @@ static void run_panic_hook(const unsigned char *message, uint64_t length) {
 void dyn_unwind_begin(const unsigned char *message, uint64_t length) {
   /* A panic does not run defers: the handler runs, then dyn_panic reports. */
   run_panic_hook(message, length);
-}
-void dyn_unwind_continue(void) {
-  DynUnwindSlot *slot = unwind_slot(0);
-  if (slot && slot->top) {
-    DynUnwind *frame = slot->top;
-    slot->top = frame->previous;
-    dyn_unwind_jump(frame);
-  }
-  if (slot) dyn_panic(slot->message, slot->length);
-  dyn_panic(0, 0);
 }
 
 /* Failed runtime checks pass the function name and kind << 24 | name length.

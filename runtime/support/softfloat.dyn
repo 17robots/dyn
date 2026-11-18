@@ -1,3 +1,4 @@
+#target(float: soft)
 // Standalone IEEE 754 binary32/binary64, using integers only. No imports,
 // allocations, floating types, runtime FP operations, or target ABI assumptions.
 // Original implementation. All arithmetic rounds to nearest, ties to even,
