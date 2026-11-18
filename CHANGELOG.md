@@ -385,6 +385,17 @@ Compiler:
 
 Compiler speed of generated code:
 
+- A small loop-free helper made of byte stores, such as
+  `binary.store_u64_le`, now expands inside loops at `--release`. The
+  inliner counted its eight stores' literals and casts and judged it too
+  large, so every call stayed a call, although the backend makes it one
+  instruction. Only the size limit changes; the growth budget still counts
+  everything, so other inlining choices stay as they were.
+- `html` escaping writes each byte's entity as one 8-byte word from a table,
+  without branches: 1.05 to 0.70 ns per byte on entity-dense text, and Chirp's
+  pages 98k to 121k requests per second on two cores. `html.print` writes
+  integers and booleans directly instead of formatting them through a
+  scratch buffer.
 - Struct and array parameters are copied less. An inlined body reads a
   caller's local in place when it never writes the parameter or takes its
   address; a callee keeps a stack-passed struct where it arrived and reads a

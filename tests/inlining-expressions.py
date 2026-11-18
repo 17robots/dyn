@@ -31,7 +31,7 @@ static void wrappers(unsigned depth, bool accepted) {
  uint32_t child=0;bool active=false;unsigned cost=2;
  DynIrProgram p={.expressions=expressions,.expression_count=depth+2,.functions=&function,.function_count=1,
    .statements=&statement,.statement_count=1,.children=&child,.child_count=1};
- Inline b={.in=&p,.loop_stride=1,.budget=512,.resource_budget=4096,.active=&active,.costs=&cost};
+ Inline b={.in=&p,.loop_stride=1,.budget=512,.resource_budget=4096,.active=&active,.costs=&cost,.sizes=&cost};
  InlineScope scope={.function=&function,.expand=true};InlineList list={0};DynExprId result=DYN_NO_EXPR;
  bool ok=inline_cast_call(&b,&scope,depth+1,&list,&result,0);
  assert(ok==accepted && !b.failed);

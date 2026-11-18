@@ -70,7 +70,7 @@ static void reservation(unsigned count,unsigned locals) {
  DynIrFunction f={.return_type=DYN_TYPE_U64,.local_count=locals};bool active=false;unsigned cost=2;
  DynIrProgram p={.expressions=&call,.expression_count=1,.statements=statements,.statement_count=2,
   .children=children,.child_count=count+1,.functions=&f,.function_count=1};
- Inline b={.in=&p,.budget=512,.resource_budget=4096,.costs=&cost,.active=&active};
+ Inline b={.in=&p,.budget=512,.resource_budget=4096,.costs=&cost,.sizes=&cost,.active=&active};
  unsigned remaining=4096;bool ok=inline_reserve_hot(&b,0,1,false,true,0,&remaining);
  if(count>4095)assert(!ok);
  else {
@@ -97,7 +97,7 @@ static void rejected_sites(void) {
  DynIrFunction f={.return_type=DYN_TYPE_BOOL};bool active=false;unsigned cost=2;
  DynIrProgram p={.expressions=exprs,.expression_count=3,.statements=statements,.statement_count=20,
   .children=children,.child_count=20,.functions=&f,.function_count=1};
- Inline b={.in=&p,.budget=512,.resource_budget=4096,.active=&active,.costs=&cost};unsigned remaining=4096;
+ Inline b={.in=&p,.budget=512,.resource_budget=4096,.active=&active,.costs=&cost,.sizes=&cost};unsigned remaining=4096;
  assert(inline_reserve_hot(&b,0,1,false,true,0,&remaining));
  assert(!b.reserved_growth && !b.reserved_resources); /* Actual depth>16 rejects. */
  statements[0].body_start=19;statements[19].expression=2;remaining=4096;
@@ -115,7 +115,7 @@ static void resources(void) {
  DynIrProgram p={.expressions=exprs,.expression_count=2,.statements=&ret,.statement_count=1,
   .children=&child,.child_count=1,.functions=&f,.function_count=1};
  Inline b={.in=&p,.budget=512,.resource_budget=24,.reserved_growth=4,.reserved_resources=24,
-  .active=&active,.costs=&cost,.loop_stride=1};InlineScope scope={.function=&f,.expand=true};InlineList list={0};DynExprId result=0;
+  .active=&active,.costs=&cost,.sizes=&cost,.loop_stride=1};InlineScope scope={.function=&f,.expand=true};InlineList list={0};DynExprId result=0;
  assert(!inline_call(&b,&scope,&exprs[1],&list,&result,0));
  assert(b.budget==512 && b.resource_budget==24 && b.reserved_growth==4);
  scope.in_loop=true;scope.returns=true;
