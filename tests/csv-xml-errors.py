@@ -44,27 +44,31 @@ fn write(data: rawptr, status: *fail.Status, source: []const u8) usize {
   check(p.calls == 1)
   return refused(status, p.code)
 }
-struct CsvField { value: csv.Field, failure: fail.Failure }
+// A field or event with whether the call returned one (the scanner's ended,
+// inverted) and the call's failure.
+struct Got { text: []u8, end_record: bool, end_input: bool, found: bool }
+struct CsvField { value: Got, failure: fail.Failure }
 fn csv_next(state: *csv.Scanner, destination: []u8) CsvField {
   status: fail.Status
   value := csv.next(&status, state, destination)
-  return CsvField{ value: value, failure: status.failure }
+  return CsvField{ value: Got{ text: value.text, end_record: value.end_record, end_input: value.end_input, found: !state.ended }, failure: status.failure }
 }
 fn csv_stream(state: *csv.StreamScanner, destination: []u8) CsvField {
   status: fail.Status
   value := csv.next_stream(&status, state, destination)
-  return CsvField{ value: value, failure: status.failure }
+  return CsvField{ value: Got{ text: value.text, end_record: value.end_record, end_input: value.end_input, found: !state.ended }, failure: status.failure }
 }
-struct XmlEvent { value: xml.Next, failure: fail.Failure }
+struct EventGot { value: xml.Event, found: bool }
+struct XmlEvent { value: EventGot, failure: fail.Failure }
 fn xml_next(state: *xml.Scanner) XmlEvent {
   status: fail.Status
   value := xml.next(&status, state)
-  return XmlEvent{ value: value, failure: status.failure }
+  return XmlEvent{ value: EventGot{ value: value, found: !state.ended }, failure: status.failure }
 }
 fn xml_stream(state: *xml.StreamScanner) XmlEvent {
   status: fail.Status
   value := xml.next_stream(&status, state)
-  return XmlEvent{ value: value, failure: status.failure }
+  return XmlEvent{ value: EventGot{ value: value, found: !state.ended }, failure: status.failure }
 }
 fn callback_contracts() {
   scratch: [32]u8
@@ -136,8 +140,8 @@ fn callback_contracts() {
   check(!xml_next(&xb).value.found)
   attr := xml.attributes(xml.Event{ attributes: " a=bad" })
   attributing: fail.Status
-  ar := xml.next_attribute(&attributing, &attr)
-  check(!ar.found && attributing.failure.kind == fail.Kind.InvalidInput)
+  _ = xml.next_attribute(&attributing, &attr)
+  check(attr.ended && attributing.failure.kind == fail.Kind.InvalidInput)
   p := Probe{}
   w := xml.writer(io.Writer{ data: #cast(rawptr, &p), write: write })
   invalid_name: fail.Status
@@ -171,11 +175,12 @@ fn additional_contracts() {
   check(!end.value.found && end.failure.kind == fail.Kind.Ok)
   attrs := xml.attributes(xml.Event{})
   none: fail.Status
-  check(!xml.next_attribute(&none, &attrs).found && !none.failed)
+  _ = xml.next_attribute(&none, &attrs)
+  check(attrs.ended && !none.failed)
   zero_field: csv.Field
-  zero_next: xml.Next
+  zero_event: xml.Event
   zero_attribute: xml.Attribute
-  check(!zero_field.found && !zero_next.found && !zero_attribute.found)
+  check(#len(zero_field.text) == 0 && #len(zero_event.name) == 0 && #len(zero_attribute.name) == 0)
   // CSV diagnostics retain the field's starting byte offset.
   bad := csv.scanner("a,\"unfinished")
   check(csv_next(&bad, scratch[..]).value.found)

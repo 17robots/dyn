@@ -81,21 +81,20 @@ fn run(line: []const u8) bool {
 fn main() i32 {
   storage: [65536]u8
   input := bufio.reader(io.stdin(), storage[..])
-  line: [4096]u8
   reading: fail.Status
   all_good := true
   for {
-    read := bufio.read_line(&reading, &input, line[..])
+    line := bufio.read_line(&reading, &input)
     if reading.failed {
       report(reading.failure)
       return 1
     }
-    text := strings.trim(line[..read.transferred])
+    if input.ended { break }
+    text := strings.trim(line)
     if bytes.equal(text, "quit") { break }
     if #len(text) != 0 && !run(text) {
       all_good = false
     }
-    if read.status == bufio.ReadStatus.End { break }
   }
   if all_good { return 0 }
   return 1

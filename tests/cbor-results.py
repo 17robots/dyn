@@ -15,7 +15,7 @@ struct Got { value: cbor.Token, offset: usize, found: bool, failure: fail.Failur
 fn next(state: *cbor.Reader) Got {
  status: fail.Status
  item := cbor.next(&status, state)
- return Got{ value: item.value, offset: item.offset, found: item.found, failure: status.failure }
+ return Got{ value: item, offset: state.start, found: !state.ended, failure: status.failure }
 }
 struct Encoded { value: []u8, failure: fail.Failure }
 fn encode(arena: *mem.Arena, items: []const cbor.Token) Encoded {

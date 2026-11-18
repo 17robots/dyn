@@ -72,12 +72,12 @@ fn main() {
   lines := bytes.splitter(Vectors, "\n")
   for {
     piece := bytes.split_next(&lines)
-    if !piece.found { break }
-    if #len(piece.value) == 0 { continue }
-    tab := bytes.find_byte(piece.value, '\t')
+    if lines.ended { break }
+    if #len(piece) == 0 { continue }
+    tab := bytes.find_byte(piece, '\t')
     vectors := fail.Status{ on_failure: fail.panic_on_failure }
-    block := hex.decode(arena, &vectors, piece.value[..tab])
-    want := hex.decode(arena, &vectors, piece.value[tab + 1..])
+    block := hex.decode(arena, &vectors, piece[..tab])
+    want := hex.decode(arena, &vectors, piece[tab + 1..])
     output: [4096]u8
     got := decode_all(&decoder, block, output[..])
     if !bytes.equal(got, want) {
@@ -91,9 +91,9 @@ fn main() {
     fields := bytes.splitter(want, "|")
     for {
       item := bytes.split_next(&fields)
-      if !item.found { break }
-      equals := bytes.find_byte(item.value, '=')
-      written := hpack.encode_field(wire[length..], item.value[..equals], item.value[equals + 1..])
+      if fields.ended { break }
+      equals := bytes.find_byte(item, '=')
+      written := hpack.encode_field(wire[length..], item[..equals], item[equals + 1..])
       if written == 0 {
         io.println("encode failed {}", encoded)
         return
@@ -116,9 +116,9 @@ fn main() {
     items := bytes.splitter(want, "|")
     for {
       item := bytes.split_next(&items)
-      if !item.found { break }
-      equals := bytes.find_byte(item.value, '=')
-      section_length += qpack.encode_field(section[section_length..], item.value[..equals], item.value[equals + 1..])
+      if items.ended { break }
+      equals := bytes.find_byte(item, '=')
+      section_length += qpack.encode_field(section[section_length..], item[..equals], item[equals + 1..])
     }
     qpack_out: [4096]u8
     if !bytes.equal(qpack_all(section[..section_length], qpack_out[..]), want) {

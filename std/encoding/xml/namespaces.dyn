@@ -148,7 +148,7 @@ fn namespace_enter_impl(status: *fail.Status, state: *Namespaces, event: Event) 
   attributes_state := attributes(event)
   for {
     item := next_attribute(status, &attributes_state)
-    if !item.found { break }
+    if attributes_state.ended { break }
     split := qualified(status, item.name)
     if status.failed { return split }
     declaration := bytes.equal(item.name, "xmlns") || bytes.equal(split.prefix, "xmlns")
@@ -178,13 +178,13 @@ fn namespace_enter_impl(status: *fail.Status, state: *Namespaces, event: Event) 
   for {
     before := scan.offset
     attribute_item := next_attribute(status, &scan)
-    if !attribute_item.found { break }
+    if scan.ended { break }
     current := namespace_resolve(status, state, attribute_item.name, true)
     if status.failed { return current }
     prior := attributes(event)
     for prior.offset < before {
       other := next_attribute(status, &prior)
-      if !other.found { break }
+      if prior.ended { break }
       expanded := namespace_resolve(status, state, other.name, true)
       if bytes.equal(current.uri, expanded.uri) && bytes.equal(current.local, expanded.local) {
         return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")

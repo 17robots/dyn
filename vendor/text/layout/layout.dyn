@@ -312,8 +312,8 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
     start:=iterator.offset
     splitting: fail.Status
     grapheme:=unicode.next_grapheme(&splitting, &iterator)
-    if !grapheme.found { return fail.Kind.InvalidInput }
-    face:=font.select(font.data, grapheme.value)
+    if iterator.ended { return fail.Kind.InvalidInput }
+    face:=font.select(font.data, grapheme)
     if face.font==nil { return fail.Kind.NotFound }
     script:u32=0
     at:=start
@@ -326,7 +326,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
       at+=cp.width
     }
     clusters[used]=Cluster{start:start, end:iterator.offset, scalar:scalar, level:resolved.levels[scalar], script:script, face:face, tab:utf8.decode(text, start).codepoint==9}
-    scalar+=utf8.codepoint_count(grapheme.value)
+    scalar+=utf8.codepoint_count(grapheme)
     used+=1
   }
   clusters=clusters[..used]

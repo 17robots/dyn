@@ -53,6 +53,25 @@ Language (2026-11-16 cleanup; see `docs/guide/rules.md`):
 
 Standard library:
 
+- Iterators return their value, with no `{value, found}` struct. The call
+  that finds nothing left sets `ended` on the state passed in, and returns
+  zero; a failure sets it too. This covers `strings.scan_*`,
+  `text/scanner.next_*`, `bytes.split_next`, `utf8.next`,
+  `path.component_next`, `next_grapheme`, `fs.directory_next`,
+  `watch.next`, `http.next_part`, the `ini`, `csv`, `xml`, `json/read`,
+  `cbor`, `msgpack`, `protobuf` and `der` readers, and `tar` and `zip`.
+  `Next.offset` becomes `state.start` (where the value began) or
+  `state.offset` (archives). `array.pop` and `ring.pop` return the value,
+  zero when empty. See the migration guide.
+- `fs.make_directory(&status, path)` takes no mode and makes the directory
+  0o755. `fs.make_directory_mode(&status, path, mode)` takes the bits, such
+  as 0o700 for a private directory.
+- `bufio.read_line(&status, &reader)` returns the line itself, borrowed from
+  the reader's storage until the next read; `reader.ended` marks the end. A
+  line longer than the storage fails with `Capacity`, and the next read
+  with a fresh status continues after it. `read_until` keeps the
+  buffer-you-pass form.
+
 - Failure is state you pass in: new `std/fail` (`fail.Status`, `fail.Failure`,
   `fail.Kind`, `fail.make`, `fail.set`, `fail.invalid`, `fail.describe`,
   `fail.panic_on_failure`). A function that can fail takes a `*fail.Status`;
@@ -335,6 +354,9 @@ Standard library:
 
 Compiler:
 
+- A struct passed where exactly one of its fields fits names the field:
+  `expected []const u8, found DirectoryEntry: did you mean entry.name?`,
+  with a fix that adds `.name`.
 - Fixed: on x86-64 release builds, a call in a function the program never
   reaches could stop a constant argument from being folded into a function
   it does reach, so importing an unused module could change the code of
@@ -370,9 +392,16 @@ Compiler speed of generated code:
   loop of 16-byte stores instead of `rep stosb`, whose fixed start-up cost
   made declaring a status take about 9 ns; it now takes about 1 ns, and code
   is slightly smaller.
-- `fail.Status` is 160 bytes (was 280) and `fail.Failure` 136 (was 256): the
-  small fields come first and a failure keeps up to 112 bytes of text, a long
-  path keeping its end. Declaring a status costs about nothing.
+- `fail.Status` is 64 bytes (was 280) and `fail.Failure` 40 (was 256). A
+  failure's text (operation, message, path) goes into a ring the process
+  shares, split by thread stack so threads rarely meet, and a failure keeps
+  up to 1 KiB of it (256 bytes on 32-bit targets), a long path keeping its
+  end. Recording a failure takes about 17 ns instead of 30, and as long as
+  before with eight threads at once. The text stays readable until about
+  4 KiB of newer failure text lands on the same part of the ring; after
+  that `describe` gives the kind and the system's code ("not found (code
+  -2)") and the `*_text` functions return "". The `text` field is gone;
+  read the text with `operation_text`, `message_text` and `path_text`.
 - The evented server does less per request: one parse of the request head
   (it was parsed twice), the response head written once into a per-worker
   buffer (it was measured, then written, into an 8 KiB stack buffer zeroed

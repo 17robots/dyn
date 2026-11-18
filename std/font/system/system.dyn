@@ -203,7 +203,7 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
   defer fs.close_directory(&listing)
   for walk.count < #len(walk.entries) {
     item := fs.directory_next(&status, &listing)
-    if !item.found { break }
+    if listing.ended { break }
     mark := mem.arena_mark(scratch)
     parts: [2][]const u8 = [directory, item.name]
     path := strings.join(scratch, parts[..], "/")

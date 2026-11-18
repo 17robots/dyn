@@ -92,11 +92,11 @@ fn main() {
   parts := http.multipart(&reading, &form)
   for true {
     part := http.next_part(&reading, &parts)
-    if !part.found {
+    if parts.ended {
       io.println("parts end {}", reading.failure.kind)
       break
     }
-    io.println("part {} {} {} {}", part.value.name, part.value.filename, part.value.content_type, #len(part.value.body))
+    io.println("part {} {} {} {}", part.name, part.filename, part.content_type, #len(part.body))
   }
   out_status: fail.Status
   out := json.writer(&out_status, storage[..])

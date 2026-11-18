@@ -9,16 +9,15 @@ core and heap build on every target, bare metal included; std needs an operating
 
 Layer: heap
 
-- `struct ArchiveReader { source: []const u8, offset: usize, defaults: Overrides }`
+- `struct ArchiveReader { source: []const u8, offset: usize, defaults: Overrides, ended: bool }`: offset is the position after the last entry.
 - `fn reader(source: []const u8) ArchiveReader`
-- `fn next(status: *fail.Status, state: *ArchiveReader) Next`: Names and payload borrow source.
+- `fn next(status: *fail.Status, state: *ArchiveReader) Entry`: Names and payload borrow source.
 - `struct Entry { name: []const u8, prefix: []const u8, link_name: []const u8, size: u64, kind: u8, data: []const u8, }`
-- `struct StreamReader { source_reader: stream.Reader, metadata: []u8, spare: []u8, metadata_used: usize, defaults: Overrides, header_storage: []u8, remaining: usize, padding: usize, active: bool, ended: bool, offset: usize, failed: bool, failure: fail.Failure, }`
-- `struct StreamEntry { name: []const u8, prefix: []const u8, link_name: []const u8, size: u64, typeflag: u8, offset: usize, found: bool, }`: typeflag is the TAR protocol byte;
+- `struct StreamReader { source_reader: stream.Reader, metadata: []u8, spare: []u8, metadata_used: usize, defaults: Overrides, header_storage: []u8, remaining: usize, padding: usize, active: bool, // Turns true when next_stream returns no entry, at the end of the archive // or after a failure. ended: bool, offset: usize, failed: bool, failure: fail.Failure, }`
+- `struct StreamEntry { name: []const u8, prefix: []const u8, link_name: []const u8, size: u64, typeflag: u8, offset: usize, }`: typeflag is the TAR protocol byte.
 - `fn stream_reader(input: stream.Reader, header_storage: []u8, metadata: []u8) StreamReader`: Header and metadata storage must not overlap;
 - `fn next_stream(status: *fail.Status, state: *StreamReader) StreamEntry`: Input, header, and metadata storage must be disjoint.
 - `fn read_stream(status: *fail.Status, state: *StreamReader, destination: []u8) usize`: Reads the current entry's payload incrementally;
-- `struct Next { entry: Entry, offset: usize, found: bool }`: An entry, found false at the end of the archive.
 
 ## std/archive/zip
 
@@ -26,13 +25,12 @@ Layer: heap
 
 - `fn open_checked(status: *fail.Status, source: []const u8) ArchiveReader`: Checks directory framing and every local-header/descriptor relationship up front.
 - `struct Entry { name: []const u8, payload: []const u8, method: u16, flags: u16, checksum: u32, compressed_size: usize, uncompressed_size: usize, directory: bool, }`
-- `struct ArchiveReader { source: []const u8, offset: usize, indexed: bool, directory_start: usize, directory_end: usize, remaining: usize, failed: bool, failure: fail.Failure }`: After a failure a reader stays failed: next fails the same way again.
-- `struct Next { value: Entry, offset: usize, found: bool }`: An entry, found false at the end of the archive;
+- `struct ArchiveReader { source: []const u8, offset: usize, indexed: bool, directory_start: usize, directory_end: usize, remaining: usize, failed: bool, failure: fail.Failure, ended: bool }`: After a failure a reader stays failed: next fails the same way again.
 - `struct StreamReader { source_reader: stream.Reader, header_storage: []u8, name_storage: []u8, payload_storage: []u8, ended: bool, offset: usize, failed: bool, failure: fail.Failure, }`
 - `fn stream_reader(input: stream.Reader, header_storage: []u8, name_storage: []u8, payload_storage: []u8) StreamReader`: The three storages must not overlap;
-- `fn next_stream(status: *fail.Status, state: *StreamReader) Next`: Reads one local-file entry from a stream.
+- `fn next_stream(status: *fail.Status, state: *StreamReader) Entry`: Reads one local-file entry from a stream.
 - `fn open(source: []const u8) ArchiveReader`
-- `fn next(status: *fail.Status, state: *ArchiveReader) Next`: Reads the next entry of an archive in memory, with the same failures as next_stream.
+- `fn next(status: *fail.Status, state: *ArchiveReader) Entry`: Reads the next entry of an archive in memory, with the same failures as next_stream.
 - `fn extract(arena: *mem.Arena, status: *fail.Status, archive_entry: Entry) []u8`: The entry's bytes, decompressed and checksum-verified, in arena.
 
 ## std/audio/wav
@@ -53,13 +51,13 @@ Layer: heap
 - `fn writer_buffered(state: *const Writer) usize`
 - `fn writer_flush(status: *fail.Status, state: *Writer)`: Writes everything buffered.
 - `fn writer_adapter(state: *Writer) io.Writer`
-- `struct Reader { source: io.Reader, storage: []u8, start: usize, end: usize, ended: bool, pending: [2]u8, pending_count: usize, }`: Reads source a buffer at a time.
+- `struct Reader { source: io.Reader, storage: []u8, start: usize, end: usize, // The source reported its end. input_done: bool, pending: [2]u8, pending_count: usize, // Set by a read_line call that returns no line: at the end of the input, // or after a failure. ended: bool, // read_line is dropping the rest of a line too long for storage. skipping: bool, }`: Reads source a buffer at a time.
 - `fn reader(source: io.Reader, storage: []u8) Reader`
 - `fn reader_adapter(state: *Reader) io.Reader`
 - `enum ReadStatus { Complete, End, More }`: How a record read ended: at its delimiter (Complete), at the end of the input (End, possibly with a final unterminated fragment), or ...
 - `struct ReadResult { transferred: usize, status: ReadStatus, }`
 - `fn read_until(status: *fail.Status, state: *Reader, destination: []u8, delimiter: u8) ReadResult`: Reads up to delimiter, which is consumed and left out.
-- `fn read_line(status: *fail.Status, state: *Reader, destination: []u8) ReadResult`: Reads one line: LF and CRLF end it, a lone CR is kept.
+- `fn read_line(status: *fail.Status, state: *Reader) []const u8`: The next line, without its LF or CRLF;
 
 ## std/bytes
 
@@ -75,10 +73,9 @@ Layer: core
 - `fn find_last(value: []const u8, needle: []const u8) usize`: An empty needle matches at the end.
 - `fn contains(value: []const u8, needle: []const u8) bool`
 - `fn count_occurrences(value: []const u8, needle: []const u8) usize`
-- `struct Splitter { value: []const u8, separator: []const u8, offset: usize, done: bool, }`
+- `struct Splitter { value: []const u8, separator: []const u8, offset: usize, // Set after the last piece is returned. done: bool, // Set by the split_next call after that, which returns "". ended: bool, }`
 - `fn splitter(value: []const u8, separator: []const u8) Splitter`
-- `struct Piece { value: []const u8, found: bool }`
-- `fn split_next(state: *Splitter) Piece`: The next piece, or found false after the last one.
+- `fn split_next(state: *Splitter) []const u8`: The next piece.
 - `struct Cursor { data: []const u8, offset: usize, }`
 - `fn cursor(data: []const u8) Cursor`
 - `fn cursor_remaining(state: *const Cursor) usize`
@@ -219,8 +216,7 @@ Layer: heap
 - `fn push_ref(a: *Array($T), value: $T) *T`: Adds value at the end and returns its address, which goes stale at the next push.
 - `fn push_all(a: *Array($T), values: []const $T)`: Adds every value at the end.
 - `fn get(a: *const Array($T), index: usize) *T`: The element at index, or nil past the end.
-- `struct Popped(T) { value: T, found: bool }`: The last element, removed: found is false when the array was empty.
-- `fn pop(a: *Array($T)) Popped(T)`
+- `fn pop(a: *Array($T)) T`: The last element, removed, or the zero value when the array is empty.
 - `fn clear(a: *Array($T))`: Empties the array.
 
 ## std/container/bit_set
@@ -299,8 +295,7 @@ Layer: core
 - `fn init(backing: []u8) Ring`
 - `fn length(state: *const Ring) usize`
 - `fn push(status: *fail.Status, state: *Ring, byte: u8)`: A full ring fails with Capacity and keeps its bytes.
-- `struct Popped { value: u8, found: bool }`
-- `fn pop(state: *Ring) Popped`: The oldest byte;
+- `fn pop(state: *Ring) u8`: The oldest byte, or 0 when the ring is empty.
 
 ## std/container/slot_map
 
@@ -407,10 +402,9 @@ Layer: core
 Layer: core
 
 - `struct Element { tag: u8, content: []const u8, encoded: []const u8, constructed: bool }`
-- `struct Cursor { source: []const u8, offset: usize, failed: bool, error_kind: fail.Kind, error_offset: usize }`: After a failure the cursor stays failed: next fails the same way again.
-- `struct Next { value: Element, offset: usize, found: bool }`: An element, found false at the end of the input;
+- `struct Cursor { source: []const u8, offset: usize, failed: bool, error_kind: fail.Kind, error_offset: usize, start: usize, ended: bool }`: After a failure the cursor stays failed: next fails the same way again.
 - `fn cursor(source: []const u8) Cursor`
-- `fn next(status: *fail.Status, state: *Cursor) Next`: Malformed input fails with InvalidInput, a length past usize with Overflow, both at the offending byte.
+- `fn next(status: *fail.Status, state: *Cursor) Element`: Malformed input fails with InvalidInput, a length past usize with Overflow, both at the offending byte.
 - `fn enter(element: Element) Cursor`
 - `fn finished(state: *const Cursor) bool`
 
@@ -654,19 +648,18 @@ Layer: heap
 - `enum Kind { Unsigned, Negative, Bytes, Text, Array, Map, Tag, Bool, Null, Undefined, Simple, Float, End }`: RFC 8949: https://www.rfc-editor.org/rfc/rfc8949.html Borrowed preorder tokens, with End only for indefinite containers/strings.
 - `struct Token { kind: Kind, value: u64, bytes: []const u8, real: f64, boolean: bool, indefinite: bool }`
 - `struct Frame { kind: Kind, remaining: u64, indefinite: bool, odd: bool }`
-- `struct Reader { source: []const u8, offset: usize, frames: [64]Frame, depth: usize, failed: bool, error_kind: fail.Kind, error_offset: usize }`: After a failure the reader stays failed: next fails the same way again.
-- `struct Next { value: Token, offset: usize, found: bool }`: A token, found false at the end of the input;
+- `struct Reader { source: []const u8, offset: usize, frames: [64]Frame, depth: usize, failed: bool, error_kind: fail.Kind, error_offset: usize, start: usize, ended: bool }`: After a failure the reader stays failed: next fails the same way again.
 - `fn reader(source: []const u8) Reader`
-- `fn next(status: *fail.Status, state: *Reader) Next`: The next token.
+- `fn next(status: *fail.Status, state: *Reader) Token`: The next token.
 - `fn encode(arena: *mem.Arena, status: *fail.Status, tokens: []const Token) []u8`: Arena-owned output.
 
 ## std/encoding/csv
 
 Layer: heap
 
-- `struct Scanner { source: []const u8, offset: usize, finished: bool }`
-- `struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, record_ended: bool, ended: bool, finished: bool }`
-- `struct Field { text: []u8, end_record: bool, end_input: bool, found: bool }`
+- `struct Scanner { source: []const u8, offset: usize, finished: bool, ended: bool }`
+- `struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, record_ended: bool, input_done: bool, finished: bool, ended: bool }`
+- `struct Field { text: []u8, end_record: bool, end_input: bool }`
 - `struct Writer { sink: stream.Writer, fields: usize }`
 - `fn scanner(source: []const u8) Scanner`
 - `fn stream_scanner(input: stream.Reader) StreamScanner`
@@ -688,10 +681,9 @@ Layer: heap
 
 - `enum Kind { Section, Pair }`: Allocation-free INI scanner.
 - `struct Entry { section: []const u8, key: []const u8, value: []const u8, kind: Kind, line: usize }`
-- `struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, failed: bool, error_offset: usize, error_line: usize }`: line counts the lines read so far, so a zero Scanner{ source: text } is ready to use.
-- `struct Next { value: Entry, found: bool }`: found is false at the end of the input.
+- `struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, failed: bool, error_offset: usize, error_line: usize, ended: bool }`: line counts the lines read so far, so a zero Scanner{ source: text } is ready to use.
 - `fn scanner(source: []const u8) Scanner`
-- `fn next(status: *fail.Status, state: *Scanner) Next`
+- `fn next(status: *fail.Status, state: *Scanner) Entry`
 - `fn find(status: *fail.Status, source: []const u8, section: []const u8, key: []const u8) []const u8`: The value of key in section, borrowing source;
 - `fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) []Entry`: A materialized entry table.
 
@@ -783,8 +775,8 @@ Layer: heap
 - `fn as_u64(value: *const Value) u64`: Zero is returned for a wrong kind, a fractional real or an out-of-range value.
 - `fn as_i64(value: *const Value) i64`
 - `fn is_missing(value: *const Value) bool`
-- `struct Iterator { cursor: *const Value, remaining: usize, object: bool }`
-- `struct Entry { value: *const Value, key: []const u8, found: bool }`
+- `struct Iterator { cursor: *const Value, remaining: usize, object: bool, ended: bool }`: ended turns true when next finds no entry left;
+- `struct Entry { value: *const Value, key: []const u8 }`: key is "" for an array element.
 - `fn iterator(container: *const Value) Iterator`: @ownership Iterator and entries borrow the document's arena storage.
 - `fn next(state: *Iterator) Entry`
 
@@ -818,10 +810,9 @@ Layer: heap
 
 - `enum Kind { Nil, Bool, Unsigned, Signed, Float, Text, Bytes, Array, Map, Extension }`: MessagePack specification: https://github.com/msgpack/msgpack/blob/master/spec.md Flattened preorder tokens.
 - `struct Token { kind: Kind, value: u64, integer: i64, real: f64, boolean: bool, bytes: []const u8, extension: i8 }`
-- `struct Next { value: Token, offset: usize, found: bool }`: A token, found false at the end of the input;
-- `struct Reader { source: []const u8, offset: usize, remaining: [64]u64, depth: usize, failed: bool, error_kind: fail.Kind, error_offset: usize }`: After a failure the reader stays failed: next fails the same way again.
+- `struct Reader { source: []const u8, offset: usize, remaining: [64]u64, depth: usize, failed: bool, error_kind: fail.Kind, error_offset: usize, start: usize, ended: bool }`: After a failure the reader stays failed: next fails the same way again.
 - `fn reader(source: []const u8) Reader`
-- `fn next(status: *fail.Status, state: *Reader) Next`: The next token.
+- `fn next(status: *fail.Status, state: *Reader) Token`: The next token.
 - `fn encode(arena: *mem.Arena, status: *fail.Status, tokens: []const Token) []u8`: Tokens must be a complete preorder sequence.
 
 ## std/encoding/protobuf
@@ -830,10 +821,9 @@ Layer: heap
 
 - `enum Wire { Varint, Fixed64, Bytes, StartGroup, EndGroup, Fixed32 }`
 - `struct Field { number: u32, wire: Wire, value: u64, bytes: []const u8 }`
-- `struct Next { value: Field, offset: usize, found: bool }`: A field, found false at the end of the input;
-- `struct Reader { source: []const u8, offset: usize, failed: bool, kind: fail.Kind, error_offset: usize, groups: [64]u32, depth: usize }`: Input and field bytes are borrowed.
+- `struct Reader { source: []const u8, offset: usize, failed: bool, kind: fail.Kind, error_offset: usize, groups: [64]u32, depth: usize, start: usize, ended: bool }`: Input and field bytes are borrowed.
 - `fn reader(source: []const u8) Reader`
-- `fn next(status: *fail.Status, state: *Reader) Next`: The next field.
+- `fn next(status: *fail.Status, state: *Reader) Field`: The next field.
 - `fn zigzag(value: i64) u64`
 - `fn unzigzag(value: u64) i64`
 - `fn encode(arena: *mem.Arena, status: *fail.Status, fields: []const Field) []u8`: A schema-free wire encoder.
@@ -872,22 +862,21 @@ Layer: heap
 - `fn parse(arena: *tree_memory.Arena, status: *fail.Status, source: []const u8) *const Node`: On validation failure rewind exactly the entry mark and return a read-only Missing stub.
 - `enum Kind { Start, End, Text, Comment, Processing, Cdata }`
 - `struct Event { kind: Kind, name: []const u8, text: []const u8, attributes: []const u8, self_closing: bool }`: Malformed text fails with InvalidInput at its offset.
-- `struct Scanner { source: []const u8, offset: usize, failed: bool }`
-- `struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, ended: bool, failed: bool }`
-- `struct Next { value: Event, found: bool }`: An event, found false at the end of the input.
-- `struct AttributeScanner { source: []const u8, offset: usize, failed: bool }`
-- `struct Attribute { name: []const u8, value: []const u8, found: bool }`
+- `struct Scanner { source: []const u8, offset: usize, failed: bool, ended: bool }`
+- `struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, input_done: bool, failed: bool, ended: bool }`
+- `struct AttributeScanner { source: []const u8, offset: usize, failed: bool, ended: bool }`
+- `struct Attribute { name: []const u8, value: []const u8 }`
 - `struct Writer { sink: stream.Writer }`
 - `fn scanner(source: []const u8) Scanner`
 - `fn stream_scanner(input: stream.Reader, storage: []u8) StreamScanner`
-- `fn next_stream(status: *fail.Status, state: *StreamScanner) Next`: Events borrow storage until the next call.
+- `fn next_stream(status: *fail.Status, state: *StreamScanner) Event`
 - `fn writer(destination_writer: stream.Writer) Writer`
 - `fn write_text(status: *fail.Status, state: *Writer, value: []const u8)`
 - `fn write_start(status: *fail.Status, state: *Writer, name: []const u8)`
 - `fn write_attribute(status: *fail.Status, state: *Writer, name: []const u8, value: []const u8)`
 - `fn write_start_end(status: *fail.Status, state: *Writer, self_closing: bool)`
 - `fn write_end(status: *fail.Status, state: *Writer, name: []const u8)`
-- `fn next(status: *fail.Status, state: *Scanner) Next`
+- `fn next(status: *fail.Status, state: *Scanner) Event`
 - `fn attributes(event: Event) AttributeScanner`
 - `fn next_attribute(status: *fail.Status, state: *AttributeScanner) Attribute`
 - `fn valid(source: []const u8, stack: [][]const u8) bool`
@@ -927,9 +916,9 @@ Layer: std
 Layer: core
 
 - `enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }`: The portable reason.
-- `struct Failure { kind: Kind, has_offset: bool, operation_length: u8, path_length: u8, message_length: u8, // The system's own code, when the system gave one. native: isize, // For text input: where it went wrong, in bytes from the start. offset: usize, // operation, then message, then path; a path that does not fit keeps its // end ("...config/app.json"). text: [112]u8, }`: What went wrong, where, and doing what.
+- `struct Failure { kind: Kind, has_offset: bool, operation_length: u16, message_length: u16, path_length: u16, // The system's own code, when the system gave one. native: isize, // For text input: where it went wrong, in bytes from the start. offset: usize, // Where the text starts in the ring. text_at: u64, }`: What went wrong, where, and doing what.
 - `struct Status { failed: bool, failure: Failure, // Optional. Called once, inside the call that failed, when the first // failure is recorded, with context. It cannot undo the failure. on_failure: fn(rawptr, *const Failure), context: rawptr, }`
-- `fn make(kind: Kind, operation: []const u8, path: []const u8, message: []const u8) Failure`: A failure of kind with its text copied in.
+- `fn make(kind: Kind, operation: []const u8, path: []const u8, message: []const u8) Failure`: A failure of kind with its text copied into the ring.
 - `fn operation_text(failure: *const Failure) []const u8`: The parts of a failure's text.
 - `fn message_text(failure: *const Failure) []const u8`
 - `fn path_text(failure: *const Failure) []const u8`
@@ -1034,7 +1023,7 @@ Layer: std
 
 - `struct File { descriptor: isize, active: bool, ended: bool, path: []const u8 }`: Files and directories.
 - `struct Metadata { size: u64, inode: u64, device: u64, mode: u16 }`: Size, inode, device and the POSIX mode (type and permission bits).
-- `struct DirectoryEntry { name: []const u8, kind: u8, found: bool }`: One directory entry.
+- `struct DirectoryEntry { name: []const u8, kind: u8 }`: One directory entry.
 - `fn is_open(file: *const File) bool`
 - `fn adopt_handle(handle: isize) File`: A File for a native handle opened elsewhere;
 - `fn open(status: *fail.Status, path: []const u8) File`: Opens path for reading.
@@ -1059,14 +1048,15 @@ Layer: std
 - `fn is_file(info: Metadata) bool`
 - `fn remove(status: *fail.Status, path: []const u8)`: Removes the file at path.
 - `fn rename(status: *fail.Status, old_path: []const u8, new_path: []const u8)`: Renames old_path to new_path, replacing new_path when it exists.
-- `fn make_directory(status: *fail.Status, path: []const u8, mode: usize)`: Creates the directory path with mode (ignored on Windows).
+- `fn make_directory(status: *fail.Status, path: []const u8)`: Creates the directory path, readable by everyone and writable by its owner (0o755).
+- `fn make_directory_mode(status: *fail.Status, path: []const u8, mode: usize)`: Like make_directory, with the permission bits mode (ignored on Windows), such as 0o700 for a directory only its owner may enter.
 - `fn make_directory_exclusive(status: *fail.Status, path: []const u8, mode: usize)`: Creates the directory path with mode;
 - `fn remove_directory(status: *fail.Status, path: []const u8)`: Removes the empty directory path.
 - `fn open_directory(status: *fail.Status, path: []const u8, storage: []u8) Directory`: Opens the directory path for listing with directory_next.
 - `fn directory_next(status: *fail.Status, directory: *Directory) DirectoryEntry`: The next entry, without "." and "..".
 - `fn list(arena: *memory.Arena, status: *fail.Status, path: []const u8) []DirectoryEntry`: The names in directory path, copied into arena, without "." and "..".
 - `enum AppDirectory { Home, Config, Cache, Data, Runtime }`
-- `struct Directory { file: File, storage: []u8, offset: usize, used: usize, path: []const u8, }`
+- `struct Directory { file: File, storage: []u8, offset: usize, used: usize, path: []const u8, // Set by directory_next when it returns no entry. ended: bool, }`
 - `fn close_directory(directory: *Directory)`
 - `fn copy_file(status: *fail.Status, source: []const u8, destination: []const u8, scratch: []u8) usize`: Copies source to destination, replacing it, and returns the bytes copied.
 - `fn symbolic_link(status: *fail.Status, target: []const u8, link: []const u8)`: Creates the symbolic link link pointing at target.
@@ -1081,10 +1071,10 @@ Layer: std
 - `fn truncate(status: *fail.Status, path: []const u8, length: usize)`: Sets the length of the file at path.
 - `fn read_link(arena: *mem.Arena, status: *fail.Status, path: []const u8) []u8`: The target of the symbolic link at path, in arena.
 - `fn app_directory(arena: *mem.Arena, status: *fail.Status, kind: AppDirectory) []u8`: The per-user directory of kind, in arena.
-- `struct Directory { file: File, storage: []u8, offset: usize, used: usize, base: i64, path: []const u8 }`: Directory listing through getdirentries64, with the Linux API shape.
+- `struct Directory { file: File, storage: []u8, offset: usize, used: usize, base: i64, path: []const u8, ended: bool }`: Directory listing through getdirentries64, with the Linux API shape.
 - `struct RemovalFrame { directory: Directory, name: []const u8, parent: isize }`: Scratch frame storage for iterative, descriptor-relative tree removal.
 - `fn remove_tree(status: *fail.Status, path: []const u8, frames: []RemovalFrame, scratch: []u8)`: Removes path and everything under it, without following symbolic links.
-- `struct Directory { handle: rawptr, storage: []u8, data: [592]u8, pending: bool, active: bool, path: []const u8 }`: Directory listing through FindFirstFileW, with the Linux API shape.
+- `struct Directory { handle: rawptr, storage: []u8, data: [592]u8, pending: bool, active: bool, path: []const u8, ended: bool }`: Directory listing through FindFirstFileW, with the Linux API shape.
 
 ## std/fs/capability
 
@@ -1115,27 +1105,26 @@ Layer: std
 - `const HasDirectoryFlag: bool = true`
 - `const FixedWatchCapacity: usize = 16`
 - `struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }`
-- `struct Next { event: Event, found: bool }`: found is false when no event is pending.
-- `struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, failure: fail.Failure }`: Owns one bounded allocation: at most 16 streams and 63 queued names (1023 bytes).
+- `struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }`: Owns one bounded allocation: at most 16 streams and 63 queued names (1023 bytes).
 - `fn open(status: *fail.Status, storage: []u8) Watcher`
 - `fn add(status: *fail.Status, watcher: *Watcher, path: []const u8, mask: u32) i32`: Watches path;
 - `fn remove(status: *fail.Status, watcher: *Watcher, id: i32)`
 - `fn close(watcher: *Watcher)`
-- `fn next(status: *fail.Status, watcher: *Watcher) Next`: Empty and rescan events remain protocol states.
+- `fn next(status: *fail.Status, watcher: *Watcher) Event`
 - `fn acknowledge_rescan(watcher: *Watcher)`
 - `const SupportedEvents: u32 = 4046`
 - `const HasCloseWrite: bool = true`
 - `const HasMoveCookies: bool = true`
 - `const FixedWatchCapacity: usize = 0`: Zero means no fixed userspace slot limit;
-- `struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, failure: fail.Failure }`: Zero is a closed watcher: active is false.
+- `struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }`: Zero is a closed watcher: active is false.
 - `fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i32`: Watches path;
 - `fn remove(status: *fail.Status, state: *Watcher, watch: i32)`
 - `fn close(state: *Watcher)`
-- `fn next(status: *fail.Status, state: *Watcher) Next`
+- `fn next(status: *fail.Status, state: *Watcher) Event`
 - `fn acknowledge_rescan(state: *Watcher)`: Call only after rebuilding the snapshot;
 - `const SupportedEvents: u32 = 966`
 - `const HasDirectoryFlag: bool = false`
-- `struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, failure: fail.Failure }`: Noncopyable owner.
+- `struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }`: Noncopyable owner.
 
 ## std/hash
 
@@ -1853,10 +1842,9 @@ Layer: std
 - `fn allow_at(limiter: *Limiter, key: u64, now: i64) bool`: allow with an explicit monotonic time in milliseconds, for tests.
 - `fn ip_key(ip: []const u8, purpose: u64) u64`: A key for ip bytes (IPv4 or IPv6) and a purpose: FNV-1a over both, so one limiter table can hold several limits.
 - `struct Part { // From Content-Disposition: the field name, and the file name when the // part is a file. Quotes are removed; backslash escapes are kept as sent. name: []const u8, filename: []const u8, has_filename: bool, // Empty means text/plain. content_type: []const u8, body: []const u8, }`
-- `struct Parts { delimiter: [74]u8, delimiter_length: usize, rest: []const u8, done: bool, failed: bool, }`
-- `struct NextPart { value: Part, found: bool }`: A part, or found false after the closing delimiter.
+- `struct Parts { delimiter: [74]u8, delimiter_length: usize, rest: []const u8, done: bool, failed: bool, // Set by a next_part call that returns no part: after the closing // delimiter, or after a failure. ended: bool, }`
 - `fn multipart(status: *fail.Status, request: *const Request) Parts`: Starts reading a multipart/form-data body.
-- `fn next_part(status: *fail.Status, reader: *Parts) NextPart`: The next part.
+- `fn next_part(status: *fail.Status, reader: *Parts) Part`
 - `fn text(status: *fail.Status, response: *Response, code: u16, body: []const u8)`: A plain-text body with status.
 - `fn json(status: *fail.Status, response: *Response, code: u16, body: []const u8)`: A JSON body with status, not cached.
 - `fn redirect(status: *fail.Status, response: *Response, location: []const u8, cookies: []const Cookie)`: 303 See Other to location, setting cookies (none is fine): the answer to a form post.
@@ -2285,10 +2273,9 @@ Layer: heap
 - `fn dirname(path: []const u8) []const u8`
 - `fn extension(path: []const u8) []const u8`
 - `fn is_absolute(path: []const u8) bool`
-- `struct Components { text: []const u8, offset: usize }`
-- `struct Component { value: []const u8, offset: usize, found: bool }`: ok is false after the last component.
+- `struct Components { text: []const u8, offset: usize, start: usize, ended: bool }`: start is where the last component returned begins.
 - `fn components(text: []const u8) Components`
-- `fn component_next(state: *Components) Component`
+- `fn component_next(state: *Components) []const u8`
 - `fn join(arena: *mem.Arena, left: []const u8, right: []const u8) []u8`: left and right joined by one slash, in arena.
 - `fn clean(arena: *mem.Arena, path: []const u8) []u8`: path with .
 - `fn safe_join(arena: *mem.Arena, status: *fail.Status, root: []const u8, child: []const u8) []u8`: root joined with a relative child that cannot climb out of root, in arena.
@@ -2528,15 +2515,14 @@ Layer: heap
 - `fn ascii_to_lower(byte: u8) u8`
 - `fn ascii_to_upper(byte: u8) u8`
 - `fn trim(text: []const u8) []const u8`: Returns a borrowed view of text;
-- `struct Scanner { text: []const u8, offset: usize }`
+- `struct Scanner { text: []const u8, offset: usize, ended: bool }`: ended turns true when a scan finds nothing left;
 - `fn scanner(text: []const u8) Scanner`
 - `fn scanner_rest(state: *const Scanner) []const u8`
-- `struct Scanned { value: []const u8, found: bool }`
-- `fn scan_until(state: *Scanner, delimiter: u8) Scanned`: The text up to the next delimiter, which is consumed, or the rest of the text.
-- `fn scan_field(state: *Scanner) Scanned`: The next run of non-whitespace bytes.
+- `fn scan_until(state: *Scanner, delimiter: u8) []const u8`: The text up to the next delimiter, which is consumed, or the rest of the text.
+- `fn scan_field(state: *Scanner) []const u8`: The next run of non-whitespace bytes.
 - `fn trim_left(text: []const u8) []const u8`
 - `fn trim_right(text: []const u8) []const u8`
-- `fn scan_line(state: *Scanner) Scanned`: The next line without its \n or \r\n.
+- `fn scan_line(state: *Scanner) []const u8`: The next line without its \n or \r\n.
 - `fn parse(T: type, text: []const u8) T`: Parses text as T: an integer type, f32, f64 or bool ("true" or "false").
 - `fn parse_base(T: type, text: []const u8, base: u8) T`: Like parse for integer types, in base 2 through 36.
 - `fn valid(T: type, text: []const u8) bool`: Whether text parses as T, by the same rules as parse.
@@ -2700,14 +2686,13 @@ Layer: heap
 
 Layer: core
 
-- `struct Scanner { source: []const u8, offset: usize, line: usize, column: usize }`: line and column are zero-based, so a zero Scanner{ source: text } is ready to use.
+- `struct Scanner { source: []const u8, offset: usize, line: usize, column: usize, ended: bool }`: line and column are zero-based, so a zero Scanner{ source: text } is ready to use.
 - `fn scanner(source: []const u8) Scanner`
 - `fn finished(state: *const Scanner) bool`
 - `fn rest(state: *const Scanner) []const u8`
 - `fn advance(state: *Scanner, amount: usize) bool`
-- `struct Scanned { value: []const u8, found: bool }`
-- `fn next_line(state: *Scanner) Scanned`: The next line without its \n or \r\n.
-- `fn next_field(state: *Scanner) Scanned`: The next run of bytes without spaces, tabs or line breaks.
+- `fn next_line(state: *Scanner) []const u8`: The next line without its \n or \r\n.
+- `fn next_field(state: *Scanner) []const u8`: The next run of bytes without spaces, tabs or line breaks.
 
 ## std/text/template
 
@@ -2937,10 +2922,9 @@ Layer: heap
 
 Layer: heap
 
-- `struct Graphemes { source: []const u8, offset: usize, failed: bool, error_offset: usize }`: source and returned values borrow caller storage;
-- `struct Grapheme { value: []const u8, found: bool }`: A grapheme cluster, found false at the end of the text.
+- `struct Graphemes { source: []const u8, offset: usize, failed: bool, error_offset: usize, ended: bool }`: source and returned values borrow caller storage;
 - `fn graphemes(source: []const u8) Graphemes`
-- `fn next_grapheme(status: *fail.Status, state: *Graphemes) Grapheme`: Extended grapheme clusters, UAX #29 Unicode 17 default rules.
+- `fn next_grapheme(status: *fail.Status, state: *Graphemes) []const u8`: Extended grapheme clusters, UAX #29 Unicode 17 default rules.
 - `struct LineBreak { offset: usize, mandatory: bool }`
 - `fn word_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []usize`: Word boundaries as byte offsets, excluding 0 and including #len(text) when text is not empty.
 - `fn line_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []LineBreak`: Line break opportunities as byte offsets where a line may start, excluding 0.
@@ -2976,7 +2960,6 @@ Layer: core
 - `fn codepoint_count(text: []const u8) usize`: Code points in text, counting each byte of invalid UTF-8 as one (the U+FFFD it would decode to).
 - `fn encoded_width(codepoint: u32) usize`
 - `fn encode(destination: []u8, codepoint: u32) usize`
-- `struct Iterator { text: []const u8, offset: usize, }`
+- `struct Iterator { text: []const u8, offset: usize, // Set by the next call that finds no code point left; it returns 0. ended: bool, }`
 - `fn iterator(text: []const u8) Iterator`
-- `struct Next { value: u32, found: bool }`
-- `fn next(state: *Iterator) Next`: The next code point;
+- `fn next(state: *Iterator) u32`: The next code point;

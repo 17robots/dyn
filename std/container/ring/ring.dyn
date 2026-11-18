@@ -23,13 +23,12 @@ pub fn push(status: *fail.Status, state: *Ring, byte: u8) {
   state.length += 1
 }
 
-pub struct Popped { value: u8, found: bool }
-
-// The oldest byte; found is false when the ring is empty.
-pub fn pop(state: *Ring) Popped {
-  if state.length == 0 { return Popped{} }
+// The oldest byte, or 0 when the ring is empty. Check length first where
+// empty is possible.
+pub fn pop(state: *Ring) u8 {
+  if state.length == 0 { return 0 }
   value := state.data[state.read]
   state.read = (state.read + 1) % #len(state.data)
   state.length -= 1
-  return Popped{ value: value, found: true }
+  return value
 }

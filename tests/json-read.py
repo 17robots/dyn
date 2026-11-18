@@ -36,7 +36,7 @@ fn parse(arena: *mem.Arena, source: []const u8) Parsed {
  root := json.parse(arena, &status, source)
  return Parsed{ root: root, offset: status.failure.offset, failure: status.failure }
 }'''
-lines=['use "std/fail"\nuse "std/encoding/json/read" json','use "std/encoding/json" mutable','use "std/mem" mem','use "std/io"','fn require(ok:bool,label:[]const u8) { if !ok { #panic(label) } }','fn blocks(arena:*const mem.Arena) usize {\ncount:usize=0\nblock:=arena.current\nfor block!=nil {\ncount+=1\nblock=block.previous\n}\nreturn count\n}',HELPER,MUTABLE,'fn main() {','require(#sizeof(json.Value)==16,"compact value size")','arena:=mem.arena_alloc(mem.MiB)\ndefer mem.arena_release(arena)','_=mem.push_bytes(arena,3)\nprefix_mark:=mem.arena_mark(arena)']
+lines=['use "std/fail"\nuse "std/encoding/json/read" json','use "std/encoding/json" mutable','use "std/mem" mem','use "std/io"','fn require(ok:bool,label:[]const u8) { if !ok { #panic(label) } }','fn more(it:*json.Iterator) bool {\n_=json.next(it)\nreturn !it.ended\n}','fn blocks(arena:*const mem.Arena) usize {\ncount:usize=0\nblock:=arena.current\nfor block!=nil {\ncount+=1\nblock=block.previous\n}\nreturn count\n}',HELPER,MUTABLE,'fn main() {','require(#sizeof(json.Value)==16,"compact value size")','arena:=mem.arena_alloc(mem.MiB)\ndefer mem.arena_release(arena)','_=mem.push_bytes(arena,3)\nprefix_mark:=mem.arena_mark(arena)']
 for i,v in enumerate(values):
  raw=json.dumps(v,ensure_ascii=i%2==0,separators=(',',':')).encode();lines+=['if true {',f'original:={quote(raw)}','input:=mem.push_bytes(arena,#len(original))\n_=mem.copy(input,original)','mark:=mem.arena_mark(arena)','result:=parse(arena,input)','require(result.failure.kind==fail.Kind.Ok,"valid metadata")','for i in 0..#len(input) { input[i]=255 }']
  # errors is not re-exported as Kind; use zero enum via cast.
@@ -56,7 +56,7 @@ if true {
   value:=parse(arena,"{\"\":1,\"dup\":2,\"dup\":3}")
   require(value.failure.kind==fail.Kind.Ok && json.as_u64(json.get(value.root,""))==1 && json.as_u64(json.get(value.root,"dup"))==2,"empty and duplicate keys")
   it:=json.iterator(value.root)
-  require(json.next(&it).found && json.next(&it).found && json.next(&it).found && !json.next(&it).found,"object iterator count")
+  require(more(&it) && more(&it) && more(&it) && !more(&it),"object iterator count")
   mem.arena_rewind(arena,prefix_mark)
 }
 if true {
@@ -79,7 +79,7 @@ for pad in 0..16 {
   it:=json.iterator(json.get(result.root,"x"))
   require(json.as_u64(json.next(&it).value)==0 && json.as_bool(json.next(&it).value),"array iterator")
   item:=json.next(&it)
-  require(item.found && mem.equal(json.as_text(item.value),"a\x00b") && !json.next(&it).found,"iterator decoded bytes")
+  require(!it.ended && mem.equal(json.as_text(item.value),"a\x00b") && !more(&it),"iterator decoded bytes")
 }
 if true {
   backing:[80+mem.ArenaBufferOverhead]u8
@@ -130,8 +130,8 @@ chain_source = [
  'require(owned.failure.kind==fail.Kind.Ok,"chained object document")',
  'mem.fill(input_data[..],255)',
  'it:=json.iterator(owned.root)',
- 'for i in 0..80 { entry:=json.next(&it)\nrequire(entry.found && json.as_u64(json.at(json.get(entry.value,"nested"),0))==#cast(u64,i),"chained iterator subtree") }',
- 'require(!json.next(&it).found,"chained iterator end")',
+ 'for i in 0..80 { entry:=json.next(&it)\nrequire(!it.ended && json.as_u64(json.at(json.get(entry.value,"nested"),0))==#cast(u64,i),"chained iterator subtree") }',
+ 'require(!more(&it),"chained iterator end")',
  *check('owned.root', chain_objects, 'chained object/string ownership'),
  'mem.arena_rewind(chain,saved_mark)',
  f'bad:=parse(chain,{quote(b"["*257+b"0"+b"]"*257)})',
@@ -174,6 +174,10 @@ fn parse(arena: *mem.Arena, source: []const u8) Parsed {
 }
 pub fn json_read_selected_kind(v:*const json.Value) u8 { return json.kind(v) }
 fn require(ok:bool) { if !ok { #panic("JSON read target") } }
+fn more(it:*json.Iterator) bool {
+_=json.next(it)
+return !it.ended
+}
 fn blocks(arena:*const mem.Arena) usize {
   count:usize=0
   block:=arena.current
@@ -195,9 +199,9 @@ fn main() {
  require(#bitcast(u64,json.as_f64(json.get(root,"real")))==4608308318706860032)
  require(mem.equal(json.as_text(json.get(root,"utf")),"caf\xc3\xa9"))
  it:=json.iterator(json.get(root,""))
- require(json.next(&it).found && json.as_bool(json.next(&it).value))
+ require(more(&it) && json.as_bool(json.next(&it).value))
  item:=json.next(&it)
- require(item.found && mem.equal(json.as_text(item.value),"a\x00b") && !json.next(&it).found)
+ require(!it.ended && mem.equal(json.as_text(item.value),"a\x00b") && !more(&it))
  mem.arena_reset(arena)
  zero:=parse(arena,"-0")
  require(zero.failure.kind==fail.Kind.Ok && #bitcast(u64,json.as_f64(zero.root))==9223372036854775808)

@@ -4,21 +4,26 @@ use "std/fail"
 use "std/encoding/binary" binary
 pub enum Wire { Varint, Fixed64, Bytes, StartGroup, EndGroup, Fixed32 }
 pub struct Field { number: u32, wire: Wire, value: u64, bytes: []const u8 }
-// A field, found false at the end of the input; offset is where it starts.
-pub struct Next { value: Field, offset: usize, found: bool }
 // Input and field bytes are borrowed. Groups are emitted as explicit start/end
 // fields; caller storage bounds their nesting to 64. After a failure the
 // reader stays failed: next fails the same way again.
-pub struct Reader { source: []const u8, offset: usize, failed: bool, kind: fail.Kind, error_offset: usize, groups: [64]u32, depth: usize }
+// start is where the last value next returned begins. ended turns true when
+// next returns no value, at the end of the input or after a failure.
+pub struct Reader { source: []const u8, offset: usize, failed: bool, kind: fail.Kind, error_offset: usize, groups: [64]u32, depth: usize, start: usize, ended: bool }
 pub fn reader(source: []const u8) Reader {
   return Reader{ source: source }
 }
-fn failed(status: *fail.Status, state: *Reader, offset: usize, kind: fail.Kind) Next {
+fn ended(state: *Reader, offset: usize) Field {
+  state.start = offset
+  state.ended = true
+  return Field{}
+}
+fn failed(status: *fail.Status, state: *Reader, offset: usize, kind: fail.Kind) Field {
   state.failed = true
   state.kind = kind
   state.error_offset = offset
   fail.at(status, kind, "read protobuf", message_of(kind), offset)
-  return Next{ offset: offset }
+  return ended(state, offset)
 }
 fn message_of(kind: fail.Kind) []const u8 {
   if kind == fail.Kind.Capacity { return "groups nested deeper than 64" }
@@ -26,12 +31,12 @@ fn message_of(kind: fail.Kind) []const u8 {
   return "malformed protobuf"
 }
 // The next field. Malformed input fails with InvalidInput at its offset.
-pub fn next(status: *fail.Status, state: *Reader) Next {
-  if status.failed { return Next{} }
+pub fn next(status: *fail.Status, state: *Reader) Field {
+  if status.failed { return ended(state, state.offset) }
   if state.failed { return failed(status, state, state.error_offset, state.kind) }
   if state.offset == #len(state.source) {
     if state.depth != 0 { return failed(status, state, state.offset, fail.Kind.InvalidInput) }
-    return Next{ offset: state.offset }
+    return ended(state, state.offset)
   }
   start := state.offset
   key := binary.uleb128_decode(state.source[start..])
@@ -73,7 +78,8 @@ pub fn next(status: *fail.Status, state: *Reader) Next {
     state.depth -= 1
   }
   state.offset = at
-  return Next{ value: field, offset: start, found: true }
+  state.start = start
+  return field
 }
 pub fn zigzag(value: i64) u64 {
   return #wrapping(#cast(u64, value) << 1) ^ #cast(u64, value >> 63)

@@ -104,11 +104,11 @@ fn open_failed(status: *fail.Status, kind: fail.Kind, offset: usize) ArchiveRead
   fail.set(status, located(kind, offset))
   return ArchiveReader{}
 }
-fn next_indexed(status: *fail.Status, state: *ArchiveReader) Next {
-  if state.remaining == 0 { return Next{ offset: state.offset } }
+fn next_indexed(status: *fail.Status, state: *ArchiveReader) Entry {
+  if state.remaining == 0 { return archive_ended(state) }
   item := central_entry(state.source, state.offset, state.directory_end, state.directory_start)
   if !item.ok { return archive_failed(status, state, item.error) }
   state.offset = item.next
   state.remaining -= 1
-  return Next{ value: item.entry, offset: state.offset, found: true }
+  return item.entry
 }

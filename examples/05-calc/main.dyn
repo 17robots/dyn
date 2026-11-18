@@ -39,22 +39,15 @@ fn main() {
 
   input_storage: [4096]u8
   reader := bufio.reader(io.stdin(), input_storage[..])
-  line_storage: [256]u8
   input: fail.Status
-  ended := false
-  for !ended {
-    read := bufio.read_line(&input, &reader, line_storage[..])
+  for {
+    line := bufio.read_line(&input, &reader)
     if input.failed {
       storage: [512]u8
       io.eprintln("calc: {}", fail.describe(storage[..], input.failure))
       return
     }
-    if read.status == bufio.ReadStatus.More {
-      io.eprintln("calc: a line is longer than its buffer")
-      return
-    }
-    ended = read.status == bufio.ReadStatus.End
-    line := line_storage[..read.transferred]
+    if reader.ended { return }
     if #len(strings.trim(line)) == 0 { continue }
     io.println("> {}", line)
 
@@ -67,7 +60,7 @@ fn main() {
       if value.problem != Problem.None {
         point_at(value.offset, problem_text(value.problem))
       } else if #len(statement.name) > 0 {
-        // The name points into line_storage. Copy it before keeping it.
+        // The name points into the reader's storage. Copy it before keeping it.
         name: []const u8 = strings.clone(permanent, statement.name)
         map.insert(&names, name, value.number)
         io.println("{} = {}", statement.name, value.number)

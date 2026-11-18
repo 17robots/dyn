@@ -99,20 +99,22 @@ fn parse_i64_into(text: []const u8, base: u8, output: *i64) bool {
   return true
 }
 
-pub struct Scanner { text: []const u8, offset: usize }
+// ended turns true when a scan finds nothing left; the scan returns "".
+pub struct Scanner { text: []const u8, offset: usize, ended: bool }
 pub fn scanner(text: []const u8) Scanner {
-  return Scanner{ text: text, offset: 0 }
+  return Scanner{ text: text, offset: 0, ended: false }
 }
 pub fn scanner_rest(state: *const Scanner) []const u8 {
   return state.text[state.offset..]
 }
 
-pub struct Scanned { value: []const u8, found: bool }
-
 // The text up to the next delimiter, which is consumed, or the rest of the
-// text. ok is false once the text is used up.
-pub fn scan_until(state: *Scanner, delimiter: u8) Scanned {
-  if state.offset >= #len(state.text) { return Scanned{} }
+// text. Sets state.ended once the text is used up.
+pub fn scan_until(state: *Scanner, delimiter: u8) []const u8 {
+  if state.offset >= #len(state.text) {
+    state.ended = true
+    return ""
+  }
   start := state.offset
   rest := state.text[start..]
   found := byte_ops.find_byte(rest, delimiter)
@@ -121,20 +123,24 @@ pub fn scan_until(state: *Scanner, delimiter: u8) Scanned {
   } else {
     state.offset = start + found + 1
   }
-  return Scanned{ value: rest[..found], found: true }
+  return rest[..found]
 }
 
-// The next run of non-whitespace bytes. ok is false when only whitespace is left.
-pub fn scan_field(state: *Scanner) Scanned {
+// The next run of non-whitespace bytes. Sets state.ended when only
+// whitespace is left.
+pub fn scan_field(state: *Scanner) []const u8 {
   for state.offset < #len(state.text) && ascii_is_whitespace(state.text[state.offset]) {
     state.offset += 1
   }
-  if state.offset == #len(state.text) { return Scanned{} }
+  if state.offset == #len(state.text) {
+    state.ended = true
+    return ""
+  }
   start := state.offset
   for state.offset < #len(state.text) && !ascii_is_whitespace(state.text[state.offset]) {
     state.offset += 1
   }
-  return Scanned{ value: state.text[start..state.offset], found: true }
+  return state.text[start..state.offset]
 }
 
 // Binary64 decimal conversion uses bounded integer arithmetic. Every binary64
@@ -363,11 +369,10 @@ pub fn trim_right(text: []const u8) []const u8 {
   }
   return text[..end]
 }
-// The next line without its \n or \r\n. ok is false at the end of the text.
-pub fn scan_line(state: *Scanner) Scanned {
-  line := scan_until(state, 10)
-  line.value = strip_suffix(line.value, "\r")
-  return line
+// The next line without its \n or \r\n. Sets state.ended at the end of the
+// text.
+pub fn scan_line(state: *Scanner) []const u8 {
+  return strip_suffix(scan_until(state, 10), "\r")
 }
 
 // Parses text as T: an integer type, f32, f64 or bool ("true" or "false").

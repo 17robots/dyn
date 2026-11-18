@@ -60,7 +60,7 @@ pub fn remove_tree(status: *fail.Status, path: []const u8, frames: []RemovalFram
       check(status, "remove", frames[depth - 1].name, listed)
       return
     }
-    if !item.found {
+    if #len(item.name) == 0 {
       frame := &frames[depth - 1]
       removed_directory := unlink_at(frame.parent, frame.name, true)
       if removed_directory != 0 {

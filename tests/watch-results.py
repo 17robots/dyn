@@ -12,8 +12,8 @@ use "std/fail"
 fn require(ok: bool) { if !ok { #panic("watch result contract") } }
 fn next_failure(state: *watch.Watcher) fail.Failure {
  status: fail.Status
- next := watch.next(&status, state)
- require(status.failed && !next.found)
+ _ = watch.next(&status, state)
+ require(status.failed && state.ended)
  return status.failure
 }
 fn main() {
@@ -34,8 +34,8 @@ use "std/fail"
 fn require(ok: bool) { if !ok { #panic("watch read after failure") } }
 fn next_failure(state: *watch.Watcher) fail.Failure {
  status: fail.Status
- next := watch.next(&status, state)
- require(status.failed && !next.found)
+ _ = watch.next(&status, state)
+ require(status.failed && state.ended)
  return status.failure
 }
 fn main() {

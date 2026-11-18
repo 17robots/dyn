@@ -53,18 +53,19 @@ fn main() {
     reader := bufio.reader(io.Reader{ data: &reads, read: fail_read }, storage[..#cast(usize, capacity)])
     output: [4]u8
     _ = io.read(&reading, bufio.reader_adapter(&reader), output[..])
-    line := bufio.read_line(&reading, &reader, output[..])
+    _ = bufio.read_line(&reading, &reader)
     until := bufio.read_until(&reading, &reader, output[..], 10)
     if !reading.failed || reading.failure.native != -13 || reads.calls != 1 { #panic("reader failure") }
-    if line.status != bufio.ReadStatus.End || until.status != bufio.ReadStatus.End { #panic("records end after a failure") }
+    if !reader.ended || until.status != bufio.ReadStatus.End { #panic("records end after a failure") }
   }
   scan := ini.scanner("bad\nx=1")
   scanning: fail.Status
-  item := ini.next(&scanning, &scan)
+  _ = ini.next(&scanning, &scan)
+  first_ended := scan.ended
   offset := scan.offset
   again: fail.Status
-  later := ini.next(&again, &scan)
-  if item.found || later.found || scanning.failure.kind != fail.Kind.InvalidInput || scan.error_line != 1 || scan.offset != offset { #panic("ini sticky failure") }
+  _ = ini.next(&again, &scan)
+  if !first_ended || !scan.ended || scanning.failure.kind != fail.Kind.InvalidInput || scan.error_line != 1 || scan.offset != offset { #panic("ini sticky failure") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-std-sticky-') as directory:

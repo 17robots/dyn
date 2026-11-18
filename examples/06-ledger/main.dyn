@@ -66,7 +66,7 @@ fn main() i32 {
         column = Columns - 1      // extra fields are read and counted, not kept
       }
       field := csv.next(&reading, &scan, storage[column][..])
-      if !field.found {
+      if scan.ended {
         ended = true
         break
       }

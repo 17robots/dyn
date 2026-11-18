@@ -15,7 +15,7 @@ struct Got { value: pb.Field, offset: usize, found: bool, failure: fail.Failure 
 fn next(state: *pb.Reader) Got {
  status: fail.Status
  item := pb.next(&status, state)
- return Got{ value: item.value, offset: item.offset, found: item.found, failure: status.failure }
+ return Got{ value: item, offset: state.start, found: !state.ended, failure: status.failure }
 }
 struct Encoded { value: []u8, failure: fail.Failure }
 fn encode(arena: *mem.Arena, items: []const pb.Field) Encoded {

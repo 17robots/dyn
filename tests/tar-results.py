@@ -49,10 +49,22 @@ fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
  s.offset += take
  return take
 }
-struct Streamed { entry: tar.StreamEntry, failure: fail.Failure }
+// The entry a call returned, whether it returned one (the reader's ended,
+// inverted), and for archives the reader's offset after the call.
+struct Item { name: []const u8, prefix: []const u8, link_name: []const u8, size: u64, typeflag: u8, offset: usize, found: bool }
+fn item_next(status: *fail.Status, state: *tar.StreamReader) Item {
+ entry := tar.next_stream(status, state)
+ return Item{ name: entry.name, prefix: entry.prefix, link_name: entry.link_name, size: entry.size, typeflag: entry.typeflag, offset: entry.offset, found: !state.ended }
+}
+struct Next { entry: tar.Entry, offset: usize, found: bool }
+fn entry_next(status: *fail.Status, state: *tar.ArchiveReader) Next {
+ entry := tar.next(status, state)
+ return Next{ entry: entry, offset: state.offset, found: !state.ended }
+}
+struct Streamed { entry: Item, failure: fail.Failure }
 fn stream_next(state: *tar.StreamReader) Streamed {
  status: fail.Status
- entry := tar.next_stream(&status, state)
+ entry := item_next(&status, state)
  return Streamed{ entry: entry, failure: status.failure }
 }
 fn read_failure(state: *tar.StreamReader, destination: []u8) fail.Failure {
@@ -61,10 +73,10 @@ fn read_failure(state: *tar.StreamReader, destination: []u8) fail.Failure {
  check(status.failed && count == 0)
  return status.failure
 }
-struct Found { next: tar.Next, failure: fail.Failure }
+struct Found { next: Next, failure: fail.Failure }
 fn next(state: *tar.ArchiveReader) Found {
  status: fail.Status
- found := tar.next(&status, state)
+ found := entry_next(&status, state)
  return Found{ next: found, failure: status.failure }
 }
 fn replay(state: *tar.StreamReader, input: *Input, native: isize, offset: usize) {
@@ -83,41 +95,41 @@ fn main() {
  data: []const u8 = DATA
  for archive in [data, PAX, GNU] {
    state := tar.reader(archive)
-   first := tar.next(&status, &state)
+   first := entry_next(&status, &state)
    check(first.found)
    check(bytes.equal(first.entry.data,"hello") && first.entry.kind == '0')
-   empty := tar.next(&status, &state)
+   empty := entry_next(&status, &state)
    check(empty.found && #len(empty.entry.data) == 0)
-   end := tar.next(&status, &state)
+   end := entry_next(&status, &state)
    check(!end.found)
-   check(!tar.next(&status, &state).found)
+   check(!entry_next(&status, &state).found)
    header: [512]u8
    metadata: [2048]u8
    cursor := io.cursor(archive)
    stream := tar.stream_reader(io.cursor_reader(&cursor),header[..],metadata[..])
-   item := tar.next_stream(&status, &stream)
+   item := item_next(&status, &stream)
    check(item.found && item.typeflag == '0' && item.size == 5)
    check(bytes.equal(item.name,first.entry.name))
    payload: [8]u8
    loaded := tar.read_stream(&status, &stream,payload[..])
    check(loaded == 5 && bytes.equal(payload[..5],"hello"))
    check(tar.read_stream(&status, &stream,payload[..]) == 0)
-   check(tar.next_stream(&status, &stream).found)
+   check(item_next(&status, &stream).found)
    check(tar.read_stream(&status, &stream,payload[..]) == 0)
-   check(!tar.next_stream(&status, &stream).found && stream.ended && !stream.failed)
+   check(!item_next(&status, &stream).found && stream.ended && !stream.failed)
  }
  // Physical EOF exactly at a record boundary remains normal exhaustion.
  for source in ["", data[..1536]] {
    state := tar.reader(source)
-   result := tar.next(&status, &state)
-   for result.found { result = tar.next(&status, &state) }
+   result := entry_next(&status, &state)
+   for result.found { result = entry_next(&status, &state) }
    header: [512]u8
    cursor := io.cursor(source)
    stream := tar.stream_reader(io.cursor_reader(&cursor),header[..],header[..0])
-   item := tar.next_stream(&status, &stream)
-   for item.found { item = tar.next_stream(&status, &stream) }
+   item := item_next(&status, &stream)
+   for item.found { item = item_next(&status, &stream) }
    check(item.offset == #len(source))
-   check(tar.next_stream(&status, &stream).offset == item.offset)
+   check(item_next(&status, &stream).offset == item.offset)
  }
  // A reader failure stays on the stream, with its native code, even zero.
  for native in [#cast(isize,0), #cast(isize,-13)] {
@@ -199,9 +211,9 @@ fn main() {
  check(prefix_error.failure.kind == fail.Kind.InvalidInput && prefix_error.failure.offset == 1024 && dirty.offset == 0)
  check(next(&dirty).failure.offset == prefix_error.failure.offset)
  dirty.source = data
- check(bytes.equal(tar.next(&status, &dirty).entry.name,"a"))
+ check(bytes.equal(entry_next(&status, &dirty).entry.name,"a"))
  zero: tar.ArchiveReader
- check(!tar.next(&status, &zero).found)
+ check(!entry_next(&status, &zero).found)
  zero_stream: tar.StreamReader
  check(stream_next(&zero_stream).failure.kind == fail.Kind.Capacity)
  check(read_failure(&zero_stream,bad_header[..0]).kind == fail.Kind.Capacity)

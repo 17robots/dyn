@@ -8,19 +8,24 @@ use "std/fail"
 // Extension payloads (including timestamps) remain opaque.
 pub enum Kind { Nil, Bool, Unsigned, Signed, Float, Text, Bytes, Array, Map, Extension }
 pub struct Token { kind: Kind, value: u64, integer: i64, real: f64, boolean: bool, bytes: []const u8, extension: i8 }
-// A token, found false at the end of the input; offset is where it starts.
-pub struct Next { value: Token, offset: usize, found: bool }
 // After a failure the reader stays failed: next fails the same way again.
-pub struct Reader { source: []const u8, offset: usize, remaining: [64]u64, depth: usize, failed: bool, error_kind: fail.Kind, error_offset: usize }
+// start is where the last value next returned begins. ended turns true when
+// next returns no value, at the end of the input or after a failure.
+pub struct Reader { source: []const u8, offset: usize, remaining: [64]u64, depth: usize, failed: bool, error_kind: fail.Kind, error_offset: usize, start: usize, ended: bool }
 pub fn reader(source: []const u8) Reader {
   return Reader{ source: source }
 }
-fn failed(status: *fail.Status, state: *Reader, offset: usize, kind: fail.Kind) Next {
+fn ended(state: *Reader, offset: usize) Token {
+  state.start = offset
+  state.ended = true
+  return Token{}
+}
+fn failed(status: *fail.Status, state: *Reader, offset: usize, kind: fail.Kind) Token {
   state.failed = true
   state.error_kind = kind
   state.error_offset = offset
   fail.at(status, kind, "read MessagePack", message_of(kind), offset)
-  return Next{ offset: offset }
+  return ended(state, offset)
 }
 fn message_of(kind: fail.Kind) []const u8 {
   if kind == fail.Kind.Capacity { return "nested deeper than 64" }
@@ -62,13 +67,13 @@ fn complete(state: *Reader) bool {
   return state.depth == 0
 }
 // The next token. Malformed input fails with InvalidInput at its offset.
-pub fn next(status: *fail.Status, state: *Reader) Next {
-  if status.failed { return Next{} }
+pub fn next(status: *fail.Status, state: *Reader) Token {
+  if status.failed { return ended(state, state.offset) }
   if state.failed { return failed(status, state, state.error_offset, state.error_kind) }
   start := state.offset
   if start == #len(state.source) {
     if !complete(state) { return failed(status, state, start, fail.Kind.InvalidInput) }
-    return Next{ offset: start }
+    return ended(state, start)
   }
   tag := state.source[start]
   at := start + 1
@@ -174,7 +179,8 @@ pub fn next(status: *fail.Status, state: *Reader) Next {
   kind := accept(state, token)
   if kind != fail.Kind.Ok { return failed(status, state, start, kind) }
   state.offset = at
-  return Next{ value: token, offset: start, found: true }
+  state.start = start
+  return token
 }
 fn put(output: []u8, at: *usize, value: u64, size: usize) {
   for i in 0..size {

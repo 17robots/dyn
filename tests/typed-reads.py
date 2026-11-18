@@ -51,8 +51,8 @@ fn main() {
   parts := bytes.splitter("a,,b", ",")
   count: usize = 0
   for {
-    piece := bytes.split_next(&parts)
-    if !piece.found {
+    _ = bytes.split_next(&parts)
+    if parts.ended {
       break
     }
     count += 1
@@ -61,10 +61,11 @@ fn main() {
   lines := strings.scanner("one\r\ntwo")
   first := strings.scan_line(&lines)
   second := strings.scan_line(&lines)
-  check(first.found && bytes.equal(first.value, "one") && bytes.equal(second.value, "two"), "scanner")
-  check(!strings.scan_line(&lines).found, "scanner end")
+  check(bytes.equal(first, "one") && bytes.equal(second, "two") && !lines.ended, "scanner")
+  _ = strings.scan_line(&lines)
+  check(lines.ended, "scanner end")
   fields := text.Scanner{ source: "a  bc" }
-  check(bytes.equal(text.next_field(&fields).value, "a") && bytes.equal(text.next_field(&fields).value, "bc"), "fields")
+  check(bytes.equal(text.next_field(&fields), "a") && bytes.equal(text.next_field(&fields), "bc"), "fields")
   doc := parse(arena, "{\"x\": 2.5, \"name\": \"boss\", \"hp\": 40, \"alive\": true, \"tags\": [1, 2]}")
   check(doc.failure.kind == fail.Kind.Ok, "json parse")
   reading: fail.Status
@@ -98,7 +99,9 @@ fn main() {
   check(!status.failed && #len(decoded) == 2 && decoded[0] == 171 && bad.failed, "hex decode")
   check(utf8.codepoint_count("h\xc3\xa9") == 2 && utf8.codepoint_count("a\xff") == 2, "codepoints")
   walker := utf8.iterator("\xc3\xa9\xff")
-  check(utf8.next(&walker).value == 233 && utf8.next(&walker).value == 0xfffd && !utf8.next(&walker).found, "utf8 next")
+  check(utf8.next(&walker) == 233 && utf8.next(&walker) == 0xfffd && !walker.ended, "utf8 next")
+  _ = utf8.next(&walker)
+  check(walker.ended, "utf8 end")
   date := time.parse_iso8601(&status, "2024-02-29T12:34:56Z")
   impossible: fail.Status
   _ = time.parse_iso8601(&impossible, "2024-02-30")

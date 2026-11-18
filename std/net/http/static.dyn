@@ -212,7 +212,7 @@ fn load_tree(arena: *memory.Arena, status: *fail.Status, root: []const u8, relat
   defer files.close_directory(&directory)
   for {
     entry := files.directory_next(status, &directory)
-    if !entry.found { return }
+    if directory.ended { return }
     if #len(entry.name) == 0 || entry.name[0] == '.' { continue }
     child := join_path(arena, relative, entry.name)
     if entry.kind == 4 {

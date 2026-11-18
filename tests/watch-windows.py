@@ -68,10 +68,9 @@ fn main() {
   seen_first: u32 = 0
   seen_second: u32 = 0
   for attempt in 0..1000 {
-    next := watch.next(&status, &opened)
+    event := watch.next(&status, &opened)
     require(!status.failed)
-    if next.found {
-      event := next.event
+    if !opened.ended {
       require(!event.rescan && event.cookie == 0)
       if event.watch == first {
         if bytes.equal(event.name,"café-😀.txt") {
@@ -86,7 +85,7 @@ fn main() {
       }
     }
     if seen_first == (watch.Create | watch.MoveFrom | watch.MoveTo | watch.Delete) && seen_second == (watch.Create | watch.Delete) { break }
-    if !next.found { time.sleep(10000000) }
+    if opened.ended { time.sleep(10000000) }
   }
   require(seen_first == (watch.Create | watch.MoveFrom | watch.MoveTo | watch.Delete))
   require(seen_second == (watch.Create | watch.Delete))

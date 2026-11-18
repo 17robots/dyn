@@ -23,8 +23,8 @@ fn await_event(state: *watch.Watcher, id: i32, name: []const u8, mask: u32, rena
   for attempt in 0..1500 {
     result := watch.next(&status, state)
     require(!status.failed,"event error")
-    if result.found && result.event.watch == id && (result.event.mask & mask) != 0 && bytes.equal(result.event.name,name) {
-      if renamed { require(result.event.cookie == 0 && result.event.rescan && state.rescan_required,"rename rescan") }
+    if !state.ended && result.watch == id && (result.mask & mask) != 0 && bytes.equal(result.name,name) {
+      if renamed { require(result.cookie == 0 && result.rescan && state.rescan_required,"rename rescan") }
       return
     }
     time.sleep(time.Millisecond*10)
@@ -88,7 +88,7 @@ fn main() {
   for attempt in 0..50 {
     result := watch.next(&status, &opened)
     require(!status.failed,"after remove")
-    require(!result.found || result.event.watch != current,"removed watch delivery")
+    require(opened.ended || result.watch != current,"removed watch delivery")
     time.sleep(time.Millisecond*10)
   }
   stage("close")
@@ -109,11 +109,12 @@ fn main() {
 # actual private callback/queue without manufacturing filesystem overflow or
 # exporting testing APIs. The nonzero stream value is compared, never called.
 AUDIT = r'''
+struct Next { event: Event, found: bool }
 fn audit_next(watcher: *Watcher) Next {
   status: fail.Status
   item := next(&status, watcher)
   if status.failed { #panic("audit next") }
-  return item
+  return Next{ event: item, found: !watcher.ended }
 }
 fn audit_path(storage: []u8, text: []const u8) *const u8 {
   status: fail.Status

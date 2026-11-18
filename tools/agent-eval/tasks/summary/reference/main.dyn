@@ -36,7 +36,7 @@ fn main() i32 {
     total += count
   }
   fmt.print(&lines, "total {}\n", total)
-  fs.make_directory(&status, output, 0o755)
+  fs.make_directory(&status, output)
   fs.write_all(&status, path.join(arena, output, "summary.txt"), fmt.bytes(&lines))
   if status.failed {
     report(status.failure)

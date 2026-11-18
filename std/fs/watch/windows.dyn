@@ -29,10 +29,10 @@ struct Native { slots: [16]Slot, next_id: i32, cursor: usize }
 // Names borrow caller storage until the next next() call. Watches are nonrecursive.
 // Windows reports paired rename actions without cookies, and cannot distinguish
 // close-write, directory flags, or deletion/movement of the watched directory.
-pub struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, failure: fail.Failure }
+// ended is set by a next call that returns no event: none is pending now,
+// and a later call may return one.
+pub struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
-// found is false when no event is pending.
-pub struct Next { event: Event, found: bool }
 extern fn native_open "dyn_watch_open"(name: *const u16, access: u32, share: u32, security: rawptr, creation: u32, flags: u32, template: rawptr) rawptr
 extern fn native_close "dyn_watch_close"(handle: rawptr) i32
 extern fn native_error "dyn_watch_error"() u32
@@ -176,28 +176,33 @@ pub fn close(state: *Watcher) {
   state.native = nil
   state.storage = state.storage[..0]
 }
-fn rescan(state: *Watcher, id: i32) Next {
+fn rescan(state: *Watcher, id: i32) Event {
   state.rescan_required = true
-  return Next{ found: true, event: Event{ watch: id, rescan: true } }
+  return Event{ watch: id, rescan: true }
 }
 // Empty and rescan events remain protocol states.
-fn next_failed(status: *fail.Status, state: *Watcher, code: isize) Next {
+fn next_failed(status: *fail.Status, state: *Watcher, code: isize) Event {
   state.failed = true
   _ = failure(status, "read events", "", code)
   state.failure = status.failure
-  return Next{}
+  return idle(state)
 }
-pub fn next(status: *fail.Status, state: *Watcher) Next {
-  if status.failed { return Next{} }
+fn idle(state: *Watcher) Event {
+  state.ended = true
+  return Event{}
+}
+pub fn next(status: *fail.Status, state: *Watcher) Event {
+  state.ended = false
+  if status.failed { return idle(state) }
   if state.failed {
     fail.set(status, state.failure)
-    return Next{}
+    return idle(state)
   }
   if state.native == nil {
     state.failed = true
     fail.set(status, fail.make(fail.Kind.InvalidState, "read events", "", "the watcher is closed"))
     state.failure = status.failure
-    return Next{}
+    return idle(state)
   }
   for checked in 0..16 {
     index := state.native.cursor
@@ -272,10 +277,10 @@ pub fn next(status: *fail.Status, state: *Watcher) Next {
         used += width
         position += decoded.width
       }
-      return Next{ found: true, event: Event{ watch: slot.id, mask: mask, name: state.storage[..used] } }
+      return Event{ watch: slot.id, mask: mask, name: state.storage[..used] }
     }
   }
-  return Next{}
+  return idle(state)
 }
 pub fn acknowledge_rescan(state: *Watcher) {
   state.rescan_required = false

@@ -21,10 +21,10 @@ pub struct Parts {
   rest: []const u8,
   done: bool,
   failed: bool,
+  // Set by a next_part call that returns no part: after the closing
+  // delimiter, or after a failure.
+  ended: bool,
 }
-
-// A part, or found false after the closing delimiter.
-pub struct NextPart { value: Part, found: bool }
 
 fn multipart_failure(status: *fail.Status, message: []const u8) {
   fail.set(status, fail.make(fail.Kind.InvalidInput, "read multipart body", "", message))
@@ -120,27 +120,31 @@ fn disposition_parameter(value: []const u8, wanted: []const u8) HttpHeader {
   return HttpHeader{}
 }
 
-// The next part. found is false after the closing delimiter. Fails with
+// The next part. Sets reader.ended after the closing delimiter. Fails with
 // InvalidInput on a malformed part or a body cut short; after that the
 // reader stays failed.
-pub fn next_part(status: *fail.Status, reader: *Parts) NextPart {
-  if status.failed { return NextPart{} }
+fn parts_ended(reader: *Parts) Part {
+  reader.ended = true
+  return Part{}
+}
+pub fn next_part(status: *fail.Status, reader: *Parts) Part {
+  if status.failed { return parts_ended(reader) }
   if reader.failed {
     multipart_failure(status, "an earlier part was malformed")
-    return NextPart{}
+    return parts_ended(reader)
   }
-  if reader.done { return NextPart{} }
+  if reader.done { return parts_ended(reader) }
   rest := reader.rest
   // After a delimiter: "--" closes, otherwise optional padding and CRLF.
   if bytes.starts_with(rest, "--") {
     reader.done = true
-    return NextPart{}
+    return parts_ended(reader)
   }
   line_end := bytes.find(rest, "\r\n")
   if line_end == #len(rest) || #len(trim_ows(rest[..line_end])) != 0 {
     reader.failed = true
     multipart_failure(status, "bad delimiter line")
-    return NextPart{}
+    return parts_ended(reader)
   }
   rest = rest[line_end + 2..]
   part := Part{}
@@ -150,7 +154,7 @@ pub fn next_part(status: *fail.Status, reader: *Parts) NextPart {
     if end == #len(rest) {
       reader.failed = true
       multipart_failure(status, "part headers cut short")
-      return NextPart{}
+      return parts_ended(reader)
     }
     line := rest[..end]
     rest = rest[end + 2..]
@@ -159,7 +163,7 @@ pub fn next_part(status: *fail.Status, reader: *Parts) NextPart {
     if colon == #len(line) {
       reader.failed = true
       multipart_failure(status, "bad part header")
-      return NextPart{}
+      return parts_ended(reader)
     }
     field := trim_ows(line[..colon])
     value := trim_ows(line[colon + 1..])
@@ -167,7 +171,7 @@ pub fn next_part(status: *fail.Status, reader: *Parts) NextPart {
       if #len(value) < 9 || !ascii_equal(value[..9], "form-data") {
         reader.failed = true
         multipart_failure(status, "not form-data")
-        return NextPart{}
+        return parts_ended(reader)
       }
       part.name = disposition_parameter(value, "name").value
       file := disposition_parameter(value, "filename")
@@ -181,16 +185,16 @@ pub fn next_part(status: *fail.Status, reader: *Parts) NextPart {
   if !disposition {
     reader.failed = true
     multipart_failure(status, "part without Content-Disposition")
-    return NextPart{}
+    return parts_ended(reader)
   }
   delimiter := reader.delimiter[..reader.delimiter_length]
   end := bytes.find(rest, delimiter)
   if end == #len(rest) {
     reader.failed = true
     multipart_failure(status, "no closing boundary")
-    return NextPart{}
+    return parts_ended(reader)
   }
   part.body = rest[..end]
   reader.rest = rest[end + #len(delimiter)..]
-  return NextPart{ value: part, found: true }
+  return part
 }

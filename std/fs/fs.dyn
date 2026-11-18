@@ -18,8 +18,7 @@ pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16 }
 
 // One directory entry. name borrows the directory's storage until the next
 // call; kind uses dirent values: 4 directory, 8 regular file, 10 link.
-// found is false at the end of the directory.
-pub struct DirectoryEntry { name: []const u8, kind: u8, found: bool }
+pub struct DirectoryEntry { name: []const u8, kind: u8 }
 
 fn owned_file(handle: isize) File {
   return File{ descriptor: handle, active: true }
@@ -357,9 +356,15 @@ pub fn rename(status: *fail.Status, old_path: []const u8, new_path: []const u8) 
   if status.failed { return }
   check(status, "rename", old_path, native_rename(old_path, new_path))
 }
-// Creates the directory path with mode (ignored on Windows). An existing
-// directory is not a failure; an existing file is.
-pub fn make_directory(status: *fail.Status, path: []const u8, mode: usize) {
+// Creates the directory path, readable by everyone and writable by its
+// owner (0o755). An existing directory is not a failure; an existing file
+// is.
+pub fn make_directory(status: *fail.Status, path: []const u8) {
+  make_directory_mode(status, path, 0o755)
+}
+// Like make_directory, with the permission bits mode (ignored on Windows),
+// such as 0o700 for a directory only its owner may enter.
+pub fn make_directory_mode(status: *fail.Status, path: []const u8, mode: usize) {
   if status.failed { return }
   code := native_make_directory(path, mode)
   if code < 0 && native_kind(code) == fail.Kind.AlreadyExists {
@@ -391,13 +396,17 @@ pub fn open_directory(status: *fail.Status, path: []const u8, storage: []u8) Dir
   directory.path = path
   return directory
 }
-// The next entry, without "." and "..". found is false at the end and after
-// a failure.
+// The next entry, without "." and "..". At the end, and after a failure, it
+// sets directory.ended and returns an entry with an empty name.
 pub fn directory_next(status: *fail.Status, directory: *Directory) DirectoryEntry {
   entry: DirectoryEntry
-  if status.failed { return entry }
-  check(status, "list", directory.path, native_directory_next(directory, &entry))
-  if status.failed { return DirectoryEntry{} }
+  if !status.failed {
+    check(status, "list", directory.path, native_directory_next(directory, &entry))
+  }
+  if status.failed || #len(entry.name) == 0 {
+    directory.ended = true
+    return DirectoryEntry{}
+  }
   return entry
 }
 // The names in directory path, copied into arena, without "." and "..".
@@ -418,7 +427,7 @@ pub fn list(arena: *memory.Arena, status: *fail.Status, path: []const u8) []Dire
       memory.arena_rewind(arena, mark)
       return empty
     }
-    if !entry.found { break }
+    if directory.ended { break }
     if count == capacity {
       grown := memory.push_array(DirectoryEntry, arena, capacity * 2)
       for i in 0..count {
@@ -429,7 +438,7 @@ pub fn list(arena: *memory.Arena, status: *fail.Status, path: []const u8) []Dire
     }
     name := memory.push_bytes(arena, #len(entry.name))
     _ = memory.copy(name, entry.name)
-    entries[count] = DirectoryEntry{ name: name, kind: entry.kind, found: true }
+    entries[count] = DirectoryEntry{ name: name, kind: entry.kind }
     count += 1
   }
   return entries[..count]

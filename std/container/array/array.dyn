@@ -84,15 +84,13 @@ pub fn get(a: *const Array($T), index: usize) *T {
   return &a.items[index]
 }
 
-// The last element, removed: found is false when the array was empty.
-pub struct Popped(T) { value: T, found: bool }
-
-pub fn pop(a: *Array($T)) Popped(T) {
-  result: Popped(T)
+// The last element, removed, or the zero value when the array is empty.
+// Check #len(a.items) first where empty is possible.
+pub fn pop(a: *Array($T)) T {
+  result: T
   count := #len(a.items)
   if count == 0 { return result }
-  result.value = a.items[count - 1]
-  result.found = true
+  result = a.items[count - 1]
   a.items = a.items[..count - 1]
   return result
 }

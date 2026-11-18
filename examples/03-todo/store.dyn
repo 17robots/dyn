@@ -26,12 +26,12 @@ fn load(tasks: *array.Array(Task), arena: *mem.Arena, status: *fail.Status, path
   scan := strings.scanner(read)
   for {
     line := strings.scan_line(&scan)
-    if !line.found { break }
+    if scan.ended { break }
     line_number += 1
-    if #len(line.value) == 0 { continue }
+    if #len(line) == 0 { continue }
     // Each line gets a status of its own, so the message can name the line.
     parsing: fail.Status
-    task := parse_task(&parsing, line.value)
+    task := parse_task(&parsing, line)
     if parsing.failed {
       message := strings.format(arena, "line {}: {}", line_number, fail.message_text(&parsing.failure))
       fail.invalid(status, "read", path, message)

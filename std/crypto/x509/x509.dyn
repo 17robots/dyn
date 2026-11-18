@@ -37,14 +37,18 @@ fn failed(reason: Reason) Inspected {
 fn validation(reason: Reason, index: usize) Validation {
   return Validation{ reason: reason, index: index }
 }
-fn next(cursor: *der.Cursor) der.Next {
+// An element and whether there was one, so each check below can test the
+// element it read.
+struct Item { value: der.Element, found: bool }
+fn next(cursor: *der.Cursor) Item {
   status: fail.Status
-  return der.next(&status, cursor)
+  element := der.next(&status, cursor)
+  return Item{ value: element, found: !cursor.ended }
 }
-fn one(source: []const u8, tag: u8) der.Next {
+fn one(source: []const u8, tag: u8) Item {
   cursor := der.cursor(source)
   result := next(&cursor)
-  if !result.found || result.value.tag != tag || !der.finished(&cursor) { return der.Next{} }
+  if !result.found || result.value.tag != tag || !der.finished(&cursor) { return Item{} }
   return result
 }
 fn oid(value: []const u8) bool {

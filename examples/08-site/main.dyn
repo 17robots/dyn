@@ -107,7 +107,7 @@ fn main() i32 {
   // step does nothing, so the only check is before reporting success.
   status: fail.Status
   names := list_pages(keep, &status, source)
-  fs.make_directory(&status, output, 0o755)
+  fs.make_directory(&status, output)
   pages: array.Array(Page)
   array.init(&pages, keep)
   for file_name in names {

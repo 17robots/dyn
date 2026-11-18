@@ -45,19 +45,18 @@ fn footer(w: *html.Writer) {
 // The first line of a page, trimmed.
 fn page_title(text: []const u8) []const u8 {
   scan := strings.scanner(text)
-  return strings.trim(strings.scan_line(&scan).value)
+  return strings.trim(strings.scan_line(&scan))
 }
 
 fn render_page(w: *html.Writer, text: []const u8) {
   scan := strings.scanner(text)
-  title := strings.trim(strings.scan_line(&scan).value)
+  title := strings.trim(strings.scan_line(&scan))
   header(w, title)
   open_tag(w, "<p><a href=\"index.html\">All pages</a></p>\n")
   block := Block.Nothing
   for {
-    next := strings.scan_line(&scan)
-    if !next.found { break }
-    line := strings.trim(next.value)
+    line := strings.trim(strings.scan_line(&scan))
+    if scan.ended { break }
     if #len(line) == 0 {
       close_block(w, block)
       block = Block.Nothing
