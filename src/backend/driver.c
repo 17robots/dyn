@@ -2792,6 +2792,10 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
         isa_store(ctx, R_A, counter);
       }
       isa_jump_back(ctx, ctx->loops[loop].condition);
+      /* An endless loop no break leaves ends the block, as sema allows a
+         non-void function to end with one. */
+      if (!s->for_range && s->expression == DYN_NO_EXPR && ctx->loops[loop].breaks == UINT32_MAX)
+        reachable = false;
       if (!resolve_jumps(ctx, ctx->loops[loop].breaks,ctx->text.n)) return false;
       --ctx->loop_depth;
     } else if (s->kind == DYN_STMT_BREAK || s->kind == DYN_STMT_CONTINUE) {

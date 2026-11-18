@@ -69,13 +69,15 @@ fn main() {
 with tempfile.TemporaryDirectory(prefix='dyn-endless-loop-') as temporary:
     project = Path(temporary)
     (project / 'main.dyn').write_text(GOOD)
-    for flags in ([], ['--release']):
+    # The tree backend (DYN_NO_SSA) too: the code after the loop is unreachable.
+    for flags, tree in (([], False), (['--release'], False), (['--release'], True)):
         output = project / 'program'
+        environment = dict(os.environ, DYN_NO_SSA='1') if tree else None
         subprocess.run([DYN, 'build', str(project), '--quiet', '--no-cache', '--output', str(output), *flags],
-                       check=True, timeout=120)
+                       check=True, timeout=120, env=environment)
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=10, check=True)
         assert result.stdout == '4 6 1 2 4\n', result.stdout
     (project / 'main.dyn').write_text(BROKEN)
     checked = subprocess.run([DYN, 'check', str(project)], capture_output=True, text=True, timeout=60)
     assert checked.returncode != 0 and 'non-void function may exit without return' in checked.stderr, checked.stderr
-print('PASS endless loops: no return needed after for {} without break; code after it allowed; break still needs one')
+print('PASS endless loops: no return needed after for {} without break; code after it allowed; break still needs one; tree backend too')
