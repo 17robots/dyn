@@ -1,15 +1,14 @@
-use "std/io" io
 #target(kernel: windows)
 extern fn clock_counter "dyn_time_counter"(value: *i64) i32
 extern fn clock_frequency "dyn_time_frequency"(value: *i64) i32
 extern fn clock_realtime "dyn_time_realtime"(value: *u64)
 extern fn clock_sleep "dyn_time_sleep"(milliseconds: u32)
-fn native_clock(monotonic: bool) ClockResult {
+fn native_clock(monotonic: bool) Instant {
   if monotonic {
     counter: i64 = 0
     frequency: i64 = 0
     if clock_counter(&counter) == 0 || clock_frequency(&frequency) == 0 || frequency <= 0 || counter < 0 {
-      return ClockResult{ failure: io.Failure{ kind: io.Kind.System } }
+      return Instant{}
     }
     // Divide before scaling; double conversion bounds the remainder without integer overflow.
     remainder := counter % frequency
@@ -17,14 +16,14 @@ fn native_clock(monotonic: bool) ClockResult {
     if nanos >= Second {
       nanos = Second - 1
     }
-    return ClockResult{ value: Instant{ seconds: counter / frequency, nanoseconds: nanos } }
+    return Instant{ seconds: counter / frequency, nanoseconds: nanos }
   }
   ticks: u64 = 0
   clock_realtime(&ticks)
   seconds := #cast(i64, (ticks / 10000000)) - 11644473600
-  return ClockResult{ value: Instant{ seconds: seconds, nanoseconds: #cast(i64, (ticks % 10000000)) * 100 } }
+  return Instant{ seconds: seconds, nanoseconds: #cast(i64, (ticks % 10000000)) * 100 }
 }
-fn native_sleep(duration: i64) SleepResult {
+fn native_sleep(duration: i64) {
   milliseconds := #cast(u64, (duration / Millisecond))
   if duration % Millisecond != 0 {
     milliseconds += 1
@@ -34,5 +33,4 @@ fn native_sleep(duration: i64) SleepResult {
     milliseconds -= 4294967294
   }
   clock_sleep(#cast(u32, milliseconds))
-  return SleepResult{}
 }

@@ -85,7 +85,8 @@ fn native_timeout(descriptor: isize, milliseconds: usize, sending: bool) isize {
 }
 
 // A value greater than capacity means the datagram was truncated.
-pub fn receive_packet(descriptor: isize, bytes: []u8) Result {
+pub fn receive_packet(status: *fail.Status, descriptor: isize, bytes: []u8) usize {
+  if status.failed { return 0 }
   data: *u8 = nil
   if #len(bytes) > 0 {
     data = &bytes[0]
@@ -94,11 +95,12 @@ pub fn receive_packet(descriptor: isize, bytes: []u8) Result {
   for value == -4 {
     value = native_receive(descriptor, data, #len(bytes), 32, nil, nil)
   }
-  return result(value)
+  if check(status, "receive", value) < 0 { return 0 }
+  return #cast(usize, value)
 }
 
-fn native_kind(code: isize) io.Kind {
-  return io.linux(code)
+fn native_failure(operation: []const u8, code: isize) fail.Failure {
+  return io.from_linux(operation, "", code)
 }
 
 const MulticastJoinOption: usize = 35

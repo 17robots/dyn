@@ -22,9 +22,7 @@ struct Search { files: u64, bytes: u64, lines: u64, matching_lines: u64, matchin
 struct Number { value: u64, ok: bool }
 fn numeric(root: *const json.Value, key: []const u8) Number {
   node := json.object_get(root, key)
-  if node.kind != json.KindNumber {
-    return Number{}
-  }
+  if node.kind != json.KindNumber { return Number{} }
   // Integer fields normally use the integer reader. Fraction/exponent spellings
   // retain the same binary64 validation semantics as the other DOM ports.
   if strings.valid(u64, node.text) {
@@ -32,20 +30,14 @@ fn numeric(root: *const json.Value, key: []const u8) Number {
     return Number{ value: integer, ok: integer <= Maximum }
   }
   value := json.as(f64, node)
-  if !(value >= 0.0 && value <= 9007199254740991.0) {
-    return Number{}
-  }
+  if !(value >= 0.0 && value <= 9007199254740991.0) { return Number{} }
   integer := #cast(u64, value)
   return Number{ value: integer, ok: #cast(f64, integer) == value }
 }
 fn add_record(summary: *Summary, root: *const json.Value) bool {
-  if root.kind != json.KindObject {
-    return false
-  }
+  if root.kind != json.KindObject { return false }
   service := json.object_get(root, "service")
-  if service.kind != json.KindString {
-    return false
-  }
+  if service.kind != json.KindString { return false }
   index: usize = 16
   for i in 0..16 {
     if bytes.equal(service.text, Services[i]) {
@@ -53,15 +45,11 @@ fn add_record(summary: *Summary, root: *const json.Value) bool {
       break
     }
   }
-  if index == 16 {
-    return false
-  }
+  if index == 16 { return false }
   status := numeric(root, "status")
   size := numeric(root, "bytes")
   latency := numeric(root, "latency_us")
-  if !status.ok || status.value > 599 || !size.ok || !latency.ok {
-    return false
-  }
+  if !status.ok || status.value > 599 || !size.ok || !latency.ok { return false }
   error: u64
   if status.value >= 500 {
     error = 1
@@ -70,9 +58,7 @@ fn add_record(summary: *Summary, root: *const json.Value) bool {
   for i in 0..4 {
     summary.totals[i] += row[i]
     summary.services[index][i] += row[i]
-    if summary.totals[i] > Maximum {
-      return false
-    }
+    if summary.totals[i] > Maximum { return false }
   }
   return true
 }
@@ -149,9 +135,7 @@ fn search_walk(status: *fail.Status, directory: []const u8, result: *Search) {
     if entry.kind == 0 {
       #panic("filesystem does not report entry types")
     }
-    if entry.kind != 4 && entry.kind != 8 {
-      continue
-    }
+    if entry.kind != 4 && entry.kind != 8 { continue }
     joined := path.join(scratch, directory, entry.name)
     if !joined.valid {
       #panic("path join")
@@ -200,36 +184,41 @@ fn search(directory: []const u8) {
   print_json(json.encode(arena, root))
 }
 struct App { quit: sync.AtomicU32 }
-fn handle(response: *http.Response, request: *const http.Request) http.Result {
+fn handle(status: *fail.Status, response: *http.Response, request: *const http.Request) {
   if bytes.equal(request.method, "GET") && bytes.equal(request.target, "/health") {
-    return http.respond(response, "ok\n", http.ResponseOptions{ content_type: "text/plain", close_connection: true })
+    http.respond(status, response, "ok\n", http.ResponseOptions{ content_type: "text/plain", close_connection: true })
+    return
   }
   if bytes.equal(request.method, "POST") && bytes.equal(request.target, "/quit") {
-    result := http.respond(response, "bye\n", http.ResponseOptions{ close_connection: true })
+    http.respond(status, response, "bye\n", http.ResponseOptions{ close_connection: true })
     sync.store_u32(&#cast(*App, request.context).quit, 1)
-    return result
+    return
   }
   if !bytes.equal(request.method, "POST") || !bytes.equal(request.target, "/summarize") {
-    return http.respond(response, "not found\n", http.ResponseOptions{ status: 404, close_connection: true })
+    http.respond(status, response, "not found\n", http.ResponseOptions{ status: 404, close_connection: true })
+    return
   }
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   if #len(request.body) > mem.MiB {
-    return http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
+    http.respond(status, response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
+    return
   }
   parsed := json.parse(arena, request.body)
   if parse.failed(parsed.failure) || parsed.root.kind != json.KindArray {
-    return http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
+    http.respond(status, response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
+    return
   }
   summary: Summary
   child := parsed.root.first
   for child != nil {
     if !add_record(&summary, child) {
-      return http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
+      http.respond(status, response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
+      return
     }
     child = child.next
   }
-  return http.respond(response, encoded_summary(arena, &summary), http.ResponseOptions{ content_type: "application/json", close_connection: true })
+  http.respond(status, response, encoded_summary(arena, &summary), http.ResponseOptions{ content_type: "application/json", close_connection: true })
 }
 fn serve() {
   config := evented.default_config()
@@ -241,29 +230,24 @@ fn serve() {
   defer mem.arena_release(arena)
   state := mem.push(App, arena)
   workers := mem.push_array(evented.Worker, arena, 4)
-  started := evented.start_shared(arena, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, handle, state)
-  if io.failed(started.failure) {
-    #panic("workers")
-  }
-  _ = io.write_transfer(io.stdout(), "port ")
-  _ = io.write_transfer(io.stdout(), fmt.u64_decimal(arena, #cast(u64, evented.local_port(workers))))
-  _ = io.write_transfer(io.stdout(), "\n")
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  _ = evented.start_shared(arena, &status, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, handle, state)
+  io.println("port {}", evented.local_port(workers))
   for sync.load_u32(&state.quit) == 0 {
-    _ = time.sleep(time.Millisecond)
+    time.sleep(time.Millisecond)
   }
   evented.stop(workers)
-  if io.failed(evented.join(workers).failure) {
-    #panic("join workers")
-  }
+  evented.join(&status, workers)
 }
 fn main() {
   arena := mem.arena_alloc(mem.GiB)
   defer mem.arena_release(arena)
-  arguments := process.arguments(arena)
-  if io.failed(arguments.failure) {
+  arguments_status: fail.Status
+  arguments := process.arguments(arena, &arguments_status)
+  if arguments_status.failed {
     #panic("arguments")
   }
-  args := arguments.value
+  args := arguments
   if #len(args) == 2 && bytes.equal(args[1], "serve") {
     serve()
     return

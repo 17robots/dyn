@@ -11,8 +11,8 @@ macos = (ROOT / 'std/process/macos.dyn').read_text()
 process = (ROOT / 'std/process/process.dyn').read_text()
 # Compile the production conversion/setup bodies, replacing only OS entry points.
 adapter = ('use "std/mem" mem\nuse "std/c" c\nuse "std/parse" parse\nuse "std/bytes" bytes\n'
-           'use "std/io" error_kinds\nuse "std/io" io\n'
-           + process[process.index('pub struct Redirect'):process.index('pub struct ExitResult')]
+           'use "std/io" io\nuse "std/fail"\n'
+           + process[process.index('pub struct Redirect'):process.index('// Starts path with arguments')]
            + macos[macos.index('struct CString'):macos.index('fn wait_native')])
 MOCKS = '''
 fn native_errno() *i32 { #panic("unexpected errno") }
@@ -57,12 +57,14 @@ fn main() {
   }
   before_spawn := mem.arena_mark(arena)
   environment: [1][]const u8 = ["KEY=value"]
-  result := spawn_native(arena, "/program", arguments[..], Options{environment: environment[..], directory: "/tmp"})
-  if io.failed(result.failure) || result.value.handle != 42 || mem.arena_mark(arena) != before_spawn {
+  status: fail.Status
+  result := spawn_native(arena, &status, "/program", arguments[..], Options{environment: environment[..], directory: "/tmp"})
+  if status.failed || result.handle != 42 || mem.arena_mark(arena) != before_spawn {
     #panic("spawn setup and rewind")
   }
-  rejected := spawn_native(arena, invalid[..], arguments[..], Options{})
-  if !io.failed(rejected.failure) || mem.arena_mark(arena) != before_spawn { #panic("failed setup rewind") }
+  rejected: fail.Status
+  _ = spawn_native(arena, &rejected, invalid[..], arguments[..], Options{})
+  if !rejected.failed || mem.arena_mark(arena) != before_spawn { #panic("failed setup rewind") }
   if !bytes.equal(c.bytes_from_string(text, 16).value, "café-😀") { #panic("live allocation") }
 }
 '''
@@ -78,12 +80,14 @@ with tempfile.TemporaryDirectory(prefix='dyn-process-cstring-') as temporary:
     native = root / 'native'
     native.mkdir()
     (native / 'main.dyn').write_text('''use "std/process"
+use "std/fail"
 use "std/mem"
 fn main() {
   storage: [4096]u8
   arena := mem.arena_from_buffer(storage[..])
   arguments: [1][]const u8 = ["/usr/bin/true"]
-  _ = process.spawn(arena, arguments[0], arguments[..], process.Options{})
+  status: fail.Status
+  _ = process.spawn(arena, &status, arguments[0], arguments[..], process.Options{})
 }
 ''')
     for target in ('x86_64-macos', 'aarch64-macos'):

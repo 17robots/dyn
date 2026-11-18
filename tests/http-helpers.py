@@ -13,13 +13,13 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 EXPECTED = '''Sun, 06 Nov 1994 08:49:37 GMT
 Tue, 29 Feb 2000 00:00:00 GMT
 951782400
-Syntax
+InvalidInput
 Not Modified
 Status
 sid=abc; Path=/; Max-Age=60; Secure; HttpOnly; SameSite=Strict
 sid=; Max-Age=0
-Syntax
-Syntax
+InvalidInput
+InvalidInput
 dark s3 false
 event: update
 id: 42
@@ -27,7 +27,7 @@ data: one
 data: two
 data: three
 
-Syntax
+InvalidInput
 text/javascript; charset=utf-8 application/octet-stream image/svg+xml
 false true true
 true true false

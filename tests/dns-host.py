@@ -20,7 +20,7 @@ parser.add_argument('--cross', action='store_true', help='cross-link all four na
 options = parser.parse_args()
 SOURCE = r'''use "std/net" net
 use "std/net/dns" dns
-use "std/io" io
+use "std/fail"
 use "std/mem" mem
 use "std/crypto/random" random
 fn require(value: bool, message: []const u8) { if !value { #panic(message) } }
@@ -36,17 +36,19 @@ fn main() {
   server := net.ipv4(127,0,0,1,PORT)
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  result := dns.resolve_ipv4(arena,"a.test",&server,4000)
-  require(!io.failed(result.failure) && #len(result.value) == 1,"A response")
-  require(result.value[0].a == 1 && result.value[0].b == 2 && result.value[0].c == 3 && result.value[0].d == 4,"A value / nonce filtering")
-  result6 := dns.resolve_ipv6(arena,"aaaa.test",&server,4000)
-  require(!io.failed(result6.failure) && #len(result6.value) == 1,"AAAA response")
-  for i in 0..16 { require(result6.value[0].bytes[i] == #cast(u8, i),"AAAA value") }
-  result = dns.resolve_ipv4(arena,"missing.test",&server,4000)
-  require(io.failed(result.failure) && result.failure.native == -3,"NXDOMAIN response")
-  result = dns.resolve_ipv4(arena,"large.test",&server,4000)
-  require(!io.failed(result.failure) && #len(result.value) == 1,"UDP truncation TCP fallback")
-  require(result.value[0].a == 9 && result.value[0].b == 8 && result.value[0].c == 7 && result.value[0].d == 6,"TCP response value")
+  status: fail.Status
+  result := dns.resolve_ipv4(arena,&status,"a.test",&server,4000)
+  require(!status.failed && #len(result) == 1,"A response")
+  require(result[0].a == 1 && result[0].b == 2 && result[0].c == 3 && result[0].d == 4,"A value / nonce filtering")
+  result6 := dns.resolve_ipv6(arena,&status,"aaaa.test",&server,4000)
+  require(!status.failed && #len(result6) == 1,"AAAA response")
+  for i in 0..16 { require(result6[0].bytes[i] == #cast(u8, i),"AAAA value") }
+  missing: fail.Status
+  _ = dns.resolve_ipv4(arena,&missing,"missing.test",&server,4000)
+  require(missing.failure.kind == fail.Kind.NotFound && missing.failure.native == -3,"NXDOMAIN response")
+  result = dns.resolve_ipv4(arena,&status,"large.test",&server,4000)
+  require(!status.failed && #len(result) == 1,"UDP truncation TCP fallback")
+  require(result[0].a == 9 && result[0].b == 8 && result[0].c == 7 && result[0].d == 6,"TCP response value")
 }
 '''
 

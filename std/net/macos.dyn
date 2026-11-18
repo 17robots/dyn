@@ -101,7 +101,8 @@ fn poll_native(descriptors: []PollDescriptor, milliseconds: i32) isize {
 struct MessageVector { data: *u8, length: usize }
 struct MessageHeader { name: rawptr, name_length: u32, vectors: *MessageVector, count: i32, control: rawptr, control_length: u32, flags: i32 }
 // Only the fact of truncation is portable, not the full original wire length.
-pub fn receive_packet(descriptor: isize, bytes: []u8) Result {
+pub fn receive_packet(status: *fail.Status, descriptor: isize, bytes: []u8) usize {
+  if status.failed { return 0 }
   data: *u8 = nil
   if #len(bytes) > 0 {
     data = &bytes[0]
@@ -112,12 +113,13 @@ pub fn receive_packet(descriptor: isize, bytes: []u8) Result {
   for value == -4 {
     value = #syscall(sys.Recvmsg, descriptor, &header, 0)
   }
-  if value >= 0 && (header.flags & 16) != 0 { return result(#cast(isize, #len(bytes)) + 1) }
-  return result(value)
+  if check(status, "receive", value) < 0 { return 0 }
+  if (header.flags & 16) != 0 { return #len(bytes) + 1 }
+  return #cast(usize, value)
 }
 
-fn native_kind(code: isize) io.Kind {
-  return io.darwin(code)
+fn native_failure(operation: []const u8, code: isize) fail.Failure {
+  return io.from_darwin(operation, "", code)
 }
 
 const MulticastJoinOption: usize = 12

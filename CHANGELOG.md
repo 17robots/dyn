@@ -85,6 +85,62 @@ Standard library:
   ...)`. `io.Transfer` remains only for modules not moved yet, with
   `io.read_transfer`, `io.write_transfer`, `io.read_exact_transfer` and
   `io.from_transfer` to bridge them.
+- Networking moves to it. `std/net`: every fallible call takes the status
+  and returns its value: `net.socket(&status, ...)` (a descriptor),
+  `net.tcp_listen_ipv4(&status, &address, backlog)` (a `Listener`),
+  `net.tcp_connect_ipv4` (a `Connection`), `net.listener_accept`,
+  `net.connection_read`/`connection_write` (counts; 0 is the end),
+  `net.send`/`receive`/`send_to`/`receive_from`, `net.poll`/`net.wait` (the
+  number ready, or the events), and the option setters (no return).
+  `net.Result`, `ConnectionResult` and `ListenerResult` are gone. Nonblocking
+  sockets use `net.try_send`, `net.try_receive` and `net.try_accept_address`,
+  which report a socket that is not ready as `blocked`, not as a failure;
+  `net.would_block(&status.failure)` tells such failures apart elsewhere.
+  `std/event` (`event.open(arena, &status, n)`, `event.add/modify/remove(&status,
+  &queue, ...)`, `event.wait(arena, &status, &queue, timeout)`,
+  `event.waker_open(&status)`), `std/net/tls` (`Want` reports what a
+  nonblocking connection waits for), `std/net/dns`, `std/net/url` and
+  `std/net/websocket` follow.
+- `std/net/http`: a `Handler` is `fn(*fail.Status, *Response, *const
+  Request)` and returns nothing; `http.respond(&status, response, body,
+  options)`, `respond_buffered`, `respond_stream` (returns the `Body`),
+  `body_finish`, `http.add(&status, &router, ...)`, `serve_routes` and the
+  replies (`http.text(&status, response, code, body)`) take the status. A
+  failed write finishes the response or body: later writes fail with
+  `InvalidState` instead of sending a broken message. `http.receive(&status,
+  &server)` returns `Received{ request, response, ended }`; a clean end
+  between requests is `ended`, not a failure. Parsers (`parse_request`,
+  `parse_response`, `header`, `parse_url`, `parse_date`, `decode_chunked`,
+  `chunk_step`, `form_decode`, `set_cookie`, `sse_event`, `multipart`) take
+  the status and fail with `InvalidInput` at the offset where the input went
+  wrong. `http.Result`, `ErrorKind`, `ReceiveResult`, `BodyResult`,
+  `TextResult` and `DateValue` are gone. `std/net/http/evented` follows:
+  `evented.start(arena, &status, ...)` returns the workers started,
+  `evented.join(&status, workers)`, `run`, `later`, `receive_body`,
+  `open_stream` and `upgrade` take the status, and finish functions take it
+  first. The evented server is about 4% faster on small responses.
+- `std/time`: reading a clock does not fail on the supported systems, so
+  `time.monotonic_now()` and `realtime_now()` return an `Instant` (zero
+  where there is no clock), `time.sleep` returns nothing, `time.elapsed`
+  returns nanoseconds (saturating past ±292 years), and deadlines return
+  their values. `time.checked_add/checked_sub` take a status.
+  `ClockResult`, `SleepResult`, `DurationResult`, `DeadlineResult` and
+  `ExpiredResult` are gone. `std/time/zone` takes the status
+  (`zone.load(arena, &status, name)`).
+- `std/process`, `std/process/signal`, `std/thread`, `std/thread/pool`,
+  `std/sync` and `std/os/linux` take the status: `process.spawn(arena,
+  &status, ...)` (a `*Child`), `process.wait(&status, child, false)` (an
+  `Exit`), `process.environment(arena, &status, name)` (a `Variable`;
+  `process.environment_or` needs none), `process.capture`,
+  `process.arguments(arena, &status)`, `thread.spawn(arena, &status, ...)`,
+  `thread.join(&status, thread)`, `pool.start(arena, &status, ...)`,
+  `signal.watch(&status, set)`, `signal.wait(&status, &watch)` (a `Kind`),
+  `sync.condition_wait_timeout(&status, ...)` (a `sync.Wait`).
+  `thread.yield_now()` returns nothing. `bytes/builder` drops its sticky
+  `failure`: `builder.append(&status, &b, bytes)`, and
+  `builder.append_grow(arena, &b, bytes)`/`reserve(arena, &b, n)` take the
+  arena first and panic like any arena push. `profile.finish` and the
+  testing benchmark no longer report clock failures.
 - New in `std/fs`: `fs.list(arena, &status, path)` (a directory's entries,
   copied), `fs.is_directory`, `fs.is_file`, and
   `fs.make_directory_exclusive`. `fs.make_directory` now succeeds when the

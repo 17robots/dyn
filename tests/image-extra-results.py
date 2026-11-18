@@ -21,11 +21,12 @@ use "std/bytes"
 fn main() {
   arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
-  args := process.arguments(arena)
-  if io.failed(args.failure) || #len(args.value) != 4 { #panic("image arguments") }
+  args_status: fail.Status
+  args := process.arguments(arena, &args_status)
+  if args_status.failed || #len(args) != 4 { #panic("image arguments") }
   ENCODER
   source_file: fail.Status
-  source := fs.read_all(arena, &source_file, args.value[2], 64000000)
+  source := fs.read_all(arena, &source_file, args[2], 64000000)
   if source_file.failed { #panic("image source") }
   before := mem.arena_mark(arena)
   result := codec.decode(arena, source)
@@ -34,7 +35,7 @@ fn main() {
     io.println("ERR {}", #cast(u32, result.failure.kind))
     return
   }
-  if !fs_write_file(args.value[3], result.value.pixels) { #panic("image output") }
+  if !fs_write_file(args[3], result.value.pixels) { #panic("image output") }
   io.println("{} {}", result.value.info.width, result.value.info.height)
 }
 
@@ -45,12 +46,12 @@ fn fs_write_file(path: []const u8, data: []const u8) bool {
   return !status.failed
 }
 '''
-ENCODER='''if bytes.starts_with(args.value[1], "encode") {
-  channels := strings.parse(u8, args.value[1][6..])
+ENCODER='''if bytes.starts_with(args[1], "encode") {
+  channels := strings.parse(u8, args[1][6..])
   pixels: [16]u8
   for i in 0..4 { for j in 0..#cast(usize, channels) { pixels[i * #cast(usize, channels) + j] = #cast(u8, (i * 51 + j * 37)) } }
   result := codec.encode(arena, pixels[..4 * #cast(usize, channels)], 2, 2, channels)
-  if parse.failed(result.failure) || !fs_write_file(args.value[2], result.value) { #panic("image encode") }
+  if parse.failed(result.failure) || !fs_write_file(args[2], result.value) { #panic("image encode") }
   return
 }'''
 u16=lambda x:struct.pack('<H',x)

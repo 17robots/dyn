@@ -20,26 +20,23 @@ stack or arena storage. It never stores an allocator or obtains heap memory impl
 
 ```dyn
 use "std/bytes/builder"
-use "std/io"
 use "std/mem"
 
 fn main() {
   storage: [256]u8
   arena := mem.arena_from_buffer(storage[..])
   text := builder.Builder{}
-  builder.append_grow(&text, arena, "hello")
-  if io.failed(text.failure) {
-    #panic("builder size")
-  }
+  builder.append_grow(arena, &text, "hello")
   _ = builder.bytes(&text)
 }
 ```
 
-- `append` is bounded and allocation-free, and reports `Capacity` when the storage is full.
-  `reserve` reserves exact capacity from an arena; `append_grow` grows geometrically. Both
-  panic when the arena runs out, like any arena push, and report only `Overflow`.
+- `append(status, &builder, bytes)` is bounded and allocation-free, and fails with
+  `Capacity` when the storage is full. `reserve` reserves exact capacity from an arena;
+  `append_grow` grows geometrically. Both panic when the arena runs out, like any arena
+  push; they cannot fail otherwise.
 - Appending bytes borrowed from the same builder is supported, including during growth.
-- A reported failure preserves length, bytes and storage. `clear` retains capacity.
+- A failed append preserves length, bytes and storage. `clear` retains capacity.
 - Reacquire byte views after mutation. Old arena buffers remain allocated; growth cannot
   reclaim them without invalidating other arena allocations. Reset/release the owning arena
   only after all builder uses and borrowed views have ended.

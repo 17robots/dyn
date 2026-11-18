@@ -1,8 +1,8 @@
 // TLS for std/net/http/evented through std/net/tls (OpenSSL 3, Linux).
 // Importing this module links libssl and libcrypto; evented itself does not.
 //
-//   context := tls.server_config_create(arena, "cert.pem", "key.pem")
-//   transport := https.transport(context.value)
+//   context := tls.server_config_create(arena, &status, "cert.pem", "key.pem")
+//   transport := https.transport(context)
 //   spawner := posix.spawner()
 //   config.transport = &transport
 //   config.spawner = &spawner
@@ -18,7 +18,7 @@
 // tls.config_release only after evented.join returns.
 #target(kernel: linux)
 
-use "std/io" io
+use "std/fail"
 use "std/mem" mem
 use "std/net/http/evented" evented
 use "std/net/tls" provider
@@ -51,29 +51,27 @@ fn protocol(session: rawptr) []const u8 {
   return provider.selected_alpn(session)
 }
 
-fn status(result: provider.Result) evented.TransportIo {
-  if !io.failed(result.failure) { return evented.TransportIo{ count: result.count } }
-  if result.detail == provider.ErrorKind.WantRead {
-    return evented.TransportIo{ status: evented.TransportStatus.WouldRead }
-  }
-  if result.detail == provider.ErrorKind.WantWrite {
-    return evented.TransportIo{ status: evented.TransportStatus.WouldWrite }
-  }
-  return evented.TransportIo{ status: evented.TransportStatus.Failed }
+fn transport_io(status: *fail.Status, attempt: provider.Attempt) evented.TransportIo {
+  if status.failed { return evented.TransportIo{ status: evented.TransportStatus.Failed } }
+  if attempt.want == provider.Want.Read { return evented.TransportIo{ status: evented.TransportStatus.WouldRead } }
+  if attempt.want == provider.Want.Write { return evented.TransportIo{ status: evented.TransportStatus.WouldWrite } }
+  return evented.TransportIo{ count: attempt.count }
 }
 
 fn open(data: rawptr, descriptor: isize) rawptr {
-  created := provider.server_connection_create(data, #cast(i32, descriptor))
-  if io.failed(created.failure) { return nil }
-  return created.value
+  status: fail.Status
+  return provider.server_connection_create(&status, data, #cast(i32, descriptor))
 }
 
 fn handshake(session: rawptr) evented.TransportIo {
-  return status(provider.server_handshake(session))
+  status: fail.Status
+  wanted := provider.server_handshake(&status, session)
+  return transport_io(&status, provider.Attempt{ want: wanted })
 }
 
 fn read(session: rawptr, destination: []u8) evented.TransportIo {
-  result := status(provider.read(session, destination))
+  status: fail.Status
+  result := transport_io(&status, provider.read(&status, session, destination))
   // A successful zero-byte read is the peer's close_notify.
   if result.status == evented.TransportStatus.Ok && result.count == 0 && #len(destination) > 0 {
     return evented.TransportIo{ status: evented.TransportStatus.End }
@@ -82,14 +80,16 @@ fn read(session: rawptr, destination: []u8) evented.TransportIo {
 }
 
 fn write(session: rawptr, source: []const u8) evented.TransportIo {
-  return status(provider.write(session, source))
+  status: fail.Status
+  return transport_io(&status, provider.write(&status, session, source))
 }
 
 // Sends close_notify when the socket allows it without waiting, then frees
 // the session.
 fn close(session: rawptr) {
   connection := session
-  _ = provider.shutdown(connection)
+  status: fail.Status
+  _ = provider.shutdown(&status, connection)
   provider.connection_release(&connection)
 }
 
@@ -97,16 +97,16 @@ fn close(session: rawptr) {
 
 alpn_h3: []const u8 = "\x02h3"
 
-pub struct QuicContextResult { value: provider.Context, failure: io.Failure }
-
 // A QUIC server context offering "h3" through ALPN, from PEM files. Release
 // it with tls.config_release after evented.join returns.
-pub fn quic_context(arena: *mem.Arena, certificate: []const u8, key: []const u8) QuicContextResult {
+pub fn quic_context(arena: *mem.Arena, status: *fail.Status, certificate: []const u8, key: []const u8) provider.Context {
+  if status.failed { return nil }
   created := openssl.quic_server_context_create(arena, certificate, key)
-  if io.failed(created.failure) || !openssl.set_server_alpn(created.value, &alpn_h3) {
-    return QuicContextResult{ failure: io.Failure{ kind: io.Kind.System } }
+  if created.value == nil || !openssl.set_server_alpn(created.value, &alpn_h3) {
+    fail.set(status, fail.make(fail.Kind.System, "create QUIC server", certificate, "OpenSSL could not create the context"))
+    return nil
   }
-  return QuicContextResult{ value: created.value }
+  return created.value
 }
 
 // The QUIC stack for Config.quic. context must outlive the workers.

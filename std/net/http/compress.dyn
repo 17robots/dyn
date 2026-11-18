@@ -20,11 +20,12 @@ pub const CompressHeaders: usize = 30
 // encoder is workspace, reused across calls; nil never compresses. options
 // that already set Content-Encoding, or carry more than CompressHeaders
 // headers, send body as respond would.
-pub fn respond_compressed(response: *Response, request: *const Request, body: []const u8, options: ResponseOptions,
-  level: u8, encoder: *gzip.Encoder) Result {
+pub fn respond_compressed(status: *fail.Status, response: *Response, request: *const Request, body: []const u8, options: ResponseOptions,
+  level: u8, encoder: *gzip.Encoder) {
   if !compressible(options.content_type) || #len(body) < CompressMinimum || #len(options.headers) > CompressHeaders ||
     has_coding(options.headers) {
-    return respond(response, body, options)
+    respond(status, response, body, options)
+    return
   }
   headers: [CompressHeaders + 2]Header
   count: usize = 0
@@ -36,18 +37,25 @@ pub fn respond_compressed(response: *Response, request: *const Request, body: []
   count += 1
   varied := options
   varied.headers = headers[..count]
-  if encoder == nil || !accepts_encoding(request, "gzip") { return respond(response, body, varied) }
+  if encoder == nil || !accepts_encoding(request, "gzip") {
+    respond(status, response, body, varied)
+    return
+  }
   storage := body_buffer(response, gzip.compress_bound(#len(body)))
-  if #len(storage) == 0 { return respond(response, body, varied) }
+  if #len(storage) == 0 {
+    respond(status, response, body, varied)
+    return
+  }
   encoded := gzip.write(storage, body, level, encoder)
   if parse.failed(encoded.failure) || #len(encoded.value) >= #len(body) {
     // The reservation lapses: respond queues its own copy.
-    return respond(response, body, varied)
+    respond(status, response, body, varied)
+    return
   }
   headers[count] = Header{ name: "Content-Encoding", value: "gzip" }
   count += 1
   varied.headers = headers[..count]
-  return respond_buffered(response, #len(encoded.value), varied)
+  respond_buffered(status, response, #len(encoded.value), varied)
 }
 
 // Whether a response with these headers already names a content coding.

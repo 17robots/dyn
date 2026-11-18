@@ -89,17 +89,16 @@ fn main() {''']
   backing: [8192]u8
   arena := mem.arena_from_buffer(backing[..])
   built := builder.from_buffer(backing[..0])
-  for i in 0..1000 { builder.append_grow(&built, arena, "x") }
-  t.expect(!io.failed(built.failure), "builder growth")
+  for i in 0..1000 { builder.append_grow(arena, &built, "x") }
+  t.expect(built.length == 1000, "builder growth")
   t.expect(mem.arena_used(arena) == 1024, "last allocation extends without retained old buffers")
   view := builder.bytes(&built)
-  builder.append_grow(&built, arena, view)
-  t.expect(!io.failed(built.failure), "overlapping growth")
+  builder.append_grow(arena, &built, view)
   t.expect(built.length == 2000 && mem.arena_used(arena) == 2048, "self append in place")
   _ = mem.arena_push(arena, 1, 1)
   previous := &built.storage[0]
-  builder.reserve(&built, arena, 4096)
-  t.expect(!io.failed(built.failure), "interleaved growth")
+  builder.reserve(arena, &built, 4096)
+  t.expect(#len(built.storage) == 4096, "interleaved growth")
   t.expect(&built.storage[0] != previous && built.storage[1999] == 'x', "interleaved allocation copied")
   mem.arena_reset(arena)
   names := hash.slots(Entry, arena, 32)

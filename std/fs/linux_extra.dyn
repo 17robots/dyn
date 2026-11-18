@@ -258,11 +258,8 @@ pub fn write_atomic(status: *fail.Status, destination: []const u8, temporary: []
 }
 
 fn environment_get(status: *fail.Status, name: []const u8, destination: []u8) []u8 {
-  result := platform.environment_get(name, destination)
-  if io.failed(result.failure) {
-    fail_native(status, "read environment", name, result.failure.native)
-    return destination[..0]
-  }
+  result := platform.environment_get(status, name, destination)
+  if status.failed { return destination[..0] }
   if !result.found {
     fail_kind(status, "read environment", name, fail.Kind.NotFound, "not set")
     return destination[..0]

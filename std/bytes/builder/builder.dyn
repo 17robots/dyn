@@ -1,15 +1,9 @@
 use "std/mem" memory
-use "std/io" io
+use "std/fail"
 
 // Byte and UTF-8 string construction share this byte-oriented builder. No UTF-8
 // validation is implied. A builder borrows storage; arena growth is explicit.
-// The first failure is kept in failure and turns later calls into no-ops, so
-// callers write freely and check failure once at the end.
-pub struct Builder { storage: []u8, length: usize, failure: io.Failure }
-
-fn fail(state: *Builder, kind: io.Kind) {
-  state.failure = io.Failure{ kind: kind }
-}
+pub struct Builder { storage: []u8, length: usize }
 
 pub fn from_buffer(storage: []u8) Builder {
   return Builder{ storage: storage }
@@ -20,20 +14,17 @@ pub fn from_buffer(storage: []u8) Builder {
 pub fn bytes(state: *const Builder) []const u8 {
   return state.storage[..state.length]
 }
-// Empties the builder and clears a recorded error. Keeps capacity.
+// Empties the builder. Keeps capacity.
 pub fn clear(state: *Builder) {
   state.length = 0
-  state.failure = io.Failure{}
 }
 
 // Exact capacity reservation. Panics when the arena is exhausted.
 // Extends the arena's most recent buffer in place when possible. Otherwise old
 // arena buffers remain allocated until the caller rewinds or resets.
-pub fn reserve(state: *Builder, arena: *memory.Arena, capacity: usize) {
-  if io.failed(state.failure) { return }
+pub fn reserve(arena: *memory.Arena, state: *Builder, capacity: usize) {
   if state.length > #len(state.storage) {
-    fail(state, io.Kind.InvalidState)
-    return
+    #panic("builder length is past its storage")
   }
   if capacity <= #len(state.storage) { return }
   if #len(state.storage) > 0 && memory.arena_try_extend(arena, &state.storage[0],
@@ -47,17 +38,17 @@ pub fn reserve(state: *Builder, arena: *memory.Arena, capacity: usize) {
   state.storage = storage
 }
 
-// Bounded append supports overlap/self-append. Failure writes nothing.
+// Bounded append supports overlap/self-append. Fails with Capacity, writing
+// nothing, when source does not fit the storage left.
 // Allocation: none; capacity is fixed until an explicit reserve or append_grow.
-// Failure: builder length and bytes are unchanged.
-pub fn append(state: *Builder, source: []const u8) {
-  if io.failed(state.failure) { return }
+pub fn append(status: *fail.Status, state: *Builder, source: []const u8) {
+  if status.failed { return }
   if state.length > #len(state.storage) {
-    fail(state, io.Kind.InvalidState)
+    fail.set(status, fail.make(fail.Kind.InvalidState, "append", "", "builder length is past its storage"))
     return
   }
   if #len(source) > #len(state.storage) - state.length {
-    fail(state, io.Kind.Capacity)
+    fail.set(status, fail.make(fail.Kind.Capacity, "append", "", "builder storage is full"))
     return
   }
   _ = memory.move(state.storage[state.length..], source)
@@ -66,16 +57,13 @@ pub fn append(state: *Builder, source: []const u8) {
 
 // Geometric growth. Panics when the arena cannot hold the selected capacity.
 // Existing views must be reacquired after mutation. Source may borrow this builder.
-pub fn append_grow(state: *Builder, arena: *memory.Arena, source: []const u8) {
-  if io.failed(state.failure) { return }
+pub fn append_grow(arena: *memory.Arena, state: *Builder, source: []const u8) {
   if state.length > #len(state.storage) {
-    fail(state, io.Kind.InvalidState)
-    return
+    #panic("builder length is past its storage")
   }
   maximum := #cast(usize, -1)
   if #len(source) > maximum - state.length {
-    fail(state, io.Kind.Overflow)
-    return
+    #panic("builder size overflow")
   }
   required := state.length + #len(source)
   if required > #len(state.storage) {
@@ -90,7 +78,8 @@ pub fn append_grow(state: *Builder, arena: *memory.Arena, source: []const u8) {
       }
       capacity *= 2
     }
-    reserve(state, arena, capacity)
+    reserve(arena, state, capacity)
   }
-  append(state, source)
+  _ = memory.move(state.storage[state.length..], source)
+  state.length += #len(source)
 }

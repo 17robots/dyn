@@ -9,6 +9,7 @@
 //
 // Run: dyn run examples/09-primes --release -- 10000000 8
 
+use "std/fail"
 use "std/io"
 use "std/math"
 use "std/mem"
@@ -91,22 +92,17 @@ fn main() i32 {
   // joins them all before it returns. Each thread gets its own stack.
   workers: [MaxWorkers]Worker
   threads: [MaxWorkers]*thread.Thread
+  // A thread that cannot start or join ends the program.
+  status := fail.Status{ on_failure: fail.panic_on_failure }
   for i in 0..count {
     workers[i].shared = &shared
-    spawned := thread.spawn_with_size(program.arena, 256 * mem.KiB, work, &workers[i])
-    if io.failed(spawned.failure) {
-      #panic("cannot start a thread")
-    }
-    threads[i] = spawned.value
+    threads[i] = thread.spawn_with_size(program.arena, &status, 256 * mem.KiB, work, &workers[i])
   }
 
   total: u64 = 0
   largest: u64 = 0
   for i in 0..count {
-    joined := thread.join(threads[i])
-    if io.failed(joined.failure) {
-      #panic("cannot join a thread")
-    }
+    thread.join(&status, threads[i])
     // After join, the worker's thread is done: reading its struct is safe.
     total += workers[i].primes
     largest = math.max(largest, workers[i].largest)

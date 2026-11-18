@@ -89,13 +89,13 @@ module's full declarations and comments.
 
 ## std/bytes/builder
 
-- `struct Builder { storage: []u8, length: usize, failure: io.Failure }`: Byte and UTF-8 string construction share this byte-oriented builder.
+- `struct Builder { storage: []u8, length: usize }`: Byte and UTF-8 string construction share this byte-oriented builder.
 - `fn from_buffer(storage: []u8) Builder`
 - `fn bytes(state: *const Builder) []const u8`: Ownership: returned view borrows builder storage;
-- `fn clear(state: *Builder)`: Empties the builder and clears a recorded error.
-- `fn reserve(state: *Builder, arena: *memory.Arena, capacity: usize)`: Exact capacity reservation.
-- `fn append(state: *Builder, source: []const u8)`: Bounded append supports overlap/self-append.
-- `fn append_grow(state: *Builder, arena: *memory.Arena, source: []const u8)`: Geometric growth.
+- `fn clear(state: *Builder)`: Empties the builder.
+- `fn reserve(arena: *memory.Arena, state: *Builder, capacity: usize)`: Exact capacity reservation.
+- `fn append(status: *fail.Status, state: *Builder, source: []const u8)`: Bounded append supports overlap/self-append.
+- `fn append_grow(arena: *memory.Arena, state: *Builder, source: []const u8)`: Geometric growth.
 
 ## std/bytes/search
 
@@ -827,19 +827,15 @@ module's full declarations and comments.
 - `const Error: u32 = 8`
 - `const Hangup: u32 = 16`
 - `struct Event { descriptor: isize, token: u64, events: u32 }`
-- `struct Result { failure: io.Failure }`
-- `type OpenResult = io.Result(Queue)`
-- `type WaitResult = io.Result([]Event)`
-- `struct Queue { handle: isize, active: bool, entries: []Entry, failed: bool, kind: io.Kind, error: isize, free: []u32, free_count: usize, table: []u32, used_slots: usize, batch: usize, }`: One owner, one thread.
-- `fn open(arena: *mem.Arena, capacity: usize) OpenResult`
-- `fn add(queue: *Queue, descriptor: isize, events: u32, token: u64) Result`
-- `fn modify(queue: *Queue, descriptor: isize, events: u32, token: u64) Result`
-- `fn remove(queue: *Queue, descriptor: isize) Result`
-- `fn wait(arena: *mem.Arena, queue: *Queue, timeout_milliseconds: i32) WaitResult`: Level-triggered readiness.
+- `struct Queue { handle: isize, active: bool, entries: []Entry, failed: bool, free: []u32, free_count: usize, table: []u32, used_slots: usize, batch: usize, }`: One owner, one thread.
+- `fn open(arena: *mem.Arena, status: *fail.Status, capacity: usize) Queue`
+- `fn add(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, token: u64)`
+- `fn modify(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, token: u64)`
+- `fn remove(status: *fail.Status, queue: *Queue, descriptor: isize)`
+- `fn wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout_milliseconds: i32) []Event`: Level-triggered readiness.
 - `fn close(queue: *Queue)`
 - `struct Waker { descriptor: isize, active: bool }`: Wakes a queue's owner from another thread.
-- `type WakerResult = io.Result(Waker)`
-- `fn waker_open() WakerResult`
+- `fn waker_open(status: *fail.Status) Waker`
 - `fn wake(waker: *const Waker)`: Never blocks.
 - `fn waker_drain(waker: *const Waker)`: Discards pending wakes.
 - `fn waker_close(waker: *Waker)`
@@ -1173,6 +1169,10 @@ module's full declarations and comments.
 - `fn darwin_failure(code: isize) Failure`
 - `fn windows_failure(code: isize) Failure`
 - `fn wasi_failure(code: isize) Failure`
+- `fn from_linux(operation: []const u8, path: []const u8, code: isize) fail.Failure`: A fail.Failure for a native error code: its portable kind, the code in native, and the system's text for it as the message.
+- `fn from_darwin(operation: []const u8, path: []const u8, code: isize) fail.Failure`
+- `fn from_windows(operation: []const u8, path: []const u8, code: isize) fail.Failure`
+- `fn from_wasi(operation: []const u8, path: []const u8, code: isize) fail.Failure`
 - `fn linux(code: isize) Kind`
 - `fn windows(code: isize) Kind`
 - `fn wasi(code: isize) Kind`
@@ -1570,16 +1570,16 @@ module's full declarations and comments.
 - `fn event(events: u32, data: u64) Event`
 - `fn event_events(value: *const Event) u32`
 - `fn event_data(value: *const Event) u64`
-- `fn event_queue() Result`
-- `fn event_control(queue: isize, operation: usize, descriptor: isize, value: *Event) Result`
-- `fn event_add(queue: isize, descriptor: isize, events: u32, data: u64) Result`: Registration helpers keep epoll's operation numbers and remove-event pointer convention out of application code.
-- `fn event_modify(queue: isize, descriptor: isize, events: u32, data: u64) Result`
-- `fn event_remove(queue: isize, descriptor: isize) Result`
-- `fn event_wait(queue: isize, events: []Event, timeout_milliseconds: i32) Result`
+- `fn event_queue(status: *fail.Status) isize`: A new epoll queue descriptor, or -1 after a failure.
+- `fn event_control(status: *fail.Status, queue: isize, operation: usize, descriptor: isize, value: *Event)`
+- `fn event_add(status: *fail.Status, queue: isize, descriptor: isize, events: u32, data: u64)`: Registration helpers keep epoll's operation numbers and remove-event pointer convention out of application code.
+- `fn event_modify(status: *fail.Status, queue: isize, descriptor: isize, events: u32, data: u64)`
+- `fn event_remove(status: *fail.Status, queue: isize, descriptor: isize)`
+- `fn event_wait(status: *fail.Status, queue: isize, events: []Event, timeout_milliseconds: i32) usize`: Waits for events;
 - `const AddressFamilyIpv6: usize = 10`
 - `type Descriptor = i32`
 - `struct PollDescriptor { descriptor: Descriptor, events: i16, returned: i16 }`
-- `fn receive_packet(descriptor: isize, bytes: []u8) Result`: A value greater than capacity means the datagram was truncated.
+- `fn receive_packet(status: *fail.Status, descriptor: isize, bytes: []u8) usize`: A value greater than capacity means the datagram was truncated.
 - `struct Event { bytes: [16]u8 }`: Linux UAPI naturally aligns the 64-bit epoll data field on AArch64.
 - `struct Event { bytes: [12]u8 }`: Linux UAPI packs epoll_event only on x86_64.
 - `const AddressFamilyIpv6: usize = 30`
@@ -1598,70 +1598,68 @@ module's full declarations and comments.
 - `struct Ipv6Address { bytes: [28]u8 }`
 - `struct UnixAddress { bytes: [110]u8, length: usize }`
 - `struct Address { bytes: [128]u8, length: usize }`: Large enough for every supported sockaddr.
-- `type Result = io.Result(isize)`: `error` keeps the native code;
 - `struct Connection { descriptor: isize, active: bool }`: `active` makes zeroed storage a closed handle;
 - `struct Listener { descriptor: isize, active: bool }`
 - `fn connection_from_descriptor(descriptor: isize) Connection`: Wraps an open socket descriptor;
 - `fn listener_from_descriptor(descriptor: isize) Listener`
-- `type ConnectionResult = io.Result(Connection)`
-- `type ListenerResult = io.Result(Listener)`
-- `fn result_value(outcome: *const Result) isize`
-- `fn connection_result_value(outcome: *const ConnectionResult) Connection`
-- `fn listener_result_value(outcome: *const ListenerResult) Listener`
-- `fn error_kind(code: isize) io.Kind`: Portable category for a native socket error code returned by this module.
-- `fn socket(family: usize, kind: usize, protocol: usize) Result`
-- `fn close(descriptor: isize)`
-- `fn listen(descriptor: isize, backlog: usize) Result`
-- `fn shutdown(descriptor: isize, how: usize) Result`
+- `fn socket(status: *fail.Status, family: usize, kind: usize, protocol: usize) isize`: A new socket descriptor, or -1 after a failure.
+- `fn close(descriptor: isize)`: Closes descriptor.
+- `fn listen(status: *fail.Status, descriptor: isize, backlog: usize)`
+- `fn shutdown(status: *fail.Status, descriptor: isize, how: usize)`
 - `fn ipv4_address(destination: []u8, a: u8, b: u8, c: u8, d: u8, port: u16) []u8`
 - `fn ipv4(a: u8, b: u8, c: u8, d: u8, port: u16) Ipv4Address`
 - `fn ipv6(bytes: [16]u8, port: u16, scope: u32) Ipv6Address`
 - `fn unix(path: []const u8) UnixAddress`: Native sockaddr_un.
-- `fn connect_ipv4(descriptor: isize, address: *const Ipv4Address) Result`
-- `fn bind_ipv4(descriptor: isize, address: *const Ipv4Address) Result`
-- `fn connect_ipv6(descriptor: isize, address: *const Ipv6Address) Result`
-- `fn bind_ipv6(descriptor: isize, address: *const Ipv6Address) Result`
-- `fn connect_unix(descriptor: isize, address: *const UnixAddress) Result`
-- `fn bind_unix(descriptor: isize, address: *const UnixAddress) Result`
-- `fn connect(descriptor: isize, address: []const u8) Result`
-- `fn bind(descriptor: isize, address: []const u8) Result`
-- `fn accept(descriptor: isize) Result`
-- `fn tcp_listen_ipv4(address: *const Ipv4Address, backlog: usize) ListenerResult`
-- `fn tcp_listen_ipv4_shared(address: *const Ipv4Address, backlog: usize) ListenerResult`: Like tcp_listen_ipv4 with SO_REUSEPORT set before bind.
-- `fn tcp_connect_ipv4(address: *const Ipv4Address) ConnectionResult`
-- `fn tcp_listen_ipv6(address: *const Ipv6Address, backlog: usize) ListenerResult`
-- `fn tcp_connect_ipv6(address: *const Ipv6Address) ConnectionResult`
-- `fn unix_listen(address: *const UnixAddress, backlog: usize) ListenerResult`: The caller removes the filesystem socket path after closing the listener.
-- `fn unix_connect(address: *const UnixAddress) ConnectionResult`
-- `fn multicast_join_ipv4(descriptor: isize, group: [4]u8, interface: [4]u8) Result`: IPv4 multicast membership uses network-order octets for both addresses.
-- `fn multicast_leave_ipv4(descriptor: isize, group: [4]u8, interface: [4]u8) Result`
-- `fn multicast_interface_ipv4(descriptor: isize, interface: [4]u8) Result`
-- `fn multicast_ttl_ipv4(descriptor: isize, ttl: u8) Result`
-- `fn multicast_loop_ipv4(descriptor: isize, enabled: bool) Result`: POSIX controls outgoing loopback;
-- `fn listener_accept(listener: *Listener) ConnectionResult`
+- `fn connect_ipv4(status: *fail.Status, descriptor: isize, address: *const Ipv4Address)`
+- `fn bind_ipv4(status: *fail.Status, descriptor: isize, address: *const Ipv4Address)`
+- `fn connect_ipv6(status: *fail.Status, descriptor: isize, address: *const Ipv6Address)`
+- `fn bind_ipv6(status: *fail.Status, descriptor: isize, address: *const Ipv6Address)`
+- `fn connect_unix(status: *fail.Status, descriptor: isize, address: *const UnixAddress)`
+- `fn bind_unix(status: *fail.Status, descriptor: isize, address: *const UnixAddress)`
+- `fn connect(status: *fail.Status, descriptor: isize, address: []const u8)`
+- `fn bind(status: *fail.Status, descriptor: isize, address: []const u8)`
+- `fn accept(status: *fail.Status, descriptor: isize) isize`: Accepts one connection: its descriptor, or -1 after a failure.
+- `fn tcp_listen_ipv4(status: *fail.Status, address: *const Ipv4Address, backlog: usize) Listener`
+- `fn tcp_listen_ipv4_shared(status: *fail.Status, address: *const Ipv4Address, backlog: usize) Listener`: Like tcp_listen_ipv4 with SO_REUSEPORT set before bind.
+- `fn tcp_connect_ipv4(status: *fail.Status, address: *const Ipv4Address) Connection`
+- `fn tcp_listen_ipv6(status: *fail.Status, address: *const Ipv6Address, backlog: usize) Listener`
+- `fn tcp_connect_ipv6(status: *fail.Status, address: *const Ipv6Address) Connection`
+- `fn unix_listen(status: *fail.Status, address: *const UnixAddress, backlog: usize) Listener`: The caller removes the filesystem socket path after closing the listener.
+- `fn unix_connect(status: *fail.Status, address: *const UnixAddress) Connection`
+- `fn multicast_join_ipv4(status: *fail.Status, descriptor: isize, group: [4]u8, interface: [4]u8)`: IPv4 multicast membership uses network-order octets for both addresses.
+- `fn multicast_leave_ipv4(status: *fail.Status, descriptor: isize, group: [4]u8, interface: [4]u8)`
+- `fn multicast_interface_ipv4(status: *fail.Status, descriptor: isize, interface: [4]u8)`
+- `fn multicast_ttl_ipv4(status: *fail.Status, descriptor: isize, ttl: u8)`
+- `fn multicast_loop_ipv4(status: *fail.Status, descriptor: isize, enabled: bool)`: POSIX controls outgoing loopback;
+- `fn listener_accept(status: *fail.Status, listener: *Listener) Connection`
 - `fn listener_close(listener: *Listener)`
 - `fn connection_close(connection: *Connection)`
-- `fn connection_read(connection: *Connection, destination: []u8) Result`
-- `fn connection_write(connection: *Connection, source: []const u8) Result`
+- `fn connection_read(status: *fail.Status, connection: *Connection, destination: []u8) usize`: Reads what is available, up to destination;
+- `fn connection_write(status: *fail.Status, connection: *Connection, source: []const u8) usize`: Writes all of source;
 - `fn connection_reader(connection: *Connection) io.Reader`
 - `fn connection_writer(connection: *Connection) io.Writer`
-- `fn accept_address(descriptor: isize, address: *Address, nonblocking: bool) Result`: Accepts one connection and records its peer address.
-- `fn local_address(descriptor: isize, address: *Address) Result`
-- `fn peer_address(descriptor: isize, address: *Address) Result`
-- `fn send(descriptor: isize, bytes: []const u8, flags: usize) Result`
-- `fn receive(descriptor: isize, bytes: []u8, flags: usize) Result`
-- `fn send_to(descriptor: isize, bytes: []const u8, flags: usize, address: []const u8) Result`
-- `fn receive_from(descriptor: isize, bytes: []u8, flags: usize, address: []u8, address_length: *u32) Result`
-- `fn reuse_address(descriptor: isize, enabled: bool) Result`
-- `fn no_delay(descriptor: isize, enabled: bool) Result`: TCP_NODELAY: send small segments at once instead of waiting for the peer's ACK.
-- `fn reuse_port(descriptor: isize, enabled: bool) Result`: SO_REUSEPORT with kernel load balancing.
-- `fn socket_error(descriptor: isize) Result`: Completes a nonblocking connect by reading SO_ERROR.
-- `fn nonblocking(descriptor: isize, enabled: bool) Result`
-- `fn receive_timeout(descriptor: isize, milliseconds: usize) Result`
-- `fn send_timeout(descriptor: isize, milliseconds: usize) Result`
-- `fn would_block(outcome: *const Result) bool`
-- `fn poll(descriptors: []PollDescriptor, timeout_milliseconds: i32) Result`
-- `fn wait(descriptor: isize, events: i16, timeout_milliseconds: i32) Result`
+- `fn accept_address(status: *fail.Status, descriptor: isize, address: *Address, nonblocking: bool) isize`: Accepts one connection and records its peer address.
+- `fn try_accept_address(status: *fail.Status, descriptor: isize, address: *Address, nonblocking: bool) Accepted`: Like accept_address on a nonblocking listener, where no pending connection is no failure: -1 with blocked true.
+- `struct Accepted { descriptor: isize, blocked: bool }`
+- `fn local_address(status: *fail.Status, descriptor: isize, address: *Address)`
+- `fn peer_address(status: *fail.Status, descriptor: isize, address: *Address)`
+- `fn send(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize) usize`: Sends what the socket takes now, up to all of bytes;
+- `fn receive(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize) usize`: Receives what is available, up to bytes;
+- `struct Attempt { count: usize, blocked: bool }`: For nonblocking sockets, where a socket that is not ready is no failure: count is 0 and blocked is true.
+- `fn try_send(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize) Attempt`
+- `fn try_receive(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize) Attempt`
+- `fn send_to(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize, address: []const u8) usize`: Sends one datagram to address;
+- `fn receive_from(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize, address: []u8, address_length: *u32) usize`: Receives one datagram and its sender's address;
+- `fn reuse_address(status: *fail.Status, descriptor: isize, enabled: bool)`
+- `fn no_delay(status: *fail.Status, descriptor: isize, enabled: bool)`: TCP_NODELAY: send small segments at once instead of waiting for the peer's ACK.
+- `fn reuse_port(status: *fail.Status, descriptor: isize, enabled: bool)`: SO_REUSEPORT with kernel load balancing.
+- `fn socket_error(status: *fail.Status, descriptor: isize)`: Completes a nonblocking connect: the connect's failure, read from SO_ERROR.
+- `fn nonblocking(status: *fail.Status, descriptor: isize, enabled: bool)`
+- `fn receive_timeout(status: *fail.Status, descriptor: isize, milliseconds: usize)`
+- `fn send_timeout(status: *fail.Status, descriptor: isize, milliseconds: usize)`
+- `fn would_block(failure: *const fail.Failure) bool`: Whether a failure is a socket timeout or a nonblocking socket that was not ready, rather than a broken connection.
+- `fn poll(status: *fail.Status, descriptors: []PollDescriptor, timeout_milliseconds: i32) usize`: Waits for readiness on descriptors;
+- `fn wait(status: *fail.Status, descriptor: isize, events: i16, timeout_milliseconds: i32) i16`: Waits for events on one descriptor: the events that happened, 0 on timeout.
 - `fn poll_has(item: *const PollDescriptor, events: i16) bool`
 - `struct Ip { bytes: [16]u8, length: usize, port: u16 }`: The IP of an IPv4 or IPv6 socket address: 4 or 16 bytes in network order, and the port.
 - `fn address_ip(address: *const Address) Ip`
@@ -1674,34 +1672,32 @@ module's full declarations and comments.
 
 - `struct Ipv4 { a: u8, b: u8, c: u8, d: u8 }`
 - `struct Ipv6 { bytes: [16]u8 }`
-- `struct Ipv4Result { value: []Ipv4, offset: usize, failure: io.Failure }`
-- `struct Ipv6Result { value: []Ipv6, offset: usize, failure: io.Failure }`
 - `fn query_ipv4(arena: *mem.Arena, name: []const u8, identifier: u16) []u8`: An A query for name, in arena.
 - `fn query_ipv6(arena: *mem.Arena, name: []const u8, identifier: u16) []u8`: An AAAA query for name, in arena.
-- `fn parse_ipv4(arena: *mem.Arena, packet: []const u8, identifier: u16, name: []const u8) Ipv4Result`: Complete arena-owned answers, invalidated by rewind/reset/release.
-- `fn parse_ipv6(arena: *mem.Arena, packet: []const u8, identifier: u16, name: []const u8) Ipv6Result`
-- `fn resolve_ipv4(arena: *mem.Arena, name: []const u8, server: *const network.Ipv4Address, timeout_milliseconds: i32) Ipv4Result`: The server transport address is IPv4;
-- `fn resolve_ipv6(arena: *mem.Arena, name: []const u8, server: *const network.Ipv4Address, timeout_milliseconds: i32) Ipv6Result`
+- `fn parse_ipv4(arena: *mem.Arena, status: *fail.Status, packet: []const u8, identifier: u16, name: []const u8) []Ipv4`: Complete arena-owned answers, invalidated by rewind/reset/release.
+- `fn parse_ipv6(arena: *mem.Arena, status: *fail.Status, packet: []const u8, identifier: u16, name: []const u8) []Ipv6`
+- `fn resolve_ipv4(arena: *mem.Arena, status: *fail.Status, name: []const u8, server: *const network.Ipv4Address, timeout_milliseconds: i32) []Ipv4`: The server transport address is IPv4;
+- `fn resolve_ipv6(arena: *mem.Arena, status: *fail.Status, name: []const u8, server: *const network.Ipv4Address, timeout_milliseconds: i32) []Ipv6`
 
 ## std/net/http
 
 - `const CompressMinimum: usize = 1024`: Bodies shorter than this go out as they are: a gzip member has 18 bytes of framing, and small bodies fit one packet either way.
 - `const CompressHeaders: usize = 30`: Extra headers respond_compressed can carry besides Content-Encoding and Vary.
-- `fn respond_compressed(response: *Response, request: *const Request, body: []const u8, options: ResponseOptions, level: u8, encoder: *gzip.Encoder) Result`: Like respond, with body gzipped at level (1-9) when that helps: the content type compresses (text, JSON, XML, SVG, JavaScript ...
+- `fn respond_compressed(status: *fail.Status, response: *Response, request: *const Request, body: []const u8, options: ResponseOptions, level: u8, encoder: *gzip.Encoder)`: Like respond, with body gzipped at level (1-9) when that helps: the content type compresses (text, JSON, XML, SVG, JavaScript ...
 - `enum Framing { None, Length, Chunked, Close }`
-- `struct HttpHead { offset: usize, framing: Framing, code: u16, header_length: usize, content_length: usize, keep_alive: bool, chunked: bool, failure: parse.Failure }`: Parser offsets are byte positions in the supplied input;
-- `struct HttpHeader { offset: usize, name: []const u8, value: []const u8, found: bool, failure: parse.Failure }`
-- `struct Url { offset: usize, scheme: []const u8, host: []const u8, port: u16, target: []const u8, secure: bool, failure: parse.Failure }`
-- `struct HttpIoResult { value: []u8, offset: usize, consumed: usize, count: usize, failure: io.Failure }`
-- `fn parse_response(input: []const u8) HttpHead`
-- `fn parse_request(input: []const u8) HttpHead`
-- `fn header(input: []const u8, name: []const u8) HttpHeader`
+- `struct HttpHead { framing: Framing, code: u16, header_length: usize, content_length: usize, keep_alive: bool, chunked: bool }`: Parser offsets are byte positions in the supplied input;
+- `struct HttpHeader { name: []const u8, value: []const u8, found: bool }`
+- `struct Url { scheme: []const u8, host: []const u8, port: u16, target: []const u8, secure: bool }`
+- `fn parse_response(status: *fail.Status, input: []const u8) HttpHead`: Parses a complete response or request head.
+- `fn parse_request(status: *fail.Status, input: []const u8) HttpHead`
+- `fn header(status: *fail.Status, input: []const u8, name: []const u8) HttpHeader`: The first header field called name, matched without case, in a complete head.
 - `struct ChunkReader { phase: ChunkPhase, size: usize, // Decoded bytes so far. total: usize, // A trailer field name being read: its length and whether it can still be // Content-Length or Transfer-Encoding, which trailers must not carry. name_length: usize, maybe_length: bool, maybe_encoding: bool, }`: Incremental chunked body decoding (RFC 9112 7.1) for bodies read in pieces, such as uploads larger than any buffer.
-- `struct ChunkStep { consumed: usize, data: []const u8, done: bool, failed: bool, offset: usize }`: consumed bytes of input were used;
+- `struct ChunkStep { consumed: usize, data: []const u8, done: bool }`: consumed bytes of input were used;
 - `fn chunk_reader() ChunkReader`
-- `fn chunk_step(reader: *ChunkReader, input: []const u8) ChunkStep`: Reads framing from input until it reaches data, the end of the body or the end of input.
-- `fn decode_chunked(arena: *memory.Arena, input: []const u8) HttpIoResult`: Validate the complete wire before allocating or writing decoded payload.
-- `fn parse_url(input: []const u8) Url`
+- `fn chunk_step(status: *fail.Status, reader: *ChunkReader, input: []const u8) ChunkStep`: Reads framing from input until it reaches data, the end of the body or the end of input.
+- `fn decode_chunked(arena: *memory.Arena, status: *fail.Status, input: []const u8) Chunked`: Validate the complete wire before allocating or writing decoded payload.
+- `struct Chunked { value: []u8, consumed: usize }`: A decoded body, and how many input bytes its framing took.
+- `fn parse_url(status: *fail.Status, input: []const u8) Url`
 - `const StatusOk: u16 = 200`
 - `const StatusCreated: u16 = 201`
 - `const StatusNoContent: u16 = 204`
@@ -1734,26 +1730,23 @@ module's full declarations and comments.
 - `const MaxParams: usize = 4`
 - `const StatusPayloadTooLarge: u16 = 413`
 - `const StatusInternalServerError: u16 = 500`
-- `enum ErrorKind { None, End, Invalid, Capacity, Io }`
 - `struct Request { raw: []const u8, method: []const u8, target: []const u8, // target before '?', and after it (empty when absent). Both borrow raw. path: []const u8, query: []const u8, body: []const u8, header_length: usize, keep_alive: bool, // Borrowed application state given to serve_stream or an evented start; nil otherwise. context: rawptr, // Path parameters captured by a Routes pattern such as /users/:id. Read // them with param. params: [MaxParams]Header, param_count: usize, }`
-- `struct Response { failed: bool, first: Result, first_stream: io.Transfer, output: io.Writer, // Optional transport-owned response storage. Both callbacks use output.data. // reserve_body returns exclusive writable storage until commit or handler return. // commit_body queues a copied head followed by the first length body bytes. reserve_body: fn(rawptr, usize) []u8, commit_body: fn(rawptr, []const u8, usize) io.Transfer, reserved: []u8, started: bool, finished: bool, // The request was HEAD: the head is sent with the Content-Length the body // would have, and the body is dropped. head_only: bool, // Preformatted IMF-fixdate for the Date header, kept current by the server // loop. Empty: response_begin reads the clock itself. date: []const u8, // Set by servers that also speak HTTP/3: an Alt-Svc value (RFC 7838) sent // with every response, such as h3=":443"; ma=86400. Empty sends none. alt_svc: []const u8, // The status sent, once the head is written; 0 before. status: u16, }`
+- `struct Response { output: io.Writer, // Optional transport-owned response storage. Both callbacks use output.data. // reserve_body returns exclusive writable storage until commit or handler return. // commit_body queues a copied head followed by the first length body bytes, // and returns the count queued. reserve_body: fn(rawptr, usize) []u8, commit_body: fn(rawptr, *fail.Status, []const u8, usize) usize, reserved: []u8, started: bool, finished: bool, // The request was HEAD: the head is sent with the Content-Length the body // would have, and the body is dropped. head_only: bool, // Preformatted IMF-fixdate for the Date header, kept current by the server // loop. Empty: response_begin reads the clock itself. date: []const u8, // Set by servers that also speak HTTP/3: an Alt-Svc value (RFC 7838) sent // with every response, such as h3=":443"; ma=86400. Empty sends none. alt_svc: []const u8, // The status sent, once the head is written; 0 before. status: u16, }`: A response being written.
 - `struct Header { name: []const u8, value: []const u8 }`
 - `struct ResponseOptions { status: u16, reason: []const u8, content_type: []const u8, close_connection: bool, // Leaves out the Date header that every response otherwise carries. omit_date: bool, // Extra response headers, written in order. Names must be tokens and values // must not hold CR, LF or NUL; otherwise respond fails with Invalid before // writing anything, so request data cannot inject headers. headers: []const Header, }`
-- `struct Server { failed: bool, first: Result, ended: bool, input: io.Reader, output: io.Writer, storage: []u8, used: usize, consumed: usize, // Copied into every received Request. context: rawptr, }`
-- `struct ReceiveResult { request: Request, response: Response, detail: ErrorKind, offset: usize, failure: io.Failure }`
-- `struct Result { detail: ErrorKind, offset: usize, failure: io.Failure }`
-- `struct Body { failed: bool, first: Result, first_stream: io.Transfer, output: io.Writer, finished: bool, // A HEAD response: writes succeed and send nothing. discard: bool, }`
-- `struct BodyResult { detail: ErrorKind, body: Body, result: Result, failure: io.Failure }`
-- `type Handler = fn(*Response, *const Request) Result`
-- `struct ClientResponse { raw: []u8, body: []u8, status: u16, detail: ErrorKind, offset: usize, failure: io.Failure, }`
-- `struct Typed(T) { state: *T, handler: fn(*Response, *const Request, *T) Result, }`: Typed application state.
+- `struct Server { failed: bool, ended: bool, input: io.Reader, output: io.Writer, storage: []u8, used: usize, consumed: usize, // Copied into every received Request. context: rawptr, }`: After a failure the stream position is lost, so the server stays failed: later receives fail with InvalidState.
+- `struct Received { request: Request, response: Response, ended: bool }`: A received request and the response to write.
+- `struct Body { output: io.Writer, finished: bool, // A HEAD response: writes succeed and send nothing. discard: bool, }`: A streamed response body.
+- `type Handler = fn(*fail.Status, *Response, *const Request)`: Handles one request: writes the response, and records any failure in status.
+- `struct ClientResponse { raw: []u8, body: []u8, status: u16, }`
+- `struct Typed(T) { state: *T, handler: fn(*fail.Status, *Response, *const Request, *T), }`: Typed application state.
 - `struct Binding { handler: Handler, context: rawptr }`
 - `fn bind(typed: *Typed($T)) Binding`
-- `struct TypedRoute(T) { method: []const u8, pattern: []const u8, handler: fn(*Response, *const Request, *T) Result, }`: Typed router.
-- `struct Routes(T) { routes: []TypedRoute(T), count: usize, state: *T, fallback: fn(*Response, *const Request, *T) Result, }`
+- `struct TypedRoute(T) { method: []const u8, pattern: []const u8, handler: fn(*fail.Status, *Response, *const Request, *T), }`: Typed router.
+- `struct Routes(T) { routes: []TypedRoute(T), count: usize, state: *T, fallback: fn(*fail.Status, *Response, *const Request, *T), }`
 - `fn typed_routes(storage: []TypedRoute($T), state: *$T) Routes(T)`: Route storage is caller-supplied;
-- `fn add(router: *Routes($T), method: []const u8, pattern: []const u8, handler: fn(*Response, *const Request, *$T) Result) Result`
-- `fn serve_routes(router: *Routes($T), response: *Response, request: *const Request) Result`: Runs the matching route.
+- `fn add(status: *fail.Status, router: *Routes($T), method: []const u8, pattern: []const u8, handler: fn(*fail.Status, *Response, *const Request, *$T))`: Adds a route.
+- `fn serve_routes(status: *fail.Status, router: *Routes($T), response: *Response, request: *const Request)`: Runs the matching route.
 - `fn bind_routes(router: *Routes($T)) Binding`: Binds a router for a server start, like bind.
 - `fn match_path(pattern: []const u8, path: []const u8, request: *Request) bool`: Matches path against pattern segment by segment, capturing :name segments into request.params.
 - `fn param(request: *const Request, name: []const u8) HttpHeader`: Path parameter captured by a Routes pattern, still percent-encoded.
@@ -1763,36 +1756,34 @@ module's full declarations and comments.
 - `fn frame_request(input: []const u8, capacity: usize) FrameResult`: Frames one request from bytes already buffered, with no I/O, for callers that own their sockets (event loops).
 - `fn frame_request_decoding(input: []u8, capacity: usize) FrameResult`: Like frame_request, and also takes Transfer-Encoding: chunked bodies.
 - `fn frame_request_head(input: []const u8, capacity: usize) FrameResult`: Frames only a request's head, for bodies read separately (see ChunkReader).
-- `fn receive(state: *Server) ReceiveResult`: Returned request slices borrow state.storage and remain valid only until the next receive call.
+- `fn receive(status: *fail.Status, state: *Server) Received`: The next request.
 - `fn status_reason(status: u16) []const u8`: Reason phrase for status, or "Status" for codes without a registered one.
 - `fn status_has_body(status: u16) bool`: Responses with these codes never carry content (RFC 9110 6.4.1): the head has no Content-Type, Content-Length or Transfer-Encoding.
 - `const DateLength: usize = 29`
 - `fn format_date(destination: []u8, unix_seconds: i64) []u8`: IMF-fixdate (RFC 9110 5.6.7) for unix_seconds, such as "Sun, 06 Nov 1994 08:49:37 GMT", into the first DateLength bytes of destination.
-- `struct DateValue { value: i64, failure: parse.Failure }`
-- `fn parse_date(text: []const u8) DateValue`: Unix seconds from an IMF-fixdate, as in If-Modified-Since.
+- `fn parse_date(status: *fail.Status, text: []const u8) i64`: Unix seconds from an IMF-fixdate, as in If-Modified-Since.
 - `fn request_header(request: *const Request, name: []const u8) HttpHeader`: First request header named name (ASCII case-insensitive).
 - `fn cookie(request: *const Request, name: []const u8) HttpHeader`: Value of cookie name from the request's Cookie headers (RFC 6265 5.4).
 - `fn cookie_in(header_value: []const u8, name: []const u8) HttpHeader`: The cookie named name in one Cookie header value, such as "a=1;
 - `enum SameSite { Default, Lax, Strict, None }`
 - `struct Cookie { name: []const u8, value: []const u8, path: []const u8, domain: []const u8, max_age: i64, expires: i64, secure: bool, http_only: bool, same_site: SameSite, partitioned: bool, }`: A Set-Cookie value.
-- `struct TextResult { value: []u8, failure: parse.Failure }`: Text written into caller storage;
-- `fn set_cookie(destination: []u8, item: Cookie) TextResult`: Writes the Set-Cookie header value for cookie into destination.
-- `fn sse_event(destination: []u8, event: []const u8, id: []const u8, data: []const u8) TextResult`: One Server-Sent Events message: optional event and id fields, a data line for each line of data (CR, LF or CRLF), then a blank line.
-- `struct FieldValue { value: []u8, found: bool, failure: parse.Failure }`
-- `fn form_decode(destination: []u8, source: []const u8) FieldValue`: application/x-www-form-urlencoded value into destination: '+' becomes a space and %XX a byte.
+- `fn set_cookie(status: *fail.Status, destination: []u8, item: Cookie) []u8`: Writes the Set-Cookie header value for cookie into destination.
+- `fn sse_event(status: *fail.Status, destination: []u8, event: []const u8, id: []const u8, data: []const u8) []u8`: One Server-Sent Events message: optional event and id fields, a data line for each line of data (CR, LF or CRLF), then a blank line.
+- `struct FieldValue { value: []u8, found: bool }`
+- `fn form_decode(status: *fail.Status, destination: []u8, source: []const u8) []u8`: application/x-www-form-urlencoded value into destination: '+' becomes a space and %XX a byte.
 - `fn form_field(form: []const u8, name: []const u8) HttpHeader`: Raw, still-encoded value of the first field named name in an urlencoded form or query string.
-- `fn query_value(request: *const Request, name: []const u8, destination: []u8) FieldValue`: Decoded query parameter name into destination.
-- `fn form_value(request: *const Request, name: []const u8, destination: []u8) FieldValue`: Decoded urlencoded body field name into destination.
+- `fn query_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) FieldValue`: Decoded query parameter name into destination.
+- `fn form_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) FieldValue`: Decoded urlencoded body field name into destination.
 - `fn body_buffer(response: *Response, capacity: usize) []u8`: Returns exclusive transport-owned body storage, or empty when unavailable.
-- `fn respond_buffered(response: *Response, length: usize, options: ResponseOptions) Result`: Commit the initialized prefix of body_buffer without copying its body.
-- `fn respond(response: *Response, body: []const u8, options: ResponseOptions) Result`
-- `fn respond_stream(response: *Response, options: ResponseOptions) BodyResult`
+- `fn respond_buffered(status: *fail.Status, response: *Response, length: usize, options: ResponseOptions)`: Commit the initialized prefix of body_buffer without copying its body.
+- `fn respond(status: *fail.Status, response: *Response, body: []const u8, options: ResponseOptions)`: Writes the whole response: head and body.
+- `fn respond_stream(status: *fail.Status, response: *Response, options: ResponseOptions) Body`: Writes the head of a chunked response;
 - `fn body_writer(body: *Body) io.Writer`: Borrows a stable Body slot: do not move or destroy it during the writer's lifetime.
-- `fn body_finish(body: *Body) Result`
-- `fn body_abort(body: *Body) Result`
-- `fn serve_stream(input: io.Reader, output: io.Writer, storage: []u8, handler: Handler, context: rawptr) Result`: Serves HTTP/1.1 on one stream until the client closes or a request fails, one request at a time on the calling thread.
-- `fn client_do(arena: *memory.Arena, input: io.Reader, output: io.Writer, method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse`: Complete exchange;
-- `fn client_do_connection(arena: *memory.Arena, connection: *network.Connection, method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse`
+- `fn body_finish(status: *fail.Status, body: *Body)`: Ends the body with the last chunk.
+- `fn body_abort(body: *Body)`: Stops the body without the last chunk, so the client sees it cut short.
+- `fn serve_stream(status: *fail.Status, input: io.Reader, output: io.Writer, storage: []u8, handler: Handler, context: rawptr)`: Serves HTTP/1.1 on one stream until the client closes or a request fails, one request at a time on the calling thread.
+- `fn client_do(arena: *memory.Arena, status: *fail.Status, input: io.Reader, output: io.Writer, method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse`: Complete exchange;
+- `fn client_do_connection(arena: *memory.Arena, status: *fail.Status, connection: *network.Connection, method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse`
 - `fn write_request(arena: *memory.Arena, method: []const u8, target: []const u8, host: []const u8, body: []const u8) []u8`: A complete HTTP/1.1 request with Connection: close, in arena.
 - `fn write_response(arena: *memory.Arena, code: u16, reason: []const u8, content_type: []const u8, body: []const u8) []u8`: A complete HTTP/1.1 response with Connection: close, in arena.
 - `struct Bucket { key: u64, tokens: i64, updated: i64, used: bool }`: Token buckets keyed by a 64-bit client key (see ip_key), for rate limits such as "5 logins per minute per address".
@@ -1803,29 +1794,27 @@ module's full declarations and comments.
 - `fn ip_key(ip: []const u8, purpose: u64) u64`: A key for ip bytes (IPv4 or IPv6) and a purpose: FNV-1a over both, so one limiter table can hold several limits.
 - `struct Part { // From Content-Disposition: the field name, and the file name when the // part is a file. Quotes are removed; backslash escapes are kept as sent. name: []const u8, filename: []const u8, has_filename: bool, // Empty means text/plain. content_type: []const u8, body: []const u8, }`
 - `struct Parts { delimiter: [74]u8, delimiter_length: usize, rest: []const u8, done: bool, failed: bool, }`
-- `struct PartsResult { value: Parts, failure: parse.Failure }`
-- `struct PartResult { value: Part, found: bool, failure: parse.Failure }`
-- `fn multipart(request: *const Request) PartsResult`: Starts reading a multipart/form-data body.
-- `fn next_part(reader: *Parts) PartResult`: The next part.
-- `fn text(response: *Response, status: u16, body: []const u8) Result`: A plain-text body with status.
-- `fn json(response: *Response, status: u16, body: []const u8) Result`: A JSON body with status, not cached.
-- `fn redirect(response: *Response, location: []const u8, set_cookie: []const u8) Result`: 303 See Other to location, with a Set-Cookie when set_cookie is not empty (see set_cookie): the answer to a form post.
+- `struct NextPart { value: Part, found: bool }`: A part, or found false after the closing delimiter.
+- `fn multipart(status: *fail.Status, request: *const Request) Parts`: Starts reading a multipart/form-data body.
+- `fn next_part(status: *fail.Status, reader: *Parts) NextPart`: The next part.
+- `fn text(status: *fail.Status, response: *Response, code: u16, body: []const u8)`: A plain-text body with status.
+- `fn json(status: *fail.Status, response: *Response, code: u16, body: []const u8)`: A JSON body with status, not cached.
+- `fn redirect(status: *fail.Status, response: *Response, location: []const u8, set_cookie: []const u8)`: 303 See Other to location, with a Set-Cookie when set_cookie is not empty (see set_cookie): the answer to a form post.
 - `fn page_writer(response: *Response, fallback: []u8) html.Writer`: A Writer for an HTML page (see page): over the response's send buffer when it is free, so the page goes out without a copy, else over ...
-- `fn page(response: *Response, status: u16, rendered: *const html.Writer) Result`: Sends the page from page_writer with status as text/html, not cached, with Content-Security-Policy default-src 'self' and ...
+- `fn page(status: *fail.Status, response: *Response, code: u16, rendered: *const html.Writer)`: Sends the page from page_writer with status as text/html, not cached, with Content-Security-Policy default-src 'self' and ...
 - `struct Asset { // URL path below the mount, without a leading slash: "css/app.css". path: []const u8, content_type: []const u8, body: []const u8, // Empty when gzip would not be smaller. gzip: []const u8, // Quoted strong validator: "\"0123456789abcdef\"". etag: []const u8, // Unix seconds for Last-Modified, or 0 to leave it out. modified: i64, }`
 - `struct Assets { items: []Asset, count: usize }`: Assets in caller storage;
-- `struct AssetsResult { value: Assets, failure: io.Failure }`
 - `fn content_type(name: []const u8) []const u8`: Content type for a file name by its extension, ASCII case-insensitive: "app.CSS" is text/css.
 - `fn make_asset(arena: *memory.Arena, path: []const u8, body: []const u8) Asset`: An Asset for body with path, in arena: content type from the extension, the strong ETag from a 64-bit FNV-1a hash, and a gzip copy at level ...
 - `fn assets_of(arena: *memory.Arena, pairs: ...[]const u8) Assets`: Orders assets by path so find_asset can search them.
 - `fn sort_assets(assets: *Assets)`
 - `fn find_asset(assets: *const Assets, path: []const u8) *const Asset`: The asset at path, or nil.
-- `fn load_directory(arena: *memory.Arena, root: []const u8, storage: []Asset, maximum: usize) AssetsResult`: Every regular file below root, recursively, read into arena as assets in storage, sorted.
+- `fn load_directory(arena: *memory.Arena, status: *fail.Status, root: []const u8, storage: []Asset, maximum: usize) Assets`: Every regular file below root, recursively, read into arena as assets in storage, sorted.
 - `fn accepts_encoding(request: *const Request, coding: []const u8) bool`: Whether the request's Accept-Encoding allows coding (RFC 9110 12.5.3): it is listed, or "*" is, with a q-value above zero.
 - `fn etag_matches(request: *const Request, etag: []const u8) bool`: If-None-Match against etag: "*" or a listed tag, comparing weakly (W/ prefixes ignored), as RFC 9110 13.1.2 requires for GET and HEAD.
 - `struct ByteRange { start: usize, end: usize, present: bool, satisfiable: bool }`: A single byte range of a representation length bytes long, from a Range header (RFC 9110 14.1.2): bytes=first-last, bytes=first- or ...
 - `fn byte_range(request: *const Request, length: usize) ByteRange`
-- `fn serve_asset(response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8) Result`: Answers request with asset: 304 when If-None-Match matches (or, without If-None-Match, when If-Modified-Since is not older than modified);
+- `fn serve_asset(status: *fail.Status, response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8)`: Answers request with asset: 304 when If-None-Match matches (or, without If-None-Match, when If-Modified-Since is not older than modified);
 
 ## std/net/http/evented
 
@@ -1834,34 +1823,32 @@ module's full declarations and comments.
 - `struct Peer { worker: u32, index: u32, generation: u32, // An HTTP/2 stream on that connection; 0 for HTTP/1.1. stream: u32, }`: A stream or WebSocket connection, valid from any thread.
 - `enum MessageKind { Text, Binary, Closed }`
 - `struct Message { peer: Peer, kind: MessageKind, payload: []const u8, context: rawptr }`: A WebSocket message from peer.
-- `type PeerResult = io.Result(Peer)`
 - `enum BodyEnd { Complete, Stopped, Invalid, Closed }`: How a body read with receive_body ended, for its finish function.
 - `enum TransportStatus { Ok, WouldRead, WouldWrite, End, Failed }`
 - `struct TransportIo { count: usize, status: TransportStatus }`
 - `struct Transport { data: rawptr, open: fn(rawptr, isize) rawptr, handshake: fn(rawptr) TransportIo, read: fn(rawptr, []u8) TransportIo, write: fn(rawptr, []const u8) TransportIo, close: fn(rawptr), // The application protocol the handshake agreed on (TLS ALPN), such as // "h2"; nil when the transport has none. protocol: fn(rawptr) []const u8, // The transport calls C code that keeps per-thread state; start then // requires Config.spawner. needs_native_threads: bool, }`: A byte-stream layer over each accepted nonblocking socket, such as TLS.
 - `fn default_config() Config`
 - `fn storage_size(config: Config, worker_count: usize) usize`: Bytes of backing storage start needs for this many workers.
-- `struct Result { started: usize, failure: io.Failure }`
-- `struct Worker { thread: *threading.Thread, // Handle from Config.spawner, instead of thread. native: rawptr, listener: *network.Listener, // Set by start_shared: this worker's own SO_REUSEPORT listener. own_listener: network.Listener, handler: http.Handler, context: rawptr, config: Config, connections: []Connection, free: []usize, free_count: usize, // Connections whose requests finish after this pass's events (later). later: []usize, later_count: usize, later_done: usize, // One past the highest slot ever taken. Free slots are reused last in, // first out, so scans over connections stop here, not at the capacity. slots_used: usize, send_pool: SendPool, upload_pool: SendPool, queue: event.Queue, // False while every slot is busy: the level-triggered listener would // otherwise wake the loop continuously. listening: bool, scratch: *mem.Arena, error: Result, stopping: sync.AtomicU32, // Counters are written by the worker only; read them after join. accepted: u64, requests: u64, rejected: u64, // Connections closed to make room, and connections refused with 503. evicted: u64, refused: u64, id: u32, waker: event.Waker, inbox: Inbox, // Jobs submitted and not yet finished; only the worker changes it. jobs_running: usize, // Connections in regular slots, at most connections_per_worker, and // clients parked in reserve slots. serving: usize, parked: usize, // All workers started together, and whether this one has no regular slot // free: on a shared listener, a full worker leaves accepting to the others. group: []Worker, full: sync.AtomicU32, // Current IMF-fixdate for Date headers, refreshed once per loop pass. date: [http.DateLength]u8, date_second: i64, // Workspace for respond_compressed; nil when Config.compress_level is zero. encoder: *gzip.Encoder, // The request arena; nil when Config.request_arena_size is zero. request_arena: *mem.Arena, h2: H2Pool, // HTTP/3: the UDP socket, QUIC listener, milliseconds to its next timer, // the QUIC connections' slots, and the Alt-Svc value for TCP responses. udp: isize, quic_listener: rawptr, quic_timer: i64, h3_connections: []usize, h3_count: usize, alt_svc: [48]u8, alt_svc_length: usize, }`
-- `fn start(arena: *mem.Arena, workers: []Worker, listener: *network.Listener, config: Config, handler: http.Handler, context: rawptr) Result`: Starts one event loop per worker, all accepting from listener (made nonblocking here).
-- `fn start_shared(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address, backlog: usize, config: Config, handler: http.Handler, context: rawptr) Result`: Like start, but every worker owns a listener on address with SO_REUSEPORT, so the kernel spreads new connections across workers instead of ...
+- `struct Worker { thread: *threading.Thread, // Handle from Config.spawner, instead of thread. native: rawptr, listener: *network.Listener, // Set by start_shared: this worker's own SO_REUSEPORT listener. own_listener: network.Listener, handler: http.Handler, context: rawptr, config: Config, connections: []Connection, free: []usize, free_count: usize, // Connections whose requests finish after this pass's events (later). later: []usize, later_count: usize, later_done: usize, // One past the highest slot ever taken. Free slots are reused last in, // first out, so scans over connections stop here, not at the capacity. slots_used: usize, send_pool: SendPool, upload_pool: SendPool, queue: event.Queue, // False while every slot is busy: the level-triggered listener would // otherwise wake the loop continuously. listening: bool, scratch: *mem.Arena, // Why the loop stopped, reported by join. error: fail.Status, // The worker's internal calls share io and handler calls share request. // Each is cleared after a failure is handled, so the next call starts // clean and a call that succeeds costs no status. io: fail.Status, request: fail.Status, stopping: sync.AtomicU32, // Counters are written by the worker only; read them after join. accepted: u64, requests: u64, rejected: u64, // Connections closed to make room, and connections refused with 503. evicted: u64, refused: u64, id: u32, waker: event.Waker, inbox: Inbox, // Jobs submitted and not yet finished; only the worker changes it. jobs_running: usize, // Connections in regular slots, at most connections_per_worker, and // clients parked in reserve slots. serving: usize, parked: usize, // All workers started together, and whether this one has no regular slot // free: on a shared listener, a full worker leaves accepting to the others. group: []Worker, full: sync.AtomicU32, // Current IMF-fixdate for Date headers, refreshed once per loop pass. date: [http.DateLength]u8, date_second: i64, // Workspace for respond_compressed; nil when Config.compress_level is zero. encoder: *gzip.Encoder, // The request arena; nil when Config.request_arena_size is zero. request_arena: *mem.Arena, h2: H2Pool, // HTTP/3: the UDP socket, QUIC listener, milliseconds to its next timer, // the QUIC connections' slots, and the Alt-Svc value for TCP responses. udp: isize, quic_listener: rawptr, quic_timer: i64, h3_connections: []usize, h3_count: usize, alt_svc: [48]u8, alt_svc_length: usize, }`
+- `fn start(arena: *mem.Arena, status: *fail.Status, workers: []Worker, listener: *network.Listener, config: Config, handler: http.Handler, context: rawptr) usize`: Starts one event loop per worker, all accepting from listener (made nonblocking here).
+- `fn start_shared(arena: *mem.Arena, status: *fail.Status, workers: []Worker, address: network.Ipv4Address, backlog: usize, config: Config, handler: http.Handler, context: rawptr) usize`: Like start, but every worker owns a listener on address with SO_REUSEPORT, so the kernel spreads new connections across workers instead of ...
 - `fn local_port(workers: []Worker) u16`: Local port of the first worker's listener, or 0.
 - `fn stop(workers: []Worker)`: Asks every worker to finish its current loop pass (at most about 100 ms).
-- `fn join(workers: []Worker) Result`: Always joins every worker.
-- `fn send(workers: []Worker, peer: Peer, payload: []const u8, binary: bool) io.Failure`: Queues payload for peer from any thread: a WebSocket text frame (binary frame when binary), or a chunk of an open stream.
-- `fn publish(workers: []Worker, topic: u64, payload: []const u8, binary: bool) io.Failure`: Queues payload for every stream and WebSocket opened with topic, on every worker.
-- `fn close_peer(workers: []Worker, peer: Peer) io.Failure`: Ends a stream (final chunk) or WebSocket (close frame 1000), then closes it.
+- `fn join(status: *fail.Status, workers: []Worker)`: Always joins every worker.
+- `fn send(status: *fail.Status, workers: []Worker, peer: Peer, payload: []const u8, binary: bool)`: Queues payload for peer from any thread: a WebSocket text frame (binary frame when binary), or a chunk of an open stream.
+- `fn publish(status: *fail.Status, workers: []Worker, topic: u64, payload: []const u8, binary: bool)`: Queues payload for every stream and WebSocket opened with topic, on every worker.
+- `fn close_peer(status: *fail.Status, workers: []Worker, peer: Peer)`: Ends a stream (final chunk) or WebSocket (close frame 1000), then closes it.
 - `fn client_ip(response: *http.Response) network.Ip`: The client's IP and port for an evented response;
-- `fn respond_compressed(response: *http.Response, request: *const http.Request, body: []const u8, options: http.ResponseOptions) http.Result`: http.respond_compressed with the worker's encoder at Config.compress_level: body is gzipped when the client accepts it and that helps.
+- `fn respond_compressed(status: *fail.Status, response: *http.Response, request: *const http.Request, body: []const u8, options: http.ResponseOptions)`: http.respond_compressed with the worker's encoder at Config.compress_level: body is gzipped when the client accepts it and that helps.
 - `fn arena(response: *http.Response) *mem.Arena`: Scratch for the current handler, in the worker's request arena: allocate from it and never free.
 - `fn worker_index(response: *http.Response) usize`: Which of the started workers runs this handler, from 0: an index into per-worker state, such as one database connection each, which then ...
-- `fn serve(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address, config: Config, handler: http.Handler, context: rawptr) Result`: Runs the server until SIGINT or SIGTERM: watches the signals first (before any thread starts, as std/process/signal requires), starts ...
+- `fn serve(arena: *mem.Arena, status: *fail.Status, workers: []Worker, address: network.Ipv4Address, config: Config, handler: http.Handler, context: rawptr)`: Runs the server until SIGINT or SIGTERM: watches the signals first (before any thread starts, as std/process/signal requires), starts ...
 - `fn job(T: type, response: *http.Response) *T`: Job storage for run, zeroed, in the connection's job arena: copy what the work needs into it.
-- `fn run(response: *http.Response, data: *$J, work: fn(*$J), finish: fn(*http.Response, *const http.Request, *$J) http.Result) io.Failure`: Hands the request to Config.pool: work(data) runs on a pool thread, then finish answers the request on the worker thread with a fresh ...
-- `fn later(response: *http.Response, data: *$J, finish: fn(*http.Response, *const http.Request, *$J) http.Result) io.Failure`: Finishes the request on this worker once every connection that is ready now has had its turn: finish(response, request, data) runs after ...
-- `fn receive_body(response: *http.Response, data: *$J, chunk: fn(*$J, []const u8) bool, finish: fn(*http.Response, *const http.Request, *$J, BodyEnd) http.Result) io.Failure`: In Config.on_large_body: reads the request body as it arrives instead of buffering it.
-- `fn open_stream(response: *http.Response, options: http.ResponseOptions, topic: u64) PeerResult`: Starts a chunked response that stays open after the handler returns, such as text/event-stream.
-- `fn upgrade(response: *http.Response, request: *const http.Request, topic: u64) PeerResult`: Answers a WebSocket upgrade request (RFC 6455 4.2) with 101 and switches the connection to WebSocket frames;
+- `fn run(status: *fail.Status, response: *http.Response, data: *$J, work: fn(*$J), finish: fn(*fail.Status, *http.Response, *const http.Request, *$J))`
+- `fn later(status: *fail.Status, response: *http.Response, data: *$J, finish: fn(*fail.Status, *http.Response, *const http.Request, *$J))`: Finishes the request on this worker once every connection that is ready now has had its turn: finish(response, request, data) runs after ...
+- `fn receive_body(status: *fail.Status, response: *http.Response, data: *$J, chunk: fn(*$J, []const u8) bool, finish: fn(*fail.Status, *http.Response, *const http.Request, *$J, BodyEnd))`: In Config.on_large_body: reads the request body as it arrives instead of buffering it.
+- `fn open_stream(status: *fail.Status, response: *http.Response, options: http.ResponseOptions, topic: u64) Peer`
+- `fn upgrade(status: *fail.Status, response: *http.Response, request: *const http.Request, topic: u64) Peer`: Answers a WebSocket upgrade request (RFC 6455 4.2) with 101 and switches the connection to WebSocket frames;
 - `const Http2Streams: usize = 100`
 - `enum QuicStatus { Ok, WouldBlock, End, Reset, Failed }`
 - `struct QuicIo { count: usize, status: QuicStatus }`
@@ -1872,8 +1859,7 @@ module's full declarations and comments.
 
 - `fn transport(context: provider.Context) evented.Transport`
 - `fn offer_http2(context: provider.Context) bool`: Offers HTTP/2 through ALPN on context;
-- `struct QuicContextResult { value: provider.Context, failure: io.Failure }`
-- `fn quic_context(arena: *mem.Arena, certificate: []const u8, key: []const u8) QuicContextResult`: A QUIC server context offering "h3" through ALPN, from PEM files.
+- `fn quic_context(arena: *mem.Arena, status: *fail.Status, certificate: []const u8, key: []const u8) provider.Context`: A QUIC server context offering "h3" through ALPN, from PEM files.
 - `fn quic(context: provider.Context) evented.Quic`: The QUIC stack for Config.quic.
 
 ## std/net/http/hpack
@@ -1915,11 +1901,11 @@ module's full declarations and comments.
 - `struct Session { found: bool, user: i64, csrf: []const u8, data: []const u8 }`: A session as handlers see it.
 - `struct Cache { slots: [Slots]Slot, copy: versions.Copy }`: One per worker;
 - `struct Shared { sessions: versions.Shared }`: Shared by the workers: forget marks every cache stale, and each empties itself when it notices.
-- `struct New { token: []const u8, csrf: []const u8, cookie: []const u8, ok: bool }`: A new session to store: token, csrf, and the Set-Cookie value.
+- `struct New { token: []const u8, csrf: []const u8, cookie: []const u8 }`: A new session to store: token, csrf, and the Set-Cookie value.
 - `fn token(request: *const http.Request) []const u8`: The request's session token, or empty when it has none of the right form.
 - `fn cached(cache: *Cache, shared: *Shared, token: []const u8, now: i64) Session`: The session for token from the cache, if a store answer for it is cached, unexpired at now and not forgotten since.
 - `fn remember(cache: *Cache, token: []const u8, user: i64, csrf: []const u8, data: []const u8, expires: i64) Session`: Caches what the store returned for token and returns it as a Session.
-- `fn start(arena: *mem.Arena, seconds: i64) New`: A fresh token and CSRF secret in arena, and a Set-Cookie value for a session of seconds (HttpOnly, SameSite=Lax, Path=/).
+- `fn start(arena: *mem.Arena, status: *fail.Status, seconds: i64) New`: A fresh token and CSRF secret in arena, and a Set-Cookie value for a session of seconds (HttpOnly, SameSite=Lax, Path=/).
 - `fn forget(shared: *Shared) []const u8`: After the app deleted a session from its store: every worker's cache forgets what it holds.
 - `fn csrf_ok(session: *const Session, presented: []const u8) bool`: Whether presented (a form field or header) is the session's CSRF secret, compared in constant time.
 
@@ -1928,29 +1914,25 @@ module's full declarations and comments.
 - `type Context = provider.Context`
 - `type Connection = provider.Connection`
 - `type Certificate = provider.Certificate`
-- `type ErrorKind = provider.ErrorKind`
-- `struct ContextResult { value: Context, detail: ErrorKind, provider_code: u64, failure: io.Failure }`: Provider diagnostics are not OS errno values.
-- `struct ConnectionResult { value: Connection, detail: ErrorKind, provider_code: u64, failure: io.Failure }`
-- `struct Result { count: usize, detail: ErrorKind, provider_code: u64, provider_status: i32, failure: io.Failure }`
-- `struct TextResult { value: []u8, provider_code: u64, failure: io.Failure }`
-- `fn set_alpn_protocols(connection: Connection, protocols: []const u8) Result`: The provider copies the protocol wire bytes during this call.
+- `enum Want { Nothing, Read, Write }`: What a nonblocking connection waits for before the call can go on.
+- `struct Attempt { count: usize, want: Want }`: A read or write: the bytes moved, or what the connection waits for.
+- `fn set_alpn_protocols(status: *fail.Status, connection: Connection, protocols: []const u8)`: The provider copies the protocol wire bytes during this call.
 - `fn server_alpn(context: Context, preference: *const []const u8) bool`: Server ALPN: each handshake picks the first protocol of preference (wire format, such as "\x02h2\x08http/1.1") the client offers.
 - `fn selected_alpn(connection: Connection) []const u8`: Borrows provider connection memory.
 - `fn peer_certificate_owned(connection: Connection) Certificate`
 - `fn certificate_release(certificate: *Certificate)`: Frees the certificate and clears the handle;
-- `fn certificate_subject(arena: *memory.Arena, certificate: Certificate) TextResult`: Complete provider-formatted subject copied into arena.
-- `fn handshake(connection: Connection) Result`
-- `fn server_handshake(connection: Connection) Result`
-- `fn read(connection: Connection, destination: []u8) Result`
-- `fn write(connection: Connection, source: []const u8) Result`
-- `fn shutdown(connection: Connection) Result`: A zero provider status means close_notify was sent but peer shutdown is pending.
-- `fn error_code(connection: Connection, provider_result: i32) i32`
+- `fn certificate_subject(arena: *memory.Arena, status: *fail.Status, certificate: Certificate) []u8`: Complete provider-formatted subject copied into arena.
+- `fn handshake(status: *fail.Status, connection: Connection) Want`: Runs the handshake.
+- `fn server_handshake(status: *fail.Status, connection: Connection) Want`
+- `fn read(status: *fail.Status, connection: Connection, destination: []u8) Attempt`: Reads what is available;
+- `fn write(status: *fail.Status, connection: Connection, source: []const u8) Attempt`
+- `fn shutdown(status: *fail.Status, connection: Connection) Want`: Sends close_notify.
 - `fn error_string(arena: *memory.Arena, code: u64) []u8`: The provider's text for an error code, in arena.
-- `fn client_config_create() ContextResult`
-- `fn server_config_create( arena: *memory.Arena, certificate: []const u8, key: []const u8, ) ContextResult`
+- `fn client_config_create(status: *fail.Status) Context`
+- `fn server_config_create( arena: *memory.Arena, status: *fail.Status, certificate: []const u8, key: []const u8, ) Context`
 - `fn config_release(context: *Context)`: Frees the configuration and clears the handle;
-- `fn client_connection_create( arena: *memory.Arena, context: Context, descriptor: i32, hostname: []const u8, ) ConnectionResult`
-- `fn server_connection_create(context: Context, descriptor: i32) ConnectionResult`
+- `fn client_connection_create( arena: *memory.Arena, status: *fail.Status, context: Context, descriptor: i32, hostname: []const u8, ) Connection`
+- `fn server_connection_create(status: *fail.Status, context: Context, descriptor: i32) Connection`
 - `fn connection_release(connection: *Connection)`: Frees the connection state and clears the handle.
 - `fn reader(connection: *Connection) io.Reader`: Blocking I/O adapters borrow the Connection slot and its live handle.
 - `fn writer(connection: *Connection) io.Writer`
@@ -1958,37 +1940,32 @@ module's full declarations and comments.
 ## std/net/url
 
 - `struct URL { scheme: []const u8, authority: []const u8, path: []const u8, query: []const u8, fragment: []const u8, }`
-- `struct ParseResult { value: URL, offset: usize, failure: parse.Failure }`
-- `fn parse(text: []const u8) ParseResult`
-- `struct EncodingResult { value: []u8, offset: usize, failure: parse.Failure }`
+- `fn parse(status: *fail.Status, text: []const u8) URL`: Splits text into its parts (RFC 3986), borrowing text.
 - `fn percent_encode(arena: *mem.Arena, source: []const u8) []u8`: One component percent-encoded, slashes included, in arena.
-- `fn percent_decode(arena: *mem.Arena, source: []const u8) EncodingResult`: source with %XX escapes decoded, in arena.
+- `fn percent_decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8`: source with %XX escapes decoded, in arena.
 
 ## std/net/websocket
 
-- `struct WebSocketFrame { offset: usize, payload: []const u8, opcode: u8, mask: u32, consumed: usize, final: bool, masked: bool, failure: parse.Failure }`
-- `struct WebSocketUpgrade { offset: usize, key: []const u8, failure: parse.Failure }`
-- `enum WebSocketEventKind { None, Ready, Ping, Pong, Close, Error }`
+- `struct WebSocketFrame { payload: []const u8, opcode: u8, mask: u32, consumed: usize, final: bool, masked: bool, complete: bool }`: complete is false when input holds only part of a frame: read more.
+- `enum WebSocketEventKind { None, Ready, Ping, Pong, Close }`: None: a fragment was stored and the message goes on.
 - `struct WebSocketMessageState { used: usize, opcode: u8, fragmented: bool, closed: bool, enforce_mask: bool, masked: bool }`
-- `struct WebSocketEvent { payload: []u8, detail: WebSocketEventKind, offset: usize, opcode: u8, close_code: u16, failure: io.Failure }`
-- `struct WebSocketConnection { input: io.Reader, output: io.Writer, frames: []u8, // Retain unread wire bytes; compact only on the next receive. frame_used: usize, frame_consumed: usize, input_ended: bool, message: []u8, control: []u8, state: WebSocketMessageState, client: bool, active: bool, failed: bool, kind: io.Kind, error: isize, offset: usize, close_sent: bool, }`
-- `struct Result { offset: usize, failure: io.Failure }`
-- `struct WebSocketResult { event: WebSocketEvent, offset: usize, failure: io.Failure }`
+- `struct WebSocketEvent { payload: []u8, detail: WebSocketEventKind, opcode: u8, close_code: u16 }`
+- `struct WebSocketConnection { input: io.Reader, output: io.Writer, frames: []u8, // Retain unread wire bytes; compact only on the next receive. frame_used: usize, frame_consumed: usize, input_ended: bool, message: []u8, control: []u8, state: WebSocketMessageState, client: bool, active: bool, // After a failure the stream position is lost: later calls fail with // InvalidState. failed: bool, close_sent: bool, }`
 - `fn accept(destination: []u8, key: []const u8) []u8`: Concise public names;
-- `fn validate_upgrade_request(request: []const u8) WebSocketUpgrade`
+- `fn validate_upgrade_request(status: *fail.Status, request: []const u8) []const u8`: Checks the RFC 6455 upgrade fields of a request head;
 - `fn write_upgrade_response(arena: *mem.Arena, key: []const u8) []u8`: The 101 Switching Protocols response for key, in arena.
-- `fn validate_upgrade_response(response: []const u8, key: []const u8) Result`
+- `fn validate_upgrade_response(status: *fail.Status, response: []const u8, key: []const u8)`: Checks a server's 101 response for key.
 - `fn write_frame(arena: *mem.Arena, opcode: u8, payload: []const u8, final: bool, masked: bool, mask: u32) []u8`: One encoded frame, in arena.
-- `fn parse_frame(input: []const u8) WebSocketFrame`
+- `fn parse_frame(status: *fail.Status, input: []const u8) WebSocketFrame`: One frame at the start of input;
 - `fn decode_frame(arena: *mem.Arena, frame: WebSocketFrame) []u8`: The frame's payload, unmasked, in arena.
 - `fn message_state(expect_masked: bool) WebSocketMessageState`
-- `fn receive(state: *WebSocketMessageState, message: []u8, control: []u8, frame: WebSocketFrame) WebSocketEvent`
+- `fn receive(status: *fail.Status, state: *WebSocketMessageState, message: []u8, control: []u8, frame: WebSocketFrame) WebSocketEvent`: Adds a complete frame to the message under way.
 - `fn connection(input: io.Reader, output: io.Writer, frames: []u8, message: []u8, control: []u8, client: bool) WebSocketConnection`: Stateful stream wrapper.
-- `fn connection_send(state: *WebSocketConnection, opcode: u8, payload: []const u8, final: bool, mask: u32) Result`
-- `fn connection_ping(state: *WebSocketConnection, payload: []const u8, mask: u32) Result`
-- `fn connection_pong(state: *WebSocketConnection, payload: []const u8, mask: u32) Result`
-- `fn connection_close(state: *WebSocketConnection, payload: []const u8, mask: u32) Result`
-- `fn connection_receive(state: *WebSocketConnection) WebSocketResult`: Event payload borrows message/control until the next receive call.
+- `fn connection_send(status: *fail.Status, state: *WebSocketConnection, opcode: u8, payload: []const u8, final: bool, mask: u32)`
+- `fn connection_ping(status: *fail.Status, state: *WebSocketConnection, payload: []const u8, mask: u32)`
+- `fn connection_pong(status: *fail.Status, state: *WebSocketConnection, payload: []const u8, mask: u32)`
+- `fn connection_close(status: *fail.Status, state: *WebSocketConnection, payload: []const u8, mask: u32)`
+- `fn connection_receive(status: *fail.Status, state: *WebSocketConnection) WebSocketEvent`: The next message or control frame.
 
 ## std/observe
 
@@ -2009,36 +1986,33 @@ module's full declarations and comments.
 
 ## std/os/linux
 
-- `struct Result { value: isize, failure: io.Failure }`
 - `fn process_arguments(arena: *memory.Arena) [][]const u8`: Linux exposes argv as NUL-separated bytes through procfs.
 - `fn process_id() isize`
 - `fn parent_process_id() isize`
 - `fn thread_id() isize`
 - `fn yield_thread()`
-- `struct PipeResult { input: isize, output: isize, failure: io.Failure }`
-- `struct WaitResult { process: isize, status: i32, failure: io.Failure }`
-- `struct SpawnResult { process: isize, failure: io.Failure }`
+- `struct Pipe { input: isize, output: isize }`
+- `struct Waited { process: isize, wait_status: i32 }`: wait_status is the raw status;
 - `struct SpawnOptions { input: isize, output: isize, error: isize, directory: []const u8 }`
-- `fn pipe() PipeResult`
-- `fn close_descriptor(descriptor: isize) Result`
-- `fn duplicate_to(descriptor: isize, target: isize) Result`
-- `fn send_signal(process: isize, signal: usize) Result`
-- `fn fork_process() Result`
+- `fn pipe(status: *fail.Status) Pipe`
+- `fn close_descriptor(status: *fail.Status, descriptor: isize)`: Closes descriptor.
+- `fn duplicate_to(status: *fail.Status, descriptor: isize, target: isize) isize`
+- `fn send_signal(status: *fail.Status, process: isize, signal: usize)`
+- `fn fork_process(status: *fail.Status) isize`: fork: 0 in the child, the child's id in the parent.
 - `fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) isize`
-- `fn spawn_environment( arena: *memory.Arena, path: []const u8, arguments: [][]const u8, environment: [][]const u8, options: SpawnOptions, ) SpawnResult`
-- `fn wait(process: isize, nonblocking: bool) WaitResult`
+- `fn spawn_environment( arena: *memory.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, environment: [][]const u8, options: SpawnOptions, ) isize`
+- `fn wait(status: *fail.Status, process: isize, nonblocking: bool) Waited`: Waits for process to end.
 - `fn exited(status: i32) bool`
 - `fn exit_status(status: i32) u8`
 - `fn signaled(status: i32) bool`
 - `fn termination_signal(status: i32) u8`
 - `fn exit_process(status: u8)`: Ends the whole process: exit_group, so other threads end with it.
-- `struct EnvironmentResult { value: []u8, found: bool, failure: io.Failure }`
-- `fn environment_get(name: []const u8, destination: []u8) EnvironmentResult`: Reads the process's initial environment.
-- `struct PathResult { value: []u8, failure: io.Failure }`
-- `fn current_directory(destination: []u8) PathResult`
-- `fn signal_ignore(signal: usize) Result`
-- `fn signal_default(signal: usize) Result`
-- `fn spawn(arena: *memory.Arena, path: []const u8, arguments: [][]const u8, options: SpawnOptions) SpawnResult`
+- `struct Variable { value: []u8, found: bool }`
+- `fn environment_get(status: *fail.Status, name: []const u8, destination: []u8) Variable`: Reads the process's initial environment.
+- `fn current_directory(status: *fail.Status, destination: []u8) []u8`: The working directory, in destination.
+- `fn signal_ignore(status: *fail.Status, signal: usize)`
+- `fn signal_default(status: *fail.Status, signal: usize)`
+- `fn spawn(arena: *memory.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, options: SpawnOptions) isize`
 
 ## std/os/linux/sys
 
@@ -2239,48 +2213,41 @@ module's full declarations and comments.
 - `fn redirect(handle: isize) Redirect`: Connects the child's stream to handle.
 - `struct Options { input: Redirect, output: Redirect, error: Redirect, environment: [][]const u8, directory: []const u8 }`: Zero is valid: inherit all three streams, the parent's environment and directory.
 - `struct Child { handle: isize, active: bool }`: A running child process, in the arena spawn was given;
-- `type SpawnResult = io.Result(*Child)`
-- `struct ExitResult { code: u32, signal: u32, finished: bool, failure: io.Failure }`
-- `struct Status { failure: io.Failure }`
-- `struct Pipe { input: isize, output: isize, failure: io.Failure }`
-- `struct EnvironmentResult { value: []u8, found: bool, failure: io.Failure }`
-- `struct CaptureResult { output: []u8, errors: []u8, exit: ExitResult, timed_out: bool, limit_reached: bool, failure: io.Failure }`
-- `fn spawn(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) SpawnResult`
-- `fn wait(child: *Child, nonblocking: bool) ExitResult`
-- `fn terminate(child: *Child) Status`
-- `fn pipe() Pipe`
+- `struct Exit { code: u32, signal: u32, finished: bool }`: How a child ended.
+- `struct Pipe { input: isize, output: isize }`
+- `struct Variable { value: []u8, found: bool }`
+- `struct Captured { output: []u8, errors: []u8, exit: Exit, timed_out: bool, limit_reached: bool }`
+- `fn spawn(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, configuration: Options) *Child`: Starts path with arguments (argv[0] first).
+- `fn wait(status: *fail.Status, child: *Child, nonblocking: bool) Exit`: Waits for child to end;
+- `fn terminate(status: *fail.Status, child: *Child)`: Kills child.
+- `fn pipe(status: *fail.Status) Pipe`: A pipe: write to output, read from input.
 - `fn close_pipe(handle: isize)`
-- `fn environment_or(arena: *mem.Arena, name: []const u8, fallback: []const u8) []const u8`: The value of environment variable name, in arena.
-- `fn environment(arena: *mem.Arena, name: []const u8) EnvironmentResult`
+- `fn environment_or(arena: *mem.Arena, name: []const u8, fallback: []const u8) []const u8`: The variable's value in arena, or fallback when it is unset or unreadable.
+- `fn environment(arena: *mem.Arena, status: *fail.Status, name: []const u8) Variable`: The value of environment variable name, in arena.
 - `struct CaptureOptions { timeout_milliseconds: i64, no_wait: bool, output_limit: usize, error_limit: usize }`: Zero limits are unlimited.
-- `fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options, policy: CaptureOptions) CaptureResult`: Drains both streams fairly into growing arena slices, valid until caller rewind/reset/release.
+- `fn capture(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, configuration: Options, policy: CaptureOptions) Captured`: Drains both streams fairly into growing arena slices, valid until caller rewind/reset/release.
 - `struct Program { arena: *mem.Arena, args: [][]const u8 }`: What process.start() returns: an arena that lives for the whole program and the arguments, argv[0] first, stored in it.
 - `fn start() Program`: Call it on main's first line: `program := process.start()`.
-- `type ArgumentsResult = io.Result([][]const u8)`: Includes argv[0].
-- `fn arguments(arena: *mem.Arena) ArgumentsResult`
+- `fn arguments(arena: *mem.Arena, status: *fail.Status) [][]const u8`: Includes argv[0].
 
 ## std/process/signal
 
 - `enum Kind { None, Interrupt, Terminate, Hangup }`: Process signals as events, not handlers.
 - `struct Set { interrupt: bool, terminate: bool, hangup: bool }`: Kinds to watch.
 - `struct Watch { handle: isize, set: Set, active: bool }`: An open watch.
-- `type WatchResult = io.Result(Watch)`
-- `struct Next { value: Kind, found: bool, failure: io.Failure }`
-- `struct Result { failure: io.Failure }`
-- `fn watch(set: Set) WatchResult`
-- `fn poll(state: *Watch) Next`: The next pending signal without blocking;
-- `fn wait(state: *Watch) Next`: Blocks until a watched signal arrives.
+- `fn watch(status: *fail.Status, set: Set) Watch`
+- `fn poll(status: *fail.Status, state: *Watch) Kind`: The next pending signal without blocking;
+- `fn wait(status: *fail.Status, state: *Watch) Kind`: Blocks until a watched signal arrives.
 - `fn close(state: *Watch)`: Restores default signal behavior and releases the handle.
 
 ## std/profile
 
 - `struct Event { name: []const u8, started_nanoseconds: i64, duration_nanoseconds: i64, }`: Caller-backed monotonic profiling.
-- `struct Span { name: []const u8, started: clock.ClockResult }`
-- `struct Result { failure: io.Failure }`
-- `struct Trace { events: []Event, count: usize, dropped: usize, failed: bool, error: isize, kind: io.Kind, }`
+- `struct Span { name: []const u8, started: clock.Instant }`
+- `struct Trace { events: []Event, count: usize, dropped: usize, }`: Events go in caller storage;
 - `fn trace(events: []Event) Trace`
 - `fn begin(name: []const u8) Span`
-- `fn finish(destination: *Trace, span: Span) Result`
+- `fn finish(destination: *Trace, span: Span)`: Records span as ended now.
 - `fn recorded(value: *Trace) []Event`
 - `fn clear(value: *Trace)`
 
@@ -2507,9 +2474,8 @@ module's full declarations and comments.
 - `struct Once { state: AtomicU32 }`
 - `fn condition() Condition`
 - `fn condition_wait(value: *Condition, lock_value: *Mutex)`: Mutex must be held on entry.
-- `enum ConditionWaitStatus { Signaled, TimedOut }`
-- `struct ConditionWaitResult { status: ConditionWaitStatus, failure: io.Failure }`
-- `fn condition_wait_timeout(value: *Condition, lock_value: *Mutex, timeout: i64) ConditionWaitResult`: Relative monotonic timeout in nanoseconds.
+- `enum Wait { Signaled, TimedOut }`
+- `fn condition_wait_timeout(status: *fail.Status, value: *Condition, lock_value: *Mutex, timeout: i64) Wait`: Relative monotonic timeout in nanoseconds.
 - `fn condition_signal(value: *Condition)`
 - `fn condition_broadcast(value: *Condition)`
 - `fn semaphore(count: u32) Semaphore`
@@ -2575,10 +2541,10 @@ module's full declarations and comments.
 - `fn random(seed_value: u64) Random`
 - `fn random_next(generator: *Random) u64`
 - `fn random_below(generator: *Random, bound: usize) usize`
-- `struct Benchmark { started: clock.ClockResult, iterations: usize, failed: bool, error: isize, kind: io.Kind }`: Clock failures are retained by the benchmark and returned by later queries.
+- `struct Benchmark { started: clock.Instant, iterations: usize }`
 - `fn benchmark_start(iterations: usize) Benchmark`
-- `fn benchmark_elapsed(benchmark: *Benchmark) clock.DurationResult`
-- `fn benchmark_nanoseconds_each(benchmark: *Benchmark) clock.DurationResult`
+- `fn benchmark_elapsed(benchmark: *Benchmark) i64`: Nanoseconds since benchmark_start.
+- `fn benchmark_nanoseconds_each(benchmark: *Benchmark) i64`: Nanoseconds per iteration since benchmark_start;
 
 ## std/text/edit
 
@@ -2643,15 +2609,13 @@ module's full declarations and comments.
 
 ## std/thread
 
-- `type SpawnResult = io.Result(*Thread)`
-- `type Result = io.Result(isize)`
 - `struct Spawner { data: rawptr, spawn: fn(rawptr, *mem.Arena, usize, fn(rawptr) isize, rawptr) rawptr, join: fn(rawptr, rawptr) bool, }`: A thread creator chosen by the caller, for code that starts threads on someone else's behalf (servers, pools).
-- `fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(*$C) isize, context: *$C) SpawnResult`: Starts entry(context) on a new thread with stack as its stack.
-- `fn spawn_with_size(arena: *mem.Arena, size: usize, entry: fn(*$C) isize, context: *$C) SpawnResult`: As spawn, with a stack of size bytes that the thread owns until join.
+- `fn spawn(arena: *mem.Arena, status: *fail.Status, stack: []u8, entry: fn(*$C) isize, context: *$C) *Thread`: Starts entry(context) on a new thread with stack as its stack.
+- `fn spawn_with_size(arena: *mem.Arena, status: *fail.Status, size: usize, entry: fn(*$C) isize, context: *$C) *Thread`: As spawn, with a stack of size bytes that the thread owns until join.
 - `struct Thread { handle: rawptr, identifier: u32, entry: fn(rawptr) isize, context: rawptr, ready: sync.AtomicU32 }`
-- `fn join(thread: *Thread) Result`: Ownership: success ends worker access and clears the native owner.
+- `fn join(status: *fail.Status, thread: *Thread)`: Ownership: success ends worker access and clears the native owner.
 - `fn id(thread: *const Thread) u32`: Mach thread identifier while unjoined;
-- `fn yield_now() Result`
+- `fn yield_now()`
 - `fn cpu_count() usize`: Logical CPUs currently available (hw.activecpu), at least 1.
 - `struct Thread { tid: sync.AtomicU32, stack: []u8 }`: stack is the mapping spawn_with_size made for the thread, or empty.
 - `struct Thread { native: win.Thread }`
@@ -2660,13 +2624,11 @@ module's full declarations and comments.
 
 - `struct Task { run: fn(rawptr), data: rawptr }`: One unit of work.
 - `struct Pool { lock: sync.Mutex, ready: sync.Condition, idle: sync.Condition, tasks: []Task, head: usize, count: usize, running: usize, stopping: bool, workers: []*thread.Thread, // Handles from spawner instead of workers, when started by start_spawned. natives: []rawptr, spawner: *const thread.Spawner, started: usize, }`: Pools live in the caller's arena and must not move.
-- `type StartResult = io.Result(*Pool)`
-- `struct Result { failure: io.Failure }`
-- `fn start(arena: *mem.Arena, workers: usize, capacity: usize, stack_size: usize) StartResult`: Starts workers threads, each with an owned stack of stack_size bytes, and a queue of capacity tasks.
+- `fn start(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: usize, stack_size: usize) *Pool`: Starts workers threads, each with an owned stack of stack_size bytes, and a queue of capacity tasks.
 - `fn submit(pool: *Pool, task: Task) bool`: Queues task.
 - `fn wait(pool: *Pool)`: Blocks until every queued task has finished, including tasks submitted by running tasks.
-- `fn start_spawned(arena: *mem.Arena, workers: usize, capacity: usize, stack_size: usize, spawner: *const thread.Spawner) StartResult`: Like start, with threads from spawner, such as std/thread/posix spawner() for tasks that call C libraries.
-- `fn stop(pool: *Pool) Result`: Finishes queued tasks, then joins every worker.
+- `fn start_spawned(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: usize, stack_size: usize, spawner: *const thread.Spawner) *Pool`: Like start, with threads from spawner, such as std/thread/posix spawner() for tasks that call C libraries.
+- `fn stop(status: *fail.Status, pool: *Pool)`: Finishes queued tasks, then joins every worker.
 - `struct Group { lock: sync.Mutex, done: sync.Condition, count: usize }`: A counter that waiters block on until it returns to zero, for fan-out work that does not use a pool.
 - `fn group_add(group: *Group, amount: usize)`
 - `fn group_done(group: *Group)`: Marks one unit finished.
@@ -2675,9 +2637,8 @@ module's full declarations and comments.
 ## std/thread/posix
 
 - `struct Thread { handle: usize, entry: fn(rawptr) isize, context: rawptr, joined: bool }`
-- `type SpawnResult = io.Result(*Thread)`
-- `fn spawn(arena: *mem.Arena, stack_size: usize, entry: fn(*$C) isize, context: *$C) SpawnResult`: libc owns the stack;
-- `fn join(thread: *Thread) io.Failure`: Waits for the thread.
+- `fn spawn(arena: *mem.Arena, status: *fail.Status, stack_size: usize, entry: fn(*$C) isize, context: *$C) *Thread`: libc owns the stack;
+- `fn join(status: *fail.Status, thread: *Thread)`: Waits for the thread.
 - `fn spawner() threading.Spawner`
 
 ## std/time
@@ -2689,22 +2650,17 @@ module's full declarations and comments.
 - `const Minute: i64 = 60000000000`
 - `const Hour: i64 = 3600000000000`
 - `struct Instant { seconds: i64, nanoseconds: i64 }`
-- `type DurationResult = io.Result(i64)`
 - `struct Deadline { at: Instant }`
 - `struct DateTime { year: i32, month: u8, day: u8, hour: u8, minute: u8, second: u8, nanosecond: u32, }`
-- `fn checked_add(a, b: i64) DurationResult`
-- `fn checked_sub(a, b: i64) DurationResult`
-- `fn elapsed(start, end: Instant) DurationResult`
-- `type ClockResult = io.Result(Instant)`
-- `struct SleepResult { failure: io.Failure }`
-- `type DeadlineResult = io.Result(Deadline)`
-- `type ExpiredResult = io.Result(bool)`
-- `fn monotonic_now() ClockResult`: Monotonic instants are for elapsed time/deadlines;
-- `fn realtime_now() ClockResult`
-- `fn sleep(duration: i64) SleepResult`
-- `fn deadline_after(duration: i64) DeadlineResult`
-- `fn deadline_expired(deadline: *const Deadline) ExpiredResult`
-- `fn deadline_remaining(deadline: *const Deadline) DurationResult`
+- `fn checked_add(status: *fail.Status, a, b: i64) i64`: a + b, or Overflow in status when the sum is outside i64.
+- `fn checked_sub(status: *fail.Status, a, b: i64) i64`: a - b, or Overflow in status when the difference is outside i64.
+- `fn elapsed(start, end: Instant) i64`: Nanoseconds from start to end;
+- `fn monotonic_now() Instant`: The clocks.
+- `fn realtime_now() Instant`
+- `fn sleep(duration: i64)`: Sleeps at least duration nanoseconds;
+- `fn deadline_after(duration: i64) Deadline`: The deadline duration from now.
+- `fn deadline_expired(deadline: *const Deadline) bool`
+- `fn deadline_remaining(deadline: *const Deadline) i64`: Nanoseconds left before deadline;
 - `fn valid(value: *const DateTime) bool`
 - `struct Parsed { value: DateTime, valid: bool }`
 - `fn parse_iso8601(input: []const u8) Parsed`: Parses YYYY-MM-DDTHH:MM:SSZ.
@@ -2722,16 +2678,15 @@ module's full declarations and comments.
 - `struct Type { offset: i32, dst: bool, abbreviation: []const u8 }`: One local-time type: seconds east of UTC, daylight flag and abbreviation.
 - `struct Rule { kind: u8, month: u8, week: u8, weekday: u8, day: u16, time: i32 }`: A yearly transition date.
 - `struct Zone { name: []const u8, transitions: []i64, transition_types: []u8, types: []Type, has_rule: bool, standard: Type, daylight: Type, has_daylight: bool, start: Rule, end: Rule, }`: transitions[i] is the UTC second from which types[transition_types[i]] applies.
-- `type ZoneResult = io.Result(Zone)`
 - `struct Local { value: time.DateTime, offset: i32, dst: bool, abbreviation: []const u8 }`: A local time with the type in effect at that instant.
 - `fn utc() Zone`: UTC with no daylight saving time.
 - `fn type_at(zone: *const Zone, seconds: i64) Type`: The type in effect at a UTC second.
 - `fn local(zone: *const Zone, instant: time.Instant) Local`: The local calendar time of an instant in zone.
 - `fn instant_of_local(zone: *const Zone, value: *const time.DateTime) time.Instant`: The instant of a local wall clock time in zone.
-- `fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneResult`: Parses a TZif file (RFC 8536, versions 1 through 4) into arena storage.
-- `fn parse_posix(arena: *mem.Arena, text: []const u8) ZoneResult`: Parses a POSIX TZ rule such as "CET-1CEST,M3.5.0,M10.5.0/3" into a zone with no transition table.
-- `fn load(arena: *mem.Arena, name: []const u8) ZoneResult`: The zone named by an IANA name such as "Europe/Berlin", read from the system zoneinfo database.
-- `fn system(arena: *mem.Arena) ZoneResult`: The system's local zone.
+- `fn parse_tzif(arena: *mem.Arena, status: *fail.Status, name: []const u8, data: []const u8) Zone`: Parses a TZif file (RFC 8536, versions 1 through 4) into arena storage.
+- `fn parse_posix(arena: *mem.Arena, status: *fail.Status, text: []const u8) Zone`: Parses a POSIX TZ rule such as "CET-1CEST,M3.5.0,M10.5.0/3" into a zone with no transition table.
+- `fn load(arena: *mem.Arena, status: *fail.Status, name: []const u8) Zone`: The zone named by an IANA name such as "Europe/Berlin", read from the system zoneinfo database.
+- `fn system(arena: *mem.Arena, status: *fail.Status) Zone`: The system's local zone.
 - `fn format(arena: *mem.Arena, pattern: []const u8, value: *const Local) []u8`: Formats a local time into arena storage.
 - `fn format_rfc3339(arena: *mem.Arena, value: *const Local) []u8`: RFC 3339 with the zone offset, such as 2026-10-26T14:05:09+01:00, or "".
 

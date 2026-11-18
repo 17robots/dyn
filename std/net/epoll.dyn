@@ -1,4 +1,3 @@
-use "std/io" io
 use "std/os/linux/sys"
 #target(kernel: linux)
 // Linux epoll. Target-specific Event storage follows the kernel UAPI layout.
@@ -53,51 +52,56 @@ pub fn event_data(value: *const Event) u64 {
   return low | (high << 32)
 }
 
-pub fn event_queue() Result {
-  return result(#syscall(sys.EpollCreate1, 0))
+// A new epoll queue descriptor, or -1 after a failure.
+pub fn event_queue(status: *fail.Status) isize {
+  if status.failed { return -1 }
+  return check(status, "epoll create", #syscall(sys.EpollCreate1, 0))
 }
 
-pub fn event_control(queue: isize, operation: usize, descriptor: isize, value: *Event) Result {
-  return result(#syscall(sys.EpollCtl, queue, operation, descriptor, value))
+pub fn event_control(status: *fail.Status, queue: isize, operation: usize, descriptor: isize, value: *Event) {
+  if status.failed { return }
+  _ = check(status, "epoll control", #syscall(sys.EpollCtl, queue, operation, descriptor, value))
 }
 
 // Registration helpers keep epoll's operation numbers and remove-event pointer
 // convention out of application code. `data` is returned unchanged by event_wait.
-pub fn event_add(queue: isize, descriptor: isize, events: u32, data: u64) Result {
+pub fn event_add(status: *fail.Status, queue: isize, descriptor: isize, events: u32, data: u64) {
   value := event(events, data)
-  return event_control(queue, EventAdd, descriptor, &value)
+  event_control(status, queue, EventAdd, descriptor, &value)
 }
 
-pub fn event_modify(queue: isize, descriptor: isize, events: u32, data: u64) Result {
+pub fn event_modify(status: *fail.Status, queue: isize, descriptor: isize, events: u32, data: u64) {
   value := event(events, data)
-  return event_control(queue, EventModify, descriptor, &value)
+  event_control(status, queue, EventModify, descriptor, &value)
 }
 
-pub fn event_remove(queue: isize, descriptor: isize) Result {
+pub fn event_remove(status: *fail.Status, queue: isize, descriptor: isize) {
   // Linux ignores this argument for EPOLL_CTL_DEL, but using valid storage keeps
   // the language-level pointer contract explicit.
   value := Event{}
-  return event_control(queue, EventRemove, descriptor, &value)
+  event_control(status, queue, EventRemove, descriptor, &value)
 }
 
-pub fn event_wait(queue: isize, events: []Event, timeout_milliseconds: i32) Result {
-  if #len(events) == 0 { return Result{ value: -1, failure: io.Failure{ native: -22 } } }
-  start := clock.ClockResult{}
+// Waits for events; the number stored in events, 0 on timeout.
+pub fn event_wait(status: *fail.Status, queue: isize, events: []Event, timeout_milliseconds: i32) usize {
+  if status.failed { return 0 }
+  if #len(events) == 0 {
+    invalid(status, "epoll wait", "no room for events")
+    return 0
+  }
+  start := clock.Instant{}
   if timeout_milliseconds > 0 {
     start = clock.monotonic_now()
-    if io.failed(start.failure) {
-      return Result{ value: start.failure.native, failure: io.Failure{ kind: start.failure.kind, native: start.failure.native } }
-    }
   }
   remaining := timeout_milliseconds
   value := #syscall(sys.EpollWait, queue, &events[0], #len(events), remaining)
   for value == -4 {
     if timeout_milliseconds > 0 {
-      retry := interrupted_timeout(start.value, timeout_milliseconds)
-      if io.failed(retry.failure) || retry.value == 0 { return retry }
-      remaining = #cast(i32, retry.value)
+      remaining = interrupted_timeout(start, timeout_milliseconds)
+      if remaining == 0 { return 0 }
     }
     value = #syscall(sys.EpollWait, queue, &events[0], #len(events), remaining)
   }
-  return result(value)
+  if check(status, "epoll wait", value) < 0 { return 0 }
+  return #cast(usize, value)
 }

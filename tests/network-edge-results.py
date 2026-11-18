@@ -16,108 +16,122 @@ SOURCE = r'''use "std/net/http" http
 use "std/net/websocket" ws
 use "std/fail"
 use "std/io" io
-use "std/io" errors
-use "std/parse" parse
-fn metadata(kind: parse.Kind, offset: usize, expected: parse.Kind, at: usize) {
-  if kind != expected || offset != at { #panic("parser metadata golden") }
+// A failure golden: InvalidInput at offset.
+fn malformed_at(status: *const fail.Status, at: usize) {
+  if !status.failed || status.failure.kind != fail.Kind.InvalidInput || status.failure.offset != at { #panic("parser metadata golden") }
 }
-fn head(result: http.HttpHead, offset: usize) {
-  metadata(result.failure.kind, result.offset, parse.Kind.Syntax, offset)
+fn head(input: []const u8, response: bool, offset: usize) {
+  status: fail.Status
+  if response {
+    _ = http.parse_response(&status, input)
+  } else {
+    _ = http.parse_request(&status, input)
+  }
+  malformed_at(&status, offset)
+}
+fn url_at(input: []const u8, offset: usize) {
+  status: fail.Status
+  _ = http.parse_url(&status, input)
+  malformed_at(&status, offset)
+}
+fn frame_at(input: []const u8, offset: usize) {
+  status: fail.Status
+  _ = ws.parse_frame(&status, input)
+  malformed_at(&status, offset)
 }
 struct Trace { calls: usize, native: isize }
-fn typed_handler(response: *http.Response, request: *const http.Request, state: *Trace) http.Result {
-  return http.Result{}
+fn typed_handler(status: *fail.Status, response: *http.Response, request: *const http.Request, state: *Trace) {
 }
-fn read_transfer(raw: rawptr, dest: []u8) io.Transfer {
-  trace := #cast(*Trace, raw)
-  trace.calls += 1
-  return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: trace.native } }
+fn denied(status: *fail.Status, operation: []const u8, trace: *Trace) {
+  failure := fail.make(fail.Kind.PermissionDenied, operation, "", "")
+  failure.native = trace.native
+  fail.set(status, failure)
 }
 fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
-  return io.from_transfer(status, read_transfer(data, destination), "read", "")
-}
-fn write_transfer(raw: rawptr, source: []const u8) io.Transfer {
-  trace := #cast(*Trace, raw)
+  trace := #cast(*Trace, data)
   trace.calls += 1
-  return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: trace.native } }
+  denied(status, "read", trace)
+  return 0
 }
 fn write(data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return io.from_transfer(status, write_transfer(data, source), "write", "")
+  trace := #cast(*Trace, data)
+  trace.calls += 1
+  denied(status, "write", trace)
+  return 0
+}
+fn denied_with(status: *const fail.Status, trace: *const Trace) {
+  if !status.failed || status.failure.kind != fail.Kind.PermissionDenied || status.failure.native != trace.native || status.failure.has_offset { #panic("native metadata") }
+}
+fn finished(status: *const fail.Status) {
+  if !status.failed || status.failure.kind != fail.Kind.InvalidState { #panic("failed state") }
 }
 fn main() {
-  head(http.parse_request("GET / HTTP/1.1\r\nBad Header: x\r\n\r\n"), 19)
-  head(http.parse_request("GET / HTTP/1.1\r\nContent-Length: 1x\r\n\r\n"), 33)
-  head(http.parse_request("GET / HTTP/2.0\r\n\r\n"), 11)
-  // Chunk framing headers exercise public parsers, without coupling to chunk producers.
-  head(http.parse_request("GET / HTTP/1.1\r\nTransfer-Encoding: chunks\r\n\r\n"), 35)
-  head(http.parse_response("HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\n"), 36)
-  head(http.parse_response("HTTP/1.1 2xx Bad\r\n\r\n"), 10)
-  head(http.parse_response("HTTP/1.1 200 OK\r\nBad Header: x\r\n\r\n"), 20)
-  url := http.parse_url("http://host:8x/path")
-  metadata(url.failure.kind, url.offset, parse.Kind.Syntax, 13)
-  url = http.parse_url("http://user@host/path")
-  metadata(url.failure.kind, url.offset, parse.Kind.Syntax, 11)
-  url = http.parse_url("http://host:0/path")
-  metadata(url.failure.kind, url.offset, parse.Kind.Syntax, 12)
-  valid_head := http.parse_request("GET / HTTP/1.1\r\n\r\n")
-  if parse.failed(valid_head.failure) || valid_head.offset != 0 { #panic("request success metadata") }
-  valid_head = http.parse_response("HTTP/1.1 200 OK\r\n\r\n")
-  if parse.failed(valid_head.failure) || valid_head.offset != 0 { #panic("response success metadata") }
-  url = http.parse_url("http://host/path")
-  if parse.failed(url.failure) || url.offset != 0 { #panic("URL success metadata") }
+  head("GET / HTTP/1.1\r\nBad Header: x\r\n\r\n", false, 19)
+  head("GET / HTTP/1.1\r\nContent-Length: 1x\r\n\r\n", false, 33)
+  head("GET / HTTP/2.0\r\n\r\n", false, 11)
+  head("GET / HTTP/1.1\r\nTransfer-Encoding: chunks\r\n\r\n", false, 35)
+  head("HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\n", true, 36)
+  head("HTTP/1.1 2xx Bad\r\n\r\n", true, 10)
+  head("HTTP/1.1 200 OK\r\nBad Header: x\r\n\r\n", true, 20)
+  url_at("http://host:8x/path", 13)
+  url_at("http://user@host/path", 11)
+  url_at("http://host:0/path", 12)
+  status: fail.Status
+  _ = http.parse_request(&status, "GET / HTTP/1.1\r\n\r\n")
+  _ = http.parse_response(&status, "HTTP/1.1 200 OK\r\n\r\n")
+  _ = http.parse_url(&status, "http://host/path")
+  if status.failed { #panic("success metadata") }
 
   malformed: [4]u8 = [129, 126, 0, 1]
-  frame := ws.parse_frame(malformed[..])
-  metadata(frame.failure.kind, frame.offset, parse.Kind.Syntax, 2)
+  frame_at(malformed[..], 2)
+  // Part of a frame is no failure: complete is false.
   for size in 0..4 {
-    frame = ws.parse_frame(malformed[..size])
-    metadata(frame.failure.kind, frame.offset, parse.Kind.Truncated, size)
+    frame := ws.parse_frame(&status, malformed[..size])
+    if status.failed || frame.complete { #panic("partial frame") }
   }
   reserved: [2]u8 = [193, 0]
-  frame = ws.parse_frame(reserved[..])
-  metadata(frame.failure.kind, frame.offset, parse.Kind.Syntax, 0)
+  frame_at(reserved[..], 0)
   masked: [3]u8 = [129, 128, 0]
-  frame = ws.parse_frame(masked[..])
-  metadata(frame.failure.kind, frame.offset, parse.Kind.Truncated, 3)
+  partial := ws.parse_frame(&status, masked[..])
+  if status.failed || partial.complete { #panic("partial mask") }
   valid: [2]u8 = [129, 0]
-  frame = ws.parse_frame(valid[..])
-  if parse.failed(frame.failure) || frame.offset != 0 || frame.consumed != 2 { #panic("frame success metadata") }
+  frame := ws.parse_frame(&status, valid[..])
+  if status.failed || !frame.complete || frame.consumed != 2 { #panic("frame success metadata") }
   state := ws.message_state(false)
   message: [32]u8
   control: [125]u8
-  event := ws.receive(&state, message[..], control[..], frame)
-  if errors.failed(event.failure) || event.detail != ws.WebSocketEventKind.Ready { #panic("event classification") }
-  event = ws.receive(&state, message[..], control[..], ws.parse_frame(malformed[..]))
-  if event.failure.kind != errors.Kind.InvalidInput || event.offset != 2 { #panic("event metadata") }
-  if event.detail != ws.WebSocketEventKind.Error { #panic("error event classification") }
+  event := ws.receive(&status, &state, message[..], control[..], frame)
+  if status.failed || event.detail != ws.WebSocketEventKind.Ready { #panic("event classification") }
+  incomplete: fail.Status
+  _ = ws.receive(&incomplete, &state, message[..], control[..], partial)
+  if incomplete.failure.kind != fail.Kind.InvalidInput { #panic("event metadata") }
 
-  upgrade := ws.validate_upgrade_request("GET / HTTP/1.1\r\nBad Header: x\r\n\r\n")
-  metadata(upgrade.failure.kind, upgrade.offset, parse.Kind.Syntax, 19)
-  upgrade = ws.validate_upgrade_request("GET / HTTP/1.1\r\n\r\n")
-  metadata(upgrade.failure.kind, upgrade.offset, parse.Kind.Syntax, 0)
-  response := ws.validate_upgrade_response("HTTP/1.1 2xx Bad\r\n\r\n", "")
-  if response.failure.kind != errors.Kind.InvalidInput || response.offset != 10 { #panic("upgrade metadata") }
-  response = ws.validate_upgrade_response("HTTP/1.1 200 OK\r\n\r\n", "")
-  if response.failure.kind != errors.Kind.InvalidInput || response.offset != 0 { #panic("upgrade metadata") }
-  response = ws.validate_upgrade_response("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n", "dGhlIHNhbXBsZSBub25jZQ==")
-  if io.failed(response.failure) || errors.failed(response.failure) || response.failure.native != 0 || response.offset != 0 { #panic("upgrade success metadata") }
+  upgrade: fail.Status
+  _ = ws.validate_upgrade_request(&upgrade, "GET / HTTP/1.1\r\nBad Header: x\r\n\r\n")
+  malformed_at(&upgrade, 19)
+  fields: fail.Status
+  _ = ws.validate_upgrade_request(&fields, "GET / HTTP/1.1\r\n\r\n")
+  if fields.failure.kind != fail.Kind.InvalidInput { #panic("upgrade fields") }
+  response: fail.Status
+  ws.validate_upgrade_response(&response, "HTTP/1.1 2xx Bad\r\n\r\n", "")
+  malformed_at(&response, 10)
+  refused: fail.Status
+  ws.validate_upgrade_response(&refused, "HTTP/1.1 200 OK\r\n\r\n", "")
+  if refused.failure.kind != fail.Kind.InvalidInput { #panic("upgrade metadata") }
+  ws.validate_upgrade_response(&status, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n", "dGhlIHNhbXBsZSBub25jZQ==")
+  if status.failed { #panic("upgrade success metadata") }
 
-  // Zero values are failures despite a zero native code; close preserves OS codes.
-  zero := http.Result{}
-  if errors.failed(zero.failure) || zero.failure.native != 0 || zero.offset != 0 || zero.detail != http.ErrorKind.None { #panic("zero HTTP result") }
-  ws_zero := ws.Result{}
-  if errors.failed(ws_zero.failure) || ws_zero.failure.native != 0 || ws_zero.offset != 0 { #panic("zero WS result") }
   routes: [1]http.TypedRoute(Trace)
   route_state := Trace{}
   router := http.typed_routes(routes[..], &route_state)
-  route := http.add(&router, "GET", "/", nil)
-  if route.failure.kind != errors.Kind.InvalidInput || route.offset != 0 { #panic("metadata") }
-  if route.detail != http.ErrorKind.Invalid || router.count != 0 { #panic("invalid route result") }
-  route = http.add(&router, "GET", "/", typed_handler)
-  if io.failed(route.failure) || errors.failed(route.failure) || route.failure.native != 0 || route.offset != 0 || router.count != 1 { #panic("route success result") }
-  route = http.add(&router, "GET", "/other", typed_handler)
-  if route.failure.kind != errors.Kind.Capacity || route.offset != 0 { #panic("metadata") }
-  if route.detail != http.ErrorKind.Capacity || router.count != 1 { #panic("route capacity result") }
+  invalid: fail.Status
+  http.add(&invalid, &router, "GET", "/", nil)
+  if invalid.failure.kind != fail.Kind.InvalidInput || router.count != 0 { #panic("invalid route result") }
+  http.add(&status, &router, "GET", "/", typed_handler)
+  if status.failed || router.count != 1 { #panic("route success result") }
+  full: fail.Status
+  http.add(&full, &router, "GET", "/other", typed_handler)
+  if full.failure.kind != fail.Kind.Capacity || router.count != 1 { #panic("route capacity result") }
 
   for native in [0, -73] {
     trace := Trace{ native: #cast(isize, native) }
@@ -125,22 +139,33 @@ fn main() {
     writer := io.Writer{ data: &trace, write: write }
     storage: [128]u8
     server := http.server(reader, writer, storage[..])
-    first := http.receive(&server)
-    again := http.receive(&server)
-    if !io.failed(first.failure) || first.failure.kind != errors.Kind.PermissionDenied || first.failure.native != trace.native || first.offset != 0 || first.detail != http.ErrorKind.Io { #panic("HTTP native metadata") }
-    if !io.failed(again.failure) || again.failure.kind != first.failure.kind || again.failure.native != first.failure.native || again.offset != first.offset || again.detail != first.detail || trace.calls != 1 { #panic("HTTP native replay") }
+    first: fail.Status
+    _ = http.receive(&first, &server)
+    denied_with(&first, &trace)
+    again: fail.Status
+    _ = http.receive(&again, &server)
+    finished(&again)
+    if trace.calls != 1 { #panic("HTTP native replay") }
     trace.calls = 0
     frames: [32]u8
     socket := ws.connection(reader, writer, frames[..], message[..], control[..], true)
-    received := ws.connection_receive(&socket)
-    if !io.failed(received.failure) || received.failure.kind != errors.Kind.PermissionDenied || received.failure.native != trace.native || received.offset != 0 || trace.calls != 1 { #panic("WS native read metadata") }
-    replay := ws.connection_ping(&socket, "", 0)
-    if !io.failed(replay.failure) || replay.failure.kind != received.failure.kind || replay.failure.native != received.failure.native || replay.offset != received.offset || trace.calls != 1 { #panic("WS native read replay") }
+    received: fail.Status
+    _ = ws.connection_receive(&received, &socket)
+    denied_with(&received, &trace)
+    if trace.calls != 1 { #panic("WS native read metadata") }
+    replay: fail.Status
+    ws.connection_ping(&replay, &socket, "", 0)
+    finished(&replay)
+    if trace.calls != 1 { #panic("WS native read replay") }
     socket = ws.connection(reader, writer, frames[..], message[..], control[..], true)
-    sent := ws.connection_send(&socket, 1, "x", true, 1)
-    if !io.failed(sent.failure) || sent.failure.kind != errors.Kind.PermissionDenied || sent.failure.native != trace.native || sent.offset != 0 || trace.calls != 2 { #panic("WS native write metadata") }
-    replay = ws.connection_close(&socket, "", 0)
-    if !io.failed(replay.failure) || replay.failure.kind != sent.failure.kind || replay.failure.native != sent.failure.native || replay.offset != sent.offset || trace.calls != 2 { #panic("WS native write replay") }
+    sent: fail.Status
+    ws.connection_send(&sent, &socket, 1, "x", true, 1)
+    denied_with(&sent, &trace)
+    if trace.calls != 2 { #panic("WS native write metadata") }
+    closing: fail.Status
+    ws.connection_close(&closing, &socket, "", 0)
+    finished(&closing)
+    if trace.calls != 2 { #panic("WS native write replay") }
   }
 }
 '''
@@ -153,4 +178,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-network-edge-results-') as temporar
                         '--output', str(output)], env=dict(os.environ, DYN_SDK=str(ROOT)),
                        check=True, timeout=90)
         subprocess.run([str(output)], check=True, timeout=10)
-print('PASS public network parser goldens, result metadata and native zero/nonzero (debug/release)')
+print('PASS public network parser goldens, failure metadata and native zero/nonzero (debug/release)')

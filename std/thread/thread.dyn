@@ -1,6 +1,7 @@
 #target(kernel: linux)
 
 use "std/io" io
+use "std/fail"
 use "std/sync"
 use "std/os/linux/sys"
 
@@ -41,10 +42,8 @@ extern fn spawn_raw "dyn_thread_spawn"(
 // Failed creation rewinds the arena to its entry mark; no worker starts.
 // Thread safety: caller synchronizes arena access and shared context; one caller
 // controls each returned Thread's lifecycle.
-fn spawn_untyped(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
-  if #len(stack) < 256 || entry == nil {
-    return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
+fn spawn_untyped(arena: *mem.Arena, status: *fail.Status, stack: []u8, entry: fn(rawptr) isize, context: rawptr) *Thread {
+  if #len(stack) < 256 || entry == nil { return spawn_invalid(status, "a thread needs an entry and a stack of at least 256 bytes") }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
   signals := block_quit_signals()
@@ -52,19 +51,17 @@ fn spawn_untyped(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, contex
   restore_signals(signals)
   if value < 0 {
     mem.arena_rewind(arena, mark)
-    return SpawnResult{ failure: io.linux_failure(value) }
+    fail.set(status, io.from_linux("spawn thread", "", value))
+    return nil
   }
-  return SpawnResult{ value: thread }
+  return thread
 }
 
 // Same stable caller-arena node and context lifetime as spawn. Owns a mapped
 // stack until successful join; failed creation releases it and rewinds the node.
-fn spawn_with_size_untyped(arena: *mem.Arena, size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
-  if size < 256 || entry == nil {
-    return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
-  if size > #max(usize) - stack_guard - 4096 {
-    return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+fn spawn_with_size_untyped(arena: *mem.Arena, status: *fail.Status, size: usize, entry: fn(rawptr) isize, context: rawptr) *Thread {
+  if size < 256 || entry == nil || size > #max(usize) - stack_guard - 4096 {
+    return spawn_invalid(status, "a thread needs an entry and a stack of 256 bytes to the address space")
   }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
@@ -73,7 +70,8 @@ fn spawn_with_size_untyped(arena: *mem.Arena, size: usize, entry: fn(rawptr) isi
   address := #syscall(sys.Mmap, 0, total, 3, 16418, -1, 0)
   if address < 0 {
     mem.arena_rewind(arena, mark)
-    return SpawnResult{ failure: io.linux_failure(address) }
+    fail.set(status, io.from_linux("spawn thread", "", address))
+    return nil
   }
   base := #cast(*u8, address)
   _ = #syscall(sys.Mprotect, base, stack_guard, 0)
@@ -84,16 +82,18 @@ fn spawn_with_size_untyped(arena: *mem.Arena, size: usize, entry: fn(rawptr) isi
   if value < 0 {
     _ = #syscall(sys.Munmap, base, total)
     mem.arena_rewind(arena, mark)
-    return SpawnResult{ failure: io.linux_failure(value) }
+    fail.set(status, io.from_linux("spawn thread", "", value))
+    return nil
   }
-  return SpawnResult{ value: thread }
+  return thread
 }
 
 // Ownership: success ends worker access and releases any owned stack.
 // The caller-arena node is not freed. Joining a zero or joined Thread succeeds.
 // Failure retains the owner; do not reclaim worker context or stack.
 // Thread safety: never join concurrently through copied Thread descriptors.
-pub fn join(thread: *Thread) Result {
+pub fn join(status: *fail.Status, thread: *Thread) {
+  if status.failed { return }
   for true {
     tid := sync.load_u32(&thread.tid)
     if tid == 0 {
@@ -101,23 +101,21 @@ pub fn join(thread: *Thread) Result {
         _ = #syscall(sys.Munmap, &thread.stack[0], #len(thread.stack))
         thread.stack = thread.stack[..0]
       }
-      return Result{}
+      return
     }
     result := #syscall(sys.Futex, &thread.tid, 0, tid, 0, 0, 0)
     if result < 0 && result != -4 && result != -11 {
-      return Result{ failure: io.linux_failure(result) }
+      fail.set(status, io.from_linux("join thread", "", result))
+      return
     }
   }
-  return Result{}
 }
 
 pub fn id(thread: *const Thread) u32 {
   return sync.load_u32(&thread.tid)
 }
-pub fn yield_now() Result {
-  value := #syscall(sys.SchedYield)
-  if value < 0 { return Result{ failure: io.linux_failure(value) } }
-  return Result{ value: value }
+pub fn yield_now() {
+  _ = #syscall(sys.SchedYield)
 }
 
 // CPUs this process may run on (its affinity mask), at least 1. Use it to size

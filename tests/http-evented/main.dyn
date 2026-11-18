@@ -5,6 +5,7 @@
 use "std/bytes"
 use "std/fmt"
 use "std/html"
+use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/net"
@@ -38,98 +39,103 @@ fn limited_handshake(session: rawptr) evented.TransportIo {
   return evented.TransportIo{}
 }
 fn limited_read(session: rawptr, output: []u8) evented.TransportIo {
-  result := net.receive(#cast(isize, session), output, 0)
-  if io.failed(result.failure) {
-    if net.would_block(&result) { return evented.TransportIo{ status: evented.TransportStatus.WouldRead } }
-    return evented.TransportIo{ status: evented.TransportStatus.Failed }
-  }
-  if result.value == 0 { return evented.TransportIo{ status: evented.TransportStatus.End } }
-  return evented.TransportIo{ count: #cast(usize, result.value) }
+  status: fail.Status
+  result := net.try_receive(&status, #cast(isize, session), output, 0)
+  if status.failed { return evented.TransportIo{ status: evented.TransportStatus.Failed } }
+  if result.blocked { return evented.TransportIo{ status: evented.TransportStatus.WouldRead } }
+  if result.count == 0 { return evented.TransportIo{ status: evented.TransportStatus.End } }
+  return evented.TransportIo{ count: result.count }
 }
 fn limited_write(session: rawptr, source: []const u8) evented.TransportIo {
-  result := net.send(#cast(isize, session), source, 0)
-  if io.failed(result.failure) {
-    if net.would_block(&result) { return evented.TransportIo{ status: evented.TransportStatus.WouldWrite } }
-    return evented.TransportIo{ status: evented.TransportStatus.Failed }
-  }
-  return evented.TransportIo{ count: #cast(usize, result.value) }
+  status: fail.Status
+  result := net.try_send(&status, #cast(isize, session), source, 0)
+  if status.failed { return evented.TransportIo{ status: evented.TransportStatus.Failed } }
+  if result.blocked { return evented.TransportIo{ status: evented.TransportStatus.WouldWrite } }
+  return evented.TransportIo{ count: result.count }
 }
 fn limited_close(session: rawptr) { _ = session }
 
-fn user_post(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+fn user_post(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
   storage: [128]u8
   page := html.writer(storage[..])
   html.markup(&page, html.trusted("user="))
   html.text(&page, http.param(request, "id").value)
   html.markup(&page, html.trusted(" post="))
   html.text(&page, http.param(request, "post").value)
-  return text(response, http.StatusOk, html.output(&page).bytes)
+  text(status, response, http.StatusOk, html.output(&page).bytes)
 }
 
-fn user_create(response: *http.Response, request: *const http.Request, app: *App) http.Result {
-  return text(response, http.StatusCreated, "created\n")
+fn user_create(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
+  text(status, response, http.StatusCreated, "created\n")
 }
 
 
-fn text(response: *http.Response, status: u16, body: []const u8) http.Result {
-  return http.respond(response, body, http.ResponseOptions{ status: status, content_type: "text/plain" })
+fn text(status: *fail.Status, response: *http.Response, code: u16, body: []const u8) {
+  http.respond(status, response, body, http.ResponseOptions{ status: code, content_type: "text/plain" })
 }
 
-fn handle(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+fn handle(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
   if bytes.equal(request.path, "/buffered") || bytes.equal(request.path, "/buffered-empty") {
     if #len(http.body_buffer(response, 0)) != 0 || #len(http.body_buffer(response, 0xffffffffffffffff)) != 0 {
       #panic("invalid reservation succeeded")
     }
     body := http.body_buffer(response, BigSize)
     if #len(body) == 0 {
-      if bytes.equal(request.path, "/buffered-empty") { return text(response, http.StatusOk, "") }
-      return text(response, http.StatusOk, app.big)
+      if bytes.equal(request.path, "/buffered-empty") {
+        text(status, response, http.StatusOk, "")
+        return
+      }
+      text(status, response, http.StatusOk, app.big)
+      return
     }
     if #len(http.body_buffer(response, 1)) != 0 { #panic("second reservation succeeded") }
-    if !io.failed(http.respond_buffered(response, BigSize + 1, http.ResponseOptions{}).failure) {
-      #panic("oversize commit succeeded")
-    }
+    oversize: fail.Status
+    http.respond_buffered(&oversize, response, BigSize + 1, http.ResponseOptions{})
+    if !oversize.failed { #panic("oversize commit succeeded") }
     bad_headers: [1]http.Header = [http.Header{ name: "X-Test", value: "bad\r\nheader" }]
-    if !io.failed(http.respond_buffered(response, 1, http.ResponseOptions{ headers: bad_headers[..] }).failure) {
-      #panic("invalid header succeeded")
-    }
+    invalid: fail.Status
+    http.respond_buffered(&invalid, response, 1, http.ResponseOptions{ headers: bad_headers[..] })
+    if !invalid.failed { #panic("invalid header succeeded") }
     _ = mem.copy(body, app.big)
     length := BigSize
     if bytes.equal(request.path, "/buffered-empty") { length = 0 }
     good_headers: [1]http.Header = [http.Header{ name: "X-Buffered", value: "yes" }]
-    result := http.respond_buffered(response, length, http.ResponseOptions{ content_type: "text/plain", headers: good_headers[..] })
-    if io.failed(result.failure) { return result }
-    if !io.failed(http.respond_buffered(response, 1, http.ResponseOptions{}).failure) {
-      #panic("second commit succeeded")
-    }
-    return result
+    http.respond_buffered(status, response, length, http.ResponseOptions{ content_type: "text/plain", headers: good_headers[..] })
+    if status.failed { return }
+    second: fail.Status
+    http.respond_buffered(&second, response, 1, http.ResponseOptions{})
+    if !second.failed { #panic("second commit succeeded") }
+    return
   }
   if bytes.equal(request.target, "/health") {
-    return text(response, http.StatusOk, "ok\n")
+    text(status, response, http.StatusOk, "ok\n")
+    return
   }
   if bytes.equal(request.target, "/echo") {
-    return text(response, http.StatusOk, request.body)
+    text(status, response, http.StatusOk, request.body)
+    return
   }
   if bytes.equal(request.target, "/big") {
-    return text(response, http.StatusOk, app.big)
+    text(status, response, http.StatusOk, app.big)
+    return
   }
   if bytes.equal(request.target, "/stream") {
-    opened := http.respond_stream(response, http.ResponseOptions{ content_type: "text/plain" })
-    if io.failed(opened.failure) {
-      return opened.result
-    }
-    writer := http.body_writer(&opened.body)
+    body := http.respond_stream(status, response, http.ResponseOptions{ content_type: "text/plain" })
+    writer := http.body_writer(&body)
     for i in 0..3 {
-      _ = io.write_transfer(writer, "chunk\n")
+      io.write(status, writer, "chunk\n")
     }
-    return http.body_finish(&opened.body)
+    http.body_finish(status, &body)
+    return
   }
   if bytes.equal(request.path, "/query") {
     // ?q= decoded, escaped into HTML, echoed with a request header as a response header.
     storage: [256]u8
-    q := http.query_value(request, "q", storage[..])
-    if parse.failed(q.failure) {
-      return text(response, http.StatusBadRequest, "bad query\n")
+    query: fail.Status
+    q := http.query_value(&query, request, "q", storage[..])
+    if query.failed {
+      text(status, response, http.StatusBadRequest, "bad query\n")
+      return
     }
     page_storage: [1024]u8
     page := fmt.buffer(page_storage[..])
@@ -142,28 +148,37 @@ fn handle(response: *http.Response, request: *const http.Request, app: *App) htt
       trigger = tag.value
     }
     headers: [1]http.Header = [http.Header{ name: "HX-Trigger", value: trigger }]
-    sent := http.respond(response, fmt.bytes(&page), http.ResponseOptions{ content_type: "text/html", headers: headers[..] })
-    if sent.detail == http.ErrorKind.Invalid {
-      return text(response, http.StatusBadRequest, "bad header\n")
+    // An invalid header is rejected before anything is written: answer 400.
+    sent: fail.Status
+    http.respond(&sent, response, fmt.bytes(&page), http.ResponseOptions{ content_type: "text/html", headers: headers[..] })
+    if sent.failed && sent.failure.kind == fail.Kind.InvalidInput {
+      text(status, response, http.StatusBadRequest, "bad header\n")
+      return
     }
-    return sent
+    fail.set(status, sent.failure)
+    return
   }
   if bytes.equal(request.path, "/form") {
     storage: [64]u8
-    name := http.form_value(request, "name", storage[..])
-    if !name.found {
-      return text(response, http.StatusBadRequest, "missing\n")
+    form: fail.Status
+    name := http.form_value(&form, request, "name", storage[..])
+    if !name.found && !form.failed {
+      text(status, response, http.StatusBadRequest, "missing\n")
+      return
     }
-    if parse.failed(name.failure) {
-      return text(response, http.StatusBadRequest, "bad form\n")
+    if form.failed {
+      text(status, response, http.StatusBadRequest, "bad form\n")
+      return
     }
-    return text(response, http.StatusOk, name.value)
+    text(status, response, http.StatusOk, name.value)
+    return
   }
   if bytes.equal(request.target, "/quit") {
     sync.store_u32(&app.quit, 1)
-    return http.respond(response, "bye\n", http.ResponseOptions{ content_type: "text/plain", close_connection: true })
+    http.respond(status, response, "bye\n", http.ResponseOptions{ content_type: "text/plain", close_connection: true })
+    return
   }
-  return text(response, http.StatusNotFound, "not found\n")
+  text(status, response, http.StatusNotFound, "not found\n")
 }
 
 fn main() {
@@ -176,19 +191,19 @@ fn main() {
   }
   state.router = http.typed_routes(state.route_storage[..], state)
   state.router.fallback = handle
-  if io.failed(http.add(&state.router, "GET", "/users/:id/posts/:post", user_post).failure) ||
-    io.failed(http.add(&state.router, "POST", "/users", user_create).failure) {
-    #panic("cannot add routes")
-  }
+  routes := fail.Status{ on_failure: fail.panic_on_failure }
+  http.add(&routes, &state.router, "GET", "/users/:id/posts/:post", user_post)
+  http.add(&routes, &state.router, "POST", "/users", user_create)
   binding := http.bind_routes(&state.router)
   config := evented.default_config()
   config.connections_per_worker = 16
   config.receive_size = 4 * mem.KiB
   config.send_size = 4 * mem.KiB
   config.idle_timeout_milliseconds = 500
-  arguments := process.arguments(arena)
-  shared := !io.failed(arguments.failure) && #len(arguments.value) > 1 && bytes.equal(arguments.value[1], "shared")
-  pooled := !io.failed(arguments.failure) && #len(arguments.value) > 1 && bytes.equal(arguments.value[1], "pooled")
+  arguments_status: fail.Status
+  arguments := process.arguments(arena, &arguments_status)
+  shared := !arguments_status.failed && #len(arguments) > 1 && bytes.equal(arguments[1], "shared")
+  pooled := !arguments_status.failed && #len(arguments) > 1 && bytes.equal(arguments[1], "pooled")
   transport := evented.Transport{ open: limited_open, handshake: limited_handshake, read: limited_read, write: limited_write, close: limited_close }
   worker_count := WorkerCount
   if pooled {
@@ -200,39 +215,28 @@ fn main() {
   }
   workers := mem.push_array(evented.Worker, arena, worker_count)
   listener := net.Listener{}
-  started := evented.Result{}
+  status := fail.Status{ on_failure: fail.panic_on_failure }
   if shared {
-    started = evented.start_shared(arena, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, binding.handler, binding.context)
+    _ = evented.start_shared(arena, &status, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, binding.handler, binding.context)
   } else {
     address := net.ipv4(127, 0, 0, 1, 0)
-    listened := net.tcp_listen_ipv4(&address, 128)
-    if io.failed(listened.failure) {
-      #panic("cannot listen")
-    }
-    listener = listened.value
-    started = evented.start(arena, workers, &listener, config, binding.handler, binding.context)
+    listener = net.tcp_listen_ipv4(&status, &address, 128)
+    _ = evented.start(arena, &status, workers, &listener, config, binding.handler, binding.context)
   }
-  if io.failed(started.failure) {
-    #panic("cannot start workers")
-  }
-  port := #cast(u64, evented.local_port(workers))
-  digits: [20 + mem.ArenaBufferOverhead]u8
-  scratch := mem.arena_from_buffer(digits[..])
-  _ = io.write_transfer(io.stdout(), "port ")
-  _ = io.write_transfer(io.stdout(), fmt.u64_decimal(scratch, port))
-  _ = io.write_transfer(io.stdout(), "\n")
+  io.println("port {}", evented.local_port(workers))
   for sync.load_u32(&state.quit) == 0 {
-    _ = time.sleep(10 * time.Millisecond)
+    time.sleep(10 * time.Millisecond)
   }
   evented.stop(workers)
-  joined := evented.join(workers)
+  joined: fail.Status
+  evented.join(&joined, workers)
   if listener.active {
     net.listener_close(&listener)
   }
   for worker in workers {
     if worker.send_pool.free_count != config.overflow_send_count { #panic("overflow block leaked") }
   }
-  if io.failed(joined.failure) {
+  if joined.failed {
     #panic("worker failed")
   }
 }

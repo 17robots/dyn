@@ -2,81 +2,85 @@
 use "std/io" io
 use "std/os/linux" os
 use "std/fs" fs
-use "std/fail"
 use "std/time" time
 use "std/os/linux/sys"
-fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) NativeSpawn {
-  native := os.spawn_environment(arena, path, arguments, configuration.environment,
+fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, configuration: Options) Child {
+  process := os.spawn_environment(arena, status, path, arguments, configuration.environment,
     os.SpawnOptions{ input: native_stream(configuration.input), output: native_stream(configuration.output), error: native_stream(configuration.error), directory: configuration.directory })
-  return NativeSpawn{ value: Child{ handle: native.process, active: !io.failed(native.failure) }, failure: io.linux_failure(native.failure.native) }
+  if status.failed { return Child{} }
+  return Child{ handle: process, active: true }
 }
-fn wait_native(child: *Child, nonblocking: bool) ExitResult {
-  value := os.wait(child.handle, nonblocking)
-  if io.failed(value.failure) {
-    return ExitResult{ failure: io.linux_failure(value.failure.native) }
-  }
-  if value.process == 0 { return ExitResult{} }
+fn wait_native(status: *fail.Status, child: *Child, nonblocking: bool) Exit {
+  value := os.wait(status, child.handle, nonblocking)
+  if status.failed || value.process == 0 { return Exit{} }
   child.active = false
-  if os.exited(value.status) {
-    return ExitResult{ code: os.exit_status(value.status), finished: true }
+  if os.exited(value.wait_status) {
+    return Exit{ code: os.exit_status(value.wait_status), finished: true }
   }
-  return ExitResult{ signal: os.termination_signal(value.status), finished: true }
+  return Exit{ signal: os.termination_signal(value.wait_status), finished: true }
 }
-fn terminate_native(child: *Child) Status {
-  result := os.send_signal(child.handle, 9)
-  return Status{ failure: io.linux_failure(result.failure.native) }
+fn terminate_native(status: *fail.Status, child: *Child) {
+  os.send_signal(status, child.handle, 9)
 }
-fn close_native(handle: isize) Status {
-  result := os.close_descriptor(handle)
-  return Status{ failure: io.linux_failure(result.failure.native) }
+fn close_native(handle: isize) {
+  ignored: fail.Status
+  os.close_descriptor(&ignored, handle)
 }
-fn pipe_native() Pipe {
+fn pipe_native(status: *fail.Status) Pipe {
   descriptors: [2]i32
   result := #syscall(sys.Pipe2, &descriptors[0], 524288)
-  if result < 0 { return Pipe{ failure: io.linux_failure(result) } }
+  if result < 0 {
+    fail.set(status, io.from_linux("pipe", "", result))
+    return Pipe{ input: -1, output: -1 }
+  }
   flags := #syscall(sys.Fcntl, descriptors[0], 3, 0)
   changed := #syscall(sys.Fcntl, descriptors[0], 4, flags | 2048)
   if changed < 0 {
-    _ = close_native(descriptors[0])
-    _ = close_native(descriptors[1])
-    return Pipe{ failure: io.linux_failure(changed) }
+    close_native(descriptors[0])
+    close_native(descriptors[1])
+    fail.set(status, io.from_linux("pipe", "", changed))
+    return Pipe{ input: -1, output: -1 }
   }
   return Pipe{ input: descriptors[0], output: descriptors[1] }
 }
-fn read_native(handle: isize, destination: []u8) ReadResult {
+// A pipe with nothing to read yet is no failure: count 0, not ended.
+fn read_native(status: *fail.Status, handle: isize, destination: []u8) Read {
   file := fs.adopt_handle(handle)
-  status: fail.Status
-  count := fs.read(&status, &file, destination)
-  if status.failed && status.failure.native == -11 { return ReadResult{ ok: true } }
-  return ReadResult{ count: count, ended: file.ended, error: status.failure.native, kind: status.failure.kind, ok: !status.failed }
-}
-fn milliseconds_native() MillisecondsResult {
-  now := time.monotonic_now()
-  if io.failed(now.failure) {
-    return MillisecondsResult{error: now.failure.native, kind: now.failure.kind}
+  attempt: fail.Status
+  count := fs.read(&attempt, &file, destination)
+  if attempt.failed {
+    if attempt.failure.native != -11 {
+      fail.set(status, attempt.failure)
+    }
+    return Read{}
   }
-  return MillisecondsResult{value: #cast(u64, now.value.seconds) * 1000 + #cast(u64, (now.value.nanoseconds / 1000000)), ok: true}
+  return Read{ count: count, ended: file.ended }
+}
+fn milliseconds_native() u64 {
+  now := time.monotonic_now()
+  return #cast(u64, now.seconds) * 1000 + #cast(u64, (now.nanoseconds / 1000000))
 }
 fn sleep_native() {
-  _ = time.sleep(time.Millisecond)
+  time.sleep(time.Millisecond)
 }
-fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
-  result := os.environment_get(name, destination)
-  return EnvironmentResult{ value: result.value, found: result.found, failure: io.linux_failure(result.failure.native) }
+fn environment_native(status: *fail.Status, name: []const u8, destination: []u8) Variable {
+  result := os.environment_get(status, name, destination)
+  return Variable{ value: result.value, found: result.found }
 }
 
-fn duplicate_native(value: isize) HandleResult {
+fn duplicate_native(status: *fail.Status, value: isize) isize {
   copied := #syscall(sys.Fcntl, value, 1030, 3)
-  if copied < 0 { return HandleResult{ error: copied, kind: io.linux(copied) } }
-  return HandleResult{ value: copied, ok: true }
+  if copied < 0 {
+    fail.set(status, io.from_linux("duplicate", "", copied))
+    return -1
+  }
+  return copied
 }
 
-fn arguments_native(arena: *mem.Arena) ArgumentsResult {
-  status: fail.Status
-  raw := fs.read_all(arena, &status, "/proc/self/cmdline", #max(usize))
-  if status.failed {
-    return ArgumentsResult{ failure: io.Failure{ kind: status.failure.kind, native: status.failure.native } }
-  }
+fn arguments_native(arena: *mem.Arena, status: *fail.Status) [][]const u8 {
+  raw := fs.read_all(arena, status, "/proc/self/cmdline", #max(usize))
+  empty: [][]const u8
+  if status.failed { return empty }
   count: usize = 0
   for byte in raw {
     if byte == 0 {
@@ -84,16 +88,16 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
     }
   }
   if #len(raw) > 0 && raw[#len(raw) - 1] != 0 {
-    return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
+    fail.set(status, fail.make(fail.Kind.InvalidState, "read arguments", "/proc/self/cmdline", "the last argument has no end"))
+    return empty
   }
   result := argument_slots(arena, count)
-  if io.failed(result.failure) { return result }
   at: usize = 0
   start: usize = 0
   index: usize = 0
   for at < #len(raw) {
     if raw[at] == 0 {
-      result.value[index] = raw[start..at]
+      result[index] = raw[start..at]
       index += 1
       start = at + 1
     }

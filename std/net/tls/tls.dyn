@@ -5,27 +5,51 @@ use "std/io" io
 pub type Context = provider.Context
 pub type Connection = provider.Connection
 pub type Certificate = provider.Certificate
-pub type ErrorKind = provider.ErrorKind
-// Provider diagnostics are not OS errno values. error remains zero; detail and
-// the exact unsigned provider_code/provider_status retain provider information.
-pub struct ContextResult { value: Context, detail: ErrorKind, provider_code: u64, failure: io.Failure }
-pub struct ConnectionResult { value: Connection, detail: ErrorKind, provider_code: u64, failure: io.Failure }
-pub struct Result { count: usize, detail: ErrorKind, provider_code: u64, provider_status: i32, failure: io.Failure }
-pub struct TextResult { value: []u8, provider_code: u64, failure: io.Failure }
-fn portable(detail: ErrorKind) io.Kind {
-  if detail == ErrorKind.None { return io.Kind.Ok }
-  if detail == ErrorKind.InvalidArgument { return io.Kind.InvalidInput }
-  if detail == ErrorKind.WantRead || detail == ErrorKind.WantWrite { return io.Kind.WouldBlock }
-  if detail == ErrorKind.Verification { return io.Kind.PermissionDenied }
-  return io.Kind.System
+
+// What a nonblocking connection waits for before the call can go on.
+// Blocking connections never report a want.
+pub enum Want { Nothing, Read, Write }
+// A read or write: the bytes moved, or what the connection waits for.
+pub struct Attempt { count: usize, want: Want }
+
+// Records a provider failure: the kind, the provider's code in native, and
+// the provider's text as the message.
+fn provider_failure(status: *fail.Status, operation: []const u8, detail: provider.ErrorKind, code: u64) {
+  kind := fail.Kind.System
+  message: []const u8 = ""
+  if detail == provider.ErrorKind.InvalidArgument {
+    kind = fail.Kind.InvalidInput
+    message = "invalid argument"
+  } else if detail == provider.ErrorKind.Verification {
+    kind = fail.Kind.PermissionDenied
+    message = "certificate verification failed"
+  }
+  text: [160]u8
+  if code != 0 && detail != provider.ErrorKind.Verification {
+    message = provider.error_string(text[..], code)
+  }
+  failure := fail.make(kind, operation, "", message)
+  failure.native = #bitcast(isize, #cast(usize, code))
+  fail.set(status, failure)
 }
-fn result(value: provider.Result) Result {
-  return Result{ count: value.count, detail: value.error, provider_code: value.provider_code, provider_status: value.provider_status, failure: io.Failure{ kind: portable(value.error) } }
+fn want(detail: provider.ErrorKind) Want {
+  if detail == provider.ErrorKind.WantRead { return Want.Read }
+  if detail == provider.ErrorKind.WantWrite { return Want.Write }
+  return Want.Nothing
+}
+fn attempt(status: *fail.Status, operation: []const u8, value: provider.Result) Attempt {
+  if value.error == provider.ErrorKind.None { return Attempt{ count: value.count } }
+  wanted := want(value.error)
+  if wanted != Want.Nothing { return Attempt{ count: value.count, want: wanted } }
+  provider_failure(status, operation, value.error, value.provider_code)
+  return Attempt{ count: value.count }
 }
 
 // The provider copies the protocol wire bytes during this call.
-pub fn set_alpn_protocols(connection: Connection, protocols: []const u8) Result {
-  return result(provider.set_alpn_result(connection, protocols))
+pub fn set_alpn_protocols(status: *fail.Status, connection: Connection, protocols: []const u8) {
+  if status.failed { return }
+  value := provider.set_alpn_result(connection, protocols)
+  _ = attempt(status, "set ALPN", value)
 }
 // Server ALPN: each handshake picks the first protocol of preference (wire
 // format, such as "\x02h2\x08http/1.1") the client offers. preference must
@@ -51,11 +75,17 @@ pub fn certificate_release(certificate: *Certificate) {
 // the complete output when passed a nil buffer; always release it after copying.
 // Failure publishes an empty value and consumes no arena bytes. Exhaustion panics.
 // https://github.com/openssl/openssl/blob/master/crypto/x509/x509_obj.c
-pub fn certificate_subject(arena: *memory.Arena, certificate: Certificate) TextResult {
-  if certificate == nil { return TextResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
+pub fn certificate_subject(arena: *memory.Arena, status: *fail.Status, certificate: Certificate) []u8 {
+  empty: []u8
+  if status.failed { return empty }
+  if certificate == nil {
+    fail.invalid(status, "certificate subject", "", "no certificate")
+    return empty
+  }
   formatted := provider.subject_text_owned(certificate)
   if io.failed(formatted.failure) {
-    return TextResult{ provider_code: formatted.provider_code, failure: io.Failure{ kind: io.Kind.System } }
+    provider_failure(status, "certificate subject", provider.ErrorKind.Provider, formatted.provider_code)
+    return empty
   }
   defer provider.subject_text_free_owned(formatted.value)
   length: usize = 0
@@ -67,28 +97,33 @@ pub fn certificate_subject(arena: *memory.Arena, certificate: Certificate) TextR
   for i in 0..length {
     output[i] = source[i]
   }
-  return TextResult{ value: output }
+  return output
 }
-pub fn handshake(connection: Connection) Result {
-  return result(provider.handshake(connection))
+// Runs the handshake. On a nonblocking socket it may stop with a want; call
+// it again once the socket is ready. Want.Nothing means it completed.
+pub fn handshake(status: *fail.Status, connection: Connection) Want {
+  if status.failed { return Want.Nothing }
+  return attempt(status, "handshake", provider.handshake(connection)).want
 }
-pub fn server_handshake(connection: Connection) Result {
-  return result(provider.server_handshake(connection))
+pub fn server_handshake(status: *fail.Status, connection: Connection) Want {
+  if status.failed { return Want.Nothing }
+  return attempt(status, "handshake", provider.server_handshake(connection)).want
 }
-pub fn read(connection: Connection, destination: []u8) Result {
-  return result(provider.read(connection, destination))
+// Reads what is available; count 0 with no want is the end of the stream.
+pub fn read(status: *fail.Status, connection: Connection, destination: []u8) Attempt {
+  if status.failed { return Attempt{} }
+  return attempt(status, "read", provider.read(connection, destination))
 }
-pub fn write(connection: Connection, source: []const u8) Result {
-  return result(provider.write(connection, source))
+pub fn write(status: *fail.Status, connection: Connection, source: []const u8) Attempt {
+  if status.failed { return Attempt{} }
+  return attempt(status, "write", provider.write(connection, source))
 }
-// A zero provider status means close_notify was sent but peer shutdown is
-// pending. Return WouldBlock/WantRead so callers can resume the exchange.
+// Sends close_notify. Want.Read means it was sent and the peer's is pending;
+// call again to finish the exchange, or close the socket.
 // https://docs.openssl.org/3.4/man3/SSL_shutdown/
-pub fn shutdown(connection: Connection) Result {
-  return result(provider.shutdown_result(connection))
-}
-pub fn error_code(connection: Connection, provider_result: i32) i32 {
-  return provider.error_code(connection, provider_result)
+pub fn shutdown(status: *fail.Status, connection: Connection) Want {
+  if status.failed { return Want.Nothing }
+  return attempt(status, "shutdown", provider.shutdown_result(connection)).want
 }
 // The provider's text for an error code, in arena.
 pub fn error_string(arena: *memory.Arena, code: u64) []u8 {
@@ -99,17 +134,28 @@ pub fn error_string(arena: *memory.Arena, code: u64) []u8 {
   return output
 }
 
-pub fn client_config_create() ContextResult {
+pub fn client_config_create(status: *fail.Status) Context {
+  if status.failed { return nil }
   value := provider.context_create_owned()
-  return ContextResult{ value: value.value, detail: value.error, provider_code: value.provider_code, failure: io.Failure{ kind: portable(value.error) } }
+  if value.error != provider.ErrorKind.None {
+    provider_failure(status, "create TLS client", value.error, value.provider_code)
+    return nil
+  }
+  return value.value
 }
 pub fn server_config_create(
   arena: *memory.Arena,
+  status: *fail.Status,
   certificate: []const u8,
   key: []const u8,
-) ContextResult {
+) Context {
+  if status.failed { return nil }
   value := provider.server_context_create(arena, certificate, key)
-  return ContextResult{ value: value.value, detail: value.error, provider_code: value.provider_code, failure: io.Failure{ kind: portable(value.error) } }
+  if value.error != provider.ErrorKind.None {
+    provider_failure(status, "create TLS server", value.error, value.provider_code)
+    return nil
+  }
+  return value.value
 }
 // Frees the configuration and clears the handle; releasing a cleared handle does nothing.
 pub fn config_release(context: *Context) {
@@ -119,16 +165,27 @@ pub fn config_release(context: *Context) {
 }
 pub fn client_connection_create(
   arena: *memory.Arena,
+  status: *fail.Status,
   context: Context,
   descriptor: i32,
   hostname: []const u8,
-) ConnectionResult {
+) Connection {
+  if status.failed { return nil }
   value := provider.connection_create(arena, context, descriptor, hostname)
-  return ConnectionResult{ value: value.value, detail: value.error, provider_code: value.provider_code, failure: io.Failure{ kind: portable(value.error) } }
+  if value.error != provider.ErrorKind.None {
+    provider_failure(status, "create TLS connection", value.error, value.provider_code)
+    return nil
+  }
+  return value.value
 }
-pub fn server_connection_create(context: Context, descriptor: i32) ConnectionResult {
+pub fn server_connection_create(status: *fail.Status, context: Context, descriptor: i32) Connection {
+  if status.failed { return nil }
   value := provider.server_connection_create_owned(context, descriptor)
-  return ConnectionResult{ value: value.value, detail: value.error, provider_code: value.provider_code, failure: io.Failure{ kind: portable(value.error) } }
+  if value.error != provider.ErrorKind.None {
+    provider_failure(status, "create TLS connection", value.error, value.provider_code)
+    return nil
+  }
+  return value.value
 }
 // Frees the connection state and clears the handle. The socket stays open; close it separately.
 pub fn connection_release(connection: *Connection) {
@@ -137,42 +194,40 @@ pub fn connection_release(connection: *Connection) {
   provider.connection_free_owned(value)
 }
 
-fn reader_read(data: rawptr, destination: []u8) io.Transfer {
-  connection := #cast(*Connection, data)
-  result := read(connection.*, destination)
-  if io.failed(result.failure) {
-    return io.Transfer{ failure: io.Failure{ kind: result.failure.kind, native: result.failure.native } }
+// Blocking adapters: a want here means the socket was nonblocking, which they
+// report as WouldBlock.
+fn blocked(status: *fail.Status, operation: []const u8) {
+  fail.set(status, fail.make(fail.Kind.WouldBlock, operation, "", "the socket is nonblocking"))
+}
+fn reader_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  result := read(status, #cast(*Connection, data).*, destination)
+  if result.want != Want.Nothing {
+    blocked(status, "read")
   }
-  status := io.Status.Complete
-  if result.count == 0 {
-    status = io.Status.End
-  }
-  return io.Transfer{ transferred: result.count, status: status }
+  return result.count
 }
 
-fn writer_write(data: rawptr, source: []const u8) io.Transfer {
+fn writer_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
   connection := #cast(*Connection, data)
-  result := write(connection.*, source)
-  if io.failed(result.failure) {
-    return io.Transfer{ transferred: result.count, failure: io.Failure{ kind: result.failure.kind, native: result.failure.native } }
+  total: usize = 0
+  for total < #len(source) && !status.failed {
+    result := write(status, connection.*, source[total..])
+    if result.want != Want.Nothing {
+      blocked(status, "write")
+    } else if result.count == 0 && !status.failed {
+      fail.set(status, fail.make(fail.Kind.System, "write", "", "the connection accepted no bytes"))
+    }
+    total += result.count
   }
-  return io.Transfer{ transferred: result.count, status: io.Status.Complete }
+  return total
 }
 
 // Blocking I/O adapters borrow the Connection slot and its live handle.
-// Use read/write directly for nonblocking WantRead/WantWrite handling.
+// Use read/write directly for nonblocking connections.
 pub fn reader(connection: *Connection) io.Reader {
-  return io.Reader{ data: connection, read: reader_read_stream }
+  return io.Reader{ data: connection, read: reader_read }
 }
 
 pub fn writer(connection: *Connection) io.Writer {
-  return io.Writer{ data: connection, write: writer_write_stream }
-}
-
-fn reader_read_stream(data: rawptr, status: *fail.Status, destination: []u8) usize {
-  return io.from_transfer(status, reader_read(data, destination), "read", "")
-}
-
-fn writer_write_stream(data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return io.from_transfer(status, writer_write(data, source), "write", "")
+  return io.Writer{ data: connection, write: writer_write }
 }

@@ -23,29 +23,29 @@ calendar_days = [rng.randrange(-800000, 800000) for _ in range(300)] + [0, -1, 5
 if not Path('/usr/share/zoneinfo/Europe/Berlin').exists():
     print('SKIP time zones: no zoneinfo database')
     raise SystemExit(0)
-lines = ['use "std/time" time', 'use "std/time/zone" zone', 'use "std/mem" mem', 'use "std/io" io', '',
+lines = ['use "std/time" time', 'use "std/time/zone" zone', 'use "std/mem" mem', 'use "std/io" io', 'use "std/fail"', '',
          f'const instants: [{len(instants)}]i64 = [{", ".join(map(str, instants))}]',
          f'const days: [{len(calendar_days)}]i64 = [{", ".join(map(str, calendar_days))}]', '',
-         'fn main() {', '  arena := mem.arena_alloc(16777216)', '  defer {', '    mem.arena_release(arena)', '  }',
+         'fn main() {', '  status := fail.Status{ on_failure: fail.panic_on_failure }', '  arena := mem.arena_alloc(16777216)', '  defer {', '    mem.arena_release(arena)', '  }',
          '  for day in days {', '    date := time.civil_from_days(day)',
          '    io.println("day {} {} {} {} {} {}", day, date.year, date.month, date.day, time.days_from_civil(date.year, date.month, date.day), #cast(u8, time.weekday(&date)))',
          '  }']
 for index, name in enumerate(ZONES):
-    lines += [f'  loaded{index} := zone.load(arena, "{name}")', f'  if loaded{index}.failure.kind != io.Kind.Ok {{', f'    #panic("load {name}")', '  }',
+    lines += [f'  loaded{index} := zone.load(arena, &status, "{name}")',
               '  for seconds in instants {',
-              f'    shown := zone.local(&loaded{index}.value, time.Instant{{ seconds: seconds }})',
-              f'    back := zone.instant_of_local(&loaded{index}.value, &shown.value)',
+              f'    shown := zone.local(&loaded{index}, time.Instant{{ seconds: seconds }})',
+              f'    back := zone.instant_of_local(&loaded{index}, &shown.value)',
               f'    io.println("{name} {{}} {{}} {{}} {{}} {{}}-{{}}-{{}} {{}}:{{}}:{{}} {{}}", seconds, shown.offset, shown.dst, shown.abbreviation, shown.value.year, shown.value.month, shown.value.day, shown.value.hour, shown.value.minute, shown.value.second, back.seconds)',
               '  }']
-lines += ['  posix := zone.parse_posix(arena, "CET-1CEST,M3.5.0,M10.5.0/3")', '  if io.failed(posix.failure) {', '    #panic("posix")', '  }',
-          '  for seconds in instants {', '    shown := zone.local(&posix.value, time.Instant{ seconds: seconds })',
+lines += ['  posix := zone.parse_posix(arena, &status, "CET-1CEST,M3.5.0,M10.5.0/3")',
+          '  for seconds in instants {', '    shown := zone.local(&posix, time.Instant{ seconds: seconds })',
           '    io.println("posix {} {} {}", seconds, shown.offset, shown.abbreviation)', '  }',
-          '  bad := zone.parse_posix(arena, "CET-1CEST,M13.5.0")', '  if !io.failed(bad.failure) {', '    #panic("bad posix")', '  }',
-          '  for seconds in instants {', '    shown := zone.local(&loaded0.value, time.Instant{ seconds: seconds })',
+          '  bad: fail.Status', '  _ = zone.parse_posix(arena, &bad, "CET-1CEST,M13.5.0")', '  if !bad.failed {', '    #panic("bad posix")', '  }',
+          '  for seconds in instants {', '    shown := zone.local(&loaded0, time.Instant{ seconds: seconds })',
           '    io.println("format {} {} {}", seconds, zone.format(arena, "%Y-%m-%d %H:%M:%S %j %a %A %b %B %Z %z %%", &shown), zone.format_rfc3339(arena, &shown))', '  }',
-          '  bad_format := zone.local(&loaded0.value, time.Instant{})', '  if #len(zone.format(arena, "%Q", &bad_format)) != 0 {', '    #panic("bad format")', '  }',
-          '  system := zone.system(arena)', '  if io.failed(system.failure) {', '    #panic("system")', '  }',
-          '  io.println("system {}", system.value.name)', '}']
+          '  bad_format := zone.local(&loaded0, time.Instant{})', '  if #len(zone.format(arena, "%Q", &bad_format)) != 0 {', '    #panic("bad format")', '  }',
+          '  system := zone.system(arena, &status)',
+          '  io.println("system {}", system.name)', '}']
 
 
 def expected():
@@ -101,18 +101,21 @@ with tempfile.TemporaryDirectory(prefix='dyn-time-zones-') as directory:
         windows.mkdir()
         (windows / 'main.dyn').write_text('''use "std/time/zone" zone
 use "std/mem" mem
-use "std/io" errors
+use "std/fail"
 
 fn main() {
   arena := mem.arena_alloc(1048576)
   defer {
     mem.arena_release(arena)
   }
-  if zone.load(arena, "Europe/Berlin").failure.kind != errors.Kind.Unsupported {
+  database: fail.Status
+  _ = zone.load(arena, &database, "Europe/Berlin")
+  if database.failure.kind != fail.Kind.Unsupported {
     #panic("windows load")
   }
-  system := zone.system(arena)
-  if errors.failed(system.failure) || #len(system.value.name) == 0 || #len(system.value.standard.abbreviation) == 0 {
+  status: fail.Status
+  system := zone.system(arena, &status)
+  if status.failed || #len(system.name) == 0 || #len(system.standard.abbreviation) == 0 {
     #panic("windows system")
   }
 }

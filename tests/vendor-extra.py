@@ -222,11 +222,8 @@ fn main() {
   deadline := time.deadline_after(60 * time.Second)
   samples: [2048]f32
   heard := false
-  if io.failed(deadline.failure) { #panic("deadline clock failed") }
   for !audio.sound_ended(sound.value) {
-    deadline_status := time.deadline_expired(&deadline.value)
-    if io.failed(deadline_status.failure) { #panic("deadline clock failed") }
-    if deadline_status.value { break }
+    if time.deadline_expired(&deadline) { break }
     if offline {
       result := audio.mix(engine.value, samples[..])
       if io.failed(result.failure) {
@@ -539,11 +536,8 @@ fn main() {
   }
   deadline := time.deadline_after(5 * time.Second)
   done := false
-  if io.failed(deadline.failure) { #panic("deadline clock failed") }
   for !done {
-    deadline_status := time.deadline_expired(&deadline.value)
-    if io.failed(deadline_status.failure) { #panic("deadline clock failed") }
-    if deadline_status.value { break }
+    if time.deadline_expired(&deadline) { break }
     remote := enet.service(server, 0)
     if io.failed(remote.failure) {
       #panic("server service")
@@ -585,11 +579,8 @@ fn main() {
   server_closed := false
   client_closed := false
   deadline = time.deadline_after(5 * time.Second)
-  if io.failed(deadline.failure) { #panic("deadline clock failed") }
   for (!server_closed || !client_closed) {
-    deadline_status := time.deadline_expired(&deadline.value)
-    if io.failed(deadline_status.failure) { #panic("deadline clock failed") }
-    if deadline_status.value { break }
+    if time.deadline_expired(&deadline) { break }
     server_event := enet.service(server, 0)
     client_event := enet.service(client, 0)
     if io.failed(server_event.failure) || io.failed(client_event.failure) {

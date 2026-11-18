@@ -69,11 +69,7 @@ fn main() i32 {
   args := program.args
   if #len(args) < 2 { return usage() }
 
-  path: []const u8 = "todo.txt"
-  setting := process.environment(arena, "TODO_FILE")
-  if setting.found {
-    path = setting.value
-  }
+  path := process.environment_or(arena, "TODO_FILE", "todo.txt")
 
   tasks: array.Array(Task)
   array.init(&tasks, arena)

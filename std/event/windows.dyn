@@ -1,17 +1,14 @@
-use "std/io" io
 #target(kernel: windows)
 // Readiness uses WSAPoll. IOCP reports completion of submitted operations and
 // cannot replace readiness without a separate operation/buffer lifetime API.
-fn native_open() net.Result {
-  return net.Result{}
+fn native_open(_status: *fail.Status) isize {
+  return 0
 }
-fn native_close(_handle: isize) Result {
-  return Result{}
+fn native_close(_handle: isize) {
 }
-fn native_control(_queue: *Queue, _index: usize, _entry: Entry) Result {
-  return Result{}
+fn native_control(_status: *fail.Status, _queue: *Queue, _index: usize, _entry: Entry) {
 }
-fn native_wait(arena: *mem.Arena, queue: *Queue, timeout: i32) WaitResult {
+fn native_wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout: i32) []Event {
   count: usize = 0
   for entry in queue.entries {
     if entry.active {
@@ -29,11 +26,8 @@ fn native_wait(arena: *mem.Arena, queue: *Queue, timeout: i32) WaitResult {
       at += 1
     }
   }
-  outcome := net.poll(native, timeout)
-  if io.failed(outcome.failure) {
-    return WaitResult{ failure: io.Failure{ kind: outcome.failure.kind, native: outcome.failure.native } }
-  }
-  events := mem.push_array(Event, arena, #cast(usize, outcome.value))
+  ready := net.poll(status, native, timeout)
+  events := mem.push_array(Event, arena, ready)
   at = 0
   for i in 0..count {
     if native[i].returned != 0 {
@@ -42,5 +36,5 @@ fn native_wait(arena: *mem.Arena, queue: *Queue, timeout: i32) WaitResult {
       at += 1
     }
   }
-  return WaitResult{ value: events[..at] }
+  return events[..at]
 }
