@@ -13,12 +13,8 @@ fn autopilot(game: *const breakout.Game) breakout.Input {
   // Aim off-center by a slowly changing amount so the ball covers every column.
   aim := breakout.ball_center(game) + #cast(i32, game.frame / 97 % 9) * 2 - 8
   center := breakout.paddle_center(game)
-  if aim < center - 1 {
-    return breakout.Input.Left
-  }
-  if aim > center + 1 {
-    return breakout.Input.Right
-  }
+  if aim < center - 1 { return breakout.Input.Left }
+  if aim > center + 1 { return breakout.Input.Right }
   return breakout.Input.None
 }
 
@@ -33,10 +29,10 @@ fn hash_pixels(hash: u64, pixels: []const u32) u64 {
 fn print_field(name: []const u8, value: u64) {
   digits: [20 + mem.ArenaBufferOverhead]u8
   scratch := mem.arena_from_buffer(digits[..])
-  _ = io.write_transfer(io.stdout(), name)
-  _ = io.write_transfer(io.stdout(), " ")
-  _ = io.write_transfer(io.stdout(), fmt.u64_decimal(scratch, value))
-  _ = io.write_transfer(io.stdout(), "\n")
+  io.print("{}", name)
+  io.print(" ")
+  io.print("{}", fmt.u64_decimal(scratch, value))
+  io.print("\n")
 }
 
 fn main() {

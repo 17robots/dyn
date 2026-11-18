@@ -17,7 +17,7 @@ use "std/net/http" http
 use "std/bytes" bytes
 use "std/mem" mem
 struct Feed { data: []const u8, at: usize, cut: usize, step: usize }
-fn read_feed_transfer(raw: rawptr, destination: []u8) io.Transfer {
+fn read_feed(raw: rawptr, status: *fail.Status, destination: []u8) usize {
   feed := #cast(*Feed, raw)
   count := #len(feed.data) - feed.at
   if feed.at < feed.cut && count > feed.cut - feed.at { count = feed.cut - feed.at }
@@ -25,18 +25,11 @@ fn read_feed_transfer(raw: rawptr, destination: []u8) io.Transfer {
   if count > #len(destination) { count = #len(destination) }
   for i in 0..count { destination[i] = feed.data[feed.at + i] }
   feed.at += count
-  if feed.at == #len(feed.data) { return io.Transfer{ transferred: count, status: io.Status.End } }
-  return io.Transfer{ transferred: count, status: io.Status.Complete }
+  return count
 }
-fn read_feed(data: rawptr, status: *fail.Status, destination: []u8) usize {
-  return io.from_transfer(status, read_feed_transfer(data, destination), "read", "")
-}
-fn sink_transfer(raw: rawptr, data: []const u8) io.Transfer {
+fn sink(raw: rawptr, status: *fail.Status, data: []const u8) usize {
   _ = raw
-  return io.Transfer{ transferred: #len(data), status: io.Status.Complete }
-}
-fn sink(data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return io.from_transfer(status, sink_transfer(data, source), "write", "")
+  return #len(data)
 }
 fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8) {
   splits := #len(wire) + 1

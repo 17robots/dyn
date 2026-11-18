@@ -47,8 +47,8 @@ fn main() {
     }
     if result.status == bufio.ReadStatus.End { break }
   }
-  finished := io.write_transfer(io.stderr(), "done\\n")
-  if io.failed(finished.failure) { #panic("stderr failed") }
+  io.write(&status, io.stderr(), "done\\n")
+  if status.failed { #panic("stderr failed") }
 }
 ''')
     for options in ([], ['--release']):
@@ -67,15 +67,19 @@ fn main() {
         assert (result.stdout, result.stderr) == (b'[from file]\n', b'done\n')
     errors = root/'errors'; errors.mkdir()
     (errors/'main.dyn').write_text('''use "std/io"
+use "std/fail"
 fn main() {
   bytes: [1]u8
-  input := io.read_transfer(io.stdin(), bytes[..])
-  if !io.failed(input.failure) || input.failure.native == 0 || input.transferred != 0 { #panic("missing read error") }
-  output := io.write_transfer(io.stdout(), "x")
-  if !io.failed(output.failure) || output.failure.native == 0 || output.transferred != 0 { #panic("missing write error") }
-  empty := io.read_transfer(io.stdin(), bytes[..0])
-  if (empty.status != io.Status.Complete || io.failed(empty.failure)) || empty.transferred != 0 { #panic("empty read") }
-  _ = io.write_transfer(io.stderr(), "errors handled\\n")
+  reading: fail.Status
+  count := io.read(&reading, io.stdin(), bytes[..])
+  if !reading.failed || reading.failure.native == 0 || count != 0 { #panic("missing read error") }
+  writing: fail.Status
+  output := io.stdout()
+  written := output.write(output.data, &writing, "x")
+  if !writing.failed || writing.failure.native == 0 || written != 0 { #panic("missing write error") }
+  empty: fail.Status
+  if io.read(&empty, io.stdin(), bytes[..0]) != 0 || empty.failed { #panic("empty read") }
+  io.eprint("errors handled\\n")
 }
 ''')
     failure_program = root/('errors.exe' if os.name == 'nt' else 'errors-program')
@@ -119,6 +123,7 @@ fn check_descriptors() {
                 print('PASS WASI standard-stream execution')
     project = root/'portable'; project.mkdir()
     (project/'main.dyn').write_text('''use "std/io"
+use "std/fail"
 use "std/time"
 fn main() {
   parsed := time.parse_iso8601("2024-02-29T12:34:56Z")
@@ -126,8 +131,8 @@ fn main() {
   if !parsed.valid || !time.valid(&date) { #panic("date failed") }
   cursor := io.cursor("ok")
   bytes: [2]u8
-  result := io.read_exact_transfer(io.cursor_reader(&cursor), bytes[..])
-  if (result.status != io.Status.Complete || io.failed(result.failure)) { #panic("read failed") }
+  status: fail.Status
+  if io.read_exact(&status, io.cursor_reader(&cursor), bytes[..]) != 2 || status.failed { #panic("read failed") }
 }
 ''')
     for target in ('x86_64-windows', 'aarch64-macos', 'wasm32-browser', 'aarch64-linux'):

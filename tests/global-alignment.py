@@ -163,7 +163,7 @@ fn main() {{
   checksum += values[0] + values[1] + values[2] + #cast(i64,
     preceding[0] + tiny[14] + threshold[15] + bytes[16] + holder.tag + holder.data[16] + holder.tail + const_prefix)
   if checksum != 751 {{ #panic("checksum") }}
-  _ = io.write_transfer(io.stdout(), "751\\n")
+  io.print("751\\n")
 }}
 '''
 

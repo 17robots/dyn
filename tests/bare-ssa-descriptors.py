@@ -77,7 +77,7 @@ return paircheck(state,mutate()) }
 fn main() { r:=oracle()
 if r!=0 { io.println("oracle {}",r)
 #panic("oracle") }
-_=io.write_transfer(io.stdout(),"DESCRIPTORS OK\n") }
+io.print("DESCRIPTORS OK\n") }
 extern fn touch(p:rawptr)
 pub fn large(x:[]const u8) []const u8 { a:[1025]u64
 touch(&a)

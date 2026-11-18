@@ -90,9 +90,9 @@ fn encoded_summary(arena: *mem.Arena, summary: *const Summary) []u8 {
   return json.encode(arena, root)
 }
 fn print_json(value: []const u8) {
-  if !io.complete(io.write_transfer(io.stdout(), value)) || !io.complete(io.write_transfer(io.stdout(), "\n")) {
-    #panic("stdout")
-  }
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  io.write(&status, io.stdout(), value)
+  io.write(&status, io.stdout(), "\n")
 }
 fn report(file: []const u8) {
   input := mem.arena_alloc(mem.GiB)

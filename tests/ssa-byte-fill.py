@@ -54,7 +54,7 @@ pub fn repeated(rounds:usize) {
 }''']
     checks += ['full_length()\nfor b in whole { if b!=128 { #panic("array length") } }',
                'data[65]=77\ndata[66]=78\nrepeated(3)\nif seen!=384 || data[65]!=77 || data[66]!=78 { #panic("repeated/canary") }']
-    return '\n'.join(lines+['fn main() {', *checks, '_=io.write_transfer(io.stdout(),"OK\\n")', '}']), names
+    return '\n'.join(lines+['fn main() {', *checks, 'io.print("OK\\n")', '}']), names
 
 
 REJECT = '''use "std/io"
@@ -83,7 +83,7 @@ pub fn too_far() { for i in 0..65 { small[i]=1 } }
 '''
 CASES = [
     ('success', *success_source(), '', 'OK\n'),
-    ('rejected', REJECT+'fn main() {\nsmall[0]=77\noffset()\nif small[0]!=77 { #panic("offset") }\nside_effect()\nif calls!=64 { #panic("effects") }\nextra()\nif calls!=128 { #panic("extra") }\ndynamic(64)\nother_type()\nshort()\nif local()!=255 || wide[63]!=255 { #panic("fallback") }\nindirect(&small)\nif small[0]!=128 || small[63]!=128 { #panic("pointer fallback") }\npointer_length(&small)\nsliced(small[..])\neffect_length()\nif calls!=129 || small[63]!=1 { #panic("length expression fallback") }\n_=io.write_transfer(io.stdout(),"OK\\n")\n}', [], '', 'OK\n'),
+    ('rejected', REJECT+'fn main() {\nsmall[0]=77\noffset()\nif small[0]!=77 { #panic("offset") }\nside_effect()\nif calls!=64 { #panic("effects") }\nextra()\nif calls!=128 { #panic("extra") }\ndynamic(64)\nother_type()\nshort()\nif local()!=255 || wide[63]!=255 { #panic("fallback") }\nindirect(&small)\nif small[0]!=128 || small[63]!=128 { #panic("pointer fallback") }\npointer_length(&small)\nsliced(small[..])\neffect_length()\nif calls!=129 || small[63]!=1 { #panic("length expression fallback") }\nio.print("OK\\n")\n}', [], '', 'OK\n'),
     ('overbound', REJECT+'fn main() { too_far() }', [], 'index.ok', ''),
     ('dynamic-overbound', REJECT+'fn main() { dynamic(65) }', [], 'index.ok', ''),
 ]

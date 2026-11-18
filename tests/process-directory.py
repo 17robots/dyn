@@ -22,7 +22,7 @@ arena := mem.arena_from_buffer(storage[..])
   status: fail.Status
   value := fs.read_all(arena, &status, "marker", 16)
   if status.failed { #panic("child cwd") }
-  _ = io.write_transfer(io.stdout(), value)
+  io.print("{}", value)
 }''')
     executable = root/('child.exe' if os.name == 'nt' else 'child-bin')
     subprocess.run([str(DYN),'build',str(child),'--output',str(executable),'--jobs','1'], check=True, timeout=30)

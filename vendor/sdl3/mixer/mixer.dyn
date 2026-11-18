@@ -55,8 +55,8 @@ pub fn stop(track: Track) bool {
 pub fn playing(track: Track) bool {
   return track != nil && native_playing(track)
 }
-// Samples are interleaved stereo f32. Length must be even. written is the
-// The count of meaningful samples; provider fills the rest with silence.
+// Samples are interleaved stereo f32. Length must be even. Returns the count
+// of meaningful samples; the provider fills the rest with silence.
 pub fn generate(status: *fail.Status, mixer: Mixer, samples: []f32) usize {
   if status.failed { return 0 }
   if mixer == nil || #len(samples) == 0 || #len(samples) % 2 != 0 || #len(samples) > 536870911 {

@@ -77,7 +77,7 @@ fn main() { cb=cwide
 status:=oracle()
 if status!=0 { io.println("oracle {}",status)
 #panic("oracle") }
-_=io.write_transfer(io.stdout(),"CALLS OK\n") }
+io.print("CALLS OK\n") }
 '''
 c=r'''
 typedef unsigned long long U; typedef unsigned W;

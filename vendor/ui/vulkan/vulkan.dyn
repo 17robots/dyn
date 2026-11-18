@@ -16,7 +16,7 @@ extern fn native_open "dyn_ui_vk_open"() rawptr
 extern fn native_close "dyn_ui_vk_close"(handle: rawptr)
 extern fn native_render "dyn_ui_vk_render"(handle: rawptr, words: *const u32, count: u32, rgba: *u8, width: u32, height: u32) i32
 struct Draw { bounds: ui.Rect, tint: ui.Color, coverage: []u8, next: *Draw }
-struct Build { arena: *mem.Arena, limits: Limits, count: usize, coverage_bytes: usize, first: *Draw, last: *Draw, kind: io.Kind }
+struct Build { arena: *mem.Arena, limits: Limits, count: usize, coverage_bytes: usize, first: *Draw, last: *Draw, kind: fail.Kind }
 pub fn open(status: *fail.Status, renderer: *Renderer, limits: Limits) {
   if status.failed { return }
   if renderer.handle != nil {

@@ -29,7 +29,7 @@ pub fn guarded(s:[]const u8) u64 {
 callback:fn([]const u8) u64=guarded
 fn main() {
 CHECKS
-  _=io.write_transfer(io.stdout(),"CONSTANT PASS\\n")
+  io.print("CONSTANT PASS\\n")
 }
 '''
 

@@ -8,20 +8,19 @@ use "std/fs"
 use "std/mem"
 use "std/bytes"
 use "std/process"
-use "std/io" errors
 fn require(value: bool, message: []const u8) { if !value { #panic(message) } }
 fn main() {
  zero := mem.arena_alloc(0)
  defer mem.arena_release(zero)
  missing_file: fail.Status
  missing := fs.read_all(zero, &missing_file, "DIR/missing", 100)
- require(missing_file.failed && missing_file.failure.kind == errors.Kind.NotFound && mem.arena_used(zero)==0,"missing state")
+ require(missing_file.failed && missing_file.failure.kind == fail.Kind.NotFound && mem.arena_used(zero)==0,"missing state")
  none_file: fail.Status
  none := fs.read_all(zero, &none_file, "DIR/empty", 0)
  require(!none_file.failed && #len(none)==0 && mem.arena_used(zero)==0,"zero max empty")
  extra_file: fail.Status
  extra := fs.read_all(zero, &extra_file, "DIR/small", 0)
- require(extra_file.failed && extra_file.failure.kind==errors.Kind.Overflow && mem.arena_used(zero)==0,"zero max overflow")
+ require(extra_file.failed && extra_file.failure.kind==fail.Kind.Overflow && mem.arena_used(zero)==0,"zero max overflow")
  result_file: fail.Status
  result := fs.read_all(zero, &result_file, "DIR/small", 6)
  require(!result_file.failed && bytes.equal(result,"abcdef"),"lazy read")
@@ -36,7 +35,7 @@ fn main() {
  mark := mem.arena_mark(zero)
  overflow_file: fail.Status
  overflow := fs.read_all(zero, &overflow_file, "DIR/large", 65537)
- require(overflow_file.failed && overflow_file.failure.kind==errors.Kind.Overflow && mem.arena_mark(zero)==mark,"limit rollback")
+ require(overflow_file.failed && overflow_file.failure.kind==fail.Kind.Overflow && mem.arena_mark(zero)==mark,"limit rollback")
  for byte in prefix { require(byte==77,"prefix") }
  large_file: fail.Status
  large := fs.read_all(zero, &large_file, "DIR/large", 131073)
@@ -47,7 +46,7 @@ fn main() {
  fixed.data = fixed.data[..mem.ArenaHeader + 5]
  short_file: fail.Status
  short := fs.read_all(fixed, &short_file, "DIR/small", 100)
- require(short_file.failed && short_file.failure.kind==errors.Kind.Capacity && mem.arena_mark(fixed)== mem.arena_start(fixed),"fixed rollback")
+ require(short_file.failed && short_file.failure.kind==fail.Kind.Capacity && mem.arena_mark(fixed)== mem.arena_start(fixed),"fixed rollback")
  fixed_empty := mem.arena_from_buffer(storage[..])
  fixed_empty.data = fixed_empty.data[..mem.ArenaHeader]
  empty_file: fail.Status
@@ -55,7 +54,7 @@ fn main() {
  require(!empty_file.failed && #len(empty)==0 && fixed_empty.fixed_buffer && !fixed_empty.owns_memory,"fixed empty")
  full_file: fail.Status
  full := fs.read_all(fixed_empty, &full_file, "DIR/small", 100)
- require(full_file.failed && full_file.failure.kind==errors.Kind.Capacity && fixed_empty.fixed_buffer && !fixed_empty.owns_memory,"fixed empty capacity")
+ require(full_file.failed && full_file.failure.kind==fail.Kind.Capacity && fixed_empty.fixed_buffer && !fixed_empty.owns_memory,"fixed empty capacity")
  bounded := mem.arena_alloc_bounded(160,160)
  defer mem.arena_release(bounded)
  bounded_small_file: fail.Status
@@ -64,7 +63,7 @@ fn main() {
  bounded_mark:=mem.arena_mark(bounded)
  bounded_large_file: fail.Status
  bounded_large := fs.read_all(bounded, &bounded_large_file, "DIR/large", 100)
- require(bounded_large_file.failed && bounded_large_file.failure.kind==errors.Kind.Capacity && mem.arena_mark(bounded)==bounded_mark,"bounded rollback")
+ require(bounded_large_file.failed && bounded_large_file.failure.kind==fail.Kind.Capacity && mem.arena_mark(bounded)==bounded_mark,"bounded rollback")
  require(bytes.equal(bounded_small,"abcdef"),"bounded retained payload")
  chained := mem.arena_alloc(160)
  defer mem.arena_release(chained)
@@ -80,7 +79,7 @@ fn main() {
  require(!chain_empty_file.failed && #len(chain_empty)==0 && mem.arena_mark(chained)==chain_mark,"chain empty")
  chain_overflow_file: fail.Status
  chain_overflow := fs.read_all(chained, &chain_overflow_file, "DIR/large", 65537)
- require(chain_overflow_file.failed && chain_overflow_file.failure.kind==errors.Kind.Overflow && mem.arena_mark(chained)==chain_mark && mem.arena_snapshot(chained).blocks==chain_blocks,"chain rollback")
+ require(chain_overflow_file.failed && chain_overflow_file.failure.kind==fail.Kind.Overflow && mem.arena_mark(chained)==chain_mark && mem.arena_snapshot(chained).blocks==chain_blocks,"chain rollback")
  directory_error_file: fail.Status
  directory_error := fs.read_all(chained, &directory_error_file, "DIR", 100)
  require(directory_error_file.failed && mem.arena_mark(chained)==chain_mark && mem.arena_snapshot(chained).blocks==chain_blocks,"I/O error rollback")

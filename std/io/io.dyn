@@ -19,83 +19,17 @@ pub struct Writer {
   write: fn(rawptr, *fail.Status, []const u8) usize,
 }
 
-// The result of a transfer in modules that have not moved to fail.Status:
-// a count, whether the stream ended, and the failure, zero on success.
-pub enum Status { Complete, End }
-pub struct Transfer {
-  transferred: usize,
-  failure: Failure,
-  status: Status,
-}
-// Whether a transfer finished without reaching the end and without failing.
-pub fn complete(transfer: Transfer) bool {
-  return transfer.status == Status.Complete && !failed(transfer.failure)
-}
-// Records a Transfer's failure in status and returns its count: for Reader
-// and Writer functions built on code that still returns Transfer.
-pub fn from_transfer(status: *fail.Status, transfer: Transfer, operation: []const u8, path: []const u8) usize {
-  if failed(transfer.failure) {
-    failure := fail.make(transfer.failure.kind, operation, path, "")
-    failure.native = transfer.failure.native
-    fail.set(status, failure)
-  }
-  return transfer.transferred
-}
-
-// One read or write as a Transfer, for modules that still report through
-// Transfer. They go away as those modules move to fail.Status.
-pub fn read_transfer(reader: Reader, destination: []u8) Transfer {
-  status: fail.Status
-  count := read(&status, reader, destination)
-  if status.failed {
-    return Transfer{ transferred: count, failure: Failure{ kind: status.failure.kind, native: status.failure.native } }
-  }
-  if count == 0 && #len(destination) != 0 { return Transfer{ status: Status.End } }
-  return Transfer{ transferred: count, status: Status.Complete }
-}
-// Reads until destination is full or the stream ends; Status.End when it
-// ended first.
-pub fn read_exact_transfer(reader: Reader, destination: []u8) Transfer {
-  total: usize = 0
-  for total < #len(destination) {
-    part := read_transfer(reader, destination[total..])
-    total += part.transferred
-    if failed(part.failure) { return Transfer{ transferred: total, failure: part.failure } }
-    if part.status == Status.End { return Transfer{ transferred: total, status: Status.End } }
-  }
-  return Transfer{ transferred: total, status: Status.Complete }
-}
-pub fn write_transfer(writer: Writer, source: []const u8) Transfer {
-  if #len(source) == 0 { return Transfer{ status: Status.Complete } }
-  if writer.write == nil { return Transfer{ failure: Failure{ kind: Kind.InvalidState } } }
-  status: fail.Status
-  total: usize = 0
-  for total < #len(source) {
-    remaining := #len(source) - total
-    count := writer.write(writer.data, &status, source[total..])
-    if count > remaining {
-      return Transfer{ transferred: total, failure: Failure{ kind: Kind.System, native: -5 } }
-    }
-    total += count
-    if status.failed {
-      return Transfer{ transferred: total, failure: Failure{ kind: status.failure.kind, native: status.failure.native } }
-    }
-    if count == 0 { return Transfer{ transferred: total, failure: Failure{ kind: Kind.System, native: -5 } } }
-  }
-  return Transfer{ transferred: total, status: Status.Complete }
-}
-
 // Reads into destination; the count read, zero at the end of the stream and
 // after a failure.
 pub fn read(status: *fail.Status, reader: Reader, destination: []u8) usize {
   if status.failed || #len(destination) == 0 { return 0 }
   if reader.read == nil {
-    fail.set(status, fail.make(Kind.InvalidState, "read", "", "reader has no read function"))
+    fail.set(status, fail.make(fail.Kind.InvalidState, "read", "", "reader has no read function"))
     return 0
   }
   count := reader.read(reader.data, status, destination)
   if count > #len(destination) {
-    failure := fail.make(Kind.System, "read", "", "reader returned more bytes than asked for")
+    failure := fail.make(fail.Kind.System, "read", "", "reader returned more bytes than asked for")
     failure.native = -5
     fail.set(status, failure)
     return 0
@@ -112,7 +46,7 @@ pub fn read_exact(status: *fail.Status, reader: Reader, destination: []u8) usize
     if status.failed { return 0 }
     if count == 0 {
       if total == 0 { return 0 }
-      fail.set(status, fail.make(Kind.InvalidInput, "read", "", "stream ended early"))
+      fail.set(status, fail.make(fail.Kind.InvalidInput, "read", "", "stream ended early"))
       return 0
     }
     total += count
@@ -124,7 +58,7 @@ pub fn read_exact(status: *fail.Status, reader: Reader, destination: []u8) usize
 pub fn write(status: *fail.Status, writer: Writer, source: []const u8) {
   if status.failed || #len(source) == 0 { return }
   if writer.write == nil {
-    fail.set(status, fail.make(Kind.InvalidState, "write", "", "writer has no write function"))
+    fail.set(status, fail.make(fail.Kind.InvalidState, "write", "", "writer has no write function"))
     return
   }
   total: usize = 0
@@ -136,7 +70,7 @@ pub fn write(status: *fail.Status, writer: Writer, source: []const u8) {
       if count != 0 {
         message = "writer reported more bytes than it was given"
       }
-      failure := fail.make(Kind.System, "write", "", message)
+      failure := fail.make(fail.Kind.System, "write", "", message)
       failure.native = -5
       fail.set(status, failure)
       return
@@ -274,7 +208,7 @@ pub fn print_arguments(status: *fail.Status, writer: Writer, template: []const u
     argument_index += 1
   }
   if mismatch {
-    fail.set(status, fail.make(Kind.InvalidInput, "print", "", "template does not match its arguments"))
+    fail.set(status, fail.make(fail.Kind.InvalidInput, "print", "", "template does not match its arguments"))
   }
 }
 
@@ -292,7 +226,7 @@ pub fn println_arguments(status: *fail.Status, writer: Writer, template: []const
   if status.failed { return }
   line: fail.Status
   print_arguments(&line, writer, template, arguments)
-  if line.failed && line.failure.kind != Kind.InvalidInput {
+  if line.failed && line.failure.kind != fail.Kind.InvalidInput {
     fail.set(status, line.failure)
     return
   }
@@ -309,7 +243,7 @@ pub fn println_to(status: *fail.Status, writer: Writer, template: []const u8, ar
 pub fn copy(status: *fail.Status, writer: Writer, reader: Reader, scratch: []u8) usize {
   if status.failed { return 0 }
   if #len(scratch) == 0 {
-    fail.set(status, fail.make(Kind.InvalidInput, "copy", "", "scratch buffer is empty"))
+    fail.set(status, fail.make(fail.Kind.InvalidInput, "copy", "", "scratch buffer is empty"))
     return 0
   }
   total: usize = 0
@@ -328,7 +262,7 @@ pub fn copy(status: *fail.Status, writer: Writer, reader: Reader, scratch: []u8)
 pub fn copy_n(status: *fail.Status, writer: Writer, reader: Reader, amount: usize, scratch: []u8) {
   if status.failed || amount == 0 { return }
   if #len(scratch) == 0 {
-    fail.set(status, fail.make(Kind.InvalidInput, "copy", "", "scratch buffer is empty"))
+    fail.set(status, fail.make(fail.Kind.InvalidInput, "copy", "", "scratch buffer is empty"))
     return
   }
   total: usize = 0
@@ -339,7 +273,7 @@ pub fn copy_n(status: *fail.Status, writer: Writer, reader: Reader, amount: usiz
     }
     count := read_exact(status, reader, scratch[..take])
     if count == 0 && !status.failed {
-      fail.set(status, fail.make(Kind.InvalidInput, "copy", "", "stream ended early"))
+      fail.set(status, fail.make(fail.Kind.InvalidInput, "copy", "", "stream ended early"))
     }
     write(status, writer, scratch[..count])
     total += count
@@ -358,7 +292,7 @@ pub fn cursor(data: []const u8) Cursor {
 fn cursor_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
   state := #cast(*Cursor, data)
   if state.offset > #len(state.data) {
-    fail.set(status, fail.make(Kind.InvalidState, "read", "", "cursor offset is past its data"))
+    fail.set(status, fail.make(fail.Kind.InvalidState, "read", "", "cursor offset is past its data"))
     return 0
   }
   remaining := #len(state.data) - state.offset
@@ -397,7 +331,7 @@ pub fn buffer_writer_reset(state: *BufferWriter) {
 fn buffer_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
   state := #cast(*BufferWriter, data)
   if state.length > #len(state.data) {
-    fail.set(status, fail.make(Kind.InvalidState, "write", "", "buffer length is past its storage"))
+    fail.set(status, fail.make(fail.Kind.InvalidState, "write", "", "buffer length is past its storage"))
     return 0
   }
   remaining := #len(state.data) - state.length
@@ -410,7 +344,7 @@ fn buffer_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
   }
   state.length += take
   if take != #len(source) {
-    fail.set(status, fail.make(Kind.Capacity, "write", "", "buffer is full"))
+    fail.set(status, fail.make(fail.Kind.Capacity, "write", "", "buffer is full"))
   }
   return take
 }

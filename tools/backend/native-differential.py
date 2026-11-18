@@ -412,7 +412,7 @@ fn main() {{
   arena := mem.arena_from_buffer(backing[..])
   arguments_status: fail.Status
   arguments := process.arguments(arena, &arguments_status)
-  if arguments_status.failure.kind != io.Kind.Ok || #len(arguments) < 2 {{ #panic("case index required") }}
+  if arguments_status.failed || #len(arguments) < 2 {{ #panic("case index required") }}
   if !strings.valid(u64, arguments[1]) {{ #panic("bad case index") }}
   index := strings.parse(u64, arguments[1])
   case index / 128 {{

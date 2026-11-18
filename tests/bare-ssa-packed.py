@@ -90,7 +90,7 @@ return 0; }
 W anyoracle(void) { W x=91; return anycall(0x1122334455667788ULL,(W)&x); }
 W cpacr(void){return *(volatile W*)0xe000ed88u;}
 '''
-src+='fn main() {\nanydebug()\n'+''.join(f'if {x} {{ #panic("case{i}") }}\n' for i,x in enumerate(checks))+'_ = io.write_transfer(io.stdout(),"PACK OK\\n") }\n'
+src+='fn main() {\nanydebug()\n'+''.join(f'if {x} {{ #panic("case{i}") }}\n' for i,x in enumerate(checks))+'io.print("PACK OK\\n") }\n'
 
 cases={
 'anyreturn':'pub fn bad(x:any) any { return x }\nfn main() {}',
