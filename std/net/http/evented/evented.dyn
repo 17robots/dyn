@@ -401,6 +401,13 @@ pub struct Worker {
   // otherwise wake the loop continuously.
   listening: bool,
   scratch: *mem.Arena,
+  // Set by run and later on first use, and by open_stream: the loop reaches
+  // job and stream code only through these, so a server that never defers or
+  // streams does not link it.
+  on_deferred: fn(*Worker, usize) bool,
+  on_job_done: fn(*Worker, usize),
+  on_later: fn(*Worker),
+  on_deliver: fn(*Worker, usize, Post, []const u8),
   // Where response heads are composed: 8 KiB, reused by every response this
   // worker writes, so none zeroes a buffer of its own.
   head_staging: []u8,
@@ -864,7 +871,7 @@ fn recycle(worker: *Worker, index: usize) {
 // connection must close now.
 fn serve_buffered(worker: *Worker, index: usize) bool {
   connection := &worker.connections[index]
-  if connection.mode == Mode.Deferred { return flush_and_wait(worker, index) }
+  if connection.mode == Mode.Deferred { return worker.on_deferred(worker, index) }
   if connection.mode == Mode.Body { return body_feed(worker, index) }
   if connection.mode == Mode.Http2 { return worker.config.http2.serve(worker, index) }
   if connection.fresh && connection.mode == Mode.Http && has_http2(worker.config) {
@@ -929,7 +936,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
       // run took the request: it stays in input until finish answers it.
       connection.job_request = request
       connection.job_consumed = consumed
-      return flush_and_wait(worker, index)
+      return worker.on_deferred(worker, index)
     }
     if connection.mode == Mode.Stream || connection.mode == Mode.WebSocket { break }
     if handler_failed || !response.finished {
@@ -1359,7 +1366,9 @@ fn worker_main(worker: *Worker) isize {
       }
     }
     mem.arena_rewind(worker.scratch, mark)
-    finish_later(worker)
+    if worker.on_later != nil {
+      worker.on_later(worker)
+    }
     // Datagrams, timers, and whatever handlers and pushes wrote to QUIC.
     if has_http3(worker.config) {
       worker.config.http3.poll(worker)
@@ -1378,7 +1387,9 @@ fn worker_main(worker: *Worker) isize {
       }
     }
   }
-  finish_later(worker)
+  if worker.on_later != nil {
+    worker.on_later(worker)
+  }
   // Slots past slots_used were never taken.
   for i in 0..worker.slots_used {
     close_connection(worker, i)
@@ -1847,7 +1858,7 @@ fn read_inbox(worker: *Worker) {
     if (entry & SlotJob) != 0 {
       worker.config.http2.job_done(worker, entry & ~SlotJob)
     } else {
-      job_done(worker, entry)
+      worker.on_job_done(worker, entry)
     }
   }
   inbox.done_count[half] = 0
@@ -1861,7 +1872,7 @@ fn read_inbox(worker: *Worker) {
         if pushable(connection) && connection.mode == Mode.Http2 && !connection.close_after {
           worker.config.http2.deliver(worker, connection, item, payload)
         } else if pushable(connection) && connection.topic == item.topic && !connection.close_after {
-          deliver(worker, c, item, payload)
+          worker.on_deliver(worker, c, item, payload)
         }
       }
       touched = true
@@ -1873,7 +1884,7 @@ fn read_inbox(worker: *Worker) {
       if connection.mode == Mode.Http2 {
         worker.config.http2.deliver(worker, connection, item, payload)
       } else {
-        deliver(worker, index, item, payload)
+        worker.on_deliver(worker, index, item, payload)
       }
       touched = true
     }
@@ -2041,6 +2052,7 @@ pub fn run(status: *fail.Status, response: *http.Response, data: *$J, work: fn(*
   connection.job_work = #cast(fn(rawptr), work)
   connection.job_finish = #cast(fn(*fail.Status, *http.Response, *const http.Request, rawptr), finish)
   connection.job_running = true
+  use_jobs(worker)
   if !tasks.submit(worker.config.pool, tasks.Task{ run: job_main, data: connection }) {
     connection.job_running = false
     job_failure(status, fail.Kind.Capacity, "the pool's queue is full")
@@ -2084,10 +2096,18 @@ pub fn later(status: *fail.Status, response: *http.Response, data: *$J, finish: 
   connection.job_finish = #cast(fn(*fail.Status, *http.Response, *const http.Request, rawptr), finish)
   connection.job_running = true
   connection.mode = Mode.Deferred
+  use_jobs(worker)
+  worker.on_later = finish_later
   worker.jobs_running += 1
   worker.later[worker.later_count] = connection.index
   worker.later_count += 1
   response.finished = true
+}
+
+// Puts the job code within the loop's reach; see Worker.on_deferred.
+fn use_jobs(worker: *Worker) {
+  worker.on_deferred = flush_and_wait
+  worker.on_job_done = job_done
 }
 
 // Requests deferred with later, including any that their finishing defers.
@@ -2364,6 +2384,7 @@ pub fn open_stream(status: *fail.Status, response: *http.Response, options: http
   if status.failed { return Peer{} }
   connection.mode = Mode.Stream
   connection.topic = topic
+  connection.worker.on_deliver = deliver
   return peer_of(connection.worker, connection.index)
 }
 
@@ -2397,6 +2418,7 @@ pub fn upgrade(status: *fail.Status, response: *http.Response, request: *const h
   connection.topic = topic
   connection.frames = websocket.message_state(true)
   connection.on_frames = websocket_frames
+  connection.worker.on_deliver = deliver
   return peer_of(connection.worker, connection.index)
 }
 

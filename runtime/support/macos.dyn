@@ -1,8 +1,4 @@
 #target(kernel: darwin)
-// This target retains thread lookup when unlinking an unwind frame.
-fn unwind_owner_offset() usize {
-  return 0
-}
 extern fn pthread_self "pthread_self"() rawptr
 extern fn syscall_raw "dyn_syscall6"(n: i64, a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) i64
 // Runtime slot chunks: 64 threads per chunk, more chunks on demand.
@@ -26,19 +22,6 @@ fn trace_write(data: *const u8, size: u64) {
     if written <= 0 { return }
     offset += #cast(usize, written)
   }
-}
-// Resumes unwinding after a frame's cleanup has run.
-pub fn dyn_unwind_continue() {
-  slot := unwind_slot(false)
-  if slot != nil && slot.top != nil {
-    frame := slot.top
-    slot.top = frame.previous
-    jump(frame)
-  }
-  if slot != nil {
-    panic_raw(slot.message, slot.length)
-  }
-  panic_raw(nil, 0)
 }
 // Debug programs report a memory fault like a panic. The handler runs on its
 // own stack, so a stack overflow reports too, and never returns.

@@ -339,6 +339,14 @@ Compiler:
   reaches could stop a constant argument from being folded into a function
   it does reach, so importing an unused module could change the code of
   used ones.
+- Every program links less runtime support: 10.1 KB instead of 19.7 KB on
+  x86-64 Linux. The unwinding left over from when a panic ran defers is
+  gone (the per-thread 4 KiB message buffer, the link and continue
+  functions, and the jump routines in every start file); a panic still
+  records its trace and runs the `panic.set_handler` handler. The software
+  floating point helpers are built only for soft-float targets.
+- `#target` takes `float: soft` or `float: hard`. Targets whose ABI passes
+  floats in integer registers (`ilp32`, `aapcs-soft`) are `soft`.
 
 Compiler speed of generated code:
 
@@ -479,6 +487,9 @@ Servers:
   resident after serving, down from 9.7 MiB.
 - `evented.job` panics, naming the type and both sizes, when the job type is
   larger than `Config.job_size`. It used to return nil on every request.
+- The evented server links its job code (`run`, `later`) and its push code
+  (`open_stream`, `upgrade`) only when the program calls them. The flagship
+  server is 161 KB of code instead of 175 KB.
 
 Finding things:
 

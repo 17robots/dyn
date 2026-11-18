@@ -62,6 +62,10 @@ const char *dyn_target_property(const DynTarget *target, const char *key) {
     return target->endian;
   if (!strcmp(key, "pointer_bits"))
     return target->pointer_bits;
+  /* Floating point in software: the soft-float ABIs, whose code calls the
+     dyn_soft_* helpers. Everything else has a hardware FPU. */
+  if (!strcmp(key, "float"))
+    return !strcmp(target->abi, "ilp32") || !strcmp(target->abi, "aapcs-soft") ? "soft" : "hard";
   /* Standard input, output and error: every target but the browser. */
   if (!strcmp(key, "streams"))
     return strcmp(target->kernel, "browser") ? "yes" : "no";

@@ -181,9 +181,6 @@ add('parser-unit-test', [COMPILER/'tests/parser-unit.c', *parser_sources, *heade
 add('parser-snapshot-test', [COMPILER/'tests/parser-snapshot.c', *parser_sources, *headers],
     [*cc, *cflags, '-O1', f'-I{COMPILER}/src', COMPILER/'tests/parser-snapshot.c', '-pthread', '-o', BUILD/'parser-snapshot-test'])
 
-add('unwind-capacity-test', [f'{COMPILER}/tests/unwind-capacity.c', f'{COMPILER}/runtime/reference_support.c'],
-    [*cc, *cppflags, *cflags, '-ffreestanding', '-fno-builtin', 'tests/unwind-capacity.c', '-o', f'{BUILD}/unwind-capacity-test'])
-
 add('dyn-per-file', [*sources, *headers, *native_sources, *native_inputs],
     [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', *sources, *native_sources, '-pthread', '-o', BUILD/'dyn-per-file'])
 

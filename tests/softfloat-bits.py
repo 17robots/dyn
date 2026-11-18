@@ -200,7 +200,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-softfloat-bits-') as tmp:
     source.mkdir()
     # Runtime symbols are reserved in ordinary application builds. Rename
     # only those symbols in this isolated copy; helper bodies stay identical.
-    (source / 'softfloat.dyn').write_text(HELPERS.replace('dyn_soft_', 'test_soft_'))
+    (source / 'softfloat.dyn').write_text(HELPERS.replace('#target(float: soft)\n', '').replace('dyn_soft_', 'test_soft_'))
     driver = ['extern fn run_oracle(f:fn(u64,u64,u64) u64, count:u64, seed:u64) i32',
               'fn dispatch(op:u64,a:u64,b:u64) u64 {', 'case op {']
     for wide in (False, True):

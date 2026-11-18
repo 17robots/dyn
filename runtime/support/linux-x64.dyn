@@ -1,8 +1,4 @@
 #target(kernel: linux, arch: x86_64)
-// Linux x64 saves registers through byte 71 in a 128-byte context.
-fn unwind_owner_offset() usize {
-  return 72
-}
 fn exit_number() i64 {
   return 231
 }
@@ -37,7 +33,7 @@ fn write_number() i64 {
 
 // Registers dyn_panic captures from its caller; the trace starts there.
 struct UnwindState {
-  previous: *Unwind, rbx: u64, rbp: u64, r12: u64, r13: u64, r14: u64, r15: u64, rsp: u64, rip: u64
+  previous: rawptr, rbx: u64, rbp: u64, r12: u64, r13: u64, r14: u64, r15: u64, rsp: u64, rip: u64
 }
 // A panic does not run defers: it records the trace, runs the handler set
 // with panic.set_handler, and returns so dyn_panic reports and exits.
