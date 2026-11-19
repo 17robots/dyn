@@ -21,6 +21,15 @@ servers so they pick up the new `dyn`.
   `config.large_body = evented.large_bodies(upload)` where you had
   `config.on_large_body = upload`. `receive_body` is unchanged.
 
+Fixes:
+
+- Release builds could compute wrong results when two adjacent `f32` fields
+  were stored together and the same values had been read earlier in the
+  function by a condition spanning several blocks (`a && x > p.x && ...`).
+  The two-lane pairing pass sent those earlier reads to lanes that did not
+  exist yet. Preview 40 runs this pass at plain `--release` (before, only at
+  `--opt-level 3`), which exposed it.
+
 ## 0.1.0-preview.40
 
 Breaking: see [docs/migrations/0.1.0-preview.40.md](docs/migrations/0.1.0-preview.40.md),
