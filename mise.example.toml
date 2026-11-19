@@ -1,11 +1,11 @@
-# Verified preview 39 SDK assets; keep checksums and version together.
+# Verified preview 40 SDK assets; keep checksums and version together.
 [tools."github:17robots/dyn"]
-version = "0.1.0-preview.39"
+version = "0.1.0-preview.40"
 prerelease = true
 strip_components = 1
 bin_path = "bin"
 
 [tools."github:17robots/dyn".platforms]
-linux-x64 = { asset_pattern = "dyn-0.1.0-preview.39-linux-x86_64-glibc2.39.tar.gz", checksum = "sha256:4b15d092c88c293f79167a919295c536a748e0a64b32bf61c0bf85862a7597b5" }
-macos-arm64 = { asset_pattern = "dyn-0.1.0-preview.39-macos-aarch64.tar.gz", checksum = "sha256:03dd555303c95548f73ad0ceb7faf720c6410569a9ac969a73e062d9d403ec26" }
-windows-x64 = { asset_pattern = "dyn-0.1.0-preview.39-windows-x86_64.zip", checksum = "sha256:b7457f7b2363ebc36c0352615ea38a78768c8ebddf0f3ea493dd02fb7f155cec" }
+linux-x64 = { asset_pattern = "dyn-0.1.0-preview.40-linux-x86_64-glibc2.39.tar.gz", checksum = "sha256:162a6f88b36ae41a008084c0f6eac5ff3169e951239ed42d804acf07e4786e1e" }
+macos-arm64 = { asset_pattern = "dyn-0.1.0-preview.40-macos-aarch64.tar.gz", checksum = "sha256:2b4d2a3b698cbe2108ec370312226c7f8653297d5b9532eaf8fcb1161505bed3" }
+windows-x64 = { asset_pattern = "dyn-0.1.0-preview.40-windows-x86_64.zip", checksum = "sha256:8aa9005a6ddea7ab329d7ef6fadafec9741882cd5dc0f0fec1f9ffccb771621b" }
