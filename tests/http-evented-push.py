@@ -110,7 +110,7 @@ def exercise(port):
 
     assert request(port, 'GET', '/ip')[2] == b'127.0.0.1'
 
-    # Bodies past the 1 MiB upload blocks stream through Config.on_large_body.
+    # Bodies past the 1 MiB upload blocks stream through Config.large_body.
     big = bytes((i * 13) % 256 for i in range(5 * 1024 * 1024 + 7))
     status, _, body = request(port, 'POST', '/large', big)
     assert (status, body) == (200, b'%d %d' % (len(big), sum(big))), (status, body)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """HTTP/3 on the evented server through OpenSSL QUIC, driven by curl's HTTP/3
 client (ngtcp2 and nghttp3): requests, HEAD, bodies in slots, upload blocks
-and on_large_body, gzip, many streams on one connection, run jobs, SSE with
+and Config.large_body, gzip, many streams on one connection, run jobs, SSE with
 publish, Alt-Svc on TCP responses and connection slots given back."""
 import gzip
 import http.client

@@ -11,7 +11,7 @@
 // state blocks (HPACK table and stream table), and each stream holds one of
 // the worker's Config.http2_slots request slots (receive_size bytes plus job
 // storage) until it is answered; bodies past a slot borrow an upload block,
-// and larger ones go to Config.on_large_body. A stream that finds no slot is
+// and larger ones go to Config.large_body. A stream that finds no slot is
 // refused (REFUSED_STREAM), which clients retry.
 //
 // Costs to know:
@@ -83,7 +83,7 @@ enum Phase {
   Deferred,
   // open_stream: answered, pushes arrive through the inbox.
   Streaming,
-  // on_large_body before receive_body, and while the body arrives.
+  // large_body before receive_body, and while the body arrives.
   LargeHead,
   Large,
   // upgrade: WebSocket frames in DATA, assembled in the slot.
@@ -1083,7 +1083,7 @@ fn on_headers(worker: *Worker, index: usize, at: usize, sequence: usize) bool {
 }
 
 // Moves a stream's request into an upload block for total body bytes, or
-// hands it to on_large_body when nothing can hold it.
+// hands it to large_body when nothing can hold it.
 fn grow_stream(worker: *Worker, index: usize, stream_index: usize, total: usize) {
   connection := &worker.connections[index]
   stream := &connection.h2.streams[stream_index]
@@ -1101,7 +1101,7 @@ fn grow_stream(worker: *Worker, index: usize, stream_index: usize, total: usize)
     send_answer(worker, index, stream_index, http.StatusServiceUnavailable, "upload slots busy\n")
     return
   }
-  if worker.config.on_large_body != nil {
+  if worker.config.large_body.handler != nil {
     large_begin(worker, index, stream_index)
     return
   }
@@ -1183,7 +1183,7 @@ fn on_data(worker: *Worker, index: usize, flags: u8, id: u32, payload: []const u
   }
   stream.credit += #cast(i64, #len(payload))
   if stream.phase == Phase.Receiving && stream.head_length + stream.body_length + #len(data) > #len(stream.storage) {
-    // Into an upload block, to on_large_body, or answered and closed.
+    // Into an upload block, to large_body, or answered and closed.
     grow_stream(worker, index, found, stream.body_length + #len(data))
     stream = &h2.streams[found]
     if stream.phase != Phase.Receiving && stream.phase != Phase.Large { return }
@@ -1818,7 +1818,7 @@ fn h2_deliver(worker: *Worker, connection: *Connection, item: Post, payload: []c
   }
 }
 
-// HEADERS whose body fits nothing: on_large_body answers from the head or
+// HEADERS whose body fits nothing: large_body answers from the head or
 // starts receive_body.
 fn large_begin(worker: *Worker, index: usize, stream_index: usize) {
   connection := &worker.connections[index]
@@ -1832,7 +1832,7 @@ fn large_begin(worker: *Worker, index: usize, stream_index: usize) {
   stream.head_only = bytes.equal(request.method, "HEAD")
   response := h2_response(worker, connection, stream_index)
   worker.requests += 1
-  worker.config.on_large_body(&worker.request, &response, &request)
+  worker.config.large_body.handler(&worker.request, &response, &request)
   _ = handled(worker, &request, &response, connection.h2.streams[stream_index].phase == Phase.LargeHead)
   stream = &connection.h2.streams[stream_index]
   if stream.phase == Phase.Large {
@@ -1860,7 +1860,7 @@ fn h2_receive_body(status: *fail.Status, connection: *Connection, response: *htt
   stream := current_stream(connection)
   slot := current_slot(connection)
   if slot == nil || stream.phase != Phase.LargeHead || response.started || response.finished {
-    job_failure(status, fail.Kind.InvalidState, "receive_body runs only in Config.on_large_body")
+    job_failure(status, fail.Kind.InvalidState, "receive_body runs only in the Config.large_body handler")
     return
   }
   slot.body_data = data
