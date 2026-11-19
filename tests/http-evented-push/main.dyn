@@ -436,7 +436,7 @@ fn main() {
   }
   config.evict_idle_milliseconds = 200
   config.compress_level = 6
-  config.on_large_body = large_body
+  config.large_body = evented.large_bodies(large_body)
   storage := mem.arena_from_source(mem.within(arena, evented.storage_size(config, WorkerCount) + mem.MiB))
   address := net.ipv4(127, 0, 0, 1, 0)
   listener := net.tcp_listen_ipv4(&setup, &address, 64)

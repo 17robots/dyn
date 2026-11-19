@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """HTTP/2 on the evented server (prior knowledge), through tests/h2client.py:
-requests and HEAD, bodies in slots, upload blocks and on_large_body, gzip,
+requests and HEAD, bodies in slots, upload blocks and Config.large_body, gzip,
 flow control with 64 KiB windows, multiplexing past slow run jobs, SSE with
 publish, trailers, CONTINUATION, PING, client resets, malformed requests and
 connection errors. HTTP/1.1 keeps working on the same port."""

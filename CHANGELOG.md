@@ -12,6 +12,15 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- `evented.Config.on_large_body` becomes `Config.large_body`, set with
+  `evented.large_bodies(handler)`, as `http2()` and `http3()` are: a server
+  that never calls it links none of the streaming-body code (about 6 KB),
+  and bodies too large for its buffers get 413. Write
+  `config.large_body = evented.large_bodies(upload)` where you had
+  `config.on_large_body = upload`. `receive_body` is unchanged.
+
 ## 0.1.0-preview.40
 
 Breaking: see [docs/migrations/0.1.0-preview.40.md](docs/migrations/0.1.0-preview.40.md),

@@ -283,9 +283,11 @@ when it is bigger). Clients that send `Expect: 100-continue` get `100 Continue`
 before their body. Chunked request bodies (`Transfer-Encoding: chunked`) are
 decoded in place once complete.
 
-Bodies larger than any block go to `Config.on_large_body` with the head
-alone (nil answers 413). It answers from the head, or reads the body as it
-arrives with `evented.receive_body(&status, response, data, chunk, finish)`:
+Bodies larger than any block go to the handler set with
+`config.large_body = evented.large_bodies(large_body)`, with the head alone.
+It answers from the head, or reads the body as it arrives with
+`evented.receive_body(&status, response, data, chunk, finish)`. Without
+`large_bodies` such requests get 413, and the streaming code is not linked:
 
 ```dyn
 use "std/fail"
@@ -479,7 +481,7 @@ Memory stays fixed. An HTTP/2 connection leases one of
 streams, about 21 KiB). Each stream holds one of the worker's
 `Config.http2_slots` request slots (`receive_size` plus `job_size`) until it
 is answered; a body past its slot borrows an upload block, and a larger one
-goes to `Config.on_large_body`. A stream that finds no slot is refused
+goes to `Config.large_body`. A stream that finds no slot is refused
 (`REFUSED_STREAM`), which clients retry. A connection that finds no state
 block is told to go away. With 32 KiB receive buffers the defaults (256 blocks, 64
 slots) add about 7.5 MiB per worker; `evented.storage_size` counts it.
