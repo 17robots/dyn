@@ -536,15 +536,24 @@ static bool imported_decl(Resolver *r, char **targets, size_t count,
   return false;
 }
 #include "removed_api.inc"
+/* Whether directory is the SDK module path (std/mem, vendor/sqlite): a
+   checkout keeps that path, while an installed SDK keeps std modules in
+   share/dyn/mem, so the module also resolves the way `use` resolves it. */
+static bool api_module_is(const char *directory, const char *path) {
+  size_t length = strlen(directory), module = strlen(path);
+  if (length >= module && !strcmp(directory + length - module, path) &&
+      (length == module || directory[length - module - 1] == '/' || directory[length - module - 1] == '\\'))
+    return true;
+  char *resolved = dyn_module_resolve_sdk(path);
+  bool same = resolved && !strcmp(resolved, directory);
+  free(resolved);
+  return same;
+}
 /* The entry for member of the module in directory in table, or NULL. */
 static const RemovedApi *api_entry(const RemovedApi *table, size_t count, const char *directory, const char *member) {
-  size_t length = strlen(directory);
   for (size_t i = 0; i < count; ++i) {
     const RemovedApi *api = &table[i];
-    size_t module = strlen(api->module);
-    if (strcmp(api->member, member) || length < module || strcmp(directory + length - module, api->module)) continue;
-    if (length > module && directory[length - module - 1] != '/' && directory[length - module - 1] != '\\') continue;
-    return api;
+    if (!strcmp(api->member, member) && api_module_is(directory, api->module)) return api;
   }
   return NULL;
 }
