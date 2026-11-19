@@ -7220,8 +7220,12 @@ static bool ssa_pairs(Ssa *s, const uint32_t *order, uint32_t n) {
       s1->c = v; s1->aux2 = SSA_MEM(64, 0, 1);
       s2->dead = true;
       ++stores;
-      /* Later scalar reads of the stored values read their lanes. */
-      if (s->values[v].op == SO_VPAIR && x != y && !ssa_pairs_read_before(&p, x) && !ssa_pairs_read_before(&p, y)) {
+      /* Later scalar reads of the stored values read their lanes. The lanes
+         exist only from here on, so this needs every other read to come
+         later: x and y made in this block (so no earlier block reads them)
+         and not read in it before the store. */
+      if (s->values[v].op == SO_VPAIR && x != y && s->values[x].block == block_id && s->values[y].block == block_id &&
+          !ssa_pairs_read_before(&p, x) && !ssa_pairs_read_before(&p, y)) {
         int32_t lane0 = ssa_pairs_add(&p, block_id, k, SO_VLANE, SC_F32, v, -1, 0, 0);
         int32_t lane1 = ssa_pairs_add(&p, block_id, k, SO_VLANE, SC_F32, v, -1, 1, 0);
         if (lane0 >= 0 && lane1 >= 0) { ssa_replace(s, (uint32_t)x, lane0); ssa_replace(s, (uint32_t)y, lane1); }

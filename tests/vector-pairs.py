@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Two-lane f32 pairs: release results match debug bit for bit, including
-subtraction, swapped lanes, a store between the loads and overlapping
-arrays, and the pair code appears where it should."""
+subtraction, swapped lanes, a store between the loads, overlapping arrays and
+stored values that earlier blocks also read, and the pair code appears where
+it should."""
 import os
 from pathlib import Path
 import re
@@ -44,6 +45,21 @@ fn shifted(ps: []V) {
   }
 }
 
+struct Box { x: f32, y: f32, width: f32, height: f32 }
+struct Last { origin_x: i32, origin_y: i32, box: Box, valid: bool }
+
+// x and y are read by a short-circuit chain, in blocks before the paired
+// store of the same values: those reads must keep the scalar values.
+fn framed(last: *Last, box: *const Box) bool {
+  x := box.x + #cast(f32, last.origin_x)
+  y := box.y + #cast(f32, last.origin_y)
+  previous := last.box
+  inside := last.valid && x > previous.x && y > previous.y && x - previous.x <= 2.5 && y - previous.y <= 2.5
+  last.box = Box{ x: x, y: y, width: box.width, height: box.height }
+  last.valid = true
+  return inside
+}
+
 fn bits(ps: []V) u64 {
   h: u64 = 1469598103934665603
   for p in ps {
@@ -69,7 +85,16 @@ fn main() {
     between(ps, vs)
     shifted(ps)
   }
-  io.println("{} {} {}", #bitcast(u32, e), bits(ps), bits(vs))
+  last := Last{}
+  frames: u32 = 0
+  for i in 0..257 {
+    f := #cast(f32, i % 7)
+    box := Box{ x: f, y: f + 1.0, width: 30.0 - f, height: 40.0 - f }
+    if framed(&last, &box) {
+      frames += 1
+    }
+  }
+  io.println("{} {} {} {}", #bitcast(u32, e), bits(ps), bits(vs), frames)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-pairs-') as directory:
