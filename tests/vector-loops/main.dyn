@@ -67,6 +67,13 @@ fn blend(a: []i32, b: []i32, k: i32) i32 {
   return t
 }
 
+// 64-bit integer lanes: bitwise operations, a wrapping add and subtract.
+fn knead(a: []u64, b: []u64, c: []u64) {
+  for i in 0..#len(a) {
+    a[i] = #wrapping(((a[i] ^ b[i]) | (c[i] & 0xff00ff00ff00ff00)) + c[i] - b[i])
+  }
+}
+
 // A multiply, and a u32 sum that wraps.
 fn churn(a: []u32, b: []u32) u32 {
   t: u32 = 4000000000
@@ -199,6 +206,22 @@ fn main() {
     io.println("int {} {} {} {} {}", n, blend(ia[..n], ib[..n], 2147483647), churn(ua[..n], ub[..n]), ia[n / 2], ua[n / 2])
   }
   io.println("int overlap {} {}", blend(ia[1..], ia[..36], 5), churn(ua[2..], ua[..35]))
+  la := mem.push_array(u64, arena, 37)
+  lb := mem.push_array(u64, arena, 37)
+  lc := mem.push_array(u64, arena, 37)
+  for i in 0..37 {
+    la[i] = #wrapping(i * 0x9e3779b97f4a7c15)
+    lb[i] = #wrapping(i * 0xc2b2ae3d27d4eb4f + 7)
+    lc[i] = #wrapping(i * 0x165667b19e3779f9 + 3)
+  }
+  long_counts: [4]usize = [1, 2, 5, 37]
+  for n in long_counts {
+    knead(la[..n], lb[..n], lc[..n])
+    io.println("i64 {} {} {}", n, la[n / 2], la[n - 1])
+  }
+  // Overlapping arrays take the scalar loop.
+  knead(la[1..], la[..36], lb[..36])
+  io.println("i64 overlap {} {}", la[18], la[36])
   // An index past the end panics after the earlier iterations' writes.
   short := buffer[..5]
   io.println("last {}", bits(step(buffer, short, 0, 5, 1.0)))

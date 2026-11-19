@@ -517,7 +517,9 @@ static void a64s_vloop(SsaEmit *e, SsaValue *v) {
     case VP_ADD: case VP_SUB: case VP_MUL: case VP_DIV: {
       static const uint32_t codes[] = {0x4e20d400u, 0x4ea0d400u, 0x6e20dc00u, 0x6e20fc00u};
       if (integer) {
-        uint32_t code = o[0] == VP_ADD ? 0x4ea08400u : o[0] == VP_SUB ? 0x6ea08400u : o[0] == VP_MUL ? 0x4ea09c00u : 0;
+        /* .4s, or .2d for 64-bit lanes (which never multiply). */
+        uint32_t code = o[0] == VP_ADD ? (wide ? 0x4ee08400u : 0x4ea08400u) : o[0] == VP_SUB ? (wide ? 0x6ee08400u : 0x6ea08400u) :
+                        o[0] == VP_MUL ? 0x4ea09c00u : 0;
         a64_word(ctx, code | y << 16 | x << 5 | d);
         break;
       }

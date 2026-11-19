@@ -254,10 +254,11 @@ fn main() { if oracle()!=0 { #panic("byte count oracle") } }
                 selected = set(re.findall(r'remark: (\w+): vectorized byte predicate count', p.stderr))
                 expected = {'count_eq', 'count_lt', 'count_usize', 'count_union', 'count_rounds', 'count_live', 'count_low', 'count_high', 'count_duplicate'}
                 expected |= set(INVERSE_PREDICATES) | {'count_inverse_live', 'rejected_wrap'}
-                assert selected == (expected if mode == 'ssa' else set()), (mode, selected, p.stderr)
+                # Plain --release (o2) vectorizes as O3 does; the tree backend never does.
+                assert selected == (set() if mode == 'tree' else expected), (mode, selected, p.stderr)
                 asm = run(['objdump', '-d', '-Mintel', str(binary) + '.o'])
                 assert asm.returncode == 0, asm.stderr
-                assert ('psadbw' in asm.stdout) == (mode == 'ssa'), mode
+                assert ('psadbw' in asm.stdout) == (mode != 'tree'), mode
                 if mode == 'ssa':
                     union = re.search(r'<count_union>:\n(.*?)(?=\n[0-9a-f]+ <|\Z)', asm.stdout, re.S)
                     assert union, asm.stdout

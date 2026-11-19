@@ -6609,7 +6609,7 @@ static int32_t vp_base(Vp *p, const SsaValue *v) {
   if (!vp_invariant(p, v->a) || v->b != p->index ||
       (stride != p->bytes && stride != 2 * p->bytes && stride != 3 * p->bytes) ||
       v->aux < 0 || (uint64_t)v->aux >= stride || v->aux % p->bytes ||
-      (p->integer ? (v->aux2 & ~(int64_t)0x100) != SSA_MEM(32, 0, 0) : v->aux2 != SSA_MEM(8 * p->bytes, 0, 1))) return -1;
+      (p->integer ? (v->aux2 & ~(int64_t)0x100) != SSA_MEM(8 * p->bytes, 0, 0) : v->aux2 != SSA_MEM(8 * p->bytes, 0, 1))) return -1;
   for (uint32_t k = 0; k < p->base_count; ++k)
     if (p->bases[k] == v->a) return p->strides[k] == stride && p->scales[k] == v->scale ? (int32_t)k : -1;
   if (p->base_count == VP_MAX_BASES) return -1;
@@ -6698,6 +6698,7 @@ static bool vp_body(Vp *p, const uint32_t *body, uint32_t body_count, int32_t st
         p->map[id] = op + 1;
         continue;
       }
+      if (p->integer && p->bytes == 8 && v->op == SO_EXT) return false;
       if (p->integer && v->op == SO_EXT && v->aux == 32 && v->cls == SC_INT) {
         /* Lanes hold the low 32 bits: extension changes nothing in them. */
         int32_t x = -1;
@@ -6724,7 +6725,7 @@ static bool vp_body(Vp *p, const uint32_t *body, uint32_t body_count, int32_t st
       }
       if (p->integer) {
         uint32_t ikind = v->cls != SC_INT ? 0 : v->op == SO_ADD ? VP_ADD : v->op == SO_SUB ? VP_SUB :
-                         v->op == SO_MUL && (s->ctx->a64 || s->ctx->sse41) ? VP_MUL : v->op == SO_AND ? VP_AND :
+                         v->op == SO_MUL && p->bytes == 4 && (s->ctx->a64 || s->ctx->sse41) ? VP_MUL : v->op == SO_AND ? VP_AND :
                          v->op == SO_OR ? VP_OR : v->op == SO_XOR ? VP_XOR : 0;
         if (!ikind) return false;
         int32_t x = vp_operand(p, v->a), y = vp_operand(p, v->b);
@@ -6942,8 +6943,9 @@ static bool ssa_vloops(Ssa *s, const uint32_t *order, uint32_t n) {
     if (!ok || p.index < 0) continue;
     p.step = p.index == p.primary ? p.primary_step : p.index == p.derived ? p.primary_step * p.factor : p.second_step;
     if (p.step > 24) continue;
-    /* The lane type: the first float memory access's. */
+    /* The lane type: the first memory access's. */
     p.cls = SC_NONE;
+    bool wide_int = false;
     for (uint32_t b = 0; b < body_count && p.cls == SC_NONE; ++b) {
       SsaBlock *block = &s->blocks[body[b]];
       for (uint32_t k = 0; k < block->values.count; ++k) {
@@ -6952,11 +6954,15 @@ static bool ssa_vloops(Ssa *s, const uint32_t *order, uint32_t n) {
         if (v->aux2 == SSA_MEM(32, 0, 1)) p.cls = SC_F32;
         else if (v->aux2 == SSA_MEM(64, 0, 1)) p.cls = SC_F64;
         else if ((v->aux2 & ~(int64_t)0x100) == SSA_MEM(32, 0, 0)) p.cls = SC_INT;
+        else if ((v->aux2 & ~(int64_t)0x100) == SSA_MEM(64, 0, 0)) { p.cls = SC_INT; wide_int = true; }
         break;
       }
     }
     if (p.cls == SC_NONE) continue;
-    p.bytes = p.cls == SC_F64 ? 8 : 4;
+    /* 64-bit integer lanes (two per vector) add, subtract and combine bits;
+       they keep no sums, which the 32-bit lanes' widening covers. */
+    p.bytes = p.cls == SC_F64 || wide_int ? 8 : 4;
+    if (wide_int && p.sum_count) continue;
     p.integer = p.cls == SC_INT;
     for (uint32_t r = 0; r < p.sum_count; ++r) ok &= s->values[p.sums[r]].cls == p.cls;
     if (!ok) continue;
@@ -9257,7 +9263,7 @@ static void ssa_vloop_emit(SsaEmit *e, SsaValue *v) {
       x86_reg_op(ctx, 0x66, wide, OP2(0x0f, 0x6e), o[1], X_RAX, false);   /* movd / movq */
       if (wide) vp_sse(ctx, 0x66, 0x14, o[1], o[1]);                      /* unpcklpd */
       else vp_shuffle(ctx, o[1], o[1], 0, 0, 0, 0);
-    } else if (o[0] == VP_BCAST && integer) {
+    } else if (o[0] == VP_BCAST && integer && !wide) {
       x86_mem_op(ctx, 0x66, false, OP2(0x0f, 0x6e), o[1], (SsaMemory){X_RBP, -1, 1, frame + (int32_t)(inputs_at + 4 * o[4])}, false);
       vp_sse(ctx, 0x66, 0x70, o[1], o[1]); byte(ctx, 0);                  /* pshufd */
     } else if (o[0] == VP_SUM && integer) {
@@ -9377,7 +9383,8 @@ static void ssa_vloop_emit(SsaEmit *e, SsaValue *v) {
     case VP_AND: case VP_OR: case VP_XOR:
     case VP_ADD: case VP_SUB: case VP_MUL: case VP_DIV: if (integer) {
       bool commutes = o[0] != VP_SUB;
-      unsigned code = o[0] == VP_ADD ? 0xfe : o[0] == VP_SUB ? 0xfa : o[0] == VP_AND ? 0xdb : o[0] == VP_OR ? 0xeb : 0xef;
+      unsigned code = o[0] == VP_ADD ? (wide ? 0xd4 : 0xfe) : o[0] == VP_SUB ? (wide ? 0xfb : 0xfa) :
+                      o[0] == VP_AND ? 0xdb : o[0] == VP_OR ? 0xeb : 0xef; /* paddq/paddd, psubq/psubd */
       #define VP_INT_OP(to, from) do { if (o[0] == VP_MUL) x86_reg_op(ctx, 0x66, false, OP3(0x0f, 0x38, 0x40), to, from, false); \
                                        else vp_sse(ctx, 0x66, code, to, from); } while (0)
       if (d == x) VP_INT_OP(d, y);
