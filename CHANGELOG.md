@@ -14,6 +14,11 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- The removed-API hints and their `dyn fix` renames work from an installed
+  SDK. They matched the module's path as `std/mem`, which only a checkout
+  has; installed SDKs keep std modules in `share/dyn/mem`, so preview 40's
+  release gave the plain "has no pub member" error instead of
+  "'mem.push_bytes_uninit' was removed: use mem.push_bytes(arena, count)".
 - `evented.Config.on_large_body` becomes `Config.large_body`, set with
   `evented.large_bodies(handler)`, as `http2()` and `http3()` are: a server
   that never calls it links none of the streaming-body code (about 6 KB),
