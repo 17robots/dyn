@@ -109,6 +109,7 @@ heap std/io
 heap std/log
 heap std/math/big
 heap std/mem
+heap std/mem/heap
 heap std/net/url
 heap std/path
 heap std/semver
@@ -129,6 +130,7 @@ std std/compress/zstd
 std std/crypto/random
 std std/dynlib
 std std/event
+std std/fiber
 std std/font/system
 std std/fs
 std std/fs/capability

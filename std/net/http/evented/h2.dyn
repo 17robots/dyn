@@ -1683,7 +1683,7 @@ fn h2_run(status: *fail.Status, connection: *Connection, data: rawptr, work: fn(
   slot.job_finish = finish_job
   slot.job_request = stream_request(worker, stream)
   slot.job_running = true
-  if !tasks.submit(worker.config.pool, tasks.Task{ run: h2_job_main, data: slot }) {
+  if !tasks.submit(worker.config.pool, h2_job_main, slot) {
     slot.job_running = false
     job_failure(status, fail.Kind.Capacity, "the pool's queue is full")
     return
@@ -1694,8 +1694,7 @@ fn h2_run(status: *fail.Status, connection: *Connection, data: rawptr, work: fn(
 }
 
 // On a pool thread.
-fn h2_job_main(data: rawptr) {
-  slot := #cast(*Slot, data)
+fn h2_job_main(slot: *Slot) {
   slot.job_work(slot.job_data)
   worker := slot.connection.worker
   inbox := &worker.inbox

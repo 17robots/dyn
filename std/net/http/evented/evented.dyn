@@ -2101,7 +2101,7 @@ pub fn run<J>(status: *fail.Status, response: *http.Response, data: *J, work: fn
   connection.job_finish = #cast(fn(*fail.Status, *http.Response, *const http.Request, rawptr), finish)
   connection.job_running = true
   use_jobs(worker)
-  if !tasks.submit(worker.config.pool, tasks.Task{ run: job_main, data: connection }) {
+  if !tasks.submit(worker.config.pool, job_main, connection) {
     connection.job_running = false
     job_failure(status, fail.Kind.Capacity, "the pool's queue is full")
     return
@@ -2174,8 +2174,7 @@ fn finish_later(worker: *Worker) {
 }
 
 // On a pool thread.
-fn job_main(data: rawptr) {
-  connection := #cast(*Connection, data)
+fn job_main(connection: *Connection) {
   connection.job_work(connection.job_data)
   worker := connection.worker
   inbox := &worker.inbox

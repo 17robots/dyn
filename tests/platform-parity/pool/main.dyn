@@ -13,25 +13,27 @@ gate: sync.Semaphore
 group: pool.Group
 shared: *pool.Pool
 
-fn add(data: rawptr) {
-  _ = sync.fetch_add_u64(&total, #cast(u64, #cast(usize, data)))
+values: [1001]u64
+
+fn add(value: *u64) {
+  _ = sync.fetch_add_u64(&total, value.*)
 }
 
-fn blocked(data: rawptr) {
-  _ = data
+fn blocked(unused: *u8) {
+  _ = unused
   sync.semaphore_wait(&gate)
   _ = sync.fetch_add_u64(&total, 1)
 }
 
 // Submits two more tasks from inside a running task.
-fn spread(data: rawptr) {
-  _ = data
-  check(pool.submit(shared, pool.Task{ run: add, data: #cast(rawptr, #cast(usize, 10)) }))
-  check(pool.submit(shared, pool.Task{ run: add, data: #cast(rawptr, #cast(usize, 20)) }))
+fn spread(unused: *u8) {
+  _ = unused
+  check(pool.submit(shared, add, &values[10]))
+  check(pool.submit(shared, add, &values[20]))
 }
 
-fn grouped(data: rawptr) {
-  _ = data
+fn grouped(unused: *u8) {
+  _ = unused
   _ = sync.fetch_add_u64(&total, 1)
   pool.group_done(&group)
 }
@@ -48,8 +50,11 @@ fn main() {
   workers := pool.start(arena, &status, 4, 64, 65536)
   check(!status.failed)
   shared = workers
+  for i in 0..1001 {
+    values[i] = #cast(u64, i)
+  }
   for i in 1..1001 {
-    for !pool.submit(workers, pool.Task{ run: add, data: #cast(rawptr, #cast(usize, i)) }) {
+    for !pool.submit(workers, add, &values[i]) {
       pool.wait(workers)
     }
   }
@@ -59,7 +64,7 @@ fn main() {
   sync.store_u64(&total, 0)
   gate = sync.semaphore(0)
   filled: usize = 0
-  for pool.submit(workers, pool.Task{ run: blocked }) {
+  for pool.submit<u8>(workers, blocked, nil) {
     filled += 1
   }
   check(filled >= 64 && filled <= 68)
@@ -69,17 +74,17 @@ fn main() {
   pool.wait(workers)
   check(sync.load_u64(&total) == #cast(u64, filled))
   sync.store_u64(&total, 0)
-  check(pool.submit(workers, pool.Task{ run: spread }))
+  check(pool.submit<u8>(workers, spread, nil))
   pool.wait(workers)
   check(sync.load_u64(&total) == 30)
   sync.store_u64(&total, 0)
   pool.group_add(&group, 50)
   for i in 0..50 {
-    check(pool.submit(workers, pool.Task{ run: grouped }))
+    check(pool.submit<u8>(workers, grouped, nil))
   }
   pool.group_wait(&group)
   check(sync.load_u64(&total) == 50)
   pool.stop(&status, workers)
   check(!status.failed)
-  check(!pool.submit(workers, pool.Task{ run: add }))
+  check(!pool.submit(workers, add, &values[1]))
 }

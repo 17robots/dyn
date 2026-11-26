@@ -1,0 +1,180 @@
+#target(kernel: linux)
+// Stackful fibers: functions that can pause with yield_now and continue
+// later, each on a stack of its own. There is no async or await: the code
+// in a fiber is ordinary code. A fiber runs only inside resume, on the
+// thread that resumes it, so fibers on one thread never run at the same
+// time. Programs that do not use this module link none of it.
+//
+//   f := try fiber.create(arena, 65536, work, &state)
+//   defer fiber.destroy(f)
+//   for fiber.resume(f) == fiber.State.Suspended {
+//     // work called fiber.yield_now(); do other things, then resume again.
+//   }
+//
+// Each stack is its own mapping with a guard region below it, so an
+// overflow faults instead of writing into other memory. Pages are touched
+// only as the stack grows.
+//
+// One thread at a time uses this module: the running fiber and the panic
+// hook for isolated fibers are process-wide.
+
+use mem "std/mem"
+use "std/os/linux/sys"
+
+pub enum State { Suspended, Running, Done, Panicked }
+
+// Why a fiber did not start or did not finish. System carries the system's
+// own code. Panicked comes only from run_isolated.
+pub enum FiberErr { InvalidInput, System(isize), Panicked }
+
+pub nocopy struct Fiber {
+  // The saved stack pointer while the fiber is not running.
+  sp: usize,
+  // The resumer's saved stack pointer while the fiber runs.
+  caller: usize,
+  mapping: []u8,
+  work: fn(rawptr),
+  context: rawptr,
+  state: State,
+  isolated: bool,
+  // The fiber that was running when this one was resumed.
+  previous: *Fiber,
+  message: [256]u8,
+  message_length: usize,
+}
+
+const stack_guard: usize = 65536
+
+running: *Fiber
+
+extern fn switch_stack "dyn_fiber_switch"(save: *usize, load: usize)
+extern fn swap_panic_hook "dyn_swap_panic_hook"(hook: fn(*const u8, u64)) fn(*const u8, u64)
+
+// A suspended fiber that runs work(context) when first resumed, on an owned
+// stack of stack_size bytes. The Fiber lives in arena; context must stay
+// alive and unmoved until the fiber is done or destroyed.
+pub fn create<C>(arena: *mem.Arena, stack_size: usize, work: fn(*C), context: *C) *Fiber!FiberErr {
+  return try create_untyped(arena, stack_size, #cast(fn(rawptr), work), context, false)
+}
+
+// As create, for a fiber whose panics stop only the fiber: resume returns
+// Panicked instead of the process exiting. The panic does not run the
+// fiber's defers; memory it took from arenas stays taken.
+pub fn create_isolated<C>(arena: *mem.Arena, stack_size: usize, work: fn(*C), context: *C) *Fiber!FiberErr {
+  return try create_untyped(arena, stack_size, #cast(fn(rawptr), work), context, true)
+}
+
+fn create_untyped(arena: *mem.Arena, stack_size: usize, work: fn(rawptr), context: rawptr, isolated: bool) *Fiber!FiberErr {
+  if stack_size < 4096 || work == nil || stack_size > #max(usize) - stack_guard - 4096 { fail .InvalidInput }
+  total := stack_guard + (stack_size + 4095) / 4096 * 4096
+  address := #syscall(sys.Mmap, 0, total, 3, 16418, -1, 0)
+  if address < 0 { fail FiberErr.System(address) }
+  base := #cast(*u8, address)
+  _ = #syscall(sys.Mprotect, base, stack_guard, 0)
+  f := mem.push<Fiber>(arena)
+  f.mapping = #slice(base, total)
+  f.work = work
+  f.context = context
+  f.isolated = isolated
+  f.sp = first_frame(f, #cast(usize, address) + total)
+  return f
+}
+
+// The first code on every fiber stack. It never returns: a finished fiber
+// switches back to its resumer for the last time.
+fn fiber_main(f: *Fiber) {
+  f.work(f.context)
+  f.state = State.Done
+  running = f.previous
+  switch_stack(&f.sp, f.caller)
+  #panic("a finished fiber was resumed")
+}
+
+// Runs f until it yields, finishes or (when isolated) panics, and returns
+// its state. Resuming a fiber that is done or panicked returns that state
+// at once. Resuming a running fiber, or one that is resuming another, panics.
+pub fn resume(f: *Fiber) State {
+  if f == nil { #panic("fiber.resume of a nil fiber") }
+  case f.state {
+    .Done, .Panicked => { return f.state }
+    .Running => { #panic("fiber.resume of a running fiber") }
+    .Suspended => {}
+  }
+  f.state = State.Running
+  f.previous = running
+  running = f
+  previous_hook: fn(*const u8, u64)
+  if f.isolated {
+    previous_hook = swap_panic_hook(fiber_panicked)
+  }
+  switch_stack(&f.caller, f.sp)
+  if f.isolated {
+    _ = swap_panic_hook(previous_hook)
+  }
+  return f.state
+}
+
+// Pauses the running fiber; its resume call returns Suspended. Panics
+// outside a fiber.
+pub fn yield_now() {
+  f := running
+  if f == nil { #panic("fiber.yield_now outside a fiber") }
+  f.state = State.Suspended
+  running = f.previous
+  switch_stack(&f.sp, f.caller)
+}
+
+// The running fiber, or nil outside fibers.
+pub fn current() *Fiber {
+  return running
+}
+
+// The text of the panic that stopped an isolated fiber, cut to 256 bytes;
+// empty otherwise.
+pub fn panic_message(f: *const Fiber) []const u8 {
+  return f.message[..f.message_length]
+}
+
+// Unmaps f's stack. A suspended fiber that has started is abandoned: its
+// defers do not run. Destroying a running fiber panics. Destroying twice
+// does nothing.
+pub fn destroy(f: *Fiber) {
+  if f == nil { return }
+  if f.state == State.Running { #panic("fiber.destroy of a running fiber") }
+  if f.mapping.len == 0 { return }
+  _ = #syscall(sys.Munmap, &f.mapping[0], f.mapping.len)
+  f.mapping = f.mapping[..0]
+  if f.state == State.Suspended { f.state = State.Done }
+}
+
+// Runs work(context) on a new isolated fiber until it finishes, resuming it
+// each time it yields. Fails with Panicked when work panics; the process
+// keeps running. Use it to keep one request's bug from stopping a server.
+pub fn run_isolated<C>(arena: *mem.Arena, stack_size: usize, work: fn(*C), context: *C) !FiberErr {
+  f := try create_isolated(arena, stack_size, work, context)
+  defer destroy(f)
+  for resume(f) == State.Suspended {}
+  if f.state == State.Panicked { fail .Panicked }
+}
+
+// The panic hook while an isolated fiber runs. Fibers that the isolated
+// fiber resumed are abandoned with it.
+fn fiber_panicked(message: *const u8, length: u64) {
+  f := running
+  for f != nil && !f.isolated {
+    f.state = State.Panicked
+    f = f.previous
+  }
+  if f == nil { return }
+  count := #cast(usize, length)
+  if count > f.message.len { count = f.message.len }
+  if message == nil { count = 0 }
+  for i in 0..count {
+    f.message[i] = #slice(message, count)[i]
+  }
+  f.message_length = count
+  f.state = State.Panicked
+  running = f.previous
+  abandoned: usize = 0
+  switch_stack(&abandoned, f.caller)
+}

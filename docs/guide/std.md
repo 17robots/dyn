@@ -75,6 +75,7 @@ between the program image and the stack (see [bare metal](bare-metal.md)).
 | Package | Purpose |
 | --- | --- |
 | `std/mem` | Arenas on OS pages, caller buffers or any block source; typed pushes, marks, reset and release |
+| `std/mem/heap` | Opt-in allocator on an arena for objects freed one at a time: size classes, no headers, not thread-safe |
 | `std/bytes` | Byte-slice operations, cursors and splitters |
 | `std/bytes/builder` | Byte and UTF-8 string builder over caller storage or an arena |
 | `std/bytes/search` | Prepared KMP search |
@@ -127,8 +128,9 @@ between the program image and the stack (see [bare metal](bare-metal.md)).
 | `std/path` | Lexical slash-separated paths |
 | `std/process` | Spawn, capture, pipes, environment and arguments |
 | `std/process/signal` | Interrupt, terminate and hangup signals as queued events, read with `poll` or `wait` |
-| `std/thread`, `std/sync` | Arena-backed thread handles; caller or owned stacks; portable synchronization |
-| `std/thread/pool` | Fixed worker pool over a bounded arena queue, and wait groups |
+| `std/thread`, `std/sync` | Arena-backed thread handles, scopes that join every thread; portable synchronization and bounded channels |
+| `std/thread/pool` | Fixed worker pool over a bounded arena queue with typed `submit`, and wait groups |
+| `std/fiber` | Linux stackful fibers: `resume`/`yield_now`, guarded stacks, isolated fibers whose panics stop only the fiber |
 | `std/cache` | Per-worker copies of shared data: writers call `changed`, each worker rebuilds when `stale` says so |
 | `std/time` | Monotonic and realtime clocks, durations, deadlines, calendar dates and UTC ISO-8601 |
 | `std/time/zone` | Time zones from TZif files, POSIX rules or the Windows zone; local time, strftime-style formatting and RFC 3339 |
@@ -262,6 +264,38 @@ Linux uses epoll, macOS uses kqueue, and Windows uses WSAPoll. Windows waits
 scan the registered sockets; this is not an IOCP operation-completion API.
 Timeouts let a caller run timers between batches; callbacks, timer scheduling,
 GUI message pumping and cross-thread wakeups remain application responsibilities.
+
+### Threads, channels and fibers
+
+`thread.scope(arena)` collects the threads that `thread.scope_spawn` starts,
+and `thread.scope_join` waits for all of them. Defer the join right after
+making the scope: it then also runs when `try` or `fail` leaves early, so
+thread contexts can live on the caller's stack.
+
+```dyn
+scope := thread.scope(arena)
+defer thread.scope_join(&scope)
+try thread.scope_spawn(&scope, 65536, work, &job)
+```
+
+`sync.channel<T>(arena, capacity)` makes a bounded queue whose storage all
+comes from the arena. `send` waits while it is full and `recv` while it is
+empty; `try_send` and `try_recv` fail with `.Full` or `.Empty` instead.
+After `close` (which may be called more than once), `send` fails with
+`.Closed` at once, and `recv` returns the values still queued before it fails
+with `.Closed`. A nil channel panics.
+
+`pool.submit(pool, work, &context)` queues `work(context)` with `work` a
+`fn(*C)`; it returns false when the queue is full or the pool is stopping.
+
+`std/fiber` runs functions on stacks of their own. `fiber.create(arena,
+size, work, &context)` makes a suspended fiber; `fiber.resume` runs it until
+it calls `fiber.yield_now`, finishes or panics, and returns its state.
+Fibers run only inside `resume`, on the resuming thread. A fiber made with
+`create_isolated` (or run by `fiber.run_isolated`) does not stop the process
+when it panics: `resume` returns `Panicked`, and `panic_message` keeps the
+text. The panic does not run the fiber's defers. Fibers are Linux only for
+now (x86-64, AArch64 and RISC-V), and one thread at a time uses them.
 
 ### Portable lanes
 

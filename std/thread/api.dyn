@@ -32,3 +32,58 @@ fn spawn_invalid(status: *fail.Status, message: []const u8) *Thread {
   fail.invalid(status, "spawn thread", "", message)
   return nil
 }
+
+// Why a scoped thread did not start. System carries the system's own code.
+pub enum SpawnErr { InvalidInput, System(isize) }
+
+// Threads started through a scope are all joined by scope_join, so their
+// contexts may live on the stack of the function that owns the scope:
+//
+//   scope := thread.scope(arena)
+//   defer thread.scope_join(&scope)
+//   try thread.scope_spawn(&scope, 65536, work, &job)
+//
+// The deferred join also runs when try or fail leaves the function early.
+// Thread nodes come from arena; keep it unrewound until scope_join returns.
+pub nocopy struct Scope {
+  arena: *mem.Arena,
+  first: *ScopeThread,
+}
+
+struct ScopeThread {
+  thread: *Thread,
+  next: *ScopeThread,
+}
+
+pub fn scope(arena: *mem.Arena) Scope {
+  return Scope{ arena: arena }
+}
+
+// Starts entry(context) on a new thread with an owned stack of stack_size
+// bytes. context must stay alive and unmoved until scope_join.
+pub fn scope_spawn<C>(scope: *Scope, stack_size: usize, entry: fn(*C) isize, context: *C) !SpawnErr {
+  if scope.arena == nil { #panic("create a scope with thread.scope before scope_spawn") }
+  status: fail.Status
+  started := spawn_with_size(scope.arena, &status, stack_size, entry, context)
+  if status.failed {
+    if status.failure.kind == fail.Kind.InvalidInput { fail .InvalidInput }
+    fail SpawnErr.System(status.failure.native)
+  }
+  node := mem.push<ScopeThread>(scope.arena)
+  node.thread = started
+  node.next = scope.first
+  scope.first = node
+}
+
+// Waits for every thread the scope started, newest first. A thread that
+// cannot be joined panics: its context could otherwise be freed while it
+// still runs. Joining an empty or joined scope does nothing.
+pub fn scope_join(scope: *Scope) {
+  for scope.first != nil {
+    node := scope.first
+    status: fail.Status
+    join(&status, node.thread)
+    if status.failed { #panic("thread.scope_join could not join a thread") }
+    scope.first = node.next
+  }
+}

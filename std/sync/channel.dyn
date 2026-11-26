@@ -1,0 +1,138 @@
+#target(pointer_bits: 64)
+use mem "std/mem"
+
+// Why a channel call did not move a value. Closed: the channel was closed
+// (and, for a receive, is drained). Full and Empty come only from the
+// try_ forms, which never block.
+pub enum ChanErr { Closed, Full, Empty }
+
+// A bounded first-in first-out queue between threads. channel takes all
+// storage from the arena up front; send and recv never allocate. Values
+// are copied in and out. A channel lives in its arena and must not move;
+// keep the arena alive until every thread is done with it.
+pub nocopy struct Channel<T> {
+  lock: Mutex,
+  readable: Condition,
+  writable: Condition,
+  items: []T,
+  head: usize,
+  count: usize,
+  closed: bool,
+}
+
+// A channel that holds up to capacity values. A capacity of zero panics.
+pub fn channel<T>(arena: *mem.Arena, capacity: usize) *Channel<T> {
+  if capacity == 0 { #panic("sync.channel needs a capacity of at least 1") }
+  c := mem.push<Channel<T>>(arena)
+  c.lock = mutex()
+  c.readable = condition()
+  c.writable = condition()
+  c.items = mem.push_array<T>(arena, capacity)
+  return c
+}
+
+fn channel_check<T>(c: *const Channel<T>) {
+  if c == nil { #panic("sync channel operation on a nil channel") }
+}
+
+// Caller holds the lock and has checked that there is room.
+fn channel_put<T>(c: *Channel<T>, value: T) {
+  c.items[(c.head + c.count) % c.items.len] = value
+  c.count += 1
+  condition_signal(&c.readable)
+}
+
+// Caller holds the lock and has checked that a value is queued.
+fn channel_take<T>(c: *Channel<T>) T {
+  value := c.items[c.head]
+  #init(&c.items[c.head])
+  c.head = (c.head + 1) % c.items.len
+  c.count -= 1
+  condition_signal(&c.writable)
+  return value
+}
+
+// Queues value, waiting while the channel is full. Fails with Closed, queuing
+// nothing, when the channel is closed before or during the wait.
+pub fn send<T>(c: *Channel<T>, value: T) !ChanErr {
+  channel_check(c)
+  lock(&c.lock)
+  for c.count == c.items.len && !c.closed {
+    condition_wait(&c.writable, &c.lock)
+  }
+  if c.closed {
+    unlock(&c.lock)
+    fail .Closed
+  }
+  channel_put(c, value)
+  unlock(&c.lock)
+}
+
+// As send, without waiting: fails with Full when there is no room.
+pub fn try_send<T>(c: *Channel<T>, value: T) !ChanErr {
+  channel_check(c)
+  lock(&c.lock)
+  if c.closed {
+    unlock(&c.lock)
+    fail .Closed
+  }
+  if c.count == c.items.len {
+    unlock(&c.lock)
+    fail .Full
+  }
+  channel_put(c, value)
+  unlock(&c.lock)
+}
+
+// The oldest queued value, waiting while the channel is empty. Values sent
+// before close are still received; Closed comes only once they are drained.
+pub fn recv<T>(c: *Channel<T>) T!ChanErr {
+  channel_check(c)
+  lock(&c.lock)
+  for c.count == 0 && !c.closed {
+    condition_wait(&c.readable, &c.lock)
+  }
+  if c.count == 0 {
+    unlock(&c.lock)
+    fail .Closed
+  }
+  value := channel_take(c)
+  unlock(&c.lock)
+  return value
+}
+
+// As recv, without waiting: fails with Empty when nothing is queued and the
+// channel is open.
+pub fn try_recv<T>(c: *Channel<T>) T!ChanErr {
+  channel_check(c)
+  lock(&c.lock)
+  if c.count == 0 {
+    closed := c.closed
+    unlock(&c.lock)
+    if closed { fail .Closed }
+    fail .Empty
+  }
+  value := channel_take(c)
+  unlock(&c.lock)
+  return value
+}
+
+// Stops further sends and wakes every waiting thread. Closing a closed
+// channel does nothing.
+pub fn close<T>(c: *Channel<T>) {
+  channel_check(c)
+  lock(&c.lock)
+  c.closed = true
+  condition_broadcast(&c.readable)
+  condition_broadcast(&c.writable)
+  unlock(&c.lock)
+}
+
+// Values queued right now. Other threads can change it at once.
+pub fn channel_len<T>(c: *Channel<T>) usize {
+  channel_check(c)
+  lock(&c.lock)
+  count := c.count
+  unlock(&c.lock)
+  return count
+}

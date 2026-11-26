@@ -206,6 +206,38 @@ dyn_thread_spawn:
     syscall
     ud2
 
+# void dyn_fiber_switch(usize *save, usize load): saves the callee-saved
+# registers on the current stack, stores its pointer in *save and resumes
+# the stack at load. std/fiber builds a new fiber's first frame so that the
+# switch returns into dyn_fiber_boot with rbx = entry and r12 = argument.
+.section .text.dyn_fiber_switch,"ax",@progbits
+.global dyn_fiber_switch
+.type dyn_fiber_switch,@function
+dyn_fiber_switch:
+    push %rbp
+    push %rbx
+    push %r12
+    push %r13
+    push %r14
+    push %r15
+    mov %rsp, (%rdi)
+    mov %rsi, %rsp
+    pop %r15
+    pop %r14
+    pop %r13
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
+
+.section .text.dyn_fiber_boot,"ax",@progbits
+.global dyn_fiber_boot
+.type dyn_fiber_boot,@function
+dyn_fiber_boot:
+    mov %r12, %rdi
+    call *%rbx
+    ud2
+
 .section .text.dyn_sort_directory_entries,"ax",@progbits
 .global dyn_sort_directory_entries
 .type dyn_sort_directory_entries,@function

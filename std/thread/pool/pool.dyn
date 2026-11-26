@@ -6,8 +6,8 @@ use mem "std/mem"
 use sync "std/sync"
 use thread "std/thread"
 use "std/fail"
-// One unit of work. run receives data on a worker thread.
-pub struct Task { run: fn(rawptr), data: rawptr }
+// One queued unit of work. Private to this module: build tasks with submit.
+struct Task { run: fn(rawptr), data: rawptr }
 
 // Pools live in the caller's arena and must not move. Use the functions below;
 // fields are private to this module.
@@ -83,10 +83,17 @@ pub fn start(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: 
   return pool
 }
 
-// Whether task was queued: false, queuing nothing, when the queue is full or
-// the pool is stopping, so the caller can retry or run it elsewhere.
-pub fn submit(pool: *Pool, task: Task) bool {
-  if pool == nil || task.run == nil { return false }
+// Queues work(context) to run on a worker thread. context is any *C the
+// caller keeps alive and unmoved until the task finishes; it may be nil.
+// Returns false, queuing nothing, when the queue is full or the pool is
+// stopping, so the caller can retry or run it elsewhere.
+pub fn submit<C>(pool: *Pool, work: fn(*C), context: *C) bool {
+  if work == nil { return false }
+  return submit_task(pool, Task{ run: #cast(fn(rawptr), work), data: context })
+}
+
+fn submit_task(pool: *Pool, task: Task) bool {
+  if pool == nil { return false }
   sync.lock(&pool.lock)
   if pool.stopping || pool.count == pool.tasks.len {
     sync.unlock(&pool.lock)

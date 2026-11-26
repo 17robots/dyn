@@ -960,6 +960,22 @@ Layer: core
 - `fn kind_text(kind: Kind) []const u8`: A short description of kind: "not found", "permission denied".
 - `fn describe(storage: []u8, failure: Failure) []u8`: "operation path: reason" in storage, such as "open /etc/app.conf: no such file or directory" or "parse app.json at 41: expected ','".
 
+## std/fiber
+
+Layer: std
+
+- `enum State { Suspended, Running, Done, Panicked }`
+- `enum FiberErr { InvalidInput, System(isize), Panicked }`: Why a fiber did not start or did not finish.
+- `nocopy struct Fiber { // The saved stack pointer while the fiber is not running. sp: usize, // The resumer's saved stack pointer while the fiber runs. caller: usize, mapping: []u8, work: fn(rawptr), context: rawptr, state: State, isolated: bool, // The fiber that was running when this one was resumed. previous: *Fiber, message: [256]u8, message_length: usize, }`
+- `fn create<C>(arena: *mem.Arena, stack_size: usize, work: fn(*C), context: *C) *Fiber!FiberErr`: A suspended fiber that runs work(context) when first resumed, on an owned stack of stack_size bytes.
+- `fn create_isolated<C>(arena: *mem.Arena, stack_size: usize, work: fn(*C), context: *C) *Fiber!FiberErr`: As create, for a fiber whose panics stop only the fiber: resume returns Panicked instead of the process exiting.
+- `fn resume(f: *Fiber) State`: Runs f until it yields, finishes or (when isolated) panics, and returns its state.
+- `fn yield_now()`: Pauses the running fiber;
+- `fn current() *Fiber`: The running fiber, or nil outside fibers.
+- `fn panic_message(f: *const Fiber) []const u8`: The text of the panic that stopped an isolated fiber, cut to 256 bytes;
+- `fn destroy(f: *Fiber)`: Unmaps f's stack.
+- `fn run_isolated<C>(arena: *mem.Arena, stack_size: usize, work: fn(*C), context: *C) !FiberErr`: Runs work(context) on a new isolated fiber until it finishes, resuming it each time it yields.
+
 ## std/flags
 
 Layer: heap
@@ -1629,6 +1645,18 @@ Layer: heap
 - `const KiB: usize = 1024`: Binary byte units.
 - `const MiB: usize = 1024 * KiB`
 - `const GiB: usize = 1024 * MiB`
+
+## std/mem/heap
+
+Layer: heap
+
+- `nocopy struct Heap { arena: *mem.Arena, free: [13]*Free, large: *Large, }`
+- `fn heap(arena: *mem.Arena) Heap`
+- `fn alloc<T>(h: *Heap) *T`: One fresh T: zeroed, then T's field defaults.
+- `fn free<T>(h: *Heap, value: *T)`: Gives value's block back for reuse.
+- `fn alloc_array<T>(h: *Heap, count: usize) []T`: count fresh elements.
+- `fn free_array<T>(h: *Heap, items: []T)`: Gives a slice from alloc_array or resize_array back, whole.
+- `fn resize_array<T>(h: *Heap, items: []T, count: usize) []T`: A slice of count elements that starts with items' elements;
 
 ## std/mmio
 
@@ -2617,6 +2645,15 @@ Layer: std
 - `fn exchange_u64(value: *AtomicU64, desired: u64) u64`
 - `fn fetch_add_u64(value: *AtomicU64, amount: u64) u64`
 - `fn compare_exchange_u64(value: *AtomicU64, expected: u64, desired: u64) bool`
+- `enum ChanErr { Closed, Full, Empty }`: Why a channel call did not move a value.
+- `nocopy struct Channel<T> { lock: Mutex, readable: Condition, writable: Condition, items: []T, head: usize, count: usize, closed: bool, }`: A bounded first-in first-out queue between threads.
+- `fn channel<T>(arena: *mem.Arena, capacity: usize) *Channel<T>`: A channel that holds up to capacity values.
+- `fn send<T>(c: *Channel<T>, value: T) !ChanErr`: Queues value, waiting while the channel is full.
+- `fn try_send<T>(c: *Channel<T>, value: T) !ChanErr`: As send, without waiting: fails with Full when there is no room.
+- `fn recv<T>(c: *Channel<T>) T!ChanErr`: The oldest queued value, waiting while the channel is empty.
+- `fn try_recv<T>(c: *Channel<T>) T!ChanErr`: As recv, without waiting: fails with Empty when nothing is queued and the channel is open.
+- `fn close<T>(c: *Channel<T>)`: Stops further sends and wakes every waiting thread.
+- `fn channel_len<T>(c: *Channel<T>) usize`: Values queued right now.
 - `struct Mutex { state: AtomicU32 }`
 - `fn mutex() Mutex`
 - `fn try_lock(value: *Mutex) bool`
@@ -2771,6 +2808,11 @@ Layer: std
 - `struct Spawner { data: rawptr, spawn: fn(rawptr, *mem.Arena, usize, fn(rawptr) isize, rawptr) rawptr, join: fn(rawptr, rawptr) bool, }`: A thread creator chosen by the caller, for code that starts threads on someone else's behalf (servers, pools).
 - `fn spawn<C>(arena: *mem.Arena, status: *fail.Status, stack: []u8, entry: fn(*C) isize, context: *C) *Thread`: Starts entry(context) on a new thread with stack as its stack.
 - `fn spawn_with_size<C>(arena: *mem.Arena, status: *fail.Status, size: usize, entry: fn(*C) isize, context: *C) *Thread`: As spawn, with a stack of size bytes that the thread owns until join.
+- `enum SpawnErr { InvalidInput, System(isize) }`: Why a scoped thread did not start.
+- `nocopy struct Scope { arena: *mem.Arena, first: *ScopeThread, }`: Threads started through a scope are all joined by scope_join, so their contexts may live on the stack of the function that owns the scope:  ...
+- `fn scope(arena: *mem.Arena) Scope`
+- `fn scope_spawn<C>(scope: *Scope, stack_size: usize, entry: fn(*C) isize, context: *C) !SpawnErr`: Starts entry(context) on a new thread with an owned stack of stack_size bytes.
+- `fn scope_join(scope: *Scope)`: Waits for every thread the scope started, newest first.
 - `struct Thread { handle: rawptr, identifier: u32, entry: fn(rawptr) isize, context: rawptr, ready: sync.AtomicU32 }`
 - `fn join(status: *fail.Status, thread: *Thread)`: Ownership: success ends worker access and clears the native owner.
 - `fn id(thread: *const Thread) u32`: Mach thread identifier while unjoined;
@@ -2783,10 +2825,9 @@ Layer: std
 
 Layer: std
 
-- `struct Task { run: fn(rawptr), data: rawptr }`: One unit of work.
 - `struct Pool { lock: sync.Mutex, ready: sync.Condition, idle: sync.Condition, tasks: []Task, head: usize, count: usize, running: usize, stopping: bool, workers: []*thread.Thread, // Handles from spawner instead of workers, when started by start_spawned. natives: []rawptr, spawner: *const thread.Spawner, started: usize, }`: Pools live in the caller's arena and must not move.
 - `fn start(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: usize, stack_size: usize) *Pool`: Starts workers threads, each with an owned stack of stack_size bytes, and a queue of capacity tasks.
-- `fn submit(pool: *Pool, task: Task) bool`: Whether task was queued: false, queuing nothing, when the queue is full or the pool is stopping, so the caller can retry or run it ...
+- `fn submit<C>(pool: *Pool, work: fn(*C), context: *C) bool`: Queues work(context) to run on a worker thread.
 - `fn wait(pool: *Pool)`: Blocks until every queued task has finished, including tasks submitted by running tasks.
 - `fn start_spawned(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: usize, stack_size: usize, spawner: *const thread.Spawner) *Pool`: Like start, with threads from spawner, such as std/thread/posix spawner() for tasks that call C libraries.
 - `fn stop(status: *fail.Status, pool: *Pool)`: Finishes queued tasks, then joins every worker.

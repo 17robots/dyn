@@ -1,0 +1,15 @@
+#target(kernel: linux, arch: riscv64)
+
+extern fn fiber_boot "dyn_fiber_boot"()
+
+// The frame dyn_fiber_switch loads first: ra = dyn_fiber_boot,
+// s1 = fiber_main, s2 = f; dyn_fiber_boot calls fiber_main(f). Other
+// callee-saved registers start at zero. The mapping is fresh, so it is zero.
+fn first_frame(f: *Fiber, top: usize) usize {
+  sp := (top & ~#cast(usize, 15)) - 208
+  words := #slice(#cast(*usize, sp), 26)
+  words[0] = #cast(usize, fiber_boot)
+  words[2] = #cast(usize, fiber_main)
+  words[3] = #cast(usize, f)
+  return sp
+}

@@ -1,0 +1,133 @@
+use io "std/io"
+use mem "std/mem"
+use fiber "std/fiber"
+
+fn check(ok: bool, what: str) {
+  if !ok { #panic(what) }
+}
+
+struct Counter {
+  steps: u64,
+  total: f64,
+}
+
+// Yields between steps; callee-saved registers and floats survive switches.
+fn count(c: *Counter) {
+  scale: f64 = 1.5
+  for i in 0..5 {
+    c.steps += 1
+    c.total += scale * #cast(f64, i)
+    fiber.yield_now()
+  }
+}
+
+struct Pair {
+  log: [16]u8,
+  length: usize,
+  other: *fiber.Fiber,
+}
+
+fn note(p: *Pair, byte: u8) {
+  p.log[p.length] = byte
+  p.length += 1
+}
+
+fn left(p: *Pair) {
+  for i in 0..3 {
+    note(p, 'a' + #cast(u8, i))
+    fiber.yield_now()
+  }
+}
+
+// Resumes another fiber from inside a fiber.
+fn nested(p: *Pair) {
+  note(p, 'x')
+  for fiber.resume(p.other) == fiber.State.Suspended {
+    note(p, '-')
+  }
+  note(p, 'y')
+}
+
+fn deep(depth: *u64) {
+  buffer: [512]u8
+  buffer[0] = #cast(u8, depth.* % 200)
+  if depth.* > 0 {
+    depth.* -= 1
+    deep(depth)
+  }
+  check(buffer[0] < 200, "deep frame")
+}
+
+fn bad(c: *Counter) {
+  c.steps = 1
+  fiber.yield_now()
+  if c.steps == 1 { #panic("request handler bug") }
+}
+
+fn fine(c: *Counter) {
+  c.steps = 2
+}
+
+fn main() {
+  arena := mem.arena_alloc(1 << 22)
+  defer mem.arena_release(arena)
+
+  c: Counter
+  f := fiber.create(arena, 65536, count, &c) catch { #panic("create") }
+  defer fiber.destroy(f)
+  resumes := 0
+  for fiber.resume(f) == fiber.State.Suspended {
+    resumes += 1
+    check(c.steps == #cast(u64, resumes), "one step per resume")
+  }
+  check(f.state == fiber.State.Done && c.steps == 5, "fiber finished")
+  check(c.total == 15.0, "floats survive switches")
+  check(fiber.resume(f) == fiber.State.Done, "resume after done")
+  check(fiber.current() == nil, "no fiber outside")
+
+  p: Pair
+  inner := fiber.create(arena, 65536, left, &p) catch { #panic("create inner") }
+  p.other = inner
+  outer := fiber.create(arena, 65536, nested, &p) catch { #panic("create outer") }
+  check(fiber.resume(outer) == fiber.State.Done, "nested finishes")
+  check(mem.equal(p.log[..p.length], "xa-b-c-y"), "nested order")
+  fiber.destroy(inner)
+  fiber.destroy(outer)
+
+  // A deep recursion inside a 1 MiB fiber stack.
+  depth: u64 = 1000
+  d := fiber.create(arena, 1 << 20, deep, &depth) catch { #panic("create deep") }
+  check(fiber.resume(d) == fiber.State.Done && depth == 0, "deep recursion")
+  fiber.destroy(d)
+
+  // Isolation: the panic stops only the fiber.
+  crashed: Counter
+  failed := false
+  fiber.run_isolated(arena, 65536, bad, &crashed) catch err {
+    case err {
+      .Panicked => { failed = true }
+      .InvalidInput, .System(_) => {}
+    }
+  }
+  check(failed, "isolated panic reported")
+  ok: Counter
+  fiber.run_isolated(arena, 65536, fine, &ok) catch { check(false, "isolated success") }
+  check(ok.steps == 2, "isolated work ran")
+  again := fiber.create_isolated(arena, 65536, bad, &crashed) catch { #panic("create isolated") }
+  for fiber.resume(again) == fiber.State.Suspended {}
+  check(again.state == fiber.State.Panicked, "second isolated panic")
+  check(mem.equal(fiber.panic_message(again), "request handler bug"), "panic message kept")
+  fiber.destroy(again)
+
+  invalid := false
+  _ = fiber.create(arena, 16, fine, &ok) catch err {
+    case err {
+      .InvalidInput => { invalid = true }
+      .System(_), .Panicked => {}
+    }
+    check(invalid, "tiny stack is InvalidInput")
+    io.println("fiber ok")
+    return
+  }
+  check(false, "tiny stack accepted")
+}
