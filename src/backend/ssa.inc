@@ -2454,6 +2454,84 @@ static bool ssa_sum(Ssa *s, const DynIrStmt *st, unsigned depth) {
 /* `for i in 0..n { d[i] = s[i] }` over scalar elements, as mem.copy has it:
    one SO_COPYN when n fits both slices; otherwise the ordinary loop, whose
    checks then fail at the same index. */
+/* ---- Short counted loops ----
+
+   `for j in 0..n` where n is one of a few small constants, such as the
+   continuation count of a UTF-8 decoder (0 to 3, chosen by branches), runs
+   as up to SSA_SHORT_TRIPS guarded copies of its body: test `k < n`, run the
+   body with j = k, and go on to k + 1. A loop that may run SSA_SHORT_TRIPS
+   times has no backedge, counter or exit test after its last copy. The body
+   must be small and leave only by falling off its end. */
+enum { SSA_SHORT_TRIPS = 4, SSA_SHORT_STATEMENTS = 8 };
+/* The largest value v can hold: a constant, or a phi of such values. */
+static bool ssa_largest_constant(Ssa *s, int32_t v, uint64_t *largest, unsigned depth) {
+  v = ssa_resolve(s, v);
+  if (v < 0 || depth > 4) return false;
+  const SsaValue *x = &s->values[v];
+  if (x->op == SO_CONST && x->cls == SC_INT) { *largest = (uint64_t)x->aux; return true; }
+  if (x->op != SO_PHI || !x->count) return false;
+  uint64_t best = 0;
+  for (uint32_t i = 0; i < x->count; ++i) {
+    int32_t op = ssa_resolve(s, (int32_t)s->lists[x->list + i]);
+    uint64_t m;
+    if (op == v) continue;
+    if (!ssa_largest_constant(s, op, &m, depth + 1)) return false;
+    if (m > best) best = m;
+  }
+  *largest = best;
+  return true;
+}
+/* Whether statements only compute and branch: no loop, transfer or defer,
+   counting them into *budget. */
+static bool ssa_short_body(const DynIrProgram *ir, uint32_t start, uint32_t count, unsigned *budget, unsigned depth) {
+  if (depth > 8 || (uint64_t)start + count > ir->child_count) return false;
+  for (uint32_t i = 0; i < count; ++i) {
+    uint32_t id = ir->children[start + i];
+    if (id >= ir->statement_count || !*budget) return false;
+    --*budget;
+    const DynIrStmt *st = &ir->statements[id];
+    if (st->kind != DYN_STMT_LOCAL && st->kind != DYN_STMT_ASSIGN && st->kind != DYN_STMT_EXPR && st->kind != DYN_STMT_IF)
+      return false;
+    if (st->kind == DYN_STMT_IF && (!ssa_short_body(ir, st->body_start, st->body_count, budget, depth + 1) ||
+                                    !ssa_short_body(ir, st->else_start, st->else_count, budget, depth + 1))) return false;
+  }
+  return true;
+}
+static bool ssa_pass_on(const char *name);
+static bool ssa_short_loop(Ssa *s, const DynIrStmt *st, unsigned depth) {
+  const DynIrProgram *ir = s->ir;
+  unsigned budget = SSA_SHORT_STATEMENTS;
+  if (s->ctx->debug_mode || !ssa_pass_on("short_loops") || !st->for_range || st->for_reverse || st->for_inclusive || st->for_pointer ||
+      st->target >= ir->expression_count || st->expression >= ir->expression_count) return false;
+  const DynIrExpr *start = &ir->expressions[st->target], *end = &ir->expressions[st->expression];
+  if (start->kind != DYN_EXPR_INT || start->integer || end->kind != DYN_EXPR_NAME ||
+      signed_scalar(storage_type(ir, start->type)) || !ssa_short_body(ir, st->body_start, st->body_count, &budget, 0))
+    return false;
+  uint32_t binding;
+  if (!ssa_local_index(s, st->local_id, &binding)) return false;
+  /* Reading a local emits nothing, so declining here costs nothing. */
+  int32_t stop = ssa_expr(s, st->expression, NULL, 0);
+  uint64_t largest;
+  if (s->failed || !ssa_largest_constant(s, stop, &largest, 0) || largest > SSA_SHORT_TRIPS) return false;
+  uint32_t exit = ssa_block(s);
+  if (s->failed) return true;
+  for (uint64_t k = 0; k < largest && s->current != UINT32_MAX; ++k) {
+    uint32_t body = ssa_block(s);
+    if (s->failed) return true;
+    int32_t value = ssa_const(s, k, SC_INT);
+    ssa_branch(s, ssa_compare(s, value, stop, CC_AE), exit, body);
+    ssa_seal(s, body);
+    s->current = body;
+    ssa_set_local(s, binding, value, -1);
+    ssa_statements(s, st->body_start, st->body_count, depth + 1);
+  }
+  ssa_jump(s, exit);
+  ssa_seal(s, exit);
+  s->current = s->blocks[exit].preds.count ? exit : UINT32_MAX;
+  if (s->ctx->optimization_remarks)
+    fprintf(stderr, "remark: %s: ran a loop of at most %llu trips as straight-line code\n", s->f->name, (unsigned long long)largest);
+  return true;
+}
 static bool ssa_copy_loop(Ssa *s, const DynIrStmt *st, unsigned depth) {
   const DynIrProgram *ir = s->ir;
   BackendContext *ctx = s->ctx;
@@ -2910,6 +2988,7 @@ static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
     if (ssa_sum(s, st, depth)) return;
     if (ssa_axpy(s, st, depth)) return;
     if (ssa_copy_loop(s, st, depth)) return;
+    if (ssa_short_loop(s, st, depth)) return;
     uint32_t counter = s->variable_count + s->hidden_variables++;
     ++s->loop_depth;
     uint32_t header = ssa_block(s), body = ssa_block(s), latch = ssa_block(s), exit = ssa_block(s);
@@ -2973,6 +3052,7 @@ static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
       if (!layout(ir, element, &size, &alignment, 0) || !ssa_local_index(s, st->local_id, &binding)) return;
       if (st->for_index && !ssa_local_index(s, st->local_id + 1, &index_binding)) return;
       int32_t data, length = -1;
+      bool aliased = false;
       if (array) {
         const DynExprKind kind = ir->expressions[st->target].kind;
         bool lvalue = kind == DYN_EXPR_NAME || kind == DYN_EXPR_GLOBAL || kind == DYN_EXPR_FIELD ||
@@ -3005,11 +3085,19 @@ static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
       else if (descriptor(element)) {
         int32_t second = -1, first = ssa_load_value(s, address, element, &second);
         ssa_set_local(s, binding, first, second);
+      } else if (!s->ctx->debug_mode && !s->address_exposed[binding] && s->alias[binding] < 0 &&
+                 !ssa_writes_memory(s, st->body_start, st->body_count, 0)) {
+        /* The body writes no memory, so the element cannot change while it
+           runs, and nothing takes the binding's address: read the element in
+           place instead of copying it into the binding. */
+        aliased = true;
+        s->alias[binding] = address;
       } else {
         if (!s->memory_local[binding]) { SSA_GIVE_UP(s); return; }
         ssa_store_value(s, ssa_frame(s, s->local_offset[binding]), element, address, -1);
       }
       ssa_loop_body(s, st, latch, exit, depth);
+      if (aliased) s->alias[binding] = -1;
       ssa_seal(s, latch);
       s->current = s->blocks[latch].preds.count ? latch : UINT32_MAX;
       if (s->current != UINT32_MAX) {
@@ -7314,14 +7402,34 @@ static bool ssa_hoist(Ssa *s, const uint32_t *order, uint32_t n) {
         uint32_t id = block->values.items[k];
         SsaValue *v = &s->values[id];
         bool invariant = ssa_pure(v) && !(v->op == SO_CONST && v->cls == SC_INT && !v->retain_constant) && v->op != SO_FRAME;
+        uint32_t count = 0, constants = 0;
         if (invariant) {
-          uint32_t count = ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
+          count = ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
           for (uint32_t o = 0; o < count && invariant; ++o) {
             int32_t op = *ssa_slots[o];
-            if (op >= 0 && stamp[s->values[op].block] == mark) invariant = false;
+            if (op < 0 || stamp[s->values[op].block] != mark) continue;
+            /* A small integer constant stays in the loop to be an
+               immediate; the hoisted value takes a copy of it. */
+            if (s->values[op].op == SO_CONST && s->values[op].cls == SC_INT) ++constants;
+            else invariant = false;
           }
         }
         if (!invariant) { block->values.items[kept++] = id; continue; }
+        for (uint32_t o = 0; o < count && constants; ++o) {
+          ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
+          int32_t op = *ssa_slots[o];
+          if (op < 0 || stamp[s->values[op].block] != mark) continue;
+          SsaValue original = s->values[op];
+          int32_t copy = ssa_value(s, entry, SO_CONST, original.cls, -1, -1, -1, original.aux, original.aux2);
+          if (s->failed) return changed;
+          s->values[copy].retain_constant = original.retain_constant;
+          ssa_push(s, &s->blocks[entry].values, (uint32_t)copy);
+          ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
+          *ssa_slots[o] = copy;
+          --constants;
+        }
+        v = &s->values[id];
+        pre = &s->blocks[entry]; block = &s->blocks[b];
         v->block = entry;
         ssa_push(s, &pre->values, id);
         pre = &s->blocks[entry]; block = &s->blocks[b];

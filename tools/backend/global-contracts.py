@@ -31,12 +31,12 @@ const frozen_text:[]const u8="ice"
 const frozen_callback:fn(u64) u64=plus
 const computed:u64=15
 pub fn constants() u64 {
-  total:=frozen.a+frozen.b+#cast(u64, frozen_table[2])+#cast(u64, #len(frozen_text))+frozen_callback(1)+computed
+  total:=frozen.a+frozen.b+#cast(u64, frozen_table[2])+#cast(u64, frozen_text.len)+frozen_callback(1)+computed
   return total
 }
 pub fn frozen_pointer() rawptr { return #cast(rawptr, &frozen) }
 pub fn state() u64 {
-  total:=counter+first+second+items[0]+items[1]+items[2]+pair.a+pair.b+#cast(u64, #len(text))+callback(1)+foreign_value
+  total:=counter+first+second+items[0]+items[1]+items[2]+pair.a+pair.b+#cast(u64, text.len)+callback(1)+foreign_value
   return total+payload.value.a+payload.value.b
 }
 pub fn mutate(value:u64) u64 { pair.a=value
@@ -45,12 +45,12 @@ foreign_value=value
 return pair.a+items[1]+foreign_value }
 pub fn pid() isize { return #syscall(39) }
 pub fn unknown_syscall() isize { return #syscall(999999) }
-pub fn write_text() isize { return #syscall(1,1,&text[0],#len(text)) }
+pub fn write_text() isize { return #syscall(1,1,&text[0],text.len) }
 pub fn reflect() u64 {
   info:=#typeof(Pair)
   if info.kind!=TypeKind.Struct { #panic("reflection kind") }
   if info.fields[0].name[0]!='a' || info.fields[1].name[0]!='b' { #panic("reflection fields") }
-  return #cast(u64, (info.size+info.member_count+#len(info.fields)+#len(info.name)))
+  return #cast(u64, (info.size+info.member_count+info.fields.len+info.name.len))
 }
 '''
 PROVIDER='unsigned long backend_foreign_value=11;\n'

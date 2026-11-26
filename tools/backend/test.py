@@ -374,14 +374,14 @@ SOURCE+='pub fn float_panic(a:f64,b:u64,c:u64) f64 { _ = b/c\nreturn a }\n'
 SOURCE+='pub fn float_panic_call(a:u64,b:u64) f64 { return float_panic(1.25,a,b) }\n'
 
 SOURCE+='pub fn float_max('+','.join(f'a{i}:f64' for i in range(256))+') f64 { return a0+a7+a8+a127+a255 }\n'
-SOURCE+='pub fn float_max_call() f64 { return\nfloat_max('+','.join(f'{i}.0' for i in range(256))+') }\n'
+SOURCE+='pub fn float_max_call() f64 { return float_max('+','.join(f'{i}.0' for i in range(256))+') }\n'
 
 SOURCE += """
-pub fn generic_min(a,b:$T) T { if a < b { return a }
+pub fn generic_min<T>(a,b:T) T { if a < b { return a }
 return b }
-pub fn generic_count(n:$T) T { if n == 0 { return 0 }
+pub fn generic_count<T>(n:T) T { if n == 0 { return 0 }
 return generic_count(n-1)+1 }
-pub fn generic_add(a,b:$T) T { return a+b }
+pub fn generic_add<T>(a,b:T) T { return a+b }
 pub fn generic_i8(a:i8,b:i8) i8 { return generic_min(a,b) }
 pub fn generic_i64(a:i64,b:i64) i64 { return generic_min(a,b) }
 pub fn generic_f64(a:f64,b:f64) f64 { return generic_min(a,b) }
@@ -626,7 +626,7 @@ struct NestedStorage { first:u8, item:Storage, last:u16 }
 pub fn array_local(a:u64,i:usize) u64 { x:[3]u64=[a,2]
 x[2]=4
 x[1]+=3
-return x[i]+#cast(u64, #len(x)) }
+return x[i]+#cast(u64, x.len) }
 pub fn array_zero(i:usize) u64 { x:[8]u64
 return x[i] }
 pub fn array_nested(a:u64) u64 { x:[2][3]u64=[[a,2,3],[4,5,6]]
@@ -671,8 +671,8 @@ pub fn slice_local(a:u64,i:usize) u64 { x:[4]u64=[a,2,3,4]
 s:=x[1..]
 s[0]+=5
 t:=s[..2]
-return t[i]+#cast(u64, #len(s)) }
-pub fn slice_read(s:[]const u64,i:usize) u64 { return s[i]+#cast(u64, #len(s)) }
+return t[i]+#cast(u64, s.len) }
+pub fn slice_read(s:[]const u64,i:usize) u64 { return s[i]+#cast(u64, s.len) }
 pub fn slice_identity(s:[]u64) []u64 { return s }
 pub fn slice_raw(p:*u64,n:usize) []u64 { return #slice(p,n) }
 pub fn slice_call(a:u64) u64 { x:[4]u64=[a,2,3,4]
@@ -685,14 +685,14 @@ pub fn slice_capture(s:[]u64) u64 { global_counter=0
 defer slice_observe(s)
 s=s[0..0]
 return 9 }
-pub fn slice_observe(s:[]u64) { global_counter=s[0]+#cast(u64, #len(s)) }
+pub fn slice_observe(s:[]u64) { global_counter=s[0]+#cast(u64, s.len) }
 pub fn slice_defer_return(s:[]u64) []u64 { defer defer_digit(1)
 return slice_identity(s) }
 pub fn slice_string(i:usize) u8 { s:[]const u8="abc"
 return s[i] }
 pub fn slice_bounds(a:usize,b:usize) u64 { x:[4]u64=[1,2,3,4]
 s:=x[a..b]
-return #cast(u64, #len(s)) }
+return #cast(u64, s.len) }
 pub fn panic_replace(a:u64) u64 { defer { #panic("cleanup") }
 #panic("original") }
 pub fn panic_owned(a:u64) u64 { message:[2]u8=[111,107]
@@ -702,7 +702,7 @@ defer_emit(5) }
 pub fn slice_nested_bounds(a:usize,b:usize) u64 { x:[5]u64=[1,2,3,4,5]
 s:=x[1..4]
 t:=s[a..b]
-return #cast(u64, #len(t)) }
+return #cast(u64, t.len) }
 """
 
 ABI_STRUCTS = [
