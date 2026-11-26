@@ -1,7 +1,6 @@
 use "std/bytes"
 use "std/strings"
 use "std/encoding/json"
-use "std/fail"
 use "std/fs"
 use "std/path"
 use "std/process"
@@ -25,10 +24,10 @@ fn numeric(root: *const json.Value, key: []const u8) Number {
   // Integer fields normally use the integer reader. Fraction/exponent spellings
   // retain the same binary64 validation semantics as the other DOM ports.
   if strings.valid<u64>(node.text) {
-    integer := json.as<u64>(nil, node)
+    integer := json.as<u64>(node) catch { return Number{} }
     return Number{ value: integer, ok: integer <= Maximum }
   }
-  value := json.as<f64>(nil, node)
+  value := json.as<f64>(node) catch { return Number{} }
   if !(value >= 0.0 && value <= 9007199254740991.0) { return Number{} }
   integer := #cast(u64, value)
   return Number{ value: integer, ok: #cast(f64, integer) == value }
@@ -96,7 +95,6 @@ fn print_json(value: []const u8) {
 fn report(file: []const u8) {
   input := mem.arena_alloc(mem.GiB)
   defer mem.arena_release(input)
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   read := fs.read_all(input, file, 1024 * mem.MiB) catch { #panic("read input") }
   scratch := mem.arena_alloc(0)
   defer mem.arena_release(scratch)
@@ -106,7 +104,7 @@ fn report(file: []const u8) {
     rest := read[at..]
     length := bytes.find_byte(rest, '\n')
     if length != 0 {
-      record := json.parse(scratch, &status, rest[..length])
+      record := json.parse(scratch, rest[..length]) catch { #panic("invalid record") }
       if !add_record(&summary, record) {
         #panic("invalid record")
       }
@@ -201,9 +199,11 @@ fn handle(response: *http.Response, request: *const http.Request) !io.IoErr {
     try http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
     return
   }
-  parsing: fail.Status
-  root := json.parse(arena, &parsing, request.body)
-  if parsing.failed || root.kind != json.KindArray {
+  root := json.parse(arena, request.body) catch {
+    try http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
+    return
+  }
+  if root.kind != json.KindArray {
     try http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
     return
   }

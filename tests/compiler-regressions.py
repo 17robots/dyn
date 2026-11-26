@@ -224,4 +224,22 @@ fn main() {
     for output in build_and_run(floats):
         assert output == b'ok\n', output
 
-print('PASS compiler regressions: exit flush, extern clash, global shadowing, literal operands, implicit rawptr, shared externs, variadic any floats, f64 float default')
+    # A block catch keeps its body as a range of statement children. IR
+    # validation once checked that range against call items, so a catch block
+    # longer than the program's item count failed to lower.
+    body = '\n'.join(f'    total += {i}' for i in range(60))
+    long_catch = project(root, 'long-catch', {'main.dyn': f'''use "std/io"
+use "std/parse"
+fn main() {{
+  total: u64 = 0
+  _ = parse.u64_decimal("bad") catch {{
+{body}
+    io.println("{{}}", total)
+    return
+  }}
+}}
+'''})
+    for output in build_and_run(long_catch):
+        assert output == b'1770\n', output
+
+print('PASS compiler regressions: exit flush, extern clash, global shadowing, literal operands, implicit rawptr, shared externs, variadic any floats, f64 float default, long catch blocks')

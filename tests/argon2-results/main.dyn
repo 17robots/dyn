@@ -12,8 +12,7 @@ use "std/parse"
 use "std/process"
 
 fn number(text: []const u8) u32 {
-  status: fail.Status
-  return #cast(u32, parse.u64_decimal(&status, text))
+  return #cast(u32, parse.u64_decimal(text) catch 0)
 }
 
 fn main() {

@@ -642,14 +642,14 @@ Layer: core
 Layer: heap
 
 - `fn encode(arena: *mem.Arena, source: []const u8) []u8`: Encodes source into arena.
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8`: Decodes validated input into arena.
+- `fn decode(arena: *mem.Arena, source: []const u8) []u8!parse.ParseErr`: Decodes validated input into arena.
 
 ## std/encoding/base64
 
 Layer: heap
 
 - `fn encode(arena: *mem.Arena, source: []const u8) []u8`: Encodes source into arena.
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8`: Decodes validated input into arena.
+- `fn decode(arena: *mem.Arena, source: []const u8) []u8!parse.ParseErr`: Decodes validated input into arena.
 
 ## std/encoding/binary
 
@@ -679,10 +679,10 @@ Layer: heap
 - `enum Kind { Unsigned, Negative, Bytes, Text, Array, Map, Tag, Bool, Null, Undefined, Simple, Float, End }`: RFC 8949: https://www.rfc-editor.org/rfc/rfc8949.html Borrowed preorder tokens, with End only for indefinite containers/strings.
 - `struct Token { kind: Kind, value: u64, bytes: []const u8, real: f64, boolean: bool, indefinite: bool }`
 - `struct Frame { kind: Kind, remaining: u64, indefinite: bool, odd: bool }`
-- `struct Reader { source: []const u8, offset: usize, frames: [64]Frame, depth: usize, failed: bool, error_kind: fail.Kind, error_offset: usize, start: usize, ended: bool }`: After a failure the reader stays failed: next fails the same way again.
+- `struct Reader { source: []const u8, offset: usize, frames: [64]Frame, depth: usize, failed: bool, error_kind: Problem, error_offset: usize, start: usize, ended: bool }`: After a failure the reader stays failed: next fails the same way again.
 - `fn reader(source: []const u8) Reader`
-- `fn next(status: *fail.Status, state: *Reader) Token`: The next token.
-- `fn encode(arena: *mem.Arena, status: *fail.Status, tokens: []const Token) []u8`: Arena-owned output.
+- `fn next(state: *Reader) Token!parse.ParseErr`: The next token.
+- `fn encode(arena: *mem.Arena, tokens: []const Token) []u8!parse.ParseErr`: Arena-owned output.
 
 ## std/encoding/csv
 
@@ -694,17 +694,17 @@ Layer: heap
 - `struct Writer { sink: stream.Writer, fields: usize }`
 - `fn scanner(source: []const u8) Scanner`
 - `fn stream_scanner(input: stream.Reader) StreamScanner`
-- `fn next_stream(status: *fail.Status, state: *StreamScanner, destination: []u8) Field`: Reads one field from an arbitrarily chunked input stream.
+- `fn next_stream(state: *StreamScanner, destination: []u8) Field!stream.IoErr`: Reads one field from an arbitrarily chunked input stream.
 - `fn writer(destination_writer: stream.Writer) Writer`
-- `fn write_field(status: *fail.Status, state: *Writer, value: []const u8, end_record: bool)`: Writes one field.
-- `fn next(status: *fail.Status, state: *Scanner, destination: []u8) Field`
+- `fn write_field(state: *Writer, value: []const u8, end_record: bool) !stream.IoErr`: Writes one field.
+- `fn next(state: *Scanner, destination: []u8) Field!parse.ParseErr`
 
 ## std/encoding/hex
 
 Layer: heap
 
 - `fn encode(arena: *mem.Arena, source: []const u8, uppercase: bool) []u8`: Encodes source into arena.
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8`: Decodes validated input into arena.
+- `fn decode(arena: *mem.Arena, source: []const u8) []u8!parse.ParseErr`: Decodes validated input into arena.
 
 ## std/encoding/ini
 
@@ -714,9 +714,9 @@ Layer: heap
 - `struct Entry { section: []const u8, key: []const u8, value: []const u8, kind: Kind, line: usize }`
 - `struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, failed: bool, error_offset: usize, error_line: usize, ended: bool }`: line counts the lines read so far, so a zero Scanner{ source: text } is ready to use.
 - `fn scanner(source: []const u8) Scanner`
-- `fn next(status: *fail.Status, state: *Scanner) Entry`
-- `fn find(status: *fail.Status, source: []const u8, section: []const u8, key: []const u8) []const u8`: The value of key in section, borrowing source;
-- `fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) []Entry`: A materialized entry table.
+- `fn next(state: *Scanner) Entry!parse.ParseErr`
+- `fn find(source: []const u8, section: []const u8, key: []const u8) []const u8!io.IoErr`: The value of key in section, borrowing source.
+- `fn parse(arena: *mem.Arena, source: []const u8) []Entry!parse.ParseErr`: A materialized entry table.
 
 ## std/encoding/json
 
@@ -737,7 +737,7 @@ Layer: heap
 - `fn tokenizer(source: []const u8) Tokenizer`
 - `fn token_next(state: *Tokenizer) Token`
 - `fn valid(source: []const u8) bool`
-- `fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *const Value`: Nodes, decoded strings, and object keys live in arena.
+- `fn parse(arena: *memory.Arena, source: []const u8) *const Value!parse.ParseErr`: Nodes, decoded strings, and object keys live in arena.
 - `fn push_null(arena: *memory.Arena) *Value`
 - `fn push_bool(arena: *memory.Arena, value: bool) *Value`
 - `fn push_number(arena: *memory.Arena, content: []const u8) *Value`: Retains text as a borrowed view;
@@ -747,8 +747,8 @@ Layer: heap
 - `fn add(parent: *Value, child: *Value) bool`
 - `fn add_member(parent: *Value, key: []const u8, child: *Value) bool`
 - `fn object_get(object: *const Value, key: []const u8) *const Value`: The member named key, or &nil_value.
-- `fn get<T>(status: *fail.Status, object: *const Value, key: []const u8) T`: Reads member key of object as T: an integer type, f32, f64, bool, []const u8 (string text), or *const Value (the member itself).
-- `fn as<T>(status: *fail.Status, value: *const Value) T`: Reads value itself as T, by the same rules as get.
+- `fn get<T>(object: *const Value, key: []const u8) T!stream.IoErr`: Reads member key of object as T: an integer type, f32, f64, bool, []const u8 (string text), or *const Value (the member itself).
+- `fn as<T>(value: *const Value) T!stream.IoErr`: Reads value itself as T, by the same rules as get.
 - `fn array_length(array: *const Value) usize`
 - `fn array_get(array: *const Value, index: usize) *const Value`: Element number index, or &nil_value.
 - `fn is_missing(value: *const Value) bool`
@@ -758,7 +758,7 @@ Layer: heap
 - `fn is_string(value: *const Value) bool`
 - `fn is_array(value: *const Value) bool`
 - `fn is_object(value: *const Value) bool`
-- `fn write(status: *fail.Status, destination: stream.Writer, value: *const Value)`: Writes value as compact JSON.
+- `fn write(destination: stream.Writer, value: *const Value) !stream.IoErr`: Writes value as compact JSON.
 - `fn write_string(arena: *memory.Arena, source: []const u8) []u8`: source as a quoted JSON string, in arena.
 - `fn encode(arena: *memory.Arena, value: *const Value) []u8`: value as compact JSON, in arena.
 - `fn encode_pretty(arena: *memory.Arena, value: *const Value, indent: usize) []u8`: value as JSON indented by indent spaces per level, in arena.
@@ -795,7 +795,7 @@ Layer: heap
 - `const KindObject: u8 = 6`
 - `struct Value { tag: u64, bits: u64 }`: Experimental read-only DOM.
 - `const nil_value: Value = Value{}`
-- `fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *const Value`: @ownership All values and text live in arena;
+- `fn parse(arena: *memory.Arena, source: []const u8) *const Value!parse.ParseErr`: @ownership All values and text live in arena;
 - `fn kind(value: *const Value) u8`
 - `fn length(value: *const Value) usize`
 - `fn as_text(value: *const Value) []const u8`
@@ -825,7 +825,7 @@ Layer: heap
 - `enum Label { None, Identifier, Number, String, Symbol }`
 - `struct Node { kind: Kind, label: Label, // Label text. Strings exclude their quotes and keep escapes as written. string: []const u8, // Byte offset of the node in the source. offset: usize, // '{', '(' or '[' when the children came from a group, otherwise 0. group: u8, parent: *Node, first: *Node, last: *Node, next: *Node, first_tag: *Node, last_tag: *Node, }`
 - `const nil_node: Node = Node{}`: The read-only stub returned for every miss.
-- `fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *Node`: Nodes are pushed with mem.push, so a full fixed arena panics.
+- `fn parse(arena: *mem.Arena, source: []const u8) *Node!parse.ParseErr`: Nodes are pushed with mem.push, so a full fixed arena panics.
 - `fn empty() *Node`: The shared nil node.
 - `fn is_nil(node: *const Node) bool`
 - `fn child(node: *const Node, name: []const u8) *Node`: First child labeled name, or the nil node.
@@ -841,10 +841,10 @@ Layer: heap
 
 - `enum Kind { Nil, Bool, Unsigned, Signed, Float, Text, Bytes, Array, Map, Extension }`: MessagePack specification: https://github.com/msgpack/msgpack/blob/master/spec.md Flattened preorder tokens.
 - `struct Token { kind: Kind, value: u64, integer: i64, real: f64, boolean: bool, bytes: []const u8, extension: i8 }`
-- `struct Reader { source: []const u8, offset: usize, remaining: [64]u64, depth: usize, failed: bool, error_kind: fail.Kind, error_offset: usize, start: usize, ended: bool }`: After a failure the reader stays failed: next fails the same way again.
+- `struct Reader { source: []const u8, offset: usize, remaining: [64]u64, depth: usize, failed: bool, error_kind: Problem, error_offset: usize, start: usize, ended: bool }`: After a failure the reader stays failed: next fails the same way again.
 - `fn reader(source: []const u8) Reader`
-- `fn next(status: *fail.Status, state: *Reader) Token`: The next token.
-- `fn encode(arena: *mem.Arena, status: *fail.Status, tokens: []const Token) []u8`: Tokens must be a complete preorder sequence.
+- `fn next(state: *Reader) Token!parse.ParseErr`: The next token.
+- `fn encode(arena: *mem.Arena, tokens: []const Token) []u8!parse.ParseErr`: Tokens must be a complete preorder sequence.
 
 ## std/encoding/protobuf
 
@@ -852,12 +852,12 @@ Layer: heap
 
 - `enum Wire { Varint, Fixed64, Bytes, StartGroup, EndGroup, Fixed32 }`
 - `struct Field { number: u32, wire: Wire, value: u64, bytes: []const u8 }`
-- `struct Reader { source: []const u8, offset: usize, failed: bool, kind: fail.Kind, error_offset: usize, groups: [64]u32, depth: usize, start: usize, ended: bool }`: Input and field bytes are borrowed.
+- `struct Reader { source: []const u8, offset: usize, failed: bool, error_kind: Problem, error_offset: usize, groups: [64]u32, depth: usize, start: usize, ended: bool }`: Input and field bytes are borrowed.
 - `fn reader(source: []const u8) Reader`
-- `fn next(status: *fail.Status, state: *Reader) Field`: The next field.
+- `fn next(state: *Reader) Field!parse.ParseErr`: The next field.
 - `fn zigzag(value: i64) u64`
 - `fn unzigzag(value: u64) i64`
-- `fn encode(arena: *mem.Arena, status: *fail.Status, fields: []const Field) []u8`: A schema-free wire encoder.
+- `fn encode(arena: *mem.Arena, fields: []const Field) []u8!parse.ParseErr`: A schema-free wire encoder.
 
 ## std/encoding/toml
 
@@ -868,8 +868,8 @@ Layer: heap
 - `const nil_value: Value = Value{}`
 - `fn member(parent: *const Value, key: []const u8) *const Value`
 - `fn index(parent: *const Value, at: usize) *const Value`
-- `fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *const Value`: Inputs must not borrow unused backing of the output arena.
-- `fn encode(arena: *mem.Arena, status: *fail.Status, root: *const Value) []u8`: Normalized writer uses quoted keys and inline tables, preserving scalar lexemes.
+- `fn parse(arena: *mem.Arena, source: []const u8) *const Value!parse.ParseErr`: Inputs must not borrow unused backing of the output arena.
+- `fn encode(arena: *mem.Arena, root: *const Value) []u8!io.IoErr`: Normalized writer uses quoted keys and inline tables, preserving scalar lexemes.
 
 ## std/encoding/xml
 
@@ -880,9 +880,9 @@ Layer: heap
 - `struct Namespaces { bindings: []NamespaceBinding, frames: []NamespaceFrame, storage: []u8, count: usize, depth: usize, used: usize, }`
 - `struct ExpandedName { prefix: []const u8, local: []const u8, uri: []const u8 }`
 - `fn namespaces(bindings: []NamespaceBinding, frames: []NamespaceFrame, storage: []u8) Namespaces`
-- `fn namespace_resolve(status: *fail.Status, state: *const Namespaces, name: []const u8, attribute: bool) ExpandedName`: The expanded name of an element or attribute name in the current scope.
-- `fn namespace_enter(status: *fail.Status, state: *Namespaces, event: Event) ExpandedName`: Enter every Start, including self-closing tags;
-- `fn namespace_leave(status: *fail.Status, state: *Namespaces, name: []const u8)`: Leaves element name;
+- `fn namespace_resolve(state: *const Namespaces, name: []const u8, attribute: bool) ExpandedName!stream.IoErr`: The expanded name of an element or attribute name in the current scope.
+- `fn namespace_enter(state: *Namespaces, event: Event) ExpandedName!stream.IoErr`: Enter every Start, including self-closing tags;
+- `fn namespace_leave(state: *Namespaces, name: []const u8) !stream.IoErr`: Leaves element name;
 - `enum NodeKind { Missing, Document, Element, Text, Comment, Processing, Cdata }`: Arena-owned links, borrowed source slices.
 - `struct Node { kind: NodeKind, name: []const u8, text: []const u8, attributes: []const u8, first: *Node, last: *Node, next: *Node, parent: *Node, }`
 - `const nil_node: Node = Node{}`
@@ -890,9 +890,9 @@ Layer: heap
 - `fn next_sibling(node: *const Node) *const Node`
 - `fn child(node: *const Node, name: []const u8) *const Node`
 - `fn at(node: *const Node, index: usize) *const Node`
-- `fn parse(arena: *tree_memory.Arena, status: *fail.Status, source: []const u8) *const Node`: On validation failure rewind exactly the entry mark and return a read-only Missing stub.
+- `fn parse(arena: *tree_memory.Arena, source: []const u8) *const Node!parse.ParseErr`: On validation failure rewind exactly the entry mark and fail with Invalid.
 - `enum Kind { Start, End, Text, Comment, Processing, Cdata }`
-- `struct Event { kind: Kind, name: []const u8, text: []const u8, attributes: []const u8, self_closing: bool }`: Malformed text fails with InvalidInput at its offset.
+- `struct Event { kind: Kind, name: []const u8, text: []const u8, attributes: []const u8, self_closing: bool }`: Malformed text fails with Invalid at its offset (a stream scanner: with InvalidInput, or Capacity for an event larger than storage).
 - `struct Scanner { source: []const u8, offset: usize, failed: bool, ended: bool }`
 - `struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, input_done: bool, failed: bool, ended: bool }`
 - `struct AttributeScanner { source: []const u8, offset: usize, failed: bool, ended: bool }`
@@ -900,16 +900,16 @@ Layer: heap
 - `struct Writer { sink: stream.Writer }`
 - `fn scanner(source: []const u8) Scanner`
 - `fn stream_scanner(input: stream.Reader, storage: []u8) StreamScanner`
-- `fn next_stream(status: *fail.Status, state: *StreamScanner) Event`
+- `fn next_stream(state: *StreamScanner) Event!stream.IoErr`
 - `fn writer(destination_writer: stream.Writer) Writer`
-- `fn write_text(status: *fail.Status, state: *Writer, value: []const u8)`
-- `fn write_start(status: *fail.Status, state: *Writer, name: []const u8)`
-- `fn write_attribute(status: *fail.Status, state: *Writer, name: []const u8, value: []const u8)`
-- `fn write_start_end(status: *fail.Status, state: *Writer, self_closing: bool)`
-- `fn write_end(status: *fail.Status, state: *Writer, name: []const u8)`
-- `fn next(status: *fail.Status, state: *Scanner) Event`
+- `fn write_text(state: *Writer, value: []const u8) !stream.IoErr`: Names and text that XML cannot hold fail with InvalidInput before any byte is written.
+- `fn write_start(state: *Writer, name: []const u8) !stream.IoErr`
+- `fn write_attribute(state: *Writer, name: []const u8, value: []const u8) !stream.IoErr`
+- `fn write_start_end(state: *Writer, self_closing: bool) !stream.IoErr`
+- `fn write_end(state: *Writer, name: []const u8) !stream.IoErr`
+- `fn next(state: *Scanner) Event!parse.ParseErr`
 - `fn attributes(event: Event) AttributeScanner`
-- `fn next_attribute(status: *fail.Status, state: *AttributeScanner) Attribute`
+- `fn next_attribute(state: *AttributeScanner) Attribute!parse.ParseErr`
 - `fn valid(source: []const u8, stack: [][]const u8) bool`
 
 ## std/enums
@@ -2345,15 +2345,13 @@ Layer: core
 
 Layer: core
 
-- `fn u64_decimal(status: *fail.Status, text: []const u8) u64`: Whole text as a decimal u64: one or more ASCII digits, nothing else (no sign, space or underscore).
-- `fn i64_decimal(status: *fail.Status, text: []const u8) i64`: Whole text as a decimal i64 with an optional leading '-'.
+- `fn u64_decimal(text: []const u8) u64!ParseErr`: Whole text as a decimal u64: one or more ASCII digits, nothing else.
+- `fn i64_decimal(text: []const u8) i64!ParseErr`: Whole text as a decimal i64 with an optional leading '-'.
 - `enum ParseErr { Invalid(usize), TooLarge(usize), }`: Why input could not be parsed, with the byte offset from the start of the input where it went wrong: Invalid for malformed input, TooLarge ...
 - `fn offset(err: ParseErr) usize`: The offset where err happened.
 - `fn shifted(err: ParseErr, start: usize) ParseErr`: err moved by start bytes, for a parser that worked on a part of its input.
 - `fn failure_of(err: ParseErr, operation: []const u8) fail.Failure`: Bridges for modules that still report through fail.Status.
 - `fn err_of(failure: fail.Failure) ParseErr`
-- `fn parse_u64(text: str) u64!ParseErr`: Whole text as a decimal u64: one or more ASCII digits, nothing else.
-- `fn parse_i64(text: str) i64!ParseErr`: Whole text as a decimal i64 with an optional leading '-'.
 
 ## std/path
 
@@ -2461,7 +2459,7 @@ Layer: core
 Layer: heap
 
 - `struct Version { major: u32, minor: u32, patch: u32, prerelease: []const u8, build: []const u8, }`
-- `fn parse(status: *fail.Status, text: []const u8) Version`: A version such as "1.2.3-alpha.1+build".
+- `fn parse(text: []const u8) Version!parse.ParseErr`: A version such as "1.2.3-alpha.1+build".
 - `fn compare(a, b: Version) i32`
 - `struct Range { minimum: Version, maximum: Version, has_minimum: bool, has_maximum: bool, include_minimum: bool, include_maximum: bool, }`
 - `fn contains(range: *const Range, version: Version) bool`

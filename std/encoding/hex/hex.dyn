@@ -1,5 +1,5 @@
 use mem "std/mem"
-use "std/fail"
+use parse "std/parse"
 use bytes "std/bytes"
 // A pass over the input: the bytes written, the exact size needed, or failed.
 struct Result { data: []u8, required: usize, failed: bool }
@@ -106,21 +106,14 @@ pub fn encode(arena: *mem.Arena, source: []const u8, uppercase: bool) []u8 {
 }
 
 // Decodes validated input into arena. Failures preserve the arena and source:
-// malformed input fails with InvalidInput at an offending byte, or at the
+// malformed input fails with Invalid at an offending byte, or at the
 // end of a truncated group. Arena exhaustion panics.
-pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8 {
-  if status == nil { return decode(arena, &fail.Status{}, source) }
-  empty: []u8
-  if status.failed { return empty }
+pub fn decode(arena: *mem.Arena, source: []const u8) []u8!parse.ParseErr {
   size := decoded_size(source)
-  if !size.ok {
-    fail.at(status, fail.Kind.InvalidInput, "decode hex", "invalid hex", size.offset)
-    return empty
-  }
+  if !size.ok { fail parse.ParseErr.Invalid(size.offset) }
   // Check borrowed backing before allocation or rewind can modify aliased input.
   if mem.arena_overlaps_unallocated(arena, source) {
-    fail.invalid(status, "decode hex", "", "the input lies in the arena's free space")
-    return empty
+    #panic("hex.decode: input overlaps arena output")
   }
   output := mem.push_bytes(arena, size.value)
   _ = decode_into(output, source)

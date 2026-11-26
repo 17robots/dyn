@@ -1,11 +1,12 @@
 use stream "std/io"
-use "std/fail"
+use parse "std/parse"
 use utf8 "std/unicode/utf8"
 use bytes "std/bytes"
 
 pub enum Kind { Start, End, Text, Comment, Processing, Cdata }
-// Malformed text fails with InvalidInput at its offset. After a failure a
-// scanner stays failed. A scanner's ended turns true when next returns no
+// Malformed text fails with Invalid at its offset (a stream scanner: with
+// InvalidInput, or Capacity for an event larger than storage). After a
+// failure a scanner stays failed: later calls return no event. A scanner's ended turns true when next returns no
 // event, at the end of the input or after a failure; that event is zero.
 pub struct Event { kind: Kind, name: []const u8, text: []const u8, attributes: []const u8, self_closing: bool }
 pub struct Scanner { source: []const u8, offset: usize, failed: bool, ended: bool }
@@ -39,9 +40,8 @@ fn stream_ended(state: *StreamScanner) Event {
   state.ended = true
   return Event{}
 }
-pub fn next_stream(status: *fail.Status, state: *StreamScanner) Event {
-  if status == nil { return next_stream(&fail.Status{}, state) }
-  if status.failed || state.failed { return stream_ended(state) }
+pub fn next_stream(state: *StreamScanner) Event!stream.IoErr {
+  if state.failed { return stream_ended(state) }
   shift_stream(state)
   for true {
     if state.used > 0 {
@@ -72,8 +72,11 @@ pub fn next_stream(status: *fail.Status, state: *StreamScanner) Event {
       }
       if complete || state.input_done {
         candidate := scanner(state.storage[..state.used])
-        parsed := next(status, &candidate)
-        state.failed = candidate.failed
+        parsed := next(&candidate) catch {
+          state.failed = true
+          _ = stream_ended(state)
+          fail .InvalidInput
+        }
         if candidate.ended { return stream_ended(state) }
         state.consumed = candidate.offset
         return parsed
@@ -81,13 +84,13 @@ pub fn next_stream(status: *fail.Status, state: *StreamScanner) Event {
     } else if state.input_done { return stream_ended(state) }
     if state.used == state.storage.len {
       state.failed = true
-      fail.set(status, fail.make(fail.Kind.Capacity, "read XML", "", "an event does not fit storage"))
-      return stream_ended(state)
+      _ = stream_ended(state)
+      fail .Capacity
     }
-    count := stream.read_status(status, state.input, state.storage[state.used..])
-    if status.failed {
+    count := stream.read(state.input, state.storage[state.used..]) catch err {
       state.failed = true
-      return stream_ended(state)
+      _ = stream_ended(state)
+      fail err
     }
     state.used += count
     if count == 0 {
@@ -100,13 +103,7 @@ pub fn writer(destination_writer: stream.Writer) Writer {
   return Writer{ sink: destination_writer }
 }
 
-fn emit(status: *fail.Status, state: *Writer, data: []const u8) bool {
-  stream.write_status(status, state.sink, data)
-  return !status.failed
-}
-
-fn escaped(status: *fail.Status, state: *Writer, value: []const u8, attribute: bool) bool {
-  if status.failed { return false }
+fn escaped(state: *Writer, value: []const u8, attribute: bool) !stream.IoErr {
   start: usize = 0
   for i in 0..value.len {
     replacement: []const u8 = ""
@@ -120,64 +117,49 @@ fn escaped(status: *fail.Status, state: *Writer, value: []const u8, attribute: b
       replacement = "&quot;"
     }
     if replacement.len > 0 {
-      if i > start && !emit(status, state, value[start..i]) { return false }
-      if !emit(status, state, replacement) { return false }
+      if i > start { try stream.write(state.sink, value[start..i]) }
+      try stream.write(state.sink, replacement)
       start = i + 1
     }
   }
-  return start == value.len || emit(status, state, value[start..])
+  if start < value.len { try stream.write(state.sink, value[start..]) }
+}
+
+fn xml_name(name: []const u8) bool {
+  return name.len > 0 && name_end(name, 0) == name.len
 }
 
 // Names and text that XML cannot hold fail with InvalidInput before any
 // byte is written.
-fn writer_valid(status: *fail.Status, valid: bool, message: []const u8) bool {
-  if status.failed { return false }
-  if !valid {
-    fail.invalid(status, "write XML", "", message)
-    return false
-  }
-  return true
+pub fn write_text(state: *Writer, value: []const u8) !stream.IoErr {
+  if !valid_characters(value) { fail .InvalidInput }
+  try escaped(state, value, false)
 }
-
-pub fn write_text(status: *fail.Status, state: *Writer, value: []const u8) {
-  if status == nil {
-    write_text(&fail.Status{}, state, value)
-    return
-  }
-  _ = writer_valid(status, valid_characters(value), "text holds characters XML cannot carry") && escaped(status, state, value, false)
+pub fn write_start(state: *Writer, name: []const u8) !stream.IoErr {
+  if !xml_name(name) { fail .InvalidInput }
+  try stream.write(state.sink, "<")
+  try stream.write(state.sink, name)
 }
-pub fn write_start(status: *fail.Status, state: *Writer, name: []const u8) {
-  if status == nil {
-    write_start(&fail.Status{}, state, name)
-    return
-  }
-  _ = writer_valid(status, name.len > 0 && name_end(name, 0) == name.len, "not an XML name") && emit(status, state, "<") && emit(status, state, name)
+pub fn write_attribute(state: *Writer, name: []const u8, value: []const u8) !stream.IoErr {
+  if !xml_name(name) || !valid_characters(value) { fail .InvalidInput }
+  try stream.write(state.sink, " ")
+  try stream.write(state.sink, name)
+  try stream.write(state.sink, "=\"")
+  try escaped(state, value, true)
+  try stream.write(state.sink, "\"")
 }
-pub fn write_attribute(status: *fail.Status, state: *Writer, name: []const u8, value: []const u8) {
-  if status == nil {
-    write_attribute(&fail.Status{}, state, name, value)
-    return
-  }
-  _ = writer_valid(status, name.len > 0 && name_end(name, 0) == name.len && valid_characters(value), "not an XML name, or the value holds characters XML cannot carry") && emit(status, state, " ") && emit(status, state, name) && emit(status, state, "=\"") &&
-    escaped(status, state, value, true) && emit(status, state, "\"")
-}
-pub fn write_start_end(status: *fail.Status, state: *Writer, self_closing: bool) {
-  if status == nil {
-    write_start_end(&fail.Status{}, state, self_closing)
-    return
-  }
+pub fn write_start_end(state: *Writer, self_closing: bool) !stream.IoErr {
   if self_closing {
-    _ = emit(status, state, "/>")
+    try stream.write(state.sink, "/>")
     return
   }
-  _ = emit(status, state, ">")
+  try stream.write(state.sink, ">")
 }
-pub fn write_end(status: *fail.Status, state: *Writer, name: []const u8) {
-  if status == nil {
-    write_end(&fail.Status{}, state, name)
-    return
-  }
-  _ = writer_valid(status, name.len > 0 && name_end(name, 0) == name.len, "not an XML name") && emit(status, state, "</") && emit(status, state, name) && emit(status, state, ">")
+pub fn write_end(state: *Writer, name: []const u8) !stream.IoErr {
+  if !xml_name(name) { fail .InvalidInput }
+  try stream.write(state.sink, "</")
+  try stream.write(state.sink, name)
+  try stream.write(state.sink, ">")
 }
 fn whitespace(byte: u8) bool {
   return byte == ' ' || byte == '\t' || byte == '\r' || byte == '\n'
@@ -186,10 +168,11 @@ fn starts(source: []const u8, at: usize, expected: []const u8) bool {
   if at > source.len || expected.len > source.len - at { return false }
   return bytes.equal(source[at..at + expected.len], expected)
 }
-fn fail_at(status: *fail.Status, state: *Scanner, at: usize) Event {
+// Ends the scanner for good and returns the failure at at.
+fn fail_at(state: *Scanner, at: usize) parse.ParseErr {
   state.failed = true
-  fail.at(status, fail.Kind.InvalidInput, "read XML", "malformed XML", at)
-  return scan_ended(state)
+  _ = scan_ended(state)
+  return parse.ParseErr.Invalid(at)
 }
 fn scan_ended(state: *Scanner) Event {
   state.ended = true
@@ -284,9 +267,8 @@ fn valid_text(text: []const u8, attribute: bool) bool {
   return true
 }
 
-pub fn next(status: *fail.Status, state: *Scanner) Event {
-  if status == nil { return next(&fail.Status{}, state) }
-  if status.failed || state.failed || state.offset == state.source.len { return scan_ended(state) }
+pub fn next(state: *Scanner) Event!parse.ParseErr {
+  if state.failed || state.offset == state.source.len { return scan_ended(state) }
   start := state.offset
   if state.source[start] != '<' {
     text_end := start
@@ -301,7 +283,7 @@ pub fn next(status: *fail.Status, state: *Scanner) Event {
     for cdata_end + 3 <= state.source.len && !starts(state.source, cdata_end, "]]>") {
       cdata_end += 1
     }
-    if cdata_end + 3 > state.source.len { return fail_at(status, state, start) }
+    if cdata_end + 3 > state.source.len { fail fail_at(state, start) }
     state.offset = cdata_end + 3
     return Event{ kind: Kind.Cdata, text: state.source[start + 9..cdata_end] }
   }
@@ -310,7 +292,7 @@ pub fn next(status: *fail.Status, state: *Scanner) Event {
     for comment_end + 3 <= state.source.len && !starts(state.source, comment_end, "-->") {
       comment_end += 1
     }
-    if comment_end + 3 > state.source.len { return fail_at(status, state, start) }
+    if comment_end + 3 > state.source.len { fail fail_at(state, start) }
     state.offset = comment_end + 3
     return Event{ kind: Kind.Comment, text: state.source[start + 4..comment_end] }
   }
@@ -322,13 +304,13 @@ pub fn next(status: *fail.Status, state: *Scanner) Event {
   }
   name_start := at
   at = name_end(state.source, at)
-  if at == name_start { return fail_at(status, state, at) }
+  if at == name_start { fail fail_at(state, at) }
   name := state.source[name_start..at]
   if closing {
     for at < state.source.len && whitespace(state.source[at]) {
       at += 1
     }
-    if at >= state.source.len || state.source[at] != '>' { return fail_at(status, state, at) }
+    if at >= state.source.len || state.source[at] != '>' { fail fail_at(state, at) }
     state.offset = at + 1
     return Event{ kind: Kind.End, name: name }
   }
@@ -348,7 +330,7 @@ pub fn next(status: *fail.Status, state: *Scanner) Event {
     } else if !processing && byte == '>' { break }
     tag_end += 1
   }
-  if tag_end >= state.source.len || quote != 0 { return fail_at(status, state, tag_end) }
+  if tag_end >= state.source.len || quote != 0 { fail fail_at(state, tag_end) }
   terminator := tag_end
   if processing { state.offset = tag_end + 2 } else { state.offset = tag_end + 1 }
   attributes_end := terminator
@@ -373,18 +355,18 @@ pub fn next(status: *fail.Status, state: *Scanner) Event {
 pub fn attributes(event: Event) AttributeScanner {
   return AttributeScanner{ source: event.attributes }
 }
-fn attribute_error(status: *fail.Status, state: *AttributeScanner) Attribute {
+// Ends the scanner for good and returns the failure at its offset.
+fn attribute_error(state: *AttributeScanner) parse.ParseErr {
   state.failed = true
-  fail.at(status, fail.Kind.InvalidInput, "read XML attributes", "malformed attribute", state.offset)
-  return attribute_ended(state)
+  _ = attribute_ended(state)
+  return parse.ParseErr.Invalid(state.offset)
 }
 fn attribute_ended(state: *AttributeScanner) Attribute {
   state.ended = true
   return Attribute{}
 }
-pub fn next_attribute(status: *fail.Status, state: *AttributeScanner) Attribute {
-  if status == nil { return next_attribute(&fail.Status{}, state) }
-  if status.failed || state.failed { return attribute_ended(state) }
+pub fn next_attribute(state: *AttributeScanner) Attribute!parse.ParseErr {
+  if state.failed { return attribute_ended(state) }
   at := state.offset
   for at < state.source.len && whitespace(state.source[at]) {
     at += 1
@@ -393,21 +375,21 @@ pub fn next_attribute(status: *fail.Status, state: *AttributeScanner) Attribute 
     state.offset = at
     return attribute_ended(state)
   }
-  if at == state.offset { return attribute_error(status, state) }
+  if at == state.offset { fail attribute_error(state) }
   start := at
   at = name_end(state.source, at)
-  if at == start { return attribute_error(status, state) }
+  if at == start { fail attribute_error(state) }
   name := state.source[start..at]
   for at < state.source.len && whitespace(state.source[at]) {
     at += 1
   }
-  if at >= state.source.len || state.source[at] != '=' { return attribute_error(status, state) }
+  if at >= state.source.len || state.source[at] != '=' { fail attribute_error(state) }
   at += 1
   for at < state.source.len && whitespace(state.source[at]) {
     at += 1
   }
   if at >= state.source.len || (state.source[at] != '"' && state.source[at] != 39) {
-    return attribute_error(status, state)
+    fail attribute_error(state)
   }
   quote := state.source[at]
   at += 1
@@ -415,22 +397,21 @@ pub fn next_attribute(status: *fail.Status, state: *AttributeScanner) Attribute 
   for at < state.source.len && state.source[at] != quote {
     at += 1
   }
-  if at == state.source.len { return attribute_error(status, state) }
+  if at == state.source.len { fail attribute_error(state) }
   value := state.source[value_start..at]
-  if !valid_text(value, true) { return attribute_error(status, state) }
+  if !valid_text(value, true) { fail attribute_error(state) }
   state.offset = at + 1
   return Attribute{ name: name, value: value }
 }
 fn valid_attributes(event: Event) bool {
   scan := attributes(event)
-  status: fail.Status
   for {
     before := scan.offset
-    item := next_attribute(&status, &scan)
-    if scan.ended { return !status.failed }
+    item := next_attribute(&scan) catch { return false }
+    if scan.ended { return true }
     previous := attributes(event)
     for previous.offset < before {
-      other := next_attribute(&status, &previous)
+      other := next_attribute(&previous) catch { return false }
       if previous.ended { break }
       if bytes.equal(other.name, item.name) { return false }
     }
@@ -442,10 +423,9 @@ pub fn valid(source: []const u8, stack: [][]const u8) bool {
   state := scanner(source)
   depth: usize = 0
   roots: usize = 0
-  status: fail.Status
   for {
-    item := next(&status, &state)
-    if state.ended { return !status.failed && depth == 0 && roots == 1 }
+    item := next(&state) catch { return false }
+    if state.ended { return depth == 0 && roots == 1 }
     if item.kind == Kind.Text && !valid_text(item.text, false) { return false }
     if item.kind == Kind.Cdata || item.kind == Kind.Comment {
       if !valid_characters(item.text) { return false }

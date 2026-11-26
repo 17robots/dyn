@@ -23,10 +23,10 @@ CASES = (
      "'strings.equal' was removed: use bytes.equal(a, b) from std/bytes"),
     # Neighboring arguments that each fit the other's place are reported as
     # swapped, with the swap as a suggestion; a plain mismatch is not.
-    ('use "std/encoding/json"\nuse "std/mem"\nuse "std/fail"\n\nfn main() {\n  a := mem.arena_alloc(0)\n  status: fail.Status\n'
-     '  _ = json.parse(&status, a, "x")\n}\n',
+    ('use "std/mem"\n\nstruct Status { failed: bool }\nfn load(arena: *mem.Arena, status: *Status, text: []const u8) {\n  _ = arena\n  _ = status\n  _ = text\n}\n\n'
+     'fn main() {\n  a := mem.arena_alloc(0)\n  status: Status\n  load(&status, a, "x")\n}\n',
      "function arguments 1 and 2 look swapped (expected *Arena, *Status; found *Status, *Arena)\n"
-     " 8 |   _ = json.parse(&status, a, \"x\")\n   |                  ^~~~~~~~~~\n"
+     " 13 |   load(&status, a, \"x\")\n    |" + " " * 8 + "^~~~~~~~~~\n"
      " suggestion: replace '&status, a' with 'a, &status'"),
     ('fn pair(n: i32, name: []const u8) {\n  _ = n\n  _ = name\n}\n\nfn main() {\n  name: []const u8 = "x"\n  pair(name, name)\n}\n',
      "function argument type mismatch (expected i32, found []const u8)"),

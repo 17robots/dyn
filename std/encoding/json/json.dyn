@@ -1,13 +1,12 @@
 use parse "std/parse"
 use memory "std/mem"
 use strings "std/strings"
-use "std/fail"
 use stream "std/io"
 use utf8 "std/unicode/utf8"
 use "std/bytes"
 use "std/encoding/json/scan"
 
-struct Cursor { source: []const u8, at: usize, error: fail.Kind }
+struct Cursor { source: []const u8, at: usize, failed: bool }
 
 // Kind zero is a missing value: the nil_value stub that lookups return on a
 // miss. It is not a JSON null.
@@ -331,8 +330,8 @@ fn write_string_into(destination: []u8, source: []const u8) []u8 {
 }
 
 fn failed_string(cursor: *Cursor) []const u8 {
-  if cursor.error == fail.Kind.Ok {
-    cursor.error = fail.Kind.InvalidInput
+  if !cursor.failed {
+    cursor.failed = true
   }
   return cursor.source[..0]
 }
@@ -488,7 +487,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
   }
   if byte == '"' {
     content := decoded_string(arena, cursor)
-    if cursor.error != fail.Kind.Ok { return nil }
+    if cursor.failed { return nil }
     string_node := node(arena, KindString)
     string_node.text = content
     return string_node
@@ -514,7 +513,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
       key: []const u8 = cursor.source[..0]
       if object {
         key = decoded_string(arena, cursor)
-        if cursor.error != fail.Kind.Ok { return nil }
+        if cursor.failed { return nil }
         skip(cursor)
         if cursor.at >= cursor.source.len || cursor.source[cursor.at] != ':' { return nil }
         cursor.at += 1
@@ -543,24 +542,16 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
 
 // Nodes, decoded strings, and object keys live in arena. Number text borrows source.
 // Source must outlive uses of number text; all nodes expire when arena storage resets.
-// Malformed input fails with InvalidInput at the offending byte and rewinds
-// this call's allocations; the root is then the missing value. A full fixed
-// arena panics.
-pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *const Value {
-  if status == nil { return parse(arena, &fail.Status{}, source) }
-  if status.failed { return &nil_value }
+// Malformed input fails with Invalid at the offending byte and rewinds
+// this call's allocations. A full fixed arena panics.
+pub fn parse(arena: *memory.Arena, source: []const u8) *const Value!parse.ParseErr {
   mark := memory.arena_mark(arena)
   cursor := Cursor{ source: source, at: 0 }
   root := parse_node(arena, &cursor, 0)
   skip(&cursor)
   if root == nil || cursor.at != source.len {
     memory.arena_rewind(arena, mark)
-    message: []const u8 = "malformed JSON"
-    if root != nil {
-      message = "trailing data"
-    }
-    fail.at(status, fail.Kind.InvalidInput, "parse JSON", message, cursor.at)
-    return &nil_value
+    fail parse.ParseErr.Invalid(cursor.at)
   }
   return root
 }
@@ -631,57 +622,25 @@ pub fn object_get(object: *const Value, key: []const u8) *const Value {
 }
 
 // Reads member key of object as T: an integer type, f32, f64, bool,
-// []const u8 (string text), or *const Value (the member itself). The result is
-// always usable: zero, "" or &nil_value when the member cannot be read, and
-// then the status says why. A missing or null member is NotFound; a member of
-// another kind, or a number that does not fit T or is not whole for an integer
-// T, is InvalidInput. The message names key: "\"port\" is missing". Read an
-// optional member with a status of its own. Another T panics.
-pub fn get<T>(status: *fail.Status, object: *const Value, key: []const u8) T {
-  if status == nil { return get<T>(&fail.Status{}, object, key) }
-  return read<T>(status, object_get(object, key), key)
+// []const u8 (string text), or *const Value (the member itself). A missing or
+// null member fails with NotFound; a member of another kind, or a number that
+// does not fit T or is not whole for an integer T, with InvalidInput. Read an
+// optional member with catch and a default. Another T panics.
+pub fn get<T>(object: *const Value, key: []const u8) T!stream.IoErr {
+  return try read<T>(object_get(object, key))
 }
 
 // Reads value itself as T, by the same rules as get.
-pub fn as<T>(status: *fail.Status, value: *const Value) T {
-  if status == nil { return as<T>(&fail.Status{}, value) }
-  return read<T>(status, value, "")
+pub fn as<T>(value: *const Value) T!stream.IoErr {
+  return try read<T>(value)
 }
 
-fn read<T>(status: *fail.Status, value: *const Value, key: []const u8) T {
+fn read<T>(value: *const Value) T!stream.IoErr {
   result: T
-  if status.failed {
-    // A *const Value is then &nil_value, so lookups can chain on it.
-    _ = read_into(&nil_value, &result)
-    return result
-  }
-  if value == nil || value.kind == KindMissing || value.kind == KindNull {
-    _ = read_into(&nil_value, &result)
-    read_failed(status, fail.Kind.NotFound, key, "is missing")
-    return result
-  }
+  if value == nil || value.kind == KindMissing || value.kind == KindNull { fail .NotFound }
   problem := read_into(value, &result)
-  if problem.len != 0 {
-    empty: T
-    _ = read_into(&nil_value, &empty)
-    read_failed(status, fail.Kind.InvalidInput, key, problem)
-    return empty
-  }
+  if problem.len != 0 { fail .InvalidInput }
   return result
-}
-
-// Records kind with key in the message, leaving the path for the caller's
-// file: read JSON member: "port" is missing.
-fn read_failed(status: *fail.Status, kind: fail.Kind, key: []const u8, problem: []const u8) {
-  message: [160]u8
-  used: usize = 0
-  if key.len != 0 {
-    used = put_text(message[..], used, "\"")
-    used = put_text(message[..], used, key)
-    used = put_text(message[..], used, "\" ")
-  }
-  used = put_text(message[..], used, problem)
-  fail.set(status, fail.make(kind, "read JSON member", "", message[..used]))
 }
 
 // Copies text into storage at used, as much as fits; the new used.
@@ -891,21 +850,15 @@ fn encode_pretty_into(destination: []u8, value: *const Value, indent: usize) []u
   return destination[..at]
 }
 
-fn invalid_value(status: *fail.Status, message: []const u8) {
-  fail.set(status, fail.make(fail.Kind.InvalidInput, "write", "JSON", message))
-}
-
 fn hex_digit(value: u8) u8 {
   if value < 10 { return value + '0' }
   return value - 10 + 'a'
 }
 
-fn stream_string(status: *fail.Status, destination: stream.Writer, source: []const u8) {
-  if !utf8.valid(source) {
-    invalid_value(status, "text is not valid UTF-8")
-    return
-  }
-  stream.write_status(status, destination, "\"")
+fn stream_string(destination: stream.Writer, source: []const u8) !stream.IoErr {
+  // Text that is not valid UTF-8 has no JSON form.
+  if !utf8.valid(source) { fail .InvalidInput }
+  try stream.write(destination, "\"")
   start: usize = 0
   for i in 0..source.len {
     escaped: []const u8 = ""
@@ -926,39 +879,36 @@ fn stream_string(status: *fail.Status, destination: stream.Writer, source: []con
       escaped = "\\t"
     }
     if escaped.len == 0 && byte >= 32 { continue }
-    stream.write_status(status, destination, source[start..i])
+    try stream.write(destination, source[start..i])
     if escaped.len == 0 {
       control: [6]u8 = ['\\', 'u', '0', '0', '0', '0']
       control[4] = hex_digit(byte / 16)
       control[5] = hex_digit(byte % 16)
-      stream.write_status(status, destination, control[..])
+      try stream.write(destination, control[..])
     } else {
-      stream.write_status(status, destination, escaped)
+      try stream.write(destination, escaped)
     }
     start = i + 1
   }
-  stream.write_status(status, destination, source[start..])
-  stream.write_status(status, destination, "\"")
+  try stream.write(destination, source[start..])
+  try stream.write(destination, "\"")
 }
 
-fn stream_value(status: *fail.Status, destination: stream.Writer, value: *const Value, depth: usize) {
-  if status.failed { return }
-  if value == nil || depth > MaximumDepth {
-    invalid_value(status, "value is nil or nested too deep")
-    return
-  }
+fn stream_value(destination: stream.Writer, value: *const Value, depth: usize) !stream.IoErr {
+  // A nil value, or one nested too deep, has no JSON form.
+  if value == nil || depth > MaximumDepth { fail .InvalidInput }
   if value.kind == KindNull {
-    stream.write_status(status, destination, "null")
+    try stream.write(destination, "null")
   } else if value.kind == KindBool {
     if value.boolean {
-      stream.write_status(status, destination, "true")
+      try stream.write(destination, "true")
     } else {
-      stream.write_status(status, destination, "false")
+      try stream.write(destination, "false")
     }
   } else if value.kind == KindNumber {
-    stream.write_status(status, destination, value.text)
+    try stream.write(destination, value.text)
   } else if value.kind == KindString {
-    stream_string(status, destination, value.text)
+    try stream_string(destination, value.text)
   } else {
     opening: []const u8 = "["
     closing: []const u8 = "]"
@@ -966,30 +916,27 @@ fn stream_value(status: *fail.Status, destination: stream.Writer, value: *const 
       opening = "{"
       closing = "}"
     }
-    stream.write_status(status, destination, opening)
+    try stream.write(destination, opening)
     child := value.first
     for child != nil {
       if child != value.first {
-        stream.write_status(status, destination, ",")
+        try stream.write(destination, ",")
       }
       if value.kind == KindObject {
-        stream_string(status, destination, child.key)
-        stream.write_status(status, destination, ":")
+        try stream_string(destination, child.key)
+        try stream.write(destination, ":")
       }
-      stream_value(status, destination, child, depth + 1)
+      try stream_value(destination, child, depth + 1)
       child = child.next
     }
-    stream.write_status(status, destination, closing)
+    try stream.write(destination, closing)
   }
 }
 
-// Writes value as compact JSON.
-pub fn write(status: *fail.Status, destination: stream.Writer, value: *const Value) {
-  if status == nil {
-    write(&fail.Status{}, destination, value)
-    return
-  }
-  stream_value(status, destination, value, 0)
+// Writes value as compact JSON. Invalid UTF-8 text or nesting past
+// MaximumDepth fails with InvalidInput.
+pub fn write(destination: stream.Writer, value: *const Value) !stream.IoErr {
+  try stream_value(destination, value, 0)
 }
 
 // The output size is unknown, so write into a block from arena and retry with

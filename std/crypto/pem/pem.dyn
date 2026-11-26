@@ -88,8 +88,6 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Block
     }
   }
   if !found_end { return malformed(arena, status, mark, at) }
-  decoding: fail.Status
-  decoded := base64.decode(arena, &decoding, base64_storage[..encoded_length])
-  if decoding.failed { return malformed(arena, status, mark, body_start) }
+  decoded := base64.decode(arena, base64_storage[..encoded_length]) catch { return malformed(arena, status, mark, body_start) }
   return Block{ data: decoded, label: label, consumed: at }
 }

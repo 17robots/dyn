@@ -38,16 +38,15 @@ fn zero_scanners() {
     #panic("text scanner positions are zero-based")
   }
   entries := ini.Scanner{ source: "\n[s]\nk=v\n" }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  section := ini.next(&status, &entries)
-  pair := ini.next(&status, &entries)
+  section := ini.next(&entries) catch { #panic("ini.next") }
+  pair := ini.next(&entries) catch { #panic("ini.next") }
   if section.line != 2 || pair.line != 3 || !bytes_equal(pair.section, "s") {
     #panic("zero INI scanner lines")
   }
   // An empty stream holds one empty field, from the constructor or from zero.
   empty := csv.StreamScanner{ input: io.Reader{ read: read_nothing } }
   storage: [4]u8
-  field := csv.next_stream(&status, &empty, storage[..])
+  field := csv.next_stream(&empty, storage[..]) catch { #panic("csv.next_stream") }
   if empty.ended || field.text.len != 0 || !field.end_input {
     #panic("zero CSV stream scanner")
   }

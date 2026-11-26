@@ -1,4 +1,4 @@
-use "std/fail"
+use parse "std/parse"
 use io "std/io"
 // Semantic Versioning 2.0 values. Prerelease/build slices borrow input.
 
@@ -16,7 +16,7 @@ fn identifier_byte(byte: u8) bool {
     (byte >= 'A' && byte <= 'Z') || byte == '-'
 }
 
-fn parse_number(text: []const u8, offset: *usize, output: *u32, kind: *fail.Kind) bool {
+fn parse_number(text: []const u8, offset: *usize, output: *u32, overflow: *bool) bool {
   start := offset.*
   for offset.* < text.len && text[offset.*] >= '0' && text[offset.*] <= '9' {
     offset.* += 1
@@ -31,7 +31,7 @@ fn parse_number(text: []const u8, offset: *usize, output: *u32, kind: *fail.Kind
   for i < offset.* {
     value = value * 10 + (text[i] - '0')
     if value > 4294967295 {
-      kind.* = fail.Kind.Overflow
+      overflow.* = true
       offset.* = i
       return false
     }
@@ -74,20 +74,18 @@ fn valid_identifiers(text: []const u8, prerelease: bool, failure: *usize) bool {
 }
 
 // A version such as "1.2.3-alpha.1+build". Malformed text fails with
-// InvalidInput, a number past u32 with Overflow, at the offending byte.
-pub fn parse(status: *fail.Status, text: []const u8) Version {
-  if status == nil { return parse(&fail.Status{}, text) }
-  if status.failed { return Version{} }
+// Invalid, a number past u32 with TooLarge, at the offending byte.
+pub fn parse(text: []const u8) Version!parse.ParseErr {
   at: usize = 0
   version: Version
-  kind := fail.Kind.InvalidInput
-  if !parse_number(text, &at, &version.major, &kind) { return failed(status, kind, at) }
-  if at == text.len || text[at] != '.' { return failed(status, kind, at) }
+  overflow := false
+  if !parse_number(text, &at, &version.major, &overflow) { fail failed(overflow, at) }
+  if at == text.len || text[at] != '.' { fail failed(overflow, at) }
   at += 1
-  if !parse_number(text, &at, &version.minor, &kind) { return failed(status, kind, at) }
-  if at == text.len || text[at] != '.' { return failed(status, kind, at) }
+  if !parse_number(text, &at, &version.minor, &overflow) { fail failed(overflow, at) }
+  if at == text.len || text[at] != '.' { fail failed(overflow, at) }
   at += 1
-  if !parse_number(text, &at, &version.patch, &kind) { return failed(status, kind, at) }
+  if !parse_number(text, &at, &version.patch, &overflow) { fail failed(overflow, at) }
   if at < text.len && text[at] == '-' {
     at += 1
     prerelease_start := at
@@ -97,7 +95,7 @@ pub fn parse(status: *fail.Status, text: []const u8) Version {
     version.prerelease = text[prerelease_start..at]
     failure: usize = 0
     if !valid_identifiers(version.prerelease, true, &failure) {
-      return failed(status, fail.Kind.InvalidInput, prerelease_start + failure)
+      fail parse.ParseErr.Invalid(prerelease_start + failure)
     }
   }
   if at < text.len && text[at] == '+' {
@@ -107,10 +105,10 @@ pub fn parse(status: *fail.Status, text: []const u8) Version {
     version.build = text[build_start..at]
     failure: usize = 0
     if !valid_identifiers(version.build, false, &failure) {
-      return failed(status, fail.Kind.InvalidInput, build_start + failure)
+      fail parse.ParseErr.Invalid(build_start + failure)
     }
   }
-  if at != text.len { return failed(status, kind, at) }
+  if at != text.len { fail failed(overflow, at) }
   return version
 }
 
@@ -179,11 +177,12 @@ fn compare_prerelease(a: []const u8, b: []const u8) i32 {
   return 0
 }
 
-// Build metadata does not affect precedence.
-fn failed(status: *fail.Status, kind: fail.Kind, offset: usize) Version {
-  fail.at(status, kind, "parse version", "malformed version", offset)
-  return Version{}
+fn failed(overflow: bool, offset: usize) parse.ParseErr {
+  if overflow { return parse.ParseErr.TooLarge(offset) }
+  return parse.ParseErr.Invalid(offset)
 }
+
+// Build metadata does not affect precedence.
 
 pub fn compare(a, b: Version) i32 {
   if a.major < b.major { return -1 }

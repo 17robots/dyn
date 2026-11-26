@@ -23,9 +23,9 @@ carries on. See [session.txt](session.txt).
   or an `i64` by accident; converting takes `#cast`. Money is whole cents,
   never a float.
 - **Parsing by hand.** `parse_cents` splits `"12.50"` at the dot and reads
-  each part with `parse.u64_decimal`, all into one `*fail.Status`, then checks
-  it once. Input that is too large is reported, not left to overflow.
-- **CSV.** `csv.next(&status, &scan, buffer)` copies one field, unquoted, into the
+  each part with `parse.u64_decimal`, passing any failure on with `try`.
+  Input that is too large is reported, not left to overflow.
+- **CSV.** `csv.next(&scan, buffer)` copies one field, unquoted, into the
   buffer you give it and says whether it ended the record. Quoted fields
   like `"Pizza, two slices"` and `"Lamp ""reading"" bulb"` just work. Each
   column gets its own stack buffer so a record's fields stay readable together.

@@ -6,7 +6,7 @@
 // Arena rewind/reset/release invalidates affected nodes, text and iterators.
 // Iterator must be zero-initialized or created by iterator(); advance only
 // through next(). Copying an iterator copies its position and borrowed view.
-use "std/fail"
+use parse "std/parse"
 use memory "std/mem"
 use text "std/strings"
 use utf8 "std/unicode/utf8"
@@ -20,7 +20,8 @@ pub const KindNumber: u8 = 3
 pub const KindString: u8 = 4
 pub const KindArray: u8 = 5
 pub const KindObject: u8 = 6
-struct Cursor { source: []const u8, at: usize, error: fail.Kind }
+// failed: the input is malformed or, with too_large, holds a number past binary64.
+struct Cursor { source: []const u8, at: usize, failed: bool, too_large: bool }
 const MaximumDepth: usize = 256
 
 // Experimental read-only DOM. Inspired by compact tagged-value layouts;
@@ -153,7 +154,8 @@ fn read_number(state: *ReadParser) bool {
   }
   value := text.parse<f64>(source[start..at])
   if value > 1.7976931348623157e308 || value < -1.7976931348623157e308 {
-    state.cursor.error = fail.Kind.Overflow
+    state.cursor.failed = true
+    state.cursor.too_large = true
     return false
   }
   index := read_append(state, KindNumber, #bitcast(u64, value))
@@ -165,7 +167,7 @@ fn read_number(state: *ReadParser) bool {
 // values share the same decoding, allocation and node representation.
 fn read_string_value(state: *ReadParser) bool {
   value := read_decoded_string(state)
-  if state.cursor.error != fail.Kind.Ok { return false }
+  if state.cursor.failed { return false }
   pointer: u64 = 0
   if value.len != 0 {
     pointer = #cast(usize, &value[0])
@@ -245,32 +247,27 @@ fn read_value(state: *ReadParser, depth: usize) bool {
 }
 
 // @ownership All values and text live in arena; source can change after success.
-// @failure Failure returns nil_value and rewinds allocations; exhaustion panics.
+// @failure Malformed input fails with Invalid, input or a number too large
+// with TooLarge, at the offending byte; allocations are rewound. Exhaustion
+// and input that overlaps the arena's free space panic.
 // Finite binary64 reals, u64 positive integers and i64 negative integers are
 // retained. Other integers convert to binary64; real overflow is rejected.
 // Peak storage includes a geometrically grown value buffer (up to 32 initial
 // slots for containers). Moving growth retains earlier value-buffer copies until
 // arena rewind/reset; unused tail storage of the final buffer is reclaimed.
 // offset is the parser cursor; a bad string may report its content start.
-pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *const Value {
-  if status == nil { return parse(arena, &fail.Status{}, source) }
-  if status.failed { return &nil_value }
+pub fn parse(arena: *memory.Arena, source: []const u8) *const Value!parse.ParseErr {
   mark := memory.arena_mark(arena)
-  if source.len == 0 {
-    fail.at(status, fail.Kind.InvalidInput, "parse JSON", "empty input", 0)
-    return &nil_value
-  }
+  if source.len == 0 { fail parse.ParseErr.Invalid(0) }
   maximum := #max(usize)
   // Incomplete containers can consume one node per input byte before failure.
   // The smaller complete-document estimate is only an initial capacity hint.
   limit := source.len
   if limit > maximum / 16 || #cast(u64, source.len) > 0x00ffffffffffffff {
-    fail.at(status, fail.Kind.Overflow, "parse JSON", "input too large", 0)
-    return &nil_value
+    fail parse.ParseErr.TooLarge(0)
   }
   if memory.arena_overlaps_unallocated(arena, source) {
-    fail.invalid(status, "parse JSON", "", "the input lies in the arena's free space")
-    return &nil_value
+    #panic("json.parse: input overlaps arena output")
   }
   buffer := memory.push_bytes(arena, source.len)
   _ = memory.copy(buffer, source)
@@ -289,21 +286,10 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *co
   read_skip(&state.cursor)
   if !ok || state.cursor.at != source.len {
     offset := state.cursor.at
-    kind := state.cursor.error
-    if kind == fail.Kind.Ok {
-      kind = fail.Kind.InvalidInput
-    }
-    message: []const u8 = "malformed JSON"
-    if kind == fail.Kind.Overflow {
-      message = "a number or nesting is too large"
-    }
-    if ok {
-      kind = fail.Kind.InvalidInput
-      message = "trailing data"
-    }
     memory.arena_rewind(arena, mark)
-    fail.at(status, kind, "parse JSON", message, offset)
-    return &nil_value
+    // Trailing data after a complete value is malformed, not too large.
+    if !ok && state.cursor.too_large { fail parse.ParseErr.TooLarge(offset) }
+    fail parse.ParseErr.Invalid(offset)
   }
   unused := (state.values.len - state.used) * 16
   memory.arena_rewind(arena, memory.arena_mark(arena) - unused)
@@ -517,9 +503,7 @@ fn literal(cursor: *Cursor, content: []const u8) bool {
 }
 
 fn failed_string(cursor: *Cursor) []const u8 {
-  if cursor.error == fail.Kind.Ok {
-    cursor.error = fail.Kind.InvalidInput
-  }
+  cursor.failed = true
   return cursor.source[..0]
 }
 

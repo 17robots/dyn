@@ -156,9 +156,8 @@ fn main() {
   scale: u64 = 1
   arguments := process.arguments(arena) catch { #panic("cannot read arguments") }
   if arguments.len > 1 {
-    parsing: fail.Status
-    parsed := parse.u64_decimal(&parsing, arguments[1])
-    if !parsing.failed && parsed > 0 {
+    parsed := parse.u64_decimal(arguments[1]) catch 0
+    if parsed > 0 {
       scale = parsed
     }
   }

@@ -1,31 +1,31 @@
 use "std/bytes"
 use "std/encoding/json"
-use "std/fail"
 use "std/fs"
 use "std/io"
 use "std/mem"
+use "std/parse"
 use "std/path"
 use "std/process"
 
-fn report(name: []const u8, failure: fail.Failure) {
-  storage: [512]u8
-  text := fail.describe(storage[..], failure)
-  if fail.path_text(&failure).len == 0 {
-    io.eprintln("scan: {}: {}", name, text)
-  } else {
-    io.eprintln("scan: {}", text)
-  }
-}
-
-// The whole-number "port" of the JSON file at path.
-fn port(arena: *mem.Arena, status: *fail.Status, file: []const u8) i64 {
-  if status.failed { return 0 }
+// Reads the whole-number "port" of the JSON file at path into value. On
+// failure prints one line that says why and returns false.
+fn port(arena: *mem.Arena, name: []const u8, file: []const u8, value: *i64) bool {
   text := fs.read_all(arena, file, mem.MiB) catch err {
-    fail.set(status, io.failure_of(err, "read", file))
-    return 0
+    io.eprintln("scan: {}: {}", name, err)
+    return false
   }
-  root := json.parse(arena, status, text)
-  return json.get<i64>(status, root, "port")
+  root := json.parse(arena, text) catch err {
+    io.eprintln("scan: {}: invalid JSON at byte {}", name, parse.offset(err))
+    return false
+  }
+  value.* = json.get<i64>(root, "port") catch err {
+    case err {
+      .NotFound => { io.eprintln("scan: {}: \"port\" is missing", name) }
+      _ => { io.eprintln("scan: {}: \"port\" is not a whole number", name) }
+    }
+    return false
+  }
+  return true
 }
 
 fn main() i32 {
@@ -46,10 +46,8 @@ fn main() i32 {
   for entry in entries {
     if !bytes.ends_with(entry.name, ".json") { continue }
     mark := mem.arena_mark(arena)
-    status: fail.Status
-    value := port(arena, &status, path.join(arena, directory, entry.name))
-    if status.failed {
-      report(entry.name, status.failure)
+    value: i64 = 0
+    if !port(arena, entry.name, path.join(arena, directory, entry.name), &value) {
       bad += 1
     } else {
       io.println("{} port={}", entry.name, value)

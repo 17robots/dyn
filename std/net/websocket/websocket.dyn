@@ -1,4 +1,3 @@
-use "std/fail"
 use io "std/io"
 use mem "std/mem"
 use base64 "std/encoding/base64"
@@ -157,12 +156,17 @@ fn ws_append(destination: []u8, offset: usize, source: []const u8) usize {
   return offset + source.len
 }
 
+// Whether key is base64 for 16 bytes, as RFC 6455 requires.
+fn key_decodes(arena: *mem.Arena, key: []const u8) bool {
+  decoded := base64.decode(arena, key) catch { return false }
+  return decoded.len == 16
+}
+
 // Computes RFC 6455 Sec-WebSocket-Accept into 28 caller-owned bytes.
 fn websocket_accept(destination: []u8, key: []const u8) []u8 {
   decoded: [18 + mem.ArenaBufferOverhead]u8
   decoded_arena := mem.arena_from_buffer(decoded[..])
-  decoding: fail.Status
-  if key.len != 24 || base64.decode(decoded_arena, &decoding, key).len != 16 || destination.len < 28 {
+  if key.len != 24 || !key_decodes(decoded_arena, key) || destination.len < 28 {
     return destination[..0]
   }
   guid: []const u8 = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -214,9 +218,8 @@ fn websocket_validate_upgrade_request(request: []const u8) []const u8!io.IoErr {
   key := http.header(request, "Sec-WebSocket-Key") catch { fail .InvalidInput }
   scratch: [18 + mem.ArenaBufferOverhead]u8
   scratch_arena := mem.arena_from_buffer(scratch[..])
-  decoding: fail.Status
   if !ws_equal_case(upgrade, "websocket") || !ws_equal_case(connection_header, "Upgrade") || !ws_equal(version, "13") ||
-    base64.decode(scratch_arena, &decoding, key).len != 16 { fail .InvalidInput }
+    !key_decodes(scratch_arena, key) { fail .InvalidInput }
   return key
 }
 

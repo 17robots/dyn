@@ -67,7 +67,7 @@ fn rejected(arena: *mem.Arena, kind: u8, source: []const u8) bool {
  if kind == 1 { _ = tga.decode(arena, &status, source) }
  if kind == 2 { _ = gif.decode(arena, &status, source) }
  if kind == 3 { _ = jpeg.decode(arena, &status, source) }
- if kind == 4 { _ = toml.parse(arena, &status, source) }
+ if kind == 4 { _ = toml.parse(arena, source) catch { return true } }
  return status.failed
 }
 fn main() {
@@ -90,12 +90,12 @@ fn main() {
  check(rejected(arena,1,"bad") && mem.arena_mark(arena)==mark)
  check(rejected(arena,2,"GIF89a") && mem.arena_mark(arena)==mark)
  check(rejected(arena,3,"\xff\xd8") && mem.arena_mark(arena)==mark)
- root := toml.parse(arena,&status,"[owner]\nname='Dyn'\nports=[8000,8001]\n[[products]]\nx=1979-05-27T07:32:00Z\n")
+ root := toml.parse(arena,"[owner]\nname='Dyn'\nports=[8000,8001]\n[[products]]\nx=1979-05-27T07:32:00Z\n") catch { #panic("toml") }
  owner := toml.member(root,"owner")
  check(bytes.equal(toml.member(owner,"name").text,"Dyn"))
  check(bytes.equal(toml.index(toml.member(owner,"ports"),1).text,"8001"))
- encoded := toml.encode(arena,&status,root)
- _ = toml.parse(arena,&status,encoded)
+ encoded := toml.encode(arena,root) catch { #panic("toml encode") }
+ _ = toml.parse(arena,encoded) catch { #panic("toml reparse") }
  before := mem.arena_mark(arena)
  check(rejected(arena,4,"a=1\na=2") && mem.arena_mark(arena)==before)
 }'''.replace('GIF_BYTES', dyn_bytes(gif)).replace('JPEG_BYTES', dyn_bytes(jpeg))

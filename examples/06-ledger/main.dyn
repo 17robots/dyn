@@ -50,7 +50,6 @@ fn main() i32 {
   storage: [Columns][128]u8
   fields: [Columns][]const u8
   scan := csv.scanner(file)
-  reading: fail.Status
   line: u32 = 0
   ended := false
   for !ended {
@@ -62,7 +61,10 @@ fn main() i32 {
       if column >= Columns {
         column = Columns - 1      // extra fields are read and counted, not kept
       }
-      field := csv.next(&reading, &scan, storage[column][..])
+      field := csv.next(&scan, storage[column][..]) catch {
+        io.eprintln("ledger: {}:{}: not valid CSV", path, line)
+        return 1
+      }
       if scan.ended {
         ended = true
         break
@@ -72,10 +74,6 @@ fn main() i32 {
       record_ended = field.end_record
       ended = field.end_input
     }
-    if reading.failed {
-      io.eprintln("ledger: {}:{}: not valid CSV", path, line)
-      return 1
-    }
     if line == 1 || count == 0 || (count == 1 && fields[0].len == 0) {
       continue                    // the header, or a blank line
     }
@@ -84,9 +82,7 @@ fn main() i32 {
       skipped += 1
       continue
     }
-    amounting: fail.Status
-    amount := parse_cents(&amounting, fields[3])
-    if amounting.failed {
+    amount := parse_cents(fields[3]) catch {
       io.eprintln("ledger: {}:{}: bad amount {}", path, line, fields[3])
       skipped += 1
       continue

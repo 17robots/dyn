@@ -73,9 +73,8 @@ fn arguments(rest: []const u8, wants_line: bool, wants_text: bool) Arguments {
   result := Arguments{ text: rest, valid: true }
   if wants_line {
     space := bytes.find_byte(rest, ' ')
-    status: fail.Status
-    number := parse.u64_decimal(&status, rest[..space])
-    if status.failed || number == 0 { return Arguments{} }
+    number := parse.u64_decimal(rest[..space]) catch 0
+    if number == 0 { return Arguments{} }
     result.line = #cast(usize, number)
     result.text = ""
     if space < rest.len {

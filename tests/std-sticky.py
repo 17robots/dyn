@@ -41,6 +41,10 @@ fn fail_read_status(data: rawptr, status: *fail.Status, destination: []u8) usize
   fail.set(status, failure)
   return 1
 }
+fn ini_failed(scan: *ini.Scanner) bool {
+  _ = ini.next(scan) catch { return true }
+  return false
+}
 fn main() {
   // A failed status makes every later buffered call do nothing.
   sink: Sink
@@ -71,13 +75,12 @@ fn main() {
     if !reader.ended || until.status != bufio.ReadStatus.End { #panic("records end after a failure") }
   }
   scan := ini.scanner("bad\nx=1")
-  scanning: fail.Status
-  _ = ini.next(&scanning, &scan)
+  first := ini_failed(&scan)
   first_ended := scan.ended
   offset := scan.offset
-  again: fail.Status
-  _ = ini.next(&again, &scan)
-  if !first_ended || !scan.ended || scanning.failure.kind != fail.Kind.InvalidInput || scan.error_line != 1 || scan.offset != offset { #panic("ini sticky failure") }
+  // The scanner stays failed: the next call fails the same way and reads nothing.
+  again := ini_failed(&scan)
+  if !first || !again || !first_ended || !scan.ended || scan.error_line != 1 || scan.offset != offset { #panic("ini sticky failure") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-std-sticky-') as directory:

@@ -7,30 +7,35 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "std/fail"
+SOURCE=r'''use parse "std/parse"
 use pb "std/encoding/protobuf"
 use mem "std/mem"
 use bytes "std/bytes"
-struct Got { value: pb.Field, offset: usize, found: bool, failure: fail.Failure }
-fn next(state: *pb.Reader) Got {
- status: fail.Status
- item := pb.next(&status, state)
- return Got{ value: item, offset: state.start, found: !state.ended, failure: status.failure }
+// code: 0 none, 1 Invalid, 2 TooLarge.
+fn code_of(err: parse.ParseErr) u8 {
+ case err {
+  .Invalid(_) => { return 1 }
+  .TooLarge(_) => { return 2 }
+ }
 }
-struct Encoded { value: []u8, failure: fail.Failure }
+struct Got { value: pb.Field, offset: usize, found: bool, code: u8 }
+fn next(state: *pb.Reader) Got {
+ item := pb.next(state) catch err { return Got{ offset: state.start, code: code_of(err) } }
+ return Got{ value: item, offset: state.start, found: !state.ended }
+}
+struct Encoded { value: []u8, code: u8 }
 fn encode(arena: *mem.Arena, items: []const pb.Field) Encoded {
- status: fail.Status
- value := pb.encode(arena, &status, items)
- return Encoded{ value: value, failure: status.failure }
+ value := pb.encode(arena, items) catch err { return Encoded{ code: code_of(err) } }
+ return Encoded{ value: value }
 }
 fn check(ok: bool) { if !ok { #panic("protobuf contract") } }
 fn bad(source: []const u8) {
   state := pb.reader(source)
   result := next(&state)
   for result.found { result = next(&state) }
-  check(result.failure.kind == fail.Kind.InvalidInput)
+  check(result.code == 1)
   again := next(&state)
-  check(again.failure.kind == result.failure.kind && again.offset == result.offset)
+  check(again.code == result.code && again.offset == result.offset)
 }
 fn main() {
   arena := mem.arena_alloc(0)
@@ -44,13 +49,13 @@ fn main() {
     pb.Field{ number: 5, wire: pb.Wire.EndGroup }]
   encoded := encode(arena,fields[..])
   golden := "\x08\x96\x01\x11\xef\xcd\xab\x89\x67\x45\x23\x01\x1a\x03hi\x00\x25\xef\xcd\xab\x89\x2b\x08\xff\xff\xff\xff\xff\xff\xff\xff\xff\x01\x2c"
-  check(encoded.failure.kind == fail.Kind.Ok && bytes.equal(encoded.value,golden))
+  check(encoded.code == 0 && bytes.equal(encoded.value,golden))
   state := pb.reader(golden)
   for expected in fields {
     result := next(&state)
     check(result.found && result.value.number == expected.number && result.value.wire == expected.wire && result.value.value == expected.value && bytes.equal(result.value.bytes,expected.bytes))
   }
-  check(!next(&state).found && next(&state).failure.kind == fail.Kind.Ok)
+  check(!next(&state).found && next(&state).code == 0)
   integers: [7]i64 = [-9223372036854775808,-500,-1,0,1,500,9223372036854775807]
   for value in integers { check(pb.unzigzag(pb.zigzag(value)) == value) }
   check(pb.zigzag(-1) == 1 && pb.zigzag(500) == 1000 && pb.zigzag(-9223372036854775808) == 0xffffffffffffffff)
@@ -67,25 +72,25 @@ fn main() {
   for i in 0..65 { deep[i] = 11 }
   state = pb.reader(deep[..])
   for i in 0..64 { check(next(&state).found) }
-  check(next(&state).failure.kind == fail.Kind.Capacity && next(&state).failure.kind == fail.Kind.Capacity)
+  check(next(&state).code == 2 && next(&state).code == 2)
   mark := mem.arena_mark(arena)
   invalid: [1]pb.Field = [pb.Field{ number: 0 }]
-  check(encode(arena,invalid[..]).failure.kind == fail.Kind.InvalidInput && mem.arena_mark(arena) == mark)
+  check(encode(arena,invalid[..]).code == 1 && mem.arena_mark(arena) == mark)
   invalid[0] = pb.Field{ number: 1, wire: pb.Wire.Fixed32, value: 0x100000000 }
-  check(encode(arena,invalid[..]).failure.kind == fail.Kind.InvalidInput && mem.arena_mark(arena) == mark)
+  check(encode(arena,invalid[..]).code == 1 && mem.arena_mark(arena) == mark)
   invalid[0] = pb.Field{ number: 1, wire: pb.Wire.StartGroup }
-  check(encode(arena,invalid[..]).failure.kind == fail.Kind.InvalidInput && mem.arena_mark(arena) == mark)
+  check(encode(arena,invalid[..]).code == 1 && mem.arena_mark(arena) == mark)
   fields[0] = pb.Field{ number: 536870911, value: 0xffffffffffffffff }
   encoded = encode(arena,fields[..1])
   state = pb.reader(encoded.value)
   result := next(&state)
-  check(encoded.failure.kind == fail.Kind.Ok && result.found && result.value.number == 536870911 && result.value.value == 0xffffffffffffffff)
+  check(encoded.code == 0 && result.found && result.value.number == 536870911 && result.value.value == 0xffffffffffffffff)
   // Every cut is either a complete shorter message or a structured failure.
   for length in 0..golden.len {
     state = pb.reader(golden[..length])
     item := next(&state)
     for item.found { item = next(&state) }
-    check(item.failure.kind == fail.Kind.Ok || item.failure.kind == fail.Kind.InvalidInput)
+    check(item.code == 0 || item.code == 1)
   }
 }
 '''

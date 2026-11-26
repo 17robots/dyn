@@ -7,30 +7,35 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "std/fail"
+SOURCE=r'''use parse "std/parse"
 use cbor "std/encoding/cbor"
 use mem "std/mem"
 use bytes "std/bytes"
-struct Got { value: cbor.Token, offset: usize, found: bool, failure: fail.Failure }
-fn next(state: *cbor.Reader) Got {
- status: fail.Status
- item := cbor.next(&status, state)
- return Got{ value: item, offset: state.start, found: !state.ended, failure: status.failure }
+// code: 0 none, 1 Invalid, 2 TooLarge.
+fn code_of(err: parse.ParseErr) u8 {
+ case err {
+  .Invalid(_) => { return 1 }
+  .TooLarge(_) => { return 2 }
+ }
 }
-struct Encoded { value: []u8, failure: fail.Failure }
+struct Got { value: cbor.Token, offset: usize, found: bool, code: u8 }
+fn next(state: *cbor.Reader) Got {
+ item := cbor.next(state) catch err { return Got{ offset: state.start, code: code_of(err) } }
+ return Got{ value: item, offset: state.start, found: !state.ended }
+}
+struct Encoded { value: []u8, code: u8 }
 fn encode(arena: *mem.Arena, items: []const cbor.Token) Encoded {
- status: fail.Status
- value := cbor.encode(arena, &status, items)
- return Encoded{ value: value, failure: status.failure }
+ value := cbor.encode(arena, items) catch err { return Encoded{ code: code_of(err) } }
+ return Encoded{ value: value }
 }
 fn check(ok: bool) { if !ok { #panic("CBOR contract") } }
 fn bad(source: []const u8) {
  state := cbor.reader(source)
  item := next(&state)
  for item.found { item = next(&state) }
- check(item.failure.kind == fail.Kind.InvalidInput)
+ check(item.code == 1)
  again := next(&state)
- check(again.failure.kind == item.failure.kind && again.offset == item.offset)
+ check(again.code == item.code && again.offset == item.offset)
 }
 fn main() {
  arena := mem.arena_alloc(0)
@@ -44,9 +49,9 @@ fn main() {
  for item.found { tokens[count] = item.value
  count += 1
  item = next(&state) }
- check(item.failure.kind == fail.Kind.Ok && count == 7)
+ check(item.code == 0 && count == 7)
  encoded := encode(arena,tokens[..count])
- check(encoded.failure.kind == fail.Kind.Ok && bytes.equal(encoded.value,golden))
+ check(encoded.code == 0 && bytes.equal(encoded.value,golden))
  golden = "\x9f\x01\x82\x02\x03\x04\x05\xff"
  state = cbor.reader(golden)
  count = 0
@@ -54,9 +59,9 @@ fn main() {
  for item.found { tokens[count] = item.value
  count += 1
  item = next(&state) }
- check(item.failure.kind == fail.Kind.Ok && count == 8)
+ check(item.code == 0 && count == 8)
  encoded = encode(arena,tokens[..count])
- check(encoded.failure.kind == fail.Kind.Ok && bytes.equal(encoded.value,golden))
+ check(encoded.code == 0 && bytes.equal(encoded.value,golden))
  golden = "\xbf\x61a\x5f\x42ab\x41c\xff\x61b\x7f\x61d\x62ef\xff\xff"
  state = cbor.reader(golden)
  count = 0
@@ -64,9 +69,9 @@ fn main() {
  for item.found { tokens[count] = item.value
  count += 1
  item = next(&state) }
- check(item.failure.kind == fail.Kind.Ok)
+ check(item.code == 0)
  encoded = encode(arena,tokens[..count])
- check(encoded.failure.kind == fail.Kind.Ok && bytes.equal(encoded.value,golden))
+ check(encoded.code == 0 && bytes.equal(encoded.value,golden))
  // Tags wrap one child, including nested containers and other tags.
  golden = "\x81\xd8\x20\xc0\x81\x61x"
  state = cbor.reader(golden)
@@ -75,9 +80,9 @@ fn main() {
  for item.found { tokens[count] = item.value
  count += 1
  item = next(&state) }
- check(item.failure.kind == fail.Kind.Ok && count == 5)
+ check(item.code == 0 && count == 5)
  encoded = encode(arena,tokens[..count])
- check(encoded.failure.kind == fail.Kind.Ok && bytes.equal(encoded.value,golden))
+ check(encoded.code == 0 && bytes.equal(encoded.value,golden))
  floats := "\xf9\x3e\x00\xfa\xbf\xc0\x00\x00\xfb\x3f\xf8\x00\x00\x00\x00\x00\x00\xf9\x00\x01\xf9\x80\x00\xf9\x7c\x00\xf9\x7e\x00"
  state = cbor.reader(floats)
  check(next(&state).value.real == 1.5)
@@ -90,7 +95,7 @@ fn main() {
  check(nan != nan)
  extremes: [8]cbor.Token = [cbor.Token{kind:cbor.Kind.Unsigned,value:0xffffffffffffffff},cbor.Token{kind:cbor.Kind.Negative,value:0xffffffffffffffff},cbor.Token{kind:cbor.Kind.Bool,boolean:true},cbor.Token{kind:cbor.Kind.Null},cbor.Token{kind:cbor.Kind.Undefined},cbor.Token{kind:cbor.Kind.Simple,value:255},cbor.Token{kind:cbor.Kind.Simple,value:19},cbor.Token{kind:cbor.Kind.Float,real:-1.5}]
  encoded = encode(arena,extremes[..])
- check(encoded.failure.kind == fail.Kind.Ok)
+ check(encoded.code == 0)
  state = cbor.reader(encoded.value)
  for expected in extremes {
   actual := next(&state)
@@ -110,21 +115,21 @@ fn main() {
  bad("\x9f")
  mark := mem.arena_mark(arena)
  invalid: [1]cbor.Token = [cbor.Token{kind:cbor.Kind.Tag,value:1}]
- check(encode(arena,invalid[..]).failure.kind == fail.Kind.InvalidInput && mem.arena_mark(arena) == mark)
+ check(encode(arena,invalid[..]).code == 1 && mem.arena_mark(arena) == mark)
  invalid[0] = cbor.Token{kind:cbor.Kind.Simple,value:24}
- check(encode(arena,invalid[..]).failure.kind == fail.Kind.InvalidInput && mem.arena_mark(arena) == mark)
+ check(encode(arena,invalid[..]).code == 1 && mem.arena_mark(arena) == mark)
  deep: [65]u8
  for i in 0..65 { deep[i] = 0x9f }
  state = cbor.reader(deep[..])
  for i in 0..64 { check(next(&state).found) }
- check(next(&state).failure.kind == fail.Kind.Capacity)
+ check(next(&state).code == 2)
  raw: [20]u8
  for tag in 0..256 {
   raw[0] = #cast(u8,tag)
   state = cbor.reader(raw[..])
   actual := next(&state)
   for actual.found { actual = next(&state) }
-  check(actual.failure.kind == fail.Kind.Ok || actual.failure.kind == fail.Kind.InvalidInput)
+  check(actual.code == 0 || actual.code == 1)
  }
 }
 '''

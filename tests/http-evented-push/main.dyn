@@ -296,8 +296,7 @@ fn large_body(response: *http.Response, request: *const http.Request) !io.IoErr 
   storage: [16]u8
   limit := http.query_value(request, "limit", storage[..]) catch storage[..0]
   if limit.len > 0 {
-    parsing: fail.Status
-    job.limit = #cast(usize, parse.u64_decimal(&parsing, limit))
+    job.limit = #cast(usize, parse.u64_decimal(limit) catch 0)
   }
   evented.receive_body(response, job, large_chunk, large_finish) catch {
     try text(response, http.StatusInternalServerError, "cannot read\n")

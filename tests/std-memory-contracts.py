@@ -16,26 +16,32 @@ use list "std/container/list"
 struct Slot { free_next: *Slot, value: u64 }
 const nil_slot: Slot = Slot{}
 fn expect(ok: bool) { if !ok { #panic("std memory contract") } }
+// Where a malformed INI text fails.
+fn ini_offset(arena: *mem.Arena, source: []const u8) usize {
+  _ = ini.parse(arena, source) catch err {
+    case err {
+      .Invalid(at) => { return at }
+      _ => { #panic("ini kind") }
+    }
+  }
+  #panic("ini accepted malformed text")
+}
 fn main() {
   storage: [8 * mem.KiB + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(storage[..])
   expect(bytes.equal(strings.clone(arena, "retained"), "retained"))
   parts: [2][]const u8 = ["one", "two"]
   expect(bytes.equal(strings.join(arena, parts[..], "/"), "one/two"))
-  status: fail.Status
-  parsed := ini.parse(arena, &status, "[window]\nwidth=80\nheight=25\n")
-  expect(!status.failed && parsed.len == 3)
+  parsed := ini.parse(arena, "[window]\nwidth=80\nheight=25\n") catch { #panic("ini.parse") }
+  expect(parsed.len == 3)
   expect(bytes.equal(parsed[2].section, "window") && bytes.equal(parsed[2].value, "25"))
   before := mem.arena_used(arena)
-  syntax: fail.Status
-  _ = ini.parse(arena, &syntax, "x=1\ninvalid\n")
-  expect(syntax.failure.kind == fail.Kind.InvalidInput && syntax.failure.offset == 4)
+  expect(ini_offset(arena, "x=1\ninvalid\n") == 4)
   expect(mem.arena_used(arena) == before)
   tiny_storage: [mem.ArenaBufferOverhead]u8
   tiny := mem.arena_from_buffer(tiny_storage[..])
   tiny = mem.arena_from_buffer(tiny.data[..mem.ArenaHeader])
-  _ = ini.parse(tiny, &status, "# empty")
-  expect(!status.failed)
+  _ = ini.parse(tiny, "# empty") catch { #panic("ini.parse empty") }
   expect(strings.clone(tiny, "").len == 0)
   expect(mem.arena_used(tiny) == 0)
 

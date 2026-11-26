@@ -252,7 +252,9 @@ static void prove_unsigned_ranges(DynIrProgram *ir, unsigned pointer_bytes) {
 static bool validate_ir(const DynIrProgram *ir) {
   for (size_t i = 0; i < ir->expression_count; ++i) {
     const DynIrExpr *e = &ir->expressions[i];
-    if (e->type == DYN_TYPE_INFER || e->type == DYN_TYPE_ERROR || !valid_expr_id(ir, e->left) || !valid_expr_id(ir, e->right) || (size_t)e->item_start + e->item_count > ir->item_count) return false;
+    /* A block catch keeps its body as a children range in item_start/count. */
+    size_t range_limit = e->kind == DYN_EXPR_CATCH && e->boolean ? ir->child_count : ir->item_count;
+    if (e->type == DYN_TYPE_INFER || e->type == DYN_TYPE_ERROR || !valid_expr_id(ir, e->left) || !valid_expr_id(ir, e->right) || (size_t)e->item_start + e->item_count > range_limit) return false;
     if (e->kind == DYN_EXPR_NAME && e->integer >= ir->local_count) return false;
     if (e->kind == DYN_EXPR_GLOBAL && e->integer >= ir->global_count) return false;
     if (e->kind == DYN_EXPR_CALL && e->integer >= ir->function_count) return false;

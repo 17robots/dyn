@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
-"""Search misses use the length; failed tree parses return a stub and rewind."""
+"""Search misses use the length; failed tree parses fail at their offset and rewind."""
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "std/fail"
+SOURCE=r'''use parse "std/parse"
 use sort "std/sort"
 use mem "std/mem"
 use mdesk "std/encoding/mdesk"
 use json "std/encoding/json"
+fn mdesk_offset(arena:*mem.Arena, source:[]const u8) usize {
+  _=mdesk.parse(arena,source) catch err { return parse.offset(err) }
+  #panic("mdesk accepted malformed text")
+}
+fn json_offset(arena:*mem.Arena, source:[]const u8) usize {
+  _=json.parse(arena,source) catch err { return parse.offset(err) }
+  #panic("JSON accepted malformed text")
+}
 fn main() {
   values:[5]i32=[2,4,4,8,10]
   for input: isize in -2..14 {
@@ -28,24 +36,15 @@ fn main() {
   prefix:=mem.push<u8>(arena)
   prefix.*=91
   mark:=mem.arena_mark(arena)
-  broken:fail.Status
-  parsed:=mdesk.parse(arena,&broken,"valid: 1\nbroken: {")
-  if broken.failure.kind != fail.Kind.InvalidInput { #panic("mdesk error fields") }
-  if parsed!= &mdesk.nil_node || !mdesk.is_nil(parsed) { #panic("failed root") }
+  if mdesk_offset(arena,"valid: 1\nbroken: {") != 17 { #panic("mdesk error offset") }
   if mem.arena_mark(arena)!=mark || prefix.*!=91 { #panic("failed parse rollback") }
-  if mdesk.child(parsed,"valid")!= &mdesk.nil_node || mdesk.child_count(parsed)!=0 { #panic("stub navigation") }
-  status:fail.Status
-  valid:=mdesk.parse(arena,&status,"valid: 1")
-  if status.failed || mdesk.is_nil(valid) { #panic("parse after failure") }
+  valid:=mdesk.parse(arena,"valid: 1") catch { #panic("parse after failure") }
+  if mdesk.is_nil(valid) { #panic("parse after failure") }
   jsonmark:=mem.arena_mark(arena)
-  syntax:fail.Status
-  invalidjson:=json.parse(arena,&syntax,"{broken")
-  if syntax.failure.kind != fail.Kind.InvalidInput || invalidjson!= &json.nil_value || mem.arena_mark(arena)!=jsonmark { #panic("JSON syntax fields/stub/rollback") }
-  trailing:fail.Status
-  trailing_root:=json.parse(arena,&trailing,"null garbage")
-  if trailing.failure.kind != fail.Kind.InvalidInput || !mem.equal(fail.message_text(&trailing.failure), "trailing data") || trailing.failure.offset!=5 || trailing_root!= &json.nil_value || mem.arena_mark(arena)!=jsonmark { #panic("JSON trailing fields") }
-  validjson:=json.parse(arena,&status,"null")
-  if status.failed || validjson.kind!=json.KindNull { #panic("JSON success fields") }
+  if json_offset(arena,"{broken") != 1 || mem.arena_mark(arena)!=jsonmark { #panic("JSON syntax offset/rollback") }
+  if json_offset(arena,"null garbage") != 5 || mem.arena_mark(arena)!=jsonmark { #panic("JSON trailing offset") }
+  validjson:=json.parse(arena,"null") catch { #panic("JSON success") }
+  if validjson.kind!=json.KindNull { #panic("JSON success fields") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-std-misses-') as directory:

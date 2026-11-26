@@ -592,14 +592,14 @@ use io "std/io"
 
 fn read_and_parse(arena: *mem.Arena, path: str) i64!(io.IoErr | parse.ParseErr) {
   raw := try fs.read_all(arena, path, 4096)
-  return try parse.parse_i64(raw)
+  return try parse.i64_decimal(raw)
 }
 
 fn main() {
   arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
-  if (parse.parse_u64("42") catch 0) != 42 { #panic("parse_u64") }
-  if (parse.parse_i64("-123") catch 0) != -123 { #panic("parse_i64") }
+  if (parse.u64_decimal("42") catch 0) != 42 { #panic("parse_u64") }
+  if (parse.i64_decimal("-123") catch 0) != -123 { #panic("parse_i64") }
   _ = read_and_parse(arena, "/nonexistent-dyn-phase3-file") catch err {
     case err {
       io.IoErr.NotFound => { return }

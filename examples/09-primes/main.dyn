@@ -70,9 +70,7 @@ fn work(w: *Worker) isize {
 
 fn argument(args: [][]const u8, index: usize, fallback: u64) u64 {
   if index >= args.len { return fallback }
-  status: fail.Status
-  value := parse.u64_decimal(&status, args[index])
-  if status.failed {
+  value := parse.u64_decimal(args[index]) catch {
     io.eprintln("primes: {} is not a number", args[index])
     return fallback
   }

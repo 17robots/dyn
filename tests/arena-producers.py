@@ -35,9 +35,8 @@ fn check(ok: bool, message: []const u8) {{
   }}
 }}
 fn decode_fails(arena: *mem.Arena, text: []const u8) bool {{
-  status: fail.Status
-  _ = base64.decode(arena, &status, text)
-  return status.failed
+  _ = base64.decode(arena, text) catch {{ return true }}
+  return false
 }}
 fn inflate_fails(arena: *mem.Arena, data: []const u8) bool {{
   status: fail.Status
@@ -57,7 +56,8 @@ fn main() {{
   check(bytes.equal(encoded, "aGVsbG8="), "base64 encode")
   before := mem.arena_used(arena)
   check(decode_fails(arena, "a!==") && mem.arena_used(arena) == before, "failed decode pushes nothing")
-  check(bytes.equal(base64.decode(arena, &status, encoded), "hello"), "base64 decode")
+  decoded := base64.decode(arena, encoded) catch {{ #panic("base64 decode") }}
+  check(bytes.equal(decoded, "hello"), "base64 decode")
   doc := json.push_object(arena)
   _ = json.add_member(doc, "name", json.push_string(arena, "boss"))
   check(bytes.equal(json.encode(arena, doc), "{{\\"name\\":\\"boss\\"}}"), "json encode")

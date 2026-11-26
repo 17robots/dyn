@@ -111,8 +111,7 @@ fn client_main(client: *Client) isize {
 
 // Zero for a missing or malformed number; callers reject zero.
 fn argument_u64(arguments: [][]const u8, index: usize) u64 {
-  status: fail.Status
-  return parse.u64_decimal(&status, arguments[index])
+  return parse.u64_decimal(arguments[index]) catch 0
 }
 
 fn percentile(buckets: []const u64, total: u64, fraction_thousandths: u64) u64 {
@@ -149,9 +148,8 @@ fn main() i32 {
       for end < values[5].len && values[5][end] != '.' {
         end += 1
       }
-      parsing: fail.Status
-      part := parse.u64_decimal(&parsing, values[5][at..end])
-      if parsing.failed || part > 255 {
+      part := parse.u64_decimal(values[5][at..end]) catch 256
+      if part > 255 {
         io.eprintln("httpbench: bad IPv4 address")
         return 2
       }

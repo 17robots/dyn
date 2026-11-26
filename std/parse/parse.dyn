@@ -1,63 +1,35 @@
 use "std/fail"
-// Number parsing shared by the parsers and decoders. A failure names where the
-// input went wrong: InvalidInput (or Overflow) with fail.at, the offset in
-// bytes from the start of the input, and a short message.
+// Number parsing shared by the parsers and decoders, and ParseErr, the
+// failure every parser and decoder reports.
 
-// Whole text as a decimal u64: one or more ASCII digits, nothing else (no
-// sign, space or underscore). InvalidInput at the first bad byte; Overflow
-// past the u64 range.
-pub fn u64_decimal(status: *fail.Status, text: []const u8) u64 {
-  if status == nil { return u64_decimal(&fail.Status{}, text) }
-  if status.failed { return 0 }
-  if text.len == 0 {
-    fail.at(status, fail.Kind.InvalidInput, "parse number", "expected digits", 0)
-    return 0
-  }
+// Whole text as a decimal u64: one or more ASCII digits, nothing else.
+// Invalid at the first bad byte (0 for empty text); TooLarge past the u64
+// range.
+pub fn u64_decimal(text: []const u8) u64!ParseErr {
+  if text.len == 0 { fail ParseErr.Invalid(0) }
   value: u64 = 0
   for i in 0..text.len {
     byte := text[i]
-    if byte < '0' || byte > '9' {
-      fail.at(status, fail.Kind.InvalidInput, "parse number", "expected a digit", i)
-      return 0
-    }
+    if byte < '0' || byte > '9' { fail ParseErr.Invalid(i) }
     digit := #cast(u64, byte - '0')
-    if value > (18446744073709551615 - digit) / 10 {
-      fail.at(status, fail.Kind.Overflow, "parse number", "number exceeds u64", i)
-      return 0
-    }
+    if value > (18446744073709551615 - digit) / 10 { fail ParseErr.TooLarge(i) }
     value = value * 10 + digit
   }
   return value
 }
 
 // Whole text as a decimal i64 with an optional leading '-'.
-pub fn i64_decimal(status: *fail.Status, text: []const u8) i64 {
-  if status == nil { return i64_decimal(&fail.Status{}, text) }
-  if status.failed { return 0 }
-  negative := text.len > 0 && text[0] == '-'
+pub fn i64_decimal(text: []const u8) i64!ParseErr {
+  if text.len == 0 { fail ParseErr.Invalid(0) }
+  negative := text[0] == '-'
   start: usize = 0
+  if negative { start = 1 }
+  magnitude := u64_decimal(text[start..]) catch err { fail shifted(err, start) }
   if negative {
-    start = 1
-  }
-  digits: fail.Status
-  magnitude := u64_decimal(&digits, text[start..])
-  if digits.failed {
-    failure := digits.failure
-    failure.offset += start
-    fail.set(status, failure)
-    return 0
-  }
-  if negative {
-    if magnitude > 9223372036854775808 {
-      fail.at(status, fail.Kind.Overflow, "parse number", "number below i64 minimum", start)
-      return 0
-    }
+    if magnitude > 9223372036854775808 { fail ParseErr.TooLarge(start) }
     return #cast(i64, #wrapping(0 - magnitude))
   }
-  if magnitude > 9223372036854775807 {
-    fail.at(status, fail.Kind.Overflow, "parse number", "number exceeds i64", start)
-    return 0
-  }
+  if magnitude > 9223372036854775807 { fail ParseErr.TooLarge(start) }
   return #cast(i64, magnitude)
 }
 
@@ -101,35 +73,4 @@ pub fn failure_of(err: ParseErr, operation: []const u8) fail.Failure {
 pub fn err_of(failure: fail.Failure) ParseErr {
   if failure.kind == fail.Kind.Overflow || failure.kind == fail.Kind.Capacity { return ParseErr.TooLarge(failure.offset) }
   return ParseErr.Invalid(failure.offset)
-}
-
-// Whole text as a decimal u64: one or more ASCII digits, nothing else.
-// Invalid at the first bad byte (0 for empty text); TooLarge past the u64
-// range.
-pub fn parse_u64(text: str) u64!ParseErr {
-  if text.len == 0 { fail ParseErr.Invalid(0) }
-  value: u64 = 0
-  for i in 0..text.len {
-    byte := text[i]
-    if byte < '0' || byte > '9' { fail ParseErr.Invalid(i) }
-    digit := #cast(u64, byte - '0')
-    if value > (18446744073709551615 - digit) / 10 { fail ParseErr.TooLarge(i) }
-    value = value * 10 + digit
-  }
-  return value
-}
-
-// Whole text as a decimal i64 with an optional leading '-'.
-pub fn parse_i64(text: str) i64!ParseErr {
-  if text.len == 0 { fail ParseErr.Invalid(0) }
-  negative := text[0] == '-'
-  start: usize = 0
-  if negative { start = 1 }
-  magnitude := parse_u64(text[start..]) catch err { fail shifted(err, start) }
-  if negative {
-    if magnitude > 9223372036854775808 { fail ParseErr.TooLarge(start) }
-    return #cast(i64, #wrapping(0 - magnitude))
-  }
-  if magnitude > 9223372036854775807 { fail ParseErr.TooLarge(start) }
-  return #cast(i64, magnitude)
 }

@@ -208,6 +208,21 @@ copy(arena, path, copy_path) catch err {
 ```
 
 React to one kind with `case`: `.NotFound => { ... }`, `_ => { fail err }`.
+
+Parsers and decoders (`std/encoding/*`, `std/parse`, `std/semver`, URLs and
+HTTP heads) fail with `parse.ParseErr`: `Invalid(offset)` for malformed input
+or `TooLarge(offset)` past a limit, with the byte offset where it went wrong.
+A lookup fails with `NotFound` when the value is missing and `InvalidInput`
+when it is there but wrong, so an optional value takes a default:
+
+```dyn
+fn settings(root: *const json.Value) Settings!io.IoErr {
+  port := try json.get<i64>(root, "port")         // required
+  debug := json.get<bool>(root, "debug") catch false
+  return Settings{ port: port, debug: debug }
+}
+```
+
 Iterators return their value and set `ended` on their state at the end;
 the end of the input is not a failure. Cleanup cannot fail (`fs.close`,
 `mem.arena_release`), so it works in a `defer` after any failure.
@@ -228,13 +243,7 @@ Three rules cover every such call:
 2. **A lookup always returns a usable value.** When it is not there the value
    is zero or empty and the status records `NotFound`; when it is there but
    wrong, `InvalidInput`. Read an optional value with a status of its own, so
-   a missing one stops nothing else, or pass `nil` when you do not care why:
-
-   ```dyn
-   status: fail.Status
-   port := json.get<i64>(&status, root, "port")   // required
-   debug := json.get<bool>(nil, root, "debug")    // false when missing
-   ```
+   a missing one stops nothing else, or pass `nil` when you do not care why.
 
    `nil` works for every std and vendor call that takes a status: the call
    does its work, records nothing, and returns zero or empty if it fails.
@@ -278,13 +287,12 @@ The same three rules, from the other side:
    check at all.
 
 ```dyn
-pub fn load(arena: *mem.Arena, status: *fail.Status, text: []const u8, path: []const u8) Config {
-  doc := json.parse(arena, status, text)
-  port := json.get(i64, status, doc, "port")
-  if port > 65535 {
-    fail.invalid(status, "config", path, "port out of range")
+pub fn unpack(arena: *mem.Arena, status: *fail.Status, data: []const u8, limit: usize) []const u8 {
+  inflated := deflate.inflate(arena, status, data)
+  if inflated.value.len > limit {
+    fail.invalid(status, "unpack", "", "the data is larger than the limit")
   }
-  return Config{ port: port }
+  return inflated.value
 }
 ```
 
@@ -292,8 +300,7 @@ Other outcomes are values, not failures:
 
 - **Absence in memory you own:** `map.get` returns `nil`, tree navigation
   returns an empty stub, and every byte `find*` returns `text.len` on a
-  miss. Lookups into input (JSON, INI, HTTP, the environment) record
-  `NotFound` instead (rule 2).
+  miss. Lookups into input (JSON, INI, HTTP) fail with `NotFound` instead.
 - **The end of an iterator** is `ended` on its state, set by the call that
   found nothing left. A step with several normal outcomes says so in an
   enum, such as `Want.Read`/`Want.Write` for a nonblocking socket.
@@ -309,13 +316,13 @@ the loop stops either way:
 
 ```dyn
 status: fail.Status
-scan := ini.scanner(text)
+reader := bufio.reader(input, storage[..])
 for {
-  item := ini.next(&status, &scan)
-  if scan.ended {
+  line := bufio.read_line(&status, &reader)
+  if reader.ended {
     break
   }
-  apply(item)
+  apply(line)
 }
 if status.failed {
   report(status.failure)

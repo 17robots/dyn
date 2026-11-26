@@ -1,4 +1,4 @@
-use "std/fail"
+use parse "std/parse"
 use "std/bytes"
 use "std/mem"
 
@@ -42,8 +42,10 @@ pub struct Node {
 
 struct Parser {
   arena: *mem.Arena,
-  status: *fail.Status,
   source: []const u8,
+  // The first malformed byte stops the parse.
+  failed: bool,
+  error_offset: usize,
   at: usize,
 }
 
@@ -51,19 +53,17 @@ struct Parser {
 pub const nil_node: Node = Node{}
 
 // Nodes are pushed with mem.push, so a full fixed arena panics. The root is
-// never nil: malformed text fails with InvalidInput at the offending byte
-// and returns the read-only nil_node stub.
-pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *Node {
-  if status == nil { return parse(arena, &fail.Status{}, source) }
-  if status.failed { return #cast(*Node, &nil_node) }
+// never nil. Malformed text fails with Invalid at the offending byte and
+// rewinds this call's nodes.
+pub fn parse(arena: *mem.Arena, source: []const u8) *Node!parse.ParseErr {
   mark := mem.arena_mark(arena)
-  parser := Parser{ arena: arena, status: status, source: source }
+  parser := Parser{ arena: arena, source: source }
   root := mem.push<Node>(arena)
   root.kind = Kind.Root
   parse_children(&parser, root, 0)
-  if status.failed {
+  if parser.failed {
     mem.arena_rewind(arena, mark)
-    return #cast(*Node, &nil_node)
+    fail parse.ParseErr.Invalid(parser.error_offset)
   }
   return root
 }
@@ -143,8 +143,12 @@ pub fn line_of(source: []const u8, offset: usize) usize {
   return line
 }
 
+// message says what is wrong, for a reader of this code.
 fn failed_at(parser: *Parser, message: []const u8, offset: usize) {
-  fail.at(parser.status, fail.Kind.InvalidInput, "parse Metadesk", message, offset)
+  _ = message
+  if parser.failed { return }
+  parser.failed = true
+  parser.error_offset = offset
 }
 
 fn letter(byte: u8) bool {
@@ -275,7 +279,7 @@ fn parse_children(parser: *Parser, parent: *Node, close: u8) {
   }
   for true {
     skip(parser, true)
-    if parser.status.failed { return }
+    if parser.failed { return }
     if parser.at >= parser.source.len {
       if close != 0 {
         failed_at(parser, "unclosed scope", start)
@@ -330,7 +334,7 @@ fn parse_node(parser: *Parser) *Node {
     append_tag(node, tag_node)
     skip(parser, false)
   }
-  if parser.status.failed { return node }
+  if parser.failed { return node }
   if parser.at >= source.len || closer(source[parser.at]) || source[parser.at] == ':' {
     failed_at(parser, "unexpected token", parser.at)
     return node

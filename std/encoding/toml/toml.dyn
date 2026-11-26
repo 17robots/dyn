@@ -1,5 +1,6 @@
 use mem "std/mem"
-use "std/fail"
+use io "std/io"
+use parse "std/parse"
 use utf8 "std/unicode/utf8"
 use "std/bytes"
 use "std/container/array"
@@ -577,14 +578,10 @@ fn bounded(value: *const Value, depth: usize) bool {
 // successful trees own all input text.
 // Inputs must be UTF-8. Nesting is limited to 64
 // exhausted arenas panic.
-// Malformed input fails with InvalidInput at the offending byte.
-pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *const Value {
-  if status == nil { return parse(arena, &fail.Status{}, source) }
-  if status.failed { return &nil_value }
-  if !utf8.valid(source) {
-    fail.at(status, fail.Kind.InvalidInput, "parse TOML", "the text is not UTF-8", 0)
-    return &nil_value
-  }
+// Malformed input fails with Invalid at the offending byte; text that is
+// not UTF-8 with Invalid(0).
+pub fn parse(arena: *mem.Arena, source: []const u8) *const Value!parse.ParseErr {
+  if !utf8.valid(source) { fail parse.ParseErr.Invalid(0) }
   mark := mem.arena_mark(arena)
   parser := Parser{ arena: arena, source: source }
   root := node(&parser, Kind.Table)
@@ -604,8 +601,7 @@ pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *const
   }
   if parser.failed {
     mem.arena_rewind(arena, mark)
-    fail.at(status, fail.Kind.InvalidInput, "parse TOML", "malformed TOML", parser.at)
-    return &nil_value
+    fail parse.ParseErr.Invalid(parser.at)
   }
   return root
 }
@@ -690,12 +686,9 @@ fn emit(output: *array.Array<u8>, current: *const Value, depth: usize) bool {
 // Normalized writer uses quoted keys and inline tables, preserving scalar lexemes.
 // Inputs must not borrow unused backing of the output arena.
 // Output borrows arena
-// malformed/manual trees return InvalidInput and rewind.
-pub fn encode(arena: *mem.Arena, status: *fail.Status, root: *const Value) []u8 {
-  if status == nil { return encode(arena, &fail.Status{}, root) }
-  empty: []u8
-  if status.failed { return empty }
-  if root == nil || root.kind != Kind.Table || !valid_children(root) { return unencodable(status) }
+// A tree that is not a valid TOML document fails with InvalidInput and rewinds.
+pub fn encode(arena: *mem.Arena, root: *const Value) []u8!io.IoErr {
+  if root == nil || root.kind != Kind.Table || !valid_children(root) { fail .InvalidInput }
   mark := mem.arena_mark(arena)
   output: array.Array<u8>
   array.init(&output, arena)
@@ -703,13 +696,13 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, root: *const Value) []u8 
   for child != nil {
     if !utf8.valid(child.key) {
       mem.arena_rewind(arena, mark)
-      return unencodable(status)
+      fail .InvalidInput
     }
     emit_string(&output, child.key)
     array.push_all(&output, " = ")
     if !emit(&output, child, 0) {
       mem.arena_rewind(arena, mark)
-      return unencodable(status)
+      fail .InvalidInput
     }
     array.push(&output, #cast(u8, 10))
     child = child.next
@@ -717,8 +710,3 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, root: *const Value) []u8 
   return output.items
 }
 
-fn unencodable(status: *fail.Status) []u8 {
-  fail.invalid(status, "encode TOML", "", "the tree is not a valid TOML document")
-  empty: []u8
-  return empty
-}

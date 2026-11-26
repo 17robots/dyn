@@ -6,18 +6,21 @@ import subprocess
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
-SOURCE = r'''use "std/fail"
-use semver "std/semver"
+SOURCE = r'''use semver "std/semver"
 use url "std/net/url"
 use parse "std/parse"
 use mem "std/mem"
 use strings "std/strings"
 use "std/bytes"
-fn semver_failure(input: []const u8) fail.Failure {
-  status: fail.Status
-  _ = semver.parse(&status, input)
-  if !status.failed { #panic("semver should fail") }
-  return status.failure
+fn semver_failure(input: []const u8) parse.ParseErr {
+  _ = semver.parse(input) catch err { return err }
+  #panic("semver should fail")
+}
+fn too_large(err: parse.ParseErr) bool {
+  case err {
+    .TooLarge(_) => { return true }
+    _ => { return false }
+  }
 }
 // The offset of a malformed input; TooLarge is no answer here.
 fn invalid_at(err: parse.ParseErr) usize {
@@ -35,16 +38,15 @@ fn decode_offset(arena: *mem.Arena, input: []const u8) usize {
   #panic("decode should fail")
 }
 fn main() {
-  checking: fail.Status
-  good := semver.parse(&checking, "1.2.3-alpha.1+build")
-  if checking.failed || good.major != 1 { #panic("semver valid") }
+  good := semver.parse("1.2.3-alpha.1+build") catch { #panic("semver valid") }
+  if good.major != 1 { #panic("semver valid") }
   for input in ["", "01.2.3", "1", "1.x.3", "1.2", "1.2.x", "1.2.3-", "1.2.3+", "1.2.3x", "1.2.3-01"] {
-    if semver_failure(input).kind != fail.Kind.InvalidInput { #panic("semver invalid") }
+    if too_large(semver_failure(input)) { #panic("semver invalid") }
   }
-  if semver_failure("1.2.3-alpha.x!").offset != 13 || semver_failure("01.2.3").offset != 1 { #panic("semver offending byte") }
-  if semver_failure("").offset != 0 { #panic("semver zero") }
+  if parse.offset(semver_failure("1.2.3-alpha.x!")) != 13 || parse.offset(semver_failure("01.2.3")) != 1 { #panic("semver offending byte") }
+  if parse.offset(semver_failure("")) != 0 { #panic("semver zero") }
   for input in ["4294967296.2.3", "1.4294967296.3", "1.2.4294967296"] {
-    if semver_failure(input).kind != fail.Kind.Overflow { #panic("semver overflow") }
+    if !too_large(semver_failure(input)) { #panic("semver overflow") }
   }
   parsed := url.parse("https://example.com/p?q#f") catch { #panic("url valid") }
   if !bytes.equal(parsed.path, "/p") { #panic("url valid") }

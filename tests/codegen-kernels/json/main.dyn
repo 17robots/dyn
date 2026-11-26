@@ -23,8 +23,7 @@ fn main() {
   check: usize = 0
   for round in 0..60 {
     mark := mem.arena_mark(arena)
-    status: fail.Status
-    root := json.parse(arena, &status, document)
+    root := json.parse(arena, document) catch { #panic("json.parse") }
     if json.is_array(root) {
       check += 1
     }

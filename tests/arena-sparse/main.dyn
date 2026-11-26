@@ -19,8 +19,7 @@ fn resident_kib() u64 {
   for end < rest.len && rest[end] != ' ' {
     end += 1
   }
-  status: fail.Status
-  return parse.u64_decimal(&status, rest[..end]) * 4
+  return (parse.u64_decimal(rest[..end]) catch 0) * 4
 }
 
 fn main() {
