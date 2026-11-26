@@ -27,28 +27,28 @@ struct App {
   quit: sync.AtomicU32,
 }
 
-fn text(status: *fail.Status, response: *http.Response, code: u16, body: []const u8) {
-  http.respond(status, response, body, http.ResponseOptions{ status: code, content_type: "text/plain; charset=utf-8" })
+fn text(response: *http.Response, code: u16, body: []const u8) !io.IoErr {
+  try http.respond(response, body, http.ResponseOptions{ status: code, content_type: "text/plain; charset=utf-8" })
 }
 
-fn handle_health(status: *fail.Status, response: *http.Response, request: *const http.Request, state: *App) {
-  text(status, response, http.StatusOk, "ok\n")
+fn handle_health(response: *http.Response, request: *const http.Request, state: *App) !io.IoErr {
+  try text(response, http.StatusOk, "ok\n")
 }
 
-fn handle_list(status: *fail.Status, response: *http.Response, request: *const http.Request, state: *App) {
+fn handle_list(response: *http.Response, request: *const http.Request, state: *App) !io.IoErr {
   // Copy under the lock, respond outside it: a slow client must not block writers.
   copy: [NoteCapacity]u8
   sync.lock(&state.notes_lock)
   used := state.notes_used
   _ = mem.copy(copy[..used], state.notes[..used])
   sync.unlock(&state.notes_lock)
-  text(status, response, http.StatusOk, copy[..used])
+  try text(response, http.StatusOk, copy[..used])
 }
 
-fn handle_add(status: *fail.Status, response: *http.Response, request: *const http.Request, state: *App) {
+fn handle_add(response: *http.Response, request: *const http.Request, state: *App) !io.IoErr {
   body := request.body
   if body.len == 0 || bytes.find_byte(body, '\n') < body.len {
-    text(status, response, http.StatusBadRequest, "note must be one nonempty line\n")
+    try text(response, http.StatusBadRequest, "note must be one nonempty line\n")
     return
   }
   sync.lock(&state.notes_lock)
@@ -64,7 +64,7 @@ fn handle_add(status: *fail.Status, response: *http.Response, request: *const ht
   }
   sync.unlock(&state.notes_lock)
   if !stored {
-    text(status, response, http.StatusPayloadTooLarge, "notes full\n")
+    try text(response, http.StatusPayloadTooLarge, "notes full\n")
     return
   }
   digits: [21 + mem.ArenaBufferOverhead]u8
@@ -72,12 +72,12 @@ fn handle_add(status: *fail.Status, response: *http.Response, request: *const ht
   number := fmt.u64_decimal(scratch, #cast(u64, count))
   payload := #slice(#cast(*u8, &number[0]), number.len + 1)
   payload[number.len] = '\n'
-  text(status, response, http.StatusOk, payload)
+  try text(response, http.StatusOk, payload)
 }
 
-fn handle_quit(status: *fail.Status, response: *http.Response, request: *const http.Request, state: *App) {
+fn handle_quit(response: *http.Response, request: *const http.Request, state: *App) !io.IoErr {
   sync.store_u32(&state.quit, 1)
-  http.respond(status, response, "bye\n", http.ResponseOptions{ content_type: "text/plain; charset=utf-8", close_connection: true })
+  try http.respond(response, "bye\n", http.ResponseOptions{ content_type: "text/plain; charset=utf-8", close_connection: true })
 }
 
 fn main() {
@@ -88,19 +88,19 @@ fn main() {
   // Setup and shutdown failures end the program.
   status := fail.Status{ on_failure: fail.panic_on_failure }
   state.router = http.typed_routes(state.routes[..], state)
-  http.add(&status, &state.router, "GET", "/health", handle_health)
-  http.add(&status, &state.router, "GET", "/notes", handle_list)
-  http.add(&status, &state.router, "POST", "/notes", handle_add)
-  http.add(&status, &state.router, "POST", "/quit", handle_quit)
+  http.add(&state.router, "GET", "/health", handle_health) catch { #panic("add route") }
+  http.add(&state.router, "GET", "/notes", handle_list) catch { #panic("add route") }
+  http.add(&state.router, "POST", "/notes", handle_add) catch { #panic("add route") }
+  http.add(&state.router, "POST", "/quit", handle_quit) catch { #panic("add route") }
   binding := http.bind_routes(&state.router)
 
   workers := mem.push_array<evented.Worker>(arena, WorkerCount)
-  _ = evented.start_shared(arena, &status, workers, net.ipv4(127, 0, 0, 1, 0), 64, config, binding.handler, binding.context)
+  evented.start_shared(arena, workers, net.ipv4(127, 0, 0, 1, 0), 64, config, binding.handler, binding.context) catch { #panic("start server") }
   io.println("port {}", evented.local_port(workers))
 
   for sync.load_u32(&state.quit) == 0 {
     time.sleep(10 * time.Millisecond)
   }
   evented.stop(workers)
-  evented.join(&status, workers)
+  evented.join(workers) catch { #panic("join server") }
 }

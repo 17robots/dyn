@@ -19,17 +19,19 @@ search for a word finds the function that does it.
   `process.Options{}` (inherit every stream), and scanners given only their
   `source`. Arena handles are pointers to backing headers and require
   `arena_alloc` or `arena_from_buffer`; a nil arena handle does not allocate.
-- **Failure is state you pass in.** A function the world can make fail takes
-  a `*fail.Status` (std/fail): the first failure stays there with its kind,
-  native code, operation, path and reason, and every later call given that
-  status does nothing and returns zero or empty. Callers check
-  `status.failed` once, before acting on the results, and print the failure
-  with `fail.describe`. See [idiomatic Dyn](idiomatic-dyn.md#errors-and-cleanup)
-  for the rules. Every std and vendor module uses this model: decoders fail
-  with `InvalidInput` at the offending byte offset, native calls keep the
-  system's code in `native`. Scanners and readers that fail stay failed.
-  Predicates return `bool`. Missing lookups and end of input are ordinary
-  results, not errors.
+- **Failure is a return value.** A function the world can make fail returns
+  `T!E`: `io.IoErr` for the filesystem, processes and the network (one shared
+  set of kinds, with `System(code)` keeping the system's code), and
+  `parse.ParseErr` (`Invalid(offset)` or `TooLarge(offset)`) for parsers.
+  Callers use `try` to pass a failure on, `catch` to handle it, and
+  `catch value` for a fallback. See [idiomatic Dyn](idiomatic-dyn.md#errors-and-cleanup)
+  for the rules. Modules not yet migrated still take a `*fail.Status`
+  (std/fail): the first failure stays there with its kind, native code,
+  operation, path and reason, and every later call given that status does
+  nothing. Scanners and readers that fail stay failed.
+  Predicates return `bool`, and end of input is an ordinary result. A
+  migrated lookup fails with `NotFound` when the value is missing, so an
+  optional value reads as `http.request_header(request, "x-tag") catch ""`.
 - **One place for byte search.** `std/bytes` owns `equal`, `find`,
   `find_byte`, `find_last`, `find_last_byte`, `contains`, `starts_with` and
   `ends_with`; `std/strings` holds text work (trim, split, join, format, parse)

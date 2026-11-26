@@ -56,10 +56,10 @@ fn main() {
  check(bytes.equal(hex.decode(f.arena,&status,"68656c6c6f"),"hello"))
  root:=json.parse(f.arena,&status,"{\"answer\":42,\"text\":\"hello\"}")
  check(!status.failed && json.get<i64>(&status, root, "answer")==42)
- chunked:=http.decode_chunked(f.arena,&status,"5\r\nhello\r\n0\r\n\r\n")
+ chunked:=http.decode_chunked(f.arena,"5\r\nhello\r\n0\r\n\r\n") catch { #panic("chunked") }
  check(!status.failed && bytes.equal(chunked.value,"hello"))
  packet:[46]u8=[18,52,129,128,0,1,0,1,0,0,0,0,7,101,120,97,109,112,108,101,4,116,101,115,116,0,0,1,0,1,192,12,0,1,0,1,0,0,0,1,0,4,1,2,3,4]
- answers:=dns.parse_ipv4(f.arena,&status,packet[..],0x1234,"example.test")
+ answers:=dns.parse_ipv4(f.arena,packet[..],0x1234,"example.test") catch { #panic("dns") }
  check(!status.failed && answers.len==1 && answers[0].a==1 && answers[0].d==4)
  key:[32]u8
  nonce:[12]u8

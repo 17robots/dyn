@@ -11,15 +11,16 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn')).resolve())
 PRELUDE = '''use "std/fail"
 use "std/html"
+use "std/io"
 use "std/net/http"
 
 struct App { count: i32 }
 struct Other { name: i32 }
 
-fn for_app(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
+fn for_app(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
 }
 
-fn for_other(status: *fail.Status, response: *http.Response, request: *const http.Request, other: *Other) {
+fn for_other(response: *http.Response, request: *const http.Request, other: *Other) !io.IoErr {
 }
 
 '''
@@ -31,7 +32,7 @@ CASES = {
   storage: [4]http.TypedRoute<App>
   router := http.typed_routes(storage[..], &app)
   status: fail.Status
-  http.add(&status, &router, "GET", "/", for_app)
+  http.add(&router, "GET", "/", for_app) catch { #panic("add route") }
   _ = http.bind_routes(&router)
   page_storage: [64]u8
   page := html.writer(&status, page_storage[..])
@@ -50,7 +51,7 @@ CASES = {
   storage: [4]http.TypedRoute<App>
   router := http.typed_routes(storage[..], &app)
   status: fail.Status
-  http.add(&status, &router, "GET", "/", for_other)
+  http.add(&router, "GET", "/", for_other) catch { #panic("add route") }
 }
 ''', 'error'),
     'raw markup': ('''fn main() {

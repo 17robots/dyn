@@ -52,61 +52,38 @@ pub fn event_data(value: *const Event) u64 {
   return low | (high << 32)
 }
 
-// A new epoll queue descriptor, or -1 after a failure.
-pub fn event_queue(status: *fail.Status) isize {
-  if status == nil { return event_queue(&fail.Status{}) }
-  if status.failed { return -1 }
-  return check(status, "epoll create", #syscall(sys.EpollCreate1, 0))
+// A new epoll queue descriptor.
+pub fn event_queue() isize!io.IoErr {
+  return try check(#syscall(sys.EpollCreate1, 0))
 }
 
-pub fn event_control(status: *fail.Status, queue: isize, operation: usize, descriptor: isize, value: *Event) {
-  if status == nil {
-    event_control(&fail.Status{}, queue, operation, descriptor, value)
-    return
-  }
-  if status.failed { return }
-  _ = check(status, "epoll control", #syscall(sys.EpollCtl, queue, operation, descriptor, value))
+pub fn event_control(queue: isize, operation: usize, descriptor: isize, value: *Event) !io.IoErr {
+  _ = try check(#syscall(sys.EpollCtl, queue, operation, descriptor, value))
 }
 
 // Registration helpers keep epoll's operation numbers and remove-event pointer
 // convention out of application code. `data` is returned unchanged by event_wait.
-pub fn event_add(status: *fail.Status, queue: isize, descriptor: isize, events: u32, data: u64) {
-  if status == nil {
-    event_add(&fail.Status{}, queue, descriptor, events, data)
-    return
-  }
+pub fn event_add(queue: isize, descriptor: isize, events: u32, data: u64) !io.IoErr {
   value := event(events, data)
-  event_control(status, queue, EventAdd, descriptor, &value)
+  try event_control(queue, EventAdd, descriptor, &value)
 }
 
-pub fn event_modify(status: *fail.Status, queue: isize, descriptor: isize, events: u32, data: u64) {
-  if status == nil {
-    event_modify(&fail.Status{}, queue, descriptor, events, data)
-    return
-  }
+pub fn event_modify(queue: isize, descriptor: isize, events: u32, data: u64) !io.IoErr {
   value := event(events, data)
-  event_control(status, queue, EventModify, descriptor, &value)
+  try event_control(queue, EventModify, descriptor, &value)
 }
 
-pub fn event_remove(status: *fail.Status, queue: isize, descriptor: isize) {
-  if status == nil {
-    event_remove(&fail.Status{}, queue, descriptor)
-    return
-  }
+pub fn event_remove(queue: isize, descriptor: isize) !io.IoErr {
   // Linux ignores this argument for EPOLL_CTL_DEL, but using valid storage keeps
   // the language-level pointer contract explicit.
   value := Event{}
-  event_control(status, queue, EventRemove, descriptor, &value)
+  try event_control(queue, EventRemove, descriptor, &value)
 }
 
 // Waits for events; the number stored in events, 0 on timeout.
-pub fn event_wait(status: *fail.Status, queue: isize, events: []Event, timeout_milliseconds: i32) usize {
-  if status == nil { return event_wait(&fail.Status{}, queue, events, timeout_milliseconds) }
-  if status.failed { return 0 }
-  if events.len == 0 {
-    invalid(status, "epoll wait", "no room for events")
-    return 0
-  }
+// No room for events fails with InvalidInput.
+pub fn event_wait(queue: isize, events: []Event, timeout_milliseconds: i32) usize!io.IoErr {
+  if events.len == 0 { fail .InvalidInput }
   start := clock.Instant{}
   if timeout_milliseconds > 0 {
     start = clock.monotonic_now()
@@ -120,6 +97,5 @@ pub fn event_wait(status: *fail.Status, queue: isize, events: []Event, timeout_m
     }
     value = #syscall(sys.EpollWait, queue, &events[0], events.len, remaining)
   }
-  if check(status, "epoll wait", value) < 0 { return 0 }
-  return #cast(usize, value)
+  return #cast(usize, try check(value))
 }

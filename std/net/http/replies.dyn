@@ -3,54 +3,39 @@ use html "std/html"
 // One-call answers for the usual responses. Each is respond with its
 // options filled in; pass headers for anything more.
 
-// A plain-text body with status.
-pub fn text(status: *fail.Status, response: *Response, code: u16, body: []const u8) {
-  if status == nil {
-    text(&fail.Status{}, response, code, body)
-    return
-  }
-  respond(status, response, body, ResponseOptions{ status: code, content_type: "text/plain; charset=utf-8" })
+// A plain-text body with status code.
+pub fn text(response: *Response, code: u16, body: []const u8) !io.IoErr {
+  try respond(response, body, ResponseOptions{ status: code, content_type: "text/plain; charset=utf-8" })
 }
 
-// A JSON body with status, not cached.
-pub fn json(status: *fail.Status, response: *Response, code: u16, body: []const u8) {
-  if status == nil {
-    json(&fail.Status{}, response, code, body)
-    return
-  }
+// A JSON body with status code, not cached.
+pub fn json(response: *Response, code: u16, body: []const u8) !io.IoErr {
   cache: [1]Header = [Header{ name: "Cache-Control", value: "no-store" }]
-  respond(status, response, body, ResponseOptions{ status: code, content_type: "application/json", headers: cache[..] })
+  try respond(response, body, ResponseOptions{ status: code, content_type: "application/json", headers: cache[..] })
 }
 
 // 303 See Other to location, setting cookies (none is fine): the answer to a
 // form post.
-pub fn redirect(status: *fail.Status, response: *Response, location: []const u8, cookies: []const Cookie) {
-  if status == nil {
-    redirect(&fail.Status{}, response, location, cookies)
-    return
-  }
+pub fn redirect(response: *Response, location: []const u8, cookies: []const Cookie) !io.IoErr {
   headers: [1]Header = [Header{ name: "Location", value: location }]
-  respond(status, response, "", ResponseOptions{ status: StatusSeeOther, headers: headers[..], cookies: cookies })
+  try respond(response, "", ResponseOptions{ status: StatusSeeOther, headers: headers[..], cookies: cookies })
 }
 
 // A Writer for an HTML page (see page): over the response's send buffer when
-// it is free, so the page goes out without a copy, else over fallback. A page
-// that does not fit fails status with Capacity; the server then answers 500.
-pub fn page_writer(status: *fail.Status, response: *Response, fallback: []u8) html.Writer {
+// it is free, so the page goes out without a copy, else over fallback. Writes
+// that do not fit stop the writer; page then fails with Capacity.
+pub fn page_writer(response: *Response, fallback: []u8) html.Writer {
   storage := body_buffer(response, fallback.len)
-  if storage.len == 0 { return html.writer(status, fallback) }
-  return html.writer(status, storage)
+  if storage.len == 0 { return html.writer(nil, fallback) }
+  return html.writer(nil, storage)
 }
 
 // Sends the page from page_writer with code as text/html, not cached, with
 // Content-Security-Policy default-src 'self' and X-Content-Type-Options
-// nosniff.
-pub fn page(status: *fail.Status, response: *Response, code: u16, rendered: *const html.Writer) {
-  if status == nil {
-    page(&fail.Status{}, response, code, rendered)
-    return
-  }
-  if status.failed { return }
+// nosniff. A page that did not fit fails with Capacity, before anything is
+// sent; the server then answers 500.
+pub fn page(response: *Response, code: u16, rendered: *const html.Writer) !io.IoErr {
+  if rendered.buffer.broken { fail .Capacity }
   headers: [3]Header = [
     Header{ name: "Content-Security-Policy", value: "default-src 'self'" },
     Header{ name: "X-Content-Type-Options", value: "nosniff" },
@@ -59,8 +44,8 @@ pub fn page(status: *fail.Status, response: *Response, code: u16, rendered: *con
   options := ResponseOptions{ status: code, content_type: "text/html; charset=utf-8", headers: headers[..] }
   body := html.output(rendered).bytes
   if response.reserved.len > 0 && body.len > 0 && &body[0] == &response.reserved[0] {
-    respond_buffered(status, response, body.len, options)
+    try respond_buffered(response, body.len, options)
     return
   }
-  respond(status, response, body, options)
+  try respond(response, body, options)
 }

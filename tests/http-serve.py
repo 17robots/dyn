@@ -59,8 +59,8 @@ use "std/net"
 use "std/net/http"
 use "std/net/http/evented"
 
-fn hello(status: *fail.Status, response: *http.Response, request: *const http.Request) {
-  http.text(status, response, 200, "hello\\n")
+fn hello(response: *http.Response, request: *const http.Request) !io.IoErr {
+  try http.text(response, 200, "hello\\n")
 }
 
 fn main() i32 {
@@ -69,9 +69,7 @@ fn main() i32 {
   arena := mem.arena_alloc(evented.storage_size(config, 2) + mem.MiB)
   defer mem.arena_release(arena)
   workers: [2]evented.Worker
-  status: fail.Status
-  evented.serve(arena, &status, workers[..], net.ipv4(127, 0, 0, 1, 18098), config, hello, nil)
-  if status.failed { return 1 }
+  evented.serve(arena, workers[..], net.ipv4(127, 0, 0, 1, 18098), config, hello, nil) catch { return 1 }
   return 0
 }
 '''

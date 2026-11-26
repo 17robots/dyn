@@ -1,25 +1,25 @@
 #target(kernel: linux)
-fn native_open(status: *fail.Status) isize {
-  return net.event_queue(status)
+fn native_open() isize!io.IoErr {
+  return try net.event_queue()
 }
 fn native_close(handle: isize) {
   net.close(handle)
 }
-fn native_control(status: *fail.Status, queue: *Queue, index: usize, entry: Entry) {
+fn native_control(queue: *Queue, index: usize, entry: Entry) !io.IoErr {
   old := queue.entries[index]
   if !entry.active {
-    net.event_remove(status, queue.handle, old.descriptor)
+    try net.event_remove(queue.handle, old.descriptor)
   } else if old.active {
-    net.event_modify(status, queue.handle, entry.descriptor, entry.events, index)
+    try net.event_modify(queue.handle, entry.descriptor, entry.events, index)
   } else {
-    net.event_add(status, queue.handle, entry.descriptor, entry.events, index)
+    try net.event_add(queue.handle, entry.descriptor, entry.events, index)
   }
 }
 const NativeEventSize: usize = #sizeof(net.Event)
 
-fn native_wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout: i32) []Event {
+fn native_wait(arena: *mem.Arena, queue: *Queue, timeout: i32) []Event!io.IoErr {
   native := #slice(#cast(*net.Event, &queue.native[0]), queue.batch)
-  count := net.event_wait(status, queue.handle, native, timeout)
+  count := try net.event_wait(queue.handle, native, timeout)
   events := mem.push_array<Event>(arena, count)
   for i in 0..events.len {
     index := #cast(usize, net.event_data(&native[i]))

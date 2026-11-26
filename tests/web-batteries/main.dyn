@@ -15,6 +15,12 @@ struct Post { id: i64, author: []const u8, body: []const u8, created: i64, ok: b
 
 struct Nested { inner: Post }
 
+// Whether the cache holds token at now.
+fn cached(cache: *sessions.Cache, shared: *sessions.Shared, token: []const u8, now: i64) bool {
+  _ = sessions.cached(cache, shared, token, now) catch { return false }
+  return true
+}
+
 fn main() {
   arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
@@ -48,28 +54,18 @@ fn main() {
 
   cache: sessions.Cache
   shared := sessions.Shared{}
-  random: fail.Status
-  started := sessions.start(arena, &random, 3600)
-  io.println("start {} {} {} {}", !random.failed, started.token.len, started.csrf.len, started.cookie.name)
-  cold: fail.Status
-  _ = sessions.cached(&cold, &cache, &shared, started.token, 100)
-  io.println("cold {}", !cold.failed)
-  remembering: fail.Status
-  kept := sessions.remember(&remembering, &cache, started.token, 7, started.csrf, "ann", 200)
-  looking: fail.Status
-  hit := sessions.cached(&looking, &cache, &shared, started.token, 100)
-  io.println("remembered {} hit {} user {} data {} csrf {} {}", !remembering.failed && kept.user == 7, !looking.failed, hit.user,
+  started := sessions.start(arena, 3600) catch { #panic("session start") }
+  io.println("start {} {} {} {}", true, started.token.len, started.csrf.len, started.cookie.name)
+  io.println("cold {}", cached(&cache, &shared, started.token, 100))
+  kept := sessions.remember(&cache, started.token, 7, started.csrf, "ann", 200) catch { #panic("remember") }
+  hit := sessions.cached(&cache, &shared, started.token, 100) catch { #panic("cached") }
+  io.println("remembered {} hit {} user {} data {} csrf {} {}", kept.user == 7, true, hit.user,
     hit.data, sessions.csrf_ok(&hit, started.csrf), sessions.csrf_ok(&hit, "nope"))
-  expired: fail.Status
-  _ = sessions.cached(&expired, &cache, &shared, started.token, 200)
-  io.println("expired {}", !expired.failed)
+  io.println("expired {}", cached(&cache, &shared, started.token, 200))
   cleared := sessions.forget(&shared)
   cookie_text: [128]u8
-  formatting: fail.Status
-  io.println("forget {}", http.set_cookie(&formatting, cookie_text[..], cleared))
-  forgotten: fail.Status
-  _ = sessions.cached(&forgotten, &cache, &shared, started.token, 100)
-  io.println("after forget {}", !forgotten.failed)
+  io.println("forget {}", http.set_cookie(cookie_text[..], cleared) catch cookie_text[..0])
+  io.println("after forget {}", cached(&cache, &shared, started.token, 100))
 
   assets := http.assets_of(arena, "app.js", "let x = 1", "app.css", "p { }", "dangling")
   js := http.find_asset(&assets, "app.js")

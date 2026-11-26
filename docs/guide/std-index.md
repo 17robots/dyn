@@ -930,14 +930,14 @@ Layer: std
 - `const Hangup: u32 = 16`
 - `struct Event { descriptor: isize, token: u64, events: u32 }`
 - `struct Queue { handle: isize, active: bool, entries: []Entry, failed: bool, free: []u32, free_count: usize, table: []u32, used_slots: usize, batch: usize, // Where the system writes up to batch ready events: made once by open, so // a wait neither allocates nor zeroes it. Empty where the platform builds // its list per wait. native: []u64, }`: One owner, one thread.
-- `fn open(arena: *mem.Arena, status: *fail.Status, capacity: usize) Queue`
-- `fn add(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, token: u64)`
-- `fn modify(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, token: u64)`
-- `fn remove(status: *fail.Status, queue: *Queue, descriptor: isize)`
-- `fn wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout_milliseconds: i32) []Event`: Level-triggered readiness.
+- `fn open(arena: *mem.Arena, capacity: usize) Queue!io.IoErr`: A capacity outside 1 to 2147483647 fails with InvalidInput.
+- `fn add(queue: *Queue, descriptor: isize, events: u32, token: u64) !io.IoErr`: events must be Readable and/or Writable on a valid descriptor, else InvalidInput.
+- `fn modify(queue: *Queue, descriptor: isize, events: u32, token: u64) !io.IoErr`: A descriptor not in the queue fails with NotFound.
+- `fn remove(queue: *Queue, descriptor: isize) !io.IoErr`: A descriptor not in the queue fails with NotFound.
+- `fn wait(arena: *mem.Arena, queue: *Queue, timeout_milliseconds: i32) []Event!io.IoErr`: Level-triggered readiness.
 - `fn close(queue: *Queue)`
 - `struct Waker { descriptor: isize, active: bool }`: Wakes a queue's owner from another thread.
-- `fn waker_open(status: *fail.Status) Waker`
+- `fn waker_open() Waker!io.IoErr`
 - `fn wake(waker: *const Waker)`: Never blocks.
 - `fn waker_drain(waker: *const Waker)`: Discards pending wakes.
 - `fn waker_close(waker: *Waker)`
@@ -1695,16 +1695,16 @@ Layer: std
 - `fn event(events: u32, data: u64) Event`
 - `fn event_events(value: *const Event) u32`
 - `fn event_data(value: *const Event) u64`
-- `fn event_queue(status: *fail.Status) isize`: A new epoll queue descriptor, or -1 after a failure.
-- `fn event_control(status: *fail.Status, queue: isize, operation: usize, descriptor: isize, value: *Event)`
-- `fn event_add(status: *fail.Status, queue: isize, descriptor: isize, events: u32, data: u64)`: Registration helpers keep epoll's operation numbers and remove-event pointer convention out of application code.
-- `fn event_modify(status: *fail.Status, queue: isize, descriptor: isize, events: u32, data: u64)`
-- `fn event_remove(status: *fail.Status, queue: isize, descriptor: isize)`
-- `fn event_wait(status: *fail.Status, queue: isize, events: []Event, timeout_milliseconds: i32) usize`: Waits for events;
+- `fn event_queue() isize!io.IoErr`: A new epoll queue descriptor.
+- `fn event_control(queue: isize, operation: usize, descriptor: isize, value: *Event) !io.IoErr`
+- `fn event_add(queue: isize, descriptor: isize, events: u32, data: u64) !io.IoErr`: Registration helpers keep epoll's operation numbers and remove-event pointer convention out of application code.
+- `fn event_modify(queue: isize, descriptor: isize, events: u32, data: u64) !io.IoErr`
+- `fn event_remove(queue: isize, descriptor: isize) !io.IoErr`
+- `fn event_wait(queue: isize, events: []Event, timeout_milliseconds: i32) usize!io.IoErr`: Waits for events;
 - `const AddressFamilyIpv6: usize = 10`
 - `type Descriptor = i32`
 - `struct PollDescriptor { descriptor: Descriptor, events: i16, returned: i16 }`
-- `fn receive_packet(status: *fail.Status, descriptor: isize, bytes: []u8) usize`: A value greater than capacity means the datagram was truncated.
+- `fn receive_packet(descriptor: isize, bytes: []u8) usize!io.IoErr`: A value greater than capacity means the datagram was truncated.
 - `struct Event { bytes: [16]u8 }`: Linux UAPI naturally aligns the 64-bit epoll data field on AArch64.
 - `struct Event { bytes: [12]u8 }`: Linux UAPI packs epoll_event only on x86_64.
 - `const AddressFamilyIpv6: usize = 30`
@@ -1725,67 +1725,66 @@ Layer: std
 - `struct Address { bytes: [128]u8, length: usize }`: Large enough for every supported sockaddr.
 - `struct Connection { descriptor: isize, active: bool }`: `active` makes zeroed storage a closed handle;
 - `struct Listener { descriptor: isize, active: bool }`
-- `enum NetErr { Refused, TimedOut, Reset, AddressInUse, Closed, InvalidAddress, System(isize), }`: Structured network error enum for T!NetErr APIs.
 - `fn connection_from_descriptor(descriptor: isize) Connection`: Wraps an open socket descriptor;
 - `fn listener_from_descriptor(descriptor: isize) Listener`
-- `fn socket(status: *fail.Status, family: usize, kind: usize, protocol: usize) isize`: A new socket descriptor, or -1 after a failure.
+- `fn socket(family: usize, kind: usize, protocol: usize) isize!io.IoErr`: A new socket descriptor.
 - `fn close(descriptor: isize)`: Closes descriptor.
-- `fn listen(status: *fail.Status, descriptor: isize, backlog: usize)`
-- `fn shutdown(status: *fail.Status, descriptor: isize, how: usize)`
+- `fn listen(descriptor: isize, backlog: usize) !io.IoErr`
+- `fn shutdown(descriptor: isize, how: usize) !io.IoErr`
 - `fn ipv4_address(destination: []u8, a: u8, b: u8, c: u8, d: u8, port: u16) []u8`
 - `fn ipv4(a: u8, b: u8, c: u8, d: u8, port: u16) Ipv4Address`
 - `fn ipv6(bytes: [16]u8, port: u16, scope: u32) Ipv6Address`
 - `fn unix(path: []const u8) UnixAddress`: Native sockaddr_un.
-- `fn connect_ipv4(status: *fail.Status, descriptor: isize, address: *const Ipv4Address)`
-- `fn bind_ipv4(status: *fail.Status, descriptor: isize, address: *const Ipv4Address)`
-- `fn connect_ipv6(status: *fail.Status, descriptor: isize, address: *const Ipv6Address)`
-- `fn bind_ipv6(status: *fail.Status, descriptor: isize, address: *const Ipv6Address)`
-- `fn connect_unix(status: *fail.Status, descriptor: isize, address: *const UnixAddress)`
-- `fn bind_unix(status: *fail.Status, descriptor: isize, address: *const UnixAddress)`
-- `fn connect(status: *fail.Status, descriptor: isize, address: []const u8)`
-- `fn bind(status: *fail.Status, descriptor: isize, address: []const u8)`
-- `fn accept(status: *fail.Status, descriptor: isize) isize`: Accepts one connection: its descriptor, or -1 after a failure.
-- `fn tcp_listen_ipv4(status: *fail.Status, address: *const Ipv4Address, backlog: usize) Listener`
-- `fn tcp_listen_ipv4_shared(status: *fail.Status, address: *const Ipv4Address, backlog: usize) Listener`: Like tcp_listen_ipv4 with SO_REUSEPORT set before bind.
-- `fn tcp_connect_ipv4(status: *fail.Status, address: *const Ipv4Address) Connection`
-- `fn tcp_listen_ipv6(status: *fail.Status, address: *const Ipv6Address, backlog: usize) Listener`
-- `fn tcp_connect_ipv6(status: *fail.Status, address: *const Ipv6Address) Connection`
-- `fn unix_listen(status: *fail.Status, address: *const UnixAddress, backlog: usize) Listener`: The caller removes the filesystem socket path after closing the listener.
-- `fn unix_connect(status: *fail.Status, address: *const UnixAddress) Connection`
-- `fn multicast_join_ipv4(status: *fail.Status, descriptor: isize, group: [4]u8, interface: [4]u8)`: IPv4 multicast membership uses network-order octets for both addresses.
-- `fn multicast_leave_ipv4(status: *fail.Status, descriptor: isize, group: [4]u8, interface: [4]u8)`
-- `fn multicast_interface_ipv4(status: *fail.Status, descriptor: isize, interface: [4]u8)`
-- `fn multicast_ttl_ipv4(status: *fail.Status, descriptor: isize, ttl: u8)`
-- `fn multicast_loop_ipv4(status: *fail.Status, descriptor: isize, enabled: bool)`: POSIX controls outgoing loopback;
-- `fn listener_accept(status: *fail.Status, listener: *Listener) Connection`
+- `fn connect_ipv4(descriptor: isize, address: *const Ipv4Address) !io.IoErr`
+- `fn bind_ipv4(descriptor: isize, address: *const Ipv4Address) !io.IoErr`
+- `fn connect_ipv6(descriptor: isize, address: *const Ipv6Address) !io.IoErr`
+- `fn bind_ipv6(descriptor: isize, address: *const Ipv6Address) !io.IoErr`
+- `fn connect_unix(descriptor: isize, address: *const UnixAddress) !io.IoErr`
+- `fn bind_unix(descriptor: isize, address: *const UnixAddress) !io.IoErr`
+- `fn connect(descriptor: isize, address: []const u8) !io.IoErr`: An empty address fails with InvalidInput.
+- `fn bind(descriptor: isize, address: []const u8) !io.IoErr`
+- `fn accept(descriptor: isize) isize!io.IoErr`: Accepts one connection: its descriptor.
+- `fn tcp_listen_ipv4(address: *const Ipv4Address, backlog: usize) Listener!io.IoErr`
+- `fn tcp_listen_ipv4_shared(address: *const Ipv4Address, backlog: usize) Listener!io.IoErr`: Like tcp_listen_ipv4 with SO_REUSEPORT set before bind.
+- `fn tcp_connect_ipv4(address: *const Ipv4Address) Connection!io.IoErr`
+- `fn tcp_listen_ipv6(address: *const Ipv6Address, backlog: usize) Listener!io.IoErr`
+- `fn tcp_connect_ipv6(address: *const Ipv6Address) Connection!io.IoErr`
+- `fn unix_listen(address: *const UnixAddress, backlog: usize) Listener!io.IoErr`: The caller removes the filesystem socket path after closing the listener.
+- `fn unix_connect(address: *const UnixAddress) Connection!io.IoErr`
+- `fn multicast_join_ipv4(descriptor: isize, group: [4]u8, interface: [4]u8) !io.IoErr`: IPv4 multicast membership uses network-order octets for both addresses.
+- `fn multicast_leave_ipv4(descriptor: isize, group: [4]u8, interface: [4]u8) !io.IoErr`
+- `fn multicast_interface_ipv4(descriptor: isize, interface: [4]u8) !io.IoErr`
+- `fn multicast_ttl_ipv4(descriptor: isize, ttl: u8) !io.IoErr`
+- `fn multicast_loop_ipv4(descriptor: isize, enabled: bool) !io.IoErr`: POSIX controls outgoing loopback;
+- `fn listener_accept(listener: *Listener) Connection!io.IoErr`
 - `fn listener_close(listener: *Listener)`
 - `fn connection_close(connection: *Connection)`
-- `fn connection_read(status: *fail.Status, connection: *Connection, destination: []u8) usize`: Reads what is available, up to destination;
-- `fn connection_write(status: *fail.Status, connection: *Connection, source: []const u8) usize`: Writes all of source;
+- `fn connection_read(connection: *Connection, destination: []u8) usize!io.IoErr`: Reads what is available, up to destination;
+- `fn connection_write(connection: *Connection, source: []const u8) !io.IoErr`: Writes all of source.
 - `fn connection_reader(connection: *Connection) io.Reader`
 - `fn connection_writer(connection: *Connection) io.Writer`
-- `fn accept_address(status: *fail.Status, descriptor: isize, address: *Address, nonblocking: bool) isize`: Accepts one connection and records its peer address.
-- `fn try_accept_address(status: *fail.Status, descriptor: isize, address: *Address, nonblocking: bool) Accepted`: Like accept_address on a nonblocking listener, where no pending connection is no failure: -1 with blocked true.
+- `fn accept_address(descriptor: isize, address: *Address, nonblocking: bool) isize!io.IoErr`: Accepts one connection and records its peer address.
+- `fn try_accept_address(descriptor: isize, address: *Address, nonblocking: bool) Accepted!io.IoErr`: Like accept_address on a nonblocking listener, where no pending connection is no failure: -1 with blocked true.
 - `struct Accepted { descriptor: isize, blocked: bool }`
-- `fn local_address(status: *fail.Status, descriptor: isize, address: *Address)`
-- `fn peer_address(status: *fail.Status, descriptor: isize, address: *Address)`
-- `fn send(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize) usize`: Sends what the socket takes now, up to all of bytes;
-- `fn receive(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize) usize`: Receives what is available, up to bytes;
+- `fn local_address(descriptor: isize, address: *Address) !io.IoErr`
+- `fn peer_address(descriptor: isize, address: *Address) !io.IoErr`
+- `fn send(descriptor: isize, bytes: []const u8, flags: usize) usize!io.IoErr`: Sends what the socket takes now, up to all of bytes;
+- `fn receive(descriptor: isize, bytes: []u8, flags: usize) usize!io.IoErr`: Receives what is available, up to bytes;
 - `struct Attempt { count: usize, blocked: bool }`: For nonblocking sockets, where a socket that is not ready is no failure: count is 0 and blocked is true.
-- `fn try_send(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize) Attempt`
-- `fn try_receive(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize) Attempt`
-- `fn send_to(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize, address: []const u8) usize`: Sends one datagram to address;
-- `fn receive_from(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize, address: []u8, address_length: *u32) usize`: Receives one datagram and its sender's address;
-- `fn reuse_address(status: *fail.Status, descriptor: isize, enabled: bool)`
-- `fn no_delay(status: *fail.Status, descriptor: isize, enabled: bool)`: TCP_NODELAY: send small segments at once instead of waiting for the peer's ACK.
-- `fn reuse_port(status: *fail.Status, descriptor: isize, enabled: bool)`: SO_REUSEPORT with kernel load balancing.
-- `fn socket_error(status: *fail.Status, descriptor: isize)`: Completes a nonblocking connect: the connect's failure, read from SO_ERROR.
-- `fn nonblocking(status: *fail.Status, descriptor: isize, enabled: bool)`
-- `fn receive_timeout(status: *fail.Status, descriptor: isize, milliseconds: usize)`
-- `fn send_timeout(status: *fail.Status, descriptor: isize, milliseconds: usize)`
-- `fn would_block(failure: *const fail.Failure) bool`: Whether a failure is a socket timeout or a nonblocking socket that was not ready, rather than a broken connection.
-- `fn poll(status: *fail.Status, descriptors: []PollDescriptor, timeout_milliseconds: i32) usize`: Waits for readiness on descriptors;
-- `fn wait(status: *fail.Status, descriptor: isize, events: i16, timeout_milliseconds: i32) i16`: Waits for events on one descriptor: the events that happened, 0 on timeout.
+- `fn try_send(descriptor: isize, bytes: []const u8, flags: usize) Attempt!io.IoErr`
+- `fn try_receive(descriptor: isize, bytes: []u8, flags: usize) Attempt!io.IoErr`
+- `fn send_to(descriptor: isize, bytes: []const u8, flags: usize, address: []const u8) usize!io.IoErr`: Sends one datagram to address;
+- `fn receive_from(descriptor: isize, bytes: []u8, flags: usize, address: []u8, address_length: *u32) usize!io.IoErr`: Receives one datagram and its sender's address;
+- `fn reuse_address(descriptor: isize, enabled: bool) !io.IoErr`
+- `fn no_delay(descriptor: isize, enabled: bool) !io.IoErr`: TCP_NODELAY: send small segments at once instead of waiting for the peer's ACK.
+- `fn reuse_port(descriptor: isize, enabled: bool) !io.IoErr`: SO_REUSEPORT with kernel load balancing.
+- `fn socket_error(descriptor: isize) !io.IoErr`: Completes a nonblocking connect: the connect's failure, read from SO_ERROR.
+- `fn nonblocking(descriptor: isize, enabled: bool) !io.IoErr`
+- `fn receive_timeout(descriptor: isize, milliseconds: usize) !io.IoErr`
+- `fn send_timeout(descriptor: isize, milliseconds: usize) !io.IoErr`
+- `fn would_block(err: io.IoErr) bool`: Whether err is a socket timeout or a nonblocking socket that was not ready, rather than a broken connection.
+- `fn poll(descriptors: []PollDescriptor, timeout_milliseconds: i32) usize!io.IoErr`: Waits for readiness on descriptors;
+- `fn wait(descriptor: isize, events: i16, timeout_milliseconds: i32) i16!io.IoErr`: Waits for events on one descriptor: the events that happened, 0 on timeout.
 - `fn poll_has(item: *const PollDescriptor, events: i16) bool`
 - `struct Ip { bytes: [16]u8, length: usize, port: u16 }`: The IP of an IPv4 or IPv6 socket address: 4 or 16 bytes in network order, and the port.
 - `fn address_ip(address: *const Address) Ip`
@@ -1800,12 +1799,12 @@ Layer: std
 
 - `struct Ipv4 { a: u8, b: u8, c: u8, d: u8 }`
 - `struct Ipv6 { bytes: [16]u8 }`
-- `fn query_ipv4(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16) []u8`: An A query for name, in arena.
-- `fn query_ipv6(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16) []u8`: An AAAA query for name, in arena, by the rules of query_ipv4.
-- `fn parse_ipv4(arena: *mem.Arena, status: *fail.Status, packet: []const u8, identifier: u16, name: []const u8) []Ipv4`: Complete arena-owned answers, invalidated by rewind/reset/release.
-- `fn parse_ipv6(arena: *mem.Arena, status: *fail.Status, packet: []const u8, identifier: u16, name: []const u8) []Ipv6`
-- `fn resolve_ipv4(arena: *mem.Arena, status: *fail.Status, name: []const u8, server: *const network.Ipv4Address, timeout_milliseconds: i32) []Ipv4`: The server transport address is IPv4;
-- `fn resolve_ipv6(arena: *mem.Arena, status: *fail.Status, name: []const u8, server: *const network.Ipv4Address, timeout_milliseconds: i32) []Ipv6`
+- `fn query_ipv4(arena: *mem.Arena, name: []const u8, identifier: u16) []u8!io.IoErr`: An A query for name, in arena.
+- `fn query_ipv6(arena: *mem.Arena, name: []const u8, identifier: u16) []u8!io.IoErr`: An AAAA query for name, in arena, by the rules of query_ipv4.
+- `fn parse_ipv4(arena: *mem.Arena, packet: []const u8, identifier: u16, name: []const u8) []Ipv4!io.IoErr`: Complete arena-owned answers, invalidated by rewind/reset/release.
+- `fn parse_ipv6(arena: *mem.Arena, packet: []const u8, identifier: u16, name: []const u8) []Ipv6!io.IoErr`
+- `fn resolve_ipv4(arena: *mem.Arena, name: []const u8, server: *const network.Ipv4Address, timeout_milliseconds: i32) []Ipv4!io.IoErr`: The server transport address is IPv4;
+- `fn resolve_ipv6(arena: *mem.Arena, name: []const u8, server: *const network.Ipv4Address, timeout_milliseconds: i32) []Ipv6!io.IoErr`
 
 ## std/net/http
 
@@ -1813,20 +1812,20 @@ Layer: std
 
 - `const CompressMinimum: usize = 1024`: Bodies shorter than this go out as they are: a gzip member has 18 bytes of framing, and small bodies fit one packet either way.
 - `const CompressHeaders: usize = 30`: Extra headers respond_compressed can carry besides Content-Encoding and Vary.
-- `fn respond_compressed(status: *fail.Status, response: *Response, request: *const Request, body: []const u8, options: ResponseOptions, level: u8, encoder: *gzip.Encoder)`: Like respond, with body gzipped at level (1-9) when that helps: the content type compresses (text, JSON, XML, SVG, JavaScript ...
+- `fn respond_compressed(response: *Response, request: *const Request, body: []const u8, options: ResponseOptions, level: u8, encoder: *gzip.Encoder) !io.IoErr`: Like respond, with body gzipped at level (1-9) when that helps: the content type compresses (text, JSON, XML, SVG, JavaScript ...
 - `enum Framing { None, Length, Chunked, Close }`
 - `struct HttpHead { framing: Framing, code: u16, header_length: usize, content_length: usize, keep_alive: bool, chunked: bool }`: Parser offsets are byte positions in the supplied input;
 - `struct Url { scheme: []const u8, host: []const u8, port: u16, target: []const u8, secure: bool }`
-- `fn parse_response(status: *fail.Status, input: []const u8) HttpHead`: Parses a complete response or request head.
-- `fn parse_request(status: *fail.Status, input: []const u8) HttpHead`
-- `fn header(status: *fail.Status, input: []const u8, name: []const u8) []const u8`: The value of the first header field called name, matched without case, in a complete head;
+- `fn parse_response(input: []const u8) HttpHead!parse.ParseErr`: Parses a complete response or request head.
+- `fn parse_request(input: []const u8) HttpHead!parse.ParseErr`
+- `fn header(input: []const u8, name: []const u8) []const u8!io.IoErr`: The value of the first header field called name, matched without case, in a complete head.
 - `struct ChunkReader { phase: ChunkPhase, size: usize, // Decoded bytes so far. total: usize, // A trailer field name being read: its length and whether it can still be // Content-Length or Transfer-Encoding, which trailers must not carry. name_length: usize, maybe_length: bool, maybe_encoding: bool, }`: Incremental chunked body decoding (RFC 9112 7.1) for bodies read in pieces, such as uploads larger than any buffer.
 - `struct ChunkStep { consumed: usize, data: []const u8, done: bool }`: consumed bytes of input were used;
 - `fn chunk_reader() ChunkReader`
-- `fn chunk_step(status: *fail.Status, reader: *ChunkReader, input: []const u8) ChunkStep`: Reads framing from input until it reaches data, the end of the body or the end of input.
-- `fn decode_chunked(arena: *memory.Arena, status: *fail.Status, input: []const u8) Chunked`: Validate the complete wire before allocating or writing decoded payload.
+- `fn chunk_step(reader: *ChunkReader, input: []const u8) ChunkStep!parse.ParseErr`: Reads framing from input until it reaches data, the end of the body or the end of input.
+- `fn decode_chunked(arena: *memory.Arena, input: []const u8) Chunked!parse.ParseErr`: Validate the complete wire before allocating or writing decoded payload.
 - `struct Chunked { value: []u8, consumed: usize }`: A decoded body, and how many input bytes its framing took.
-- `fn parse_url(status: *fail.Status, input: []const u8) Url`
+- `fn parse_url(input: []const u8) Url!parse.ParseErr`: An http or https URL with its host, port and request target.
 - `const StatusOk: u16 = 200`
 - `const StatusCreated: u16 = 201`
 - `const StatusNoContent: u16 = 204`
@@ -1860,60 +1859,60 @@ Layer: std
 - `const StatusPayloadTooLarge: u16 = 413`
 - `const StatusInternalServerError: u16 = 500`
 - `struct Request { raw: []const u8, method: []const u8, target: []const u8, // target before '?', and after it (empty when absent). Both borrow raw. path: []const u8, query: []const u8, body: []const u8, header_length: usize, keep_alive: bool, // Borrowed application state given to serve_stream or an evented start; nil otherwise. context: rawptr, // Path parameters captured by a Routes pattern such as /users/:id. Read // them with param. params: [MaxParams]Header, param_count: usize, }`
-- `struct Response { output: io.Writer, // Optional transport-owned response storage. Both callbacks use output.data. // reserve_body returns exclusive writable storage until commit or handler return. // commit_body queues a copied head followed by the first length body bytes, // and returns the count queued. reserve_body: fn(rawptr, usize) []u8, commit_body: fn(rawptr, *fail.Status, []const u8, usize) usize, reserved: []u8, started: bool, finished: bool, // The request was HEAD: the head is sent with the Content-Length the body // would have, and the body is dropped. head_only: bool, // Preformatted IMF-fixdate for the Date header, kept current by the server // loop. Empty: response_begin reads the clock itself. date: []const u8, // Set by servers that also speak HTTP/3: an Alt-Svc value (RFC 7838) sent // with every response, such as h3=":443"; ma=86400. Empty sends none. alt_svc: []const u8, // The status sent, once the head is written; 0 before. status: u16, // Set by a server that closes the connection after this response: the // head then says Connection: close whatever the options say. closing: bool, // Optional server-owned scratch of at least 8 KiB, reused for every // response: the head and a small body are composed in it. Empty: // response_begin uses its own stack buffer, zeroed on each call. staging: []u8, }`: A response being written.
+- `struct Response { output: io.Writer, // Optional transport-owned response storage. Both callbacks use output.data. // reserve_body returns exclusive writable storage until commit or handler return. // commit_body queues a copied head followed by the first length body bytes, // and returns the count queued. reserve_body: fn(rawptr, usize) []u8, commit_body: fn(rawptr, []const u8, usize) usize!io.IoErr, reserved: []u8, started: bool, finished: bool, // The request was HEAD: the head is sent with the Content-Length the body // would have, and the body is dropped. head_only: bool, // Preformatted IMF-fixdate for the Date header, kept current by the server // loop. Empty: response_begin reads the clock itself. date: []const u8, // Set by servers that also speak HTTP/3: an Alt-Svc value (RFC 7838) sent // with every response, such as h3=":443"; ma=86400. Empty sends none. alt_svc: []const u8, // The status sent, once the head is written; 0 before. status: u16, // Set by a server that closes the connection after this response: the // head then says Connection: close whatever the options say. closing: bool, // Optional server-owned scratch of at least 8 KiB, reused for every // response: the head and a small body are composed in it. Empty: // response_begin uses its own stack buffer, zeroed on each call. staging: []u8, }`: A response being written.
 - `struct Header { name: []const u8, value: []const u8 }`
 - `struct ResponseOptions { status: u16, reason: []const u8, content_type: []const u8, close_connection: bool, // Leaves out the Date header that every response otherwise carries. omit_date: bool, // Extra response headers, written in order. Names must be tokens and values // must not hold CR, LF or NUL; otherwise respond fails with Invalid before // writing anything, so request data cannot inject headers. headers: []const Header, // Set-Cookie headers, written from each Cookie (see set_cookie for what // is refused). A bad cookie fails respond before anything is written. cookies: []const Cookie, }`
-- `struct Server { failed: bool, ended: bool, input: io.Reader, output: io.Writer, storage: []u8, used: usize, consumed: usize, // Copied into every received Request. context: rawptr, }`: After a failure the stream position is lost, so the server stays failed: later receives fail with InvalidState.
+- `struct Server { failed: bool, ended: bool, input: io.Reader, output: io.Writer, storage: []u8, used: usize, consumed: usize, // Copied into every received Request. context: rawptr, }`: After a failure the stream position is lost, so the server stays failed: later receives fail with InvalidInput.
 - `struct Received { request: Request, response: Response, ended: bool }`: A received request and the response to write.
 - `struct Body { output: io.Writer, finished: bool, // A HEAD response: writes succeed and send nothing. discard: bool, // The response's staging, where small chunks are framed; empty: a stack // buffer, zeroed on each write. staging: []u8, }`: A streamed response body.
-- `type Handler = fn(*fail.Status, *Response, *const Request)`: Handles one request: writes the response, and records any failure in status.
+- `type Handler = fn(*Response, *const Request) !io.IoErr`: Handles one request: writes the response.
 - `struct ClientResponse { raw: []u8, body: []u8, status: u16, }`
-- `struct Typed<T> { state: *T, handler: fn(*fail.Status, *Response, *const Request, *T), }`: Typed application state.
+- `struct Typed<T> { state: *T, handler: fn(*Response, *const Request, *T) !io.IoErr, }`: Typed application state.
 - `struct Binding { handler: Handler, context: rawptr }`
 - `fn bind<T>(typed: *Typed<T>) Binding`
-- `struct TypedRoute<T> { method: []const u8, pattern: []const u8, handler: fn(*fail.Status, *Response, *const Request, *T), }`: Typed router.
-- `struct Routes<T> { routes: []TypedRoute<T>, count: usize, state: *T, fallback: fn(*fail.Status, *Response, *const Request, *T), }`
+- `struct TypedRoute<T> { method: []const u8, pattern: []const u8, handler: fn(*Response, *const Request, *T) !io.IoErr, }`: Typed router.
+- `struct Routes<T> { routes: []TypedRoute<T>, count: usize, state: *T, fallback: fn(*Response, *const Request, *T) !io.IoErr, }`
 - `fn typed_routes<T>(storage: []TypedRoute<T>, state: *T) Routes<T>`: Route storage is caller-supplied;
-- `fn add<T>(status: *fail.Status, router: *Routes<T>, method: []const u8, pattern: []const u8, handler: fn(*fail.Status, *Response, *const Request, *T))`: Adds a route.
-- `fn serve_routes<T>(status: *fail.Status, router: *Routes<T>, response: *Response, request: *const Request)`: Runs the matching route.
+- `fn add<T>(router: *Routes<T>, method: []const u8, pattern: []const u8, handler: fn(*Response, *const Request, *T) !io.IoErr) !io.IoErr`: Adds a route.
+- `fn serve_routes<T>(router: *Routes<T>, response: *Response, request: *const Request) !io.IoErr`: Runs the matching route.
 - `fn bind_routes<T>(router: *Routes<T>) Binding`: Binds a router for a server start, like bind.
 - `fn match_path(pattern: []const u8, path: []const u8, request: *Request) bool`: Matches path against pattern segment by segment, capturing :name segments into request.params.
-- `fn param(status: *fail.Status, request: *const Request, name: []const u8) []const u8`: Path parameter captured by a Routes pattern, still percent-encoded;
+- `fn param(request: *const Request, name: []const u8) []const u8!io.IoErr`: Path parameter captured by a Routes pattern, still percent-encoded.
 - `fn server(input: io.Reader, output: io.Writer, storage: []u8) Server`
 - `enum FrameStatus { Incomplete, Ready, Invalid, Capacity }`
 - `struct FrameResult { status: FrameStatus, request: Request, consumed: usize, offset: usize, total: usize, expect_continue: bool, // frame_request_head: the declared Content-Length, or chunked. body_length: usize, chunked: bool, }`: On Incomplete with a complete head, total is the request's full length and expect_continue says the client waits for 100 Continue before ...
 - `fn frame_request(input: []const u8, capacity: usize) FrameResult`: Frames one request from bytes already buffered, with no I/O, for callers that own their sockets (event loops).
 - `fn frame_request_decoding(input: []u8, capacity: usize) FrameResult`: Like frame_request, and also takes Transfer-Encoding: chunked bodies.
 - `fn frame_request_head(input: []const u8, capacity: usize) FrameResult`: Frames only a request's head, for bodies read separately (see ChunkReader).
-- `fn receive(status: *fail.Status, state: *Server) Received`: The next request.
+- `fn receive(state: *Server) Received!io.IoErr`: The next request.
 - `fn status_reason(status: u16) []const u8`: Reason phrase for status, or "Status" for codes without a registered one.
 - `fn status_has_body(status: u16) bool`: Responses with these codes never carry content (RFC 9110 6.4.1): the head has no Content-Type, Content-Length or Transfer-Encoding.
 - `const DateLength: usize = 29`
 - `fn format_date(destination: []u8, unix_seconds: i64) []u8`: IMF-fixdate (RFC 9110 5.6.7) for unix_seconds, such as "Sun, 06 Nov 1994 08:49:37 GMT", into the first DateLength bytes of destination.
-- `fn parse_date(status: *fail.Status, text: []const u8) i64`: Unix seconds from an IMF-fixdate, as in If-Modified-Since.
-- `fn request_header(status: *fail.Status, request: *const Request, name: []const u8) []const u8`: The value of the first request header named name (ASCII case-insensitive), borrowing request.raw;
-- `fn cookie(status: *fail.Status, request: *const Request, name: []const u8) []const u8`: Value of cookie name from the request's Cookie headers (RFC 6265 5.4).
-- `fn cookie_in(status: *fail.Status, header_value: []const u8, name: []const u8) []const u8`: The cookie named name in one Cookie header value, such as "a=1;
+- `fn parse_date(text: []const u8) i64!parse.ParseErr`: Unix seconds from an IMF-fixdate, as in If-Modified-Since.
+- `fn request_header(request: *const Request, name: []const u8) []const u8!io.IoErr`: The value of the first request header named name (ASCII case-insensitive), borrowing request.raw;
+- `fn cookie(request: *const Request, name: []const u8) []const u8!io.IoErr`: Value of cookie name from the request's Cookie headers (RFC 6265 5.4).
+- `fn cookie_in(header_value: []const u8, name: []const u8) []const u8!io.IoErr`: The cookie named name in one Cookie header value, such as "a=1;
 - `enum SameSite { Default, Lax, Strict, None }`
 - `const CookieLength: usize = 1024`: A Set-Cookie value.
 - `struct Cookie { name: []const u8, value: []const u8, path: []const u8, domain: []const u8, max_age: i64, expires: i64, secure: bool, http_only: bool, same_site: SameSite, partitioned: bool, }`
-- `fn set_cookie(status: *fail.Status, destination: []u8, item: Cookie) []u8`: Writes the Set-Cookie header value for cookie into destination.
-- `fn sse_event(status: *fail.Status, destination: []u8, event: []const u8, id: []const u8, data: []const u8) []u8`: One Server-Sent Events message: optional event and id fields, a data line for each line of data (CR, LF or CRLF), then a blank line.
-- `fn form_decode(status: *fail.Status, destination: []u8, source: []const u8) []u8`: application/x-www-form-urlencoded value into destination: '+' becomes a space and %XX a byte.
-- `fn form_field(status: *fail.Status, form: []const u8, name: []const u8) []const u8`: Raw, still-encoded value of the first field named name in an urlencoded form or query string;
+- `fn set_cookie(destination: []u8, item: Cookie) []u8!io.IoErr`: Writes the Set-Cookie header value for cookie into destination.
+- `fn sse_event(destination: []u8, event: []const u8, id: []const u8, data: []const u8) []u8!io.IoErr`: One Server-Sent Events message: optional event and id fields, a data line for each line of data (CR, LF or CRLF), then a blank line.
+- `fn form_decode(destination: []u8, source: []const u8) []u8!parse.ParseErr`: application/x-www-form-urlencoded value into destination: '+' becomes a space and %XX a byte.
+- `fn form_field(form: []const u8, name: []const u8) []const u8!io.IoErr`: Raw, still-encoded value of the first field named name in an urlencoded form or query string;
 - `fn query_has(request: *const Request, name: []const u8) bool`: Whether the query has a parameter called name, with or without a value ("?debug" and "?debug=1" both have debug).
-- `fn query_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) []u8`: Decoded query parameter name into destination;
-- `fn form_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) []u8`: Decoded urlencoded body field name into destination, by the rules of query_value.
+- `fn query_value(request: *const Request, name: []const u8, destination: []u8) []u8!io.IoErr`: Decoded query parameter name into destination.
+- `fn form_value(request: *const Request, name: []const u8, destination: []u8) []u8!io.IoErr`: Decoded urlencoded body field name into destination, by the rules of query_value.
 - `fn body_buffer(response: *Response, capacity: usize) []u8`: Returns exclusive transport-owned body storage, or empty when unavailable.
-- `fn respond_buffered(status: *fail.Status, response: *Response, length: usize, options: ResponseOptions)`: Commit the initialized prefix of body_buffer without copying its body.
-- `fn respond(status: *fail.Status, response: *Response, body: []const u8, options: ResponseOptions)`: Writes the whole response: head and body.
-- `fn respond_stream(status: *fail.Status, response: *Response, options: ResponseOptions) Body`: Writes the head of a chunked response;
+- `fn respond_buffered(response: *Response, length: usize, options: ResponseOptions) !io.IoErr`: Commit the initialized prefix of body_buffer without copying its body.
+- `fn respond(response: *Response, body: []const u8, options: ResponseOptions) !io.IoErr`: Writes the whole response: head and body.
+- `fn respond_stream(response: *Response, options: ResponseOptions) Body!io.IoErr`: Writes the head of a chunked response;
 - `fn body_writer(body: *Body) io.Writer`: Borrows a stable Body slot: do not move or destroy it during the writer's lifetime.
-- `fn body_finish(status: *fail.Status, body: *Body)`: Ends the body with the last chunk.
+- `fn body_finish(body: *Body) !io.IoErr`: Ends the body with the last chunk.
 - `fn body_abort(body: *Body)`: Stops the body without the last chunk, so the client sees it cut short.
-- `fn serve_stream(status: *fail.Status, input: io.Reader, output: io.Writer, storage: []u8, handler: Handler, context: rawptr)`: Serves HTTP/1.1 on one stream until the client closes or a request fails, one request at a time on the calling thread.
-- `fn client_do(arena: *memory.Arena, status: *fail.Status, input: io.Reader, output: io.Writer, method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse`: Complete exchange;
-- `fn client_do_connection(arena: *memory.Arena, status: *fail.Status, connection: *network.Connection, method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse`
+- `fn serve_stream(input: io.Reader, output: io.Writer, storage: []u8, handler: Handler, context: rawptr) !io.IoErr`: Serves HTTP/1.1 on one stream until the client closes or a request fails, one request at a time on the calling thread.
+- `fn client_do(arena: *memory.Arena, input: io.Reader, output: io.Writer, method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse!io.IoErr`: Complete exchange;
+- `fn client_do_connection(arena: *memory.Arena, connection: *network.Connection, method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse!io.IoErr`
 - `fn write_request(arena: *memory.Arena, method: []const u8, target: []const u8, host: []const u8, body: []const u8) []u8`: A complete HTTP/1.1 request with Connection: close, in arena.
 - `fn write_response(arena: *memory.Arena, code: u16, reason: []const u8, content_type: []const u8, body: []const u8) []u8`: A complete HTTP/1.1 response with Connection: close, in arena.
 - `struct Bucket { key: u64, tokens: i64, updated: i64, used: bool }`: Token buckets keyed by a 64-bit client key (see ip_key), for rate limits such as "5 logins per minute per address".
@@ -1924,13 +1923,13 @@ Layer: std
 - `fn ip_key(ip: []const u8, purpose: u64) u64`: A key for ip bytes (IPv4 or IPv6) and a purpose: FNV-1a over both, so one limiter table can hold several limits.
 - `struct Part { // From Content-Disposition: the field name, and the file name when the // part is a file. Quotes are removed; backslash escapes are kept as sent. name: []const u8, filename: []const u8, has_filename: bool, // Empty means text/plain. content_type: []const u8, body: []const u8, }`
 - `struct Parts { delimiter: [74]u8, delimiter_length: usize, rest: []const u8, done: bool, failed: bool, // Set by a next_part call that returns no part: after the closing // delimiter, or after a failure. ended: bool, }`
-- `fn multipart(status: *fail.Status, request: *const Request) Parts`: Starts reading a multipart/form-data body.
-- `fn next_part(status: *fail.Status, reader: *Parts) Part`
-- `fn text(status: *fail.Status, response: *Response, code: u16, body: []const u8)`: A plain-text body with status.
-- `fn json(status: *fail.Status, response: *Response, code: u16, body: []const u8)`: A JSON body with status, not cached.
-- `fn redirect(status: *fail.Status, response: *Response, location: []const u8, cookies: []const Cookie)`: 303 See Other to location, setting cookies (none is fine): the answer to a form post.
-- `fn page_writer(status: *fail.Status, response: *Response, fallback: []u8) html.Writer`: A Writer for an HTML page (see page): over the response's send buffer when it is free, so the page goes out without a copy, else over ...
-- `fn page(status: *fail.Status, response: *Response, code: u16, rendered: *const html.Writer)`: Sends the page from page_writer with code as text/html, not cached, with Content-Security-Policy default-src 'self' and ...
+- `fn multipart(request: *const Request) Parts!io.IoErr`: Starts reading a multipart/form-data body.
+- `fn next_part(reader: *Parts) Part!io.IoErr`
+- `fn text(response: *Response, code: u16, body: []const u8) !io.IoErr`: A plain-text body with status code.
+- `fn json(response: *Response, code: u16, body: []const u8) !io.IoErr`: A JSON body with status code, not cached.
+- `fn redirect(response: *Response, location: []const u8, cookies: []const Cookie) !io.IoErr`: 303 See Other to location, setting cookies (none is fine): the answer to a form post.
+- `fn page_writer(response: *Response, fallback: []u8) html.Writer`: A Writer for an HTML page (see page): over the response's send buffer when it is free, so the page goes out without a copy, else over ...
+- `fn page(response: *Response, code: u16, rendered: *const html.Writer) !io.IoErr`: Sends the page from page_writer with code as text/html, not cached, with Content-Security-Policy default-src 'self' and ...
 - `struct Asset { // URL path below the mount, without a leading slash: "css/app.css". path: []const u8, content_type: []const u8, body: []const u8, // Empty when gzip would not be smaller. gzip: []const u8, // Quoted strong validator: "\"0123456789abcdef\"". etag: []const u8, // Unix seconds for Last-Modified, or 0 to leave it out. modified: i64, }`
 - `struct Assets { items: []Asset, count: usize }`: Assets in caller storage;
 - `fn content_type(name: []const u8) []const u8`: Content type for a file name by its extension, ASCII case-insensitive: "app.CSS" is text/css.
@@ -1938,12 +1937,12 @@ Layer: std
 - `fn assets_of(arena: *memory.Arena, pairs: ...[]const u8) Assets`: Orders assets by path so find_asset can search them.
 - `fn sort_assets(assets: *Assets)`
 - `fn find_asset(assets: *const Assets, path: []const u8) *const Asset`: The asset at path, or nil.
-- `fn load_directory(arena: *memory.Arena, status: *fail.Status, root: []const u8, storage: []Asset, maximum: usize) Assets`: Every regular file below root, recursively, read into arena as assets in storage, sorted.
+- `fn load_directory(arena: *memory.Arena, root: []const u8, storage: []Asset, maximum: usize) Assets!io.IoErr`: Every regular file below root, recursively, read into arena as assets in storage, sorted.
 - `fn accepts_encoding(request: *const Request, coding: []const u8) bool`: Whether the request's Accept-Encoding allows coding (RFC 9110 12.5.3): it is listed, or "*" is, with a q-value above zero.
 - `fn etag_matches(request: *const Request, etag: []const u8) bool`: If-None-Match against etag: "*" or a listed tag, comparing weakly (W/ prefixes ignored), as RFC 9110 13.1.2 requires for GET and HEAD.
 - `struct ByteRange { start: usize, end: usize }`: A single byte range of a representation, as a half-open interval.
-- `fn byte_range(status: *fail.Status, request: *const Request, length: usize) ByteRange`: The byte range a Range header asks for in a representation length bytes long (RFC 9110 14.1.2): bytes=first-last, bytes=first- or ...
-- `fn serve_asset(status: *fail.Status, response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8)`: Answers request with asset: 304 when If-None-Match matches (or, without If-None-Match, when If-Modified-Since is not older than modified);
+- `fn byte_range(request: *const Request, length: usize) ByteRange!io.IoErr`: The byte range a Range header asks for in a representation length bytes long (RFC 9110 14.1.2): bytes=first-last, bytes=first- or ...
+- `fn serve_asset(response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8) !io.IoErr`: Answers request with asset: 304 when If-None-Match matches (or, without If-None-Match, when If-Modified-Since is not older than modified);
 
 ## std/net/http/evented
 
@@ -1962,34 +1961,34 @@ Layer: std
 - `struct Transport { data: rawptr, open: fn(rawptr, isize) rawptr, handshake: fn(rawptr) TransportIo, read: fn(rawptr, []u8) TransportIo, write: fn(rawptr, []const u8) TransportIo, close: fn(rawptr), // The application protocol the handshake agreed on (TLS ALPN), such as // "h2"; nil when the transport has none. protocol: fn(rawptr) []const u8, // The transport calls C code that keeps per-thread state; start then // requires Config.spawner. needs_native_threads: bool, }`: A byte-stream layer over each accepted nonblocking socket, such as TLS.
 - `fn default_config() Config`
 - `fn storage_size(config: Config, worker_count: usize) usize`: Bytes of backing storage start needs for this many workers.
-- `struct Worker { thread: *threading.Thread, // Handle from Config.spawner, instead of thread. native: rawptr, listener: *network.Listener, // Set by start_shared: this worker's own SO_REUSEPORT listener. own_listener: network.Listener, handler: http.Handler, context: rawptr, config: Config, connections: []Connection, free: []usize, free_count: usize, // Connections whose requests finish after this pass's events (later). later: []usize, later_count: usize, later_done: usize, // One past the highest slot ever taken. Free slots are reused last in, // first out, so scans over connections stop here, not at the capacity. slots_used: usize, send_pool: SendPool, upload_pool: SendPool, queue: event.Queue, // False while every slot is busy: the level-triggered listener would // otherwise wake the loop continuously. listening: bool, scratch: *mem.Arena, // Set by run and later on first use, and by open_stream: the loop reaches // job and stream code only through these, so a server that never defers or // streams does not link it. on_deferred: fn(*Worker, usize) bool, on_job_done: fn(*Worker, usize), on_later: fn(*Worker), on_deliver: fn(*Worker, usize, Post, []const u8), // Where response heads are composed: 8 KiB, reused by every response this // worker writes, so none zeroes a buffer of its own. head_staging: []u8, // Every slot's input and output buffers, receive_size and send_size each. slot_input: []u8, slot_output: []u8, // Job storage, job_stride bytes per slot. A slot's job arena is made on // its first job, so idle slots leave their pages untouched. job_bytes: []u8, job_stride: usize, // Why the loop stopped, reported by join. error: fail.Status, // The worker's internal calls share io and handler calls share request. // Each is cleared after a failure is handled, so the next call starts // clean and a call that succeeds costs no status. io: fail.Status, request: fail.Status, stopping: sync.AtomicU32, // Counters are written by the worker only; read them after join. accepted: u64, requests: u64, rejected: u64, // Connections closed to make room, and connections refused with 503. evicted: u64, refused: u64, id: u32, waker: event.Waker, inbox: Inbox, // Jobs submitted and not yet finished; only the worker changes it. jobs_running: usize, // Connections in regular slots, at most connections_per_worker, and // clients parked in reserve slots. serving: usize, parked: usize, // All workers started together, and whether this one has no regular slot // free: on a shared listener, a full worker leaves accepting to the others. group: []Worker, full: sync.AtomicU32, // Current IMF-fixdate for Date headers, refreshed once per loop pass. date: [http.DateLength]u8, date_second: i64, // Workspace for respond_compressed; nil when Config.compress_level is zero. encoder: *gzip.Encoder, // The request arena; nil when Config.request_arena_size is zero. request_arena: *mem.Arena, h2: H2Pool, // HTTP/3: the UDP socket, QUIC listener, milliseconds to its next timer, // the QUIC connections' slots, and the Alt-Svc value for TCP responses. udp: isize, quic_listener: rawptr, quic_timer: i64, h3_connections: []usize, h3_count: usize, alt_svc: [48]u8, alt_svc_length: usize, }`
-- `fn start(arena: *mem.Arena, status: *fail.Status, workers: []Worker, listener: *network.Listener, config: Config, handler: http.Handler, context: rawptr) usize`: Starts one event loop per worker, all accepting from listener (made nonblocking here).
-- `fn start_shared(arena: *mem.Arena, status: *fail.Status, workers: []Worker, address: network.Ipv4Address, backlog: usize, config: Config, handler: http.Handler, context: rawptr) usize`: Like start, but every worker owns a listener on address with SO_REUSEPORT, so the kernel spreads new connections across workers instead of ...
+- `struct Worker { thread: *threading.Thread, // Handle from Config.spawner, instead of thread. native: rawptr, listener: *network.Listener, // Set by start_shared: this worker's own SO_REUSEPORT listener. own_listener: network.Listener, handler: http.Handler, context: rawptr, config: Config, connections: []Connection, free: []usize, free_count: usize, // Connections whose requests finish after this pass's events (later). later: []usize, later_count: usize, later_done: usize, // One past the highest slot ever taken. Free slots are reused last in, // first out, so scans over connections stop here, not at the capacity. slots_used: usize, send_pool: SendPool, upload_pool: SendPool, queue: event.Queue, // False while every slot is busy: the level-triggered listener would // otherwise wake the loop continuously. listening: bool, scratch: *mem.Arena, // Set by run and later on first use, and by open_stream: the loop reaches // job and stream code only through these, so a server that never defers or // streams does not link it. on_deferred: fn(*Worker, usize) bool, on_job_done: fn(*Worker, usize), on_later: fn(*Worker), on_deliver: fn(*Worker, usize, Post, []const u8), // Where response heads are composed: 8 KiB, reused by every response this // worker writes, so none zeroes a buffer of its own. head_staging: []u8, // Every slot's input and output buffers, receive_size and send_size each. slot_input: []u8, slot_output: []u8, // Job storage, job_stride bytes per slot. A slot's job arena is made on // its first job, so idle slots leave their pages untouched. job_bytes: []u8, job_stride: usize, // Why the loop stopped, reported by join. stop_failed: bool, stop_error: io.IoErr, // Set by invoke when the handler call just made failed; handled clears it. request_failed: bool, request_error: io.IoErr, stopping: sync.AtomicU32, // Counters are written by the worker only; read them after join. accepted: u64, requests: u64, rejected: u64, // Connections closed to make room, and connections refused with 503. evicted: u64, refused: u64, id: u32, waker: event.Waker, inbox: Inbox, // Jobs submitted and not yet finished; only the worker changes it. jobs_running: usize, // Connections in regular slots, at most connections_per_worker, and // clients parked in reserve slots. serving: usize, parked: usize, // All workers started together, and whether this one has no regular slot // free: on a shared listener, a full worker leaves accepting to the others. group: []Worker, full: sync.AtomicU32, // Current IMF-fixdate for Date headers, refreshed once per loop pass. date: [http.DateLength]u8, date_second: i64, // Workspace for respond_compressed; nil when Config.compress_level is zero. encoder: *gzip.Encoder, // The request arena; nil when Config.request_arena_size is zero. request_arena: *mem.Arena, h2: H2Pool, // HTTP/3: the UDP socket, QUIC listener, milliseconds to its next timer, // the QUIC connections' slots, and the Alt-Svc value for TCP responses. udp: isize, quic_listener: rawptr, quic_timer: i64, h3_connections: []usize, h3_count: usize, alt_svc: [48]u8, alt_svc_length: usize, }`
+- `fn start(arena: *mem.Arena, workers: []Worker, listener: *network.Listener, config: Config, handler: http.Handler, context: rawptr) !io.IoErr`: Starts one event loop per worker, all accepting from listener (made nonblocking here).
+- `fn start_shared(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address, backlog: usize, config: Config, handler: http.Handler, context: rawptr) !io.IoErr`: Like start, but every worker owns a listener on address with SO_REUSEPORT, so the kernel spreads new connections across workers instead of ...
 - `fn local_port(workers: []Worker) u16`: Local port of the first worker's listener, or 0.
 - `fn stop(workers: []Worker)`: Asks every worker to finish its current loop pass (at most about 100 ms).
-- `fn join(status: *fail.Status, workers: []Worker)`: Always joins every worker.
-- `fn send(status: *fail.Status, workers: []Worker, peer: Peer, payload: []const u8, binary: bool)`: Queues payload for peer from any thread: a WebSocket text frame (binary frame when binary), or a chunk of an open stream.
-- `fn publish(status: *fail.Status, workers: []Worker, topic: u64, payload: []const u8, binary: bool)`: Queues payload for every stream and WebSocket opened with topic, on every worker.
-- `fn close_peer(status: *fail.Status, workers: []Worker, peer: Peer)`: Ends a stream (final chunk) or WebSocket (close frame 1000), then closes it.
+- `fn join(workers: []Worker) !io.IoErr`: Always joins every worker.
+- `fn send(workers: []Worker, peer: Peer, payload: []const u8, binary: bool) !io.IoErr`: Queues payload for peer from any thread: a WebSocket text frame (binary frame when binary), or a chunk of an open stream.
+- `fn publish(workers: []Worker, topic: u64, payload: []const u8, binary: bool) !io.IoErr`: Queues payload for every stream and WebSocket opened with topic, on every worker.
+- `fn close_peer(workers: []Worker, peer: Peer) !io.IoErr`: Ends a stream (final chunk) or WebSocket (close frame 1000), then closes it.
 - `fn client_ip(response: *http.Response) network.Ip`: The client's IP and port for an evented response;
-- `fn respond_compressed(status: *fail.Status, response: *http.Response, request: *const http.Request, body: []const u8, options: http.ResponseOptions)`: http.respond_compressed with the worker's encoder at Config.compress_level: body is gzipped when the client accepts it and that helps.
+- `fn respond_compressed(response: *http.Response, request: *const http.Request, body: []const u8, options: http.ResponseOptions) !io.IoErr`: http.respond_compressed with the worker's encoder at Config.compress_level: body is gzipped when the client accepts it and that helps.
 - `fn arena(response: *http.Response) *mem.Arena`: Scratch for the current handler, in the worker's request arena: allocate from it and never free.
 - `fn worker_index(response: *http.Response) usize`: Which of the started workers runs this handler, from 0: an index into per-worker state, such as one database connection each, which then ...
-- `fn serve(arena: *mem.Arena, status: *fail.Status, workers: []Worker, address: network.Ipv4Address, config: Config, handler: http.Handler, context: rawptr)`: Runs the server until SIGINT or SIGTERM: watches the signals first (before any thread starts, as std/process/signal requires), starts ...
+- `fn serve(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address, config: Config, handler: http.Handler, context: rawptr) !io.IoErr`: Runs the server until SIGINT or SIGTERM: watches the signals first (before any thread starts, as std/process/signal requires), starts ...
 - `fn job<T>(response: *http.Response) *T`: Job storage for run, zeroed, in the connection's job arena: copy what the work needs into it.
-- `fn run<J>(status: *fail.Status, response: *http.Response, data: *J, work: fn(*J), finish: fn(*fail.Status, *http.Response, *const http.Request, *J))`
-- `fn later<J>(status: *fail.Status, response: *http.Response, data: *J, finish: fn(*fail.Status, *http.Response, *const http.Request, *J))`: Finishes the request on this worker once every connection that is ready now has had its turn: finish(response, request, data) runs after ...
-- `fn receive_body<J>(status: *fail.Status, response: *http.Response, data: *J, chunk: fn(*J, []const u8) bool, finish: fn(*fail.Status, *http.Response, *const http.Request, *J, BodyEnd))`: In Config.large_body: reads the request body as it arrives instead of buffering it.
-- `fn open_stream(status: *fail.Status, response: *http.Response, options: http.ResponseOptions, topic: u64) Peer`
-- `fn upgrade(status: *fail.Status, response: *http.Response, request: *const http.Request, topic: u64) Peer`: Answers a WebSocket upgrade request (RFC 6455 4.2) with 101 and switches the connection to WebSocket frames;
+- `fn run<J>(response: *http.Response, data: *J, work: fn(*J), finish: fn(*http.Response, *const http.Request, *J) !io.IoErr) !io.IoErr`: Hands the request to Config.pool: work(data) runs on a pool thread, then finish answers the request on the worker thread with a fresh ...
+- `fn later<J>(response: *http.Response, data: *J, finish: fn(*http.Response, *const http.Request, *J) !io.IoErr) !io.IoErr`: Finishes the request on this worker once every connection that is ready now has had its turn: finish(response, request, data) runs after ...
+- `fn receive_body<J>(response: *http.Response, data: *J, chunk: fn(*J, []const u8) bool, finish: fn(*http.Response, *const http.Request, *J, BodyEnd) !io.IoErr) !io.IoErr`: In Config.large_body: reads the request body as it arrives instead of buffering it.
+- `fn open_stream(response: *http.Response, options: http.ResponseOptions, topic: u64) Peer!io.IoErr`: Starts a chunked response that stays open after the handler returns, such as text/event-stream.
+- `fn upgrade(response: *http.Response, request: *const http.Request, topic: u64) Peer!io.IoErr`: Answers a WebSocket upgrade request (RFC 6455 4.2) with 101 and switches the connection to WebSocket frames;
 - `const Http2Streams: usize = 100`
-- `struct Http2 { storage_size: fn(Config) usize, valid: fn(Config) bool, start: fn(*mem.Arena, *Worker), serve: fn(*Worker, usize) bool, begin: fn(*Worker, usize) bool, close_all: fn(*Worker, *Connection), release: fn(*Worker, *Connection), job_done: fn(*Worker, usize), deliver: fn(*Worker, *Connection, Post, []const u8), job: fn(*Connection) *mem.Arena, run: fn(*fail.Status, *Connection, rawptr, fn(rawptr), fn(*fail.Status, *http.Response, *const http.Request, rawptr)), receive_body: fn(*fail.Status, *Connection, *http.Response, rawptr, fn(rawptr, []const u8) bool, fn(*fail.Status, *http.Response, *const http.Request, rawptr, BodyEnd)), open_stream: fn(*fail.Status, *Connection, *http.Response, http.ResponseOptions, u64) Peer, upgrade: fn(*fail.Status, *Connection, *http.Response, u64) Peer, }`: HTTP/2 for Config.http2: the calls the server makes into this file.
+- `struct Http2 { storage_size: fn(Config) usize, valid: fn(Config) bool, start: fn(*mem.Arena, *Worker), serve: fn(*Worker, usize) bool, begin: fn(*Worker, usize) bool, close_all: fn(*Worker, *Connection), release: fn(*Worker, *Connection), job_done: fn(*Worker, usize), deliver: fn(*Worker, *Connection, Post, []const u8), job: fn(*Connection) *mem.Arena, run: fn(*Connection, rawptr, fn(rawptr), fn(*http.Response, *const http.Request, rawptr) !io.IoErr) !io.IoErr, receive_body: fn(*Connection, *http.Response, rawptr, fn(rawptr, []const u8) bool, fn(*http.Response, *const http.Request, rawptr, BodyEnd) !io.IoErr) !io.IoErr, open_stream: fn(*Connection, *http.Response, http.ResponseOptions, u64) Peer!io.IoErr, upgrade: fn(*Connection, *http.Response, u64) Peer!io.IoErr, }`: HTTP/2 for Config.http2: the calls the server makes into this file.
 - `fn http2() Http2`: HTTP/2 for Config.http2: prior-knowledge cleartext clients and TLS clients whose ALPN chose "h2".
 - `enum QuicStatus { Ok, WouldBlock, End, Failed }`
 - `struct QuicIo { count: usize, status: QuicStatus }`
 - `struct QuicStream { handle: rawptr, id: u64, unidirectional: bool }`: An accepted stream;
 - `struct Quic { data: rawptr, // A listener over a bound nonblocking UDP socket, or nil. listen: fn(rawptr, isize) rawptr, // Processes network I/O and timers; milliseconds to the next timer or -1. handle_events: fn(rawptr) i64, accept_connection: fn(rawptr) rawptr, accept_stream: fn(rawptr) QuicStream, // A new server unidirectional stream on a connection, or nil. open_stream: fn(rawptr) rawptr, // End: the peer finished the stream; Failed: it was reset or broke. read: fn(rawptr, []u8) QuicIo, // Writes what fits; true concludes the stream after source. write: fn(rawptr, []const u8, bool) QuicIo, writable: fn(rawptr) usize, reset: fn(rawptr, u64), closed: fn(rawptr) bool, // Frees a stream handle. free: fn(rawptr), // Closes a connection with an application error code and frees it. close: fn(rawptr, u64), // The peer's sockaddr into the buffer; its length or 0. peer: fn(rawptr, []u8) usize, close_listener: fn(rawptr), }`: A QUIC server stack, like Transport for TLS.
-- `struct Http3 { storage_size: fn(Config) usize, valid: fn(Config) bool, start: fn(*mem.Arena, *fail.Status, *Worker), close: fn(*Worker, *Connection), poll: fn(*Worker), stop: fn(*Worker), }`: HTTP/3 for Config.http3: the calls the server makes into this file.
+- `struct Http3 { storage_size: fn(Config) usize, valid: fn(Config) bool, start: fn(*mem.Arena, *Worker) !io.IoErr, close: fn(*Worker, *Connection), poll: fn(*Worker), stop: fn(*Worker), }`: HTTP/3 for Config.http3: the calls the server makes into this file.
 - `fn http3() Http3`: HTTP/3 for Config.http3, on a UDP socket at the TCP listener's address.
 
 ## std/net/http/evented/tls
@@ -1997,8 +1996,8 @@ Layer: std
 Layer: std
 
 - `fn transport(context: provider.Context) evented.Transport`
-- `fn offer_http2(status: *fail.Status, context: provider.Context)`: Offers HTTP/2 through ALPN on context;
-- `fn quic_context(arena: *mem.Arena, status: *fail.Status, certificate: []const u8, key: []const u8) provider.Context`: A QUIC server context offering "h3" through ALPN, from PEM files.
+- `fn offer_http2(context: provider.Context) !io.IoErr`: Offers HTTP/2 through ALPN on context;
+- `fn quic_context(arena: *mem.Arena, certificate: []const u8, key: []const u8) provider.Context!io.IoErr`: A QUIC server context offering "h3" through ALPN, from PEM files.
 - `fn quic(context: provider.Context) evented.Quic`: The QUIC stack for Config.quic.
 
 ## std/net/http/hpack
@@ -2048,9 +2047,9 @@ Layer: std
 - `struct Shared { sessions: versions.Shared }`: Shared by the workers: forget marks every cache stale, and each empties itself when it notices.
 - `struct New { token: []const u8, csrf: []const u8, cookie: http.Cookie }`: A new session to store: token, csrf, and the Set-Cookie value.
 - `fn token(request: *const http.Request) []const u8`: The request's session token, or empty when it has none of the right form.
-- `fn cached(status: *fail.Status, cache: *Cache, shared: *Shared, token: []const u8, now: i64) Session`: The session for token from the cache: a store answer for it that is unexpired at now and not forgotten since.
-- `fn remember(status: *fail.Status, cache: *Cache, token: []const u8, user: i64, csrf: []const u8, data: []const u8, expires: i64) Session`: Caches what the store returned for token and returns it as a Session.
-- `fn start(arena: *mem.Arena, status: *fail.Status, seconds: i64) New`: A fresh token and CSRF secret in arena, and the cookie that carries the token for a session of seconds (HttpOnly, SameSite=Lax, Path=/) ...
+- `fn cached(cache: *Cache, shared: *Shared, token: []const u8, now: i64) Session!io.IoErr`: The session for token from the cache: a store answer for it that is unexpired at now and not forgotten since.
+- `fn remember(cache: *Cache, token: []const u8, user: i64, csrf: []const u8, data: []const u8, expires: i64) Session!io.IoErr`: Caches what the store returned for token and returns it as a Session.
+- `fn start(arena: *mem.Arena, seconds: i64) New!io.IoErr`: A fresh token and CSRF secret in arena, and the cookie that carries the token for a session of seconds (HttpOnly, SameSite=Lax, Path=/) ...
 - `fn forget(shared: *Shared) http.Cookie`: After the app deleted a session from its store: every worker's cache forgets what it holds.
 - `fn csrf_ok(session: *const Session, presented: []const u8) bool`: Whether presented (a form field or header) is the session's CSRF secret, compared in constant time.
 
@@ -2063,23 +2062,23 @@ Layer: std
 - `type Certificate = provider.Certificate`
 - `type Want = provider.Want`: What a nonblocking connection waits for before the call can go on, and a read or write: the bytes moved, or what the connection waits for.
 - `type Attempt = provider.Attempt`
-- `fn set_alpn_protocols(status: *fail.Status, connection: Connection, protocols: []const u8)`: The provider copies the protocol wire bytes during this call.
-- `fn server_alpn(status: *fail.Status, context: Context, preference: *const []const u8)`: Server ALPN: each handshake picks the first protocol of preference (wire format, such as "\x02h2\x08http/1.1") the client offers.
+- `fn set_alpn_protocols(connection: Connection, protocols: []const u8) !io.IoErr`: The provider copies the protocol wire bytes during this call.
+- `fn server_alpn(context: Context, preference: *const []const u8) !io.IoErr`: Server ALPN: each handshake picks the first protocol of preference (wire format, such as "\x02h2\x08http/1.1") the client offers.
 - `fn selected_alpn(connection: Connection) []const u8`: Borrows provider connection memory.
 - `fn peer_certificate_owned(connection: Connection) Certificate`: nil when the peer sent no certificate.
 - `fn certificate_release(certificate: *Certificate)`: Frees the certificate and clears the handle;
-- `fn certificate_subject(arena: *memory.Arena, status: *fail.Status, certificate: Certificate) []u8`: Complete provider-formatted subject copied into arena.
-- `fn handshake(status: *fail.Status, connection: Connection) Want`: Runs the handshake.
-- `fn server_handshake(status: *fail.Status, connection: Connection) Want`
-- `fn read(status: *fail.Status, connection: Connection, destination: []u8) Attempt`: Reads what is available;
-- `fn write(status: *fail.Status, connection: Connection, source: []const u8) Attempt`
-- `fn shutdown(status: *fail.Status, connection: Connection) Want`: Sends close_notify.
+- `fn certificate_subject(arena: *memory.Arena, certificate: Certificate) []u8!io.IoErr`: Complete provider-formatted subject copied into arena.
+- `fn handshake(connection: Connection) Want!io.IoErr`: Runs the handshake.
+- `fn server_handshake(connection: Connection) Want!io.IoErr`
+- `fn read(connection: Connection, destination: []u8) Attempt!io.IoErr`: Reads what is available;
+- `fn write(connection: Connection, source: []const u8) Attempt!io.IoErr`
+- `fn shutdown(connection: Connection) Want!io.IoErr`: Sends close_notify.
 - `fn error_string(arena: *memory.Arena, code: u64) []u8`: The provider's text for an error code, in arena.
-- `fn client_config_create(status: *fail.Status) Context`
-- `fn server_config_create( arena: *memory.Arena, status: *fail.Status, certificate: []const u8, key: []const u8, ) Context`
+- `fn client_config_create() Context!io.IoErr`
+- `fn server_config_create( arena: *memory.Arena, certificate: []const u8, key: []const u8, ) Context!io.IoErr`
 - `fn config_release(context: *Context)`: Frees the configuration and clears the handle;
-- `fn client_connection_create( arena: *memory.Arena, status: *fail.Status, context: Context, descriptor: i32, hostname: []const u8, ) Connection`
-- `fn server_connection_create(status: *fail.Status, context: Context, descriptor: i32) Connection`
+- `fn client_connection_create( arena: *memory.Arena, context: Context, descriptor: i32, hostname: []const u8, ) Connection!io.IoErr`
+- `fn server_connection_create(context: Context, descriptor: i32) Connection!io.IoErr`
 - `fn connection_release(connection: *Connection)`: Frees the connection state and clears the handle.
 - `fn reader(connection: *Connection) io.Reader`: Blocking I/O adapters borrow the Connection slot and its live handle.
 - `fn writer(connection: *Connection) io.Writer`
@@ -2089,9 +2088,9 @@ Layer: std
 Layer: heap
 
 - `struct URL { scheme: []const u8, authority: []const u8, path: []const u8, query: []const u8, fragment: []const u8, }`
-- `fn parse(status: *fail.Status, text: []const u8) URL`: Splits text into its parts (RFC 3986), borrowing text.
+- `fn parse(text: []const u8) URL!parse.ParseErr`: Splits text into its parts (RFC 3986), borrowing text.
 - `fn percent_encode(arena: *mem.Arena, source: []const u8) []u8`: One component percent-encoded, slashes included, in arena.
-- `fn percent_decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8`: source with %XX escapes decoded, in arena.
+- `fn percent_decode(arena: *mem.Arena, source: []const u8) []u8!parse.ParseErr`: source with %XX escapes decoded, in arena.
 
 ## std/net/websocket
 
@@ -2101,22 +2100,22 @@ Layer: std
 - `enum WebSocketEventKind { None, Ready, Ping, Pong, Close }`: None: a fragment was stored and the message goes on.
 - `struct WebSocketMessageState { used: usize, opcode: u8, fragmented: bool, closed: bool, enforce_mask: bool, masked: bool }`
 - `struct WebSocketEvent { payload: []u8, detail: WebSocketEventKind, opcode: u8, close_code: u16 }`
-- `struct WebSocketConnection { input: io.Reader, output: io.Writer, frames: []u8, // Retain unread wire bytes; compact only on the next receive. frame_used: usize, frame_consumed: usize, input_ended: bool, message: []u8, control: []u8, state: WebSocketMessageState, client: bool, active: bool, // After a failure the stream position is lost: later calls fail with // InvalidState. failed: bool, close_sent: bool, }`
+- `struct WebSocketConnection { input: io.Reader, output: io.Writer, frames: []u8, // Retain unread wire bytes; compact only on the next receive. frame_used: usize, frame_consumed: usize, input_ended: bool, message: []u8, control: []u8, state: WebSocketMessageState, client: bool, active: bool, // After a failure the stream position is lost: later calls fail with // InvalidInput. failed: bool, close_sent: bool, }`
 - `fn accept(destination: []u8, key: []const u8) []u8`: Concise public names;
-- `fn validate_upgrade_request(status: *fail.Status, request: []const u8) []const u8`: Checks the RFC 6455 upgrade fields of a request head;
+- `fn validate_upgrade_request(request: []const u8) []const u8!io.IoErr`: Checks the RFC 6455 upgrade fields of a request head;
 - `fn write_upgrade_response(arena: *mem.Arena, key: []const u8) []u8`: The 101 Switching Protocols response for key, in arena.
-- `fn validate_upgrade_response(status: *fail.Status, response: []const u8, key: []const u8)`: Checks a server's 101 response for key.
+- `fn validate_upgrade_response(response: []const u8, key: []const u8) !io.IoErr`: Checks a server's 101 response for key.
 - `fn write_frame(arena: *mem.Arena, opcode: u8, payload: []const u8, final: bool, masked: bool, mask: u32) []u8`: One encoded frame, in arena.
-- `fn parse_frame(status: *fail.Status, input: []const u8) WebSocketFrame`: One frame at the start of input;
+- `fn parse_frame(input: []const u8) WebSocketFrame!parse.ParseErr`: One frame at the start of input;
 - `fn decode_frame(arena: *mem.Arena, frame: WebSocketFrame) []u8`: The frame's payload, unmasked, in arena.
 - `fn message_state(expect_masked: bool) WebSocketMessageState`
-- `fn receive(status: *fail.Status, state: *WebSocketMessageState, message: []u8, control: []u8, frame: WebSocketFrame) WebSocketEvent`: Adds a complete frame to the message under way.
+- `fn receive(state: *WebSocketMessageState, message: []u8, control: []u8, frame: WebSocketFrame) WebSocketEvent!io.IoErr`: Adds a complete frame to the message under way.
 - `fn connection(input: io.Reader, output: io.Writer, frames: []u8, message: []u8, control: []u8, client: bool) WebSocketConnection`: Stateful stream wrapper.
-- `fn connection_send(status: *fail.Status, state: *WebSocketConnection, opcode: u8, payload: []const u8, final: bool, mask: u32)`
-- `fn connection_ping(status: *fail.Status, state: *WebSocketConnection, payload: []const u8, mask: u32)`
-- `fn connection_pong(status: *fail.Status, state: *WebSocketConnection, payload: []const u8, mask: u32)`
-- `fn connection_close(status: *fail.Status, state: *WebSocketConnection, payload: []const u8, mask: u32)`
-- `fn connection_receive(status: *fail.Status, state: *WebSocketConnection) WebSocketEvent`: The next message or control frame.
+- `fn connection_send(state: *WebSocketConnection, opcode: u8, payload: []const u8, final: bool, mask: u32) !io.IoErr`
+- `fn connection_ping(state: *WebSocketConnection, payload: []const u8, mask: u32) !io.IoErr`
+- `fn connection_pong(state: *WebSocketConnection, payload: []const u8, mask: u32) !io.IoErr`
+- `fn connection_close(state: *WebSocketConnection, payload: []const u8, mask: u32) !io.IoErr`
+- `fn connection_receive(state: *WebSocketConnection) WebSocketEvent!io.IoErr`: The next message or control frame.
 
 ## std/observe
 
@@ -2348,9 +2347,13 @@ Layer: core
 
 - `fn u64_decimal(status: *fail.Status, text: []const u8) u64`: Whole text as a decimal u64: one or more ASCII digits, nothing else (no sign, space or underscore).
 - `fn i64_decimal(status: *fail.Status, text: []const u8) i64`: Whole text as a decimal i64 with an optional leading '-'.
-- `enum ParseErr { Empty, InvalidDigit(usize), Overflow(usize), }`: Structured error enum for T!ParseErr parsing APIs.
-- `fn parse_u64(text: str) u64!ParseErr`: Parses a decimal u64, returning u64!ParseErr.
-- `fn parse_i64(text: str) i64!ParseErr`: Parses a decimal i64 with an optional leading '-', returning i64!ParseErr.
+- `enum ParseErr { Invalid(usize), TooLarge(usize), }`: Why input could not be parsed, with the byte offset from the start of the input where it went wrong: Invalid for malformed input, TooLarge ...
+- `fn offset(err: ParseErr) usize`: The offset where err happened.
+- `fn shifted(err: ParseErr, start: usize) ParseErr`: err moved by start bytes, for a parser that worked on a part of its input.
+- `fn failure_of(err: ParseErr, operation: []const u8) fail.Failure`: Bridges for modules that still report through fail.Status.
+- `fn err_of(failure: fail.Failure) ParseErr`
+- `fn parse_u64(text: str) u64!ParseErr`: Whole text as a decimal u64: one or more ASCII digits, nothing else.
+- `fn parse_i64(text: str) i64!ParseErr`: Whole text as a decimal i64 with an optional leading '-'.
 
 ## std/path
 

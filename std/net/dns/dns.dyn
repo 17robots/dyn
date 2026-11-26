@@ -9,15 +9,6 @@ use bytes "std/bytes"
 pub struct Ipv4 { a: u8, b: u8, c: u8, d: u8 }
 pub struct Ipv6 { bytes: [16]u8 }
 
-// Records a malformed response, at offset when one applies.
-fn malformed(status: *fail.Status, message: []const u8, offset: usize, located: bool) usize {
-  failure := fail.make(fail.Kind.InvalidInput, "parse DNS response", "", message)
-  failure.offset = offset
-  failure.has_offset = located
-  fail.set(status, failure)
-  return 0
-}
-
 // Reject borrowed input anywhere in pending backing, before typed pushes zero it.
 fn conflicts(arena: *mem.Arena, input: []const u8) bool {
   return mem.arena_overlaps_unallocated(arena, input)
@@ -94,28 +85,18 @@ fn question_matches(packet: []const u8, name: []const u8) bool {
 
 // An A query for name, in arena. A name that is not a valid DNS name, or that
 // lies in the arena's free space, fails with InvalidInput.
-pub fn query_ipv4(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16) []u8 {
-  if status == nil { return query_ipv4(arena, &fail.Status{}, name, identifier) }
-  return query_arena(arena, status, name, identifier, 1)
+pub fn query_ipv4(arena: *mem.Arena, name: []const u8, identifier: u16) []u8!io.IoErr {
+  return try query_arena(arena, name, identifier, 1)
 }
 // An AAAA query for name, in arena, by the rules of query_ipv4.
-pub fn query_ipv6(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16) []u8 {
-  if status == nil { return query_ipv6(arena, &fail.Status{}, name, identifier) }
-  return query_arena(arena, status, name, identifier, 28)
+pub fn query_ipv6(arena: *mem.Arena, name: []const u8, identifier: u16) []u8!io.IoErr {
+  return try query_arena(arena, name, identifier, 28)
 }
-fn query_arena(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16, kind: u16) []u8 {
-  empty: []u8
-  if status.failed { return empty }
-  if conflicts(arena, name) {
-    fail.invalid(status, "build DNS query", name, "the name lies in the arena's free space")
-    return empty
-  }
+fn query_arena(arena: *mem.Arena, name: []const u8, identifier: u16, kind: u16) []u8!io.IoErr {
+  if conflicts(arena, name) { fail .InvalidInput }
   storage: [272]u8
   encoded := query(storage[..], name, identifier, kind)
-  if encoded.len == 0 {
-    fail.invalid(status, "build DNS query", name, "not a valid DNS name")
-    return empty
-  }
+  if encoded.len == 0 { fail .InvalidInput }
   output := mem.push_bytes(arena, encoded.len)
   _ = mem.copy(output, encoded)
   return output
@@ -157,37 +138,24 @@ fn query(destination: []u8, name: []const u8, identifier: u16, kind: u16) []u8 {
 
 // Complete arena-owned answers, invalidated by rewind/reset/release. Failures
 // publish no addresses and consume no arena bytes. Exhaustion panics. A
-// malformed response fails with InvalidInput at the malformed record (or
-// header or question field); a DNS error code with NotFound (NXDOMAIN) or
-// System, the negative code in native.
-pub fn parse_ipv4(arena: *mem.Arena, status: *fail.Status, packet: []const u8, identifier: u16, name: []const u8) []Ipv4 {
-  if status == nil { return parse_ipv4(arena, &fail.Status{}, packet, identifier, name) }
+// malformed response fails with InvalidInput; a DNS error code with NotFound
+// (NXDOMAIN) or System(-code).
+pub fn parse_ipv4(arena: *mem.Arena, packet: []const u8, identifier: u16, name: []const u8) []Ipv4!io.IoErr {
   empty4: []Ipv4
   empty6: []Ipv6
-  if status.failed { return empty4 }
-  if conflicts(arena, packet) || conflicts(arena, name) {
-    fail.invalid(status, "parse DNS response", name, "the input lies in the arena's free space")
-    return empty4
-  }
-  count := parse(status, packet, identifier, name, empty4, empty6, 1, false)
-  if status.failed { return empty4 }
+  if conflicts(arena, packet) || conflicts(arena, name) { fail .InvalidInput }
+  count := try parse(packet, identifier, name, empty4, empty6, 1, false)
   output := mem.push_array<Ipv4>(arena, count)
-  _ = parse(status, packet, identifier, name, output, empty6, 1, true)
+  _ = try parse(packet, identifier, name, output, empty6, 1, true)
   return output
 }
-pub fn parse_ipv6(arena: *mem.Arena, status: *fail.Status, packet: []const u8, identifier: u16, name: []const u8) []Ipv6 {
-  if status == nil { return parse_ipv6(arena, &fail.Status{}, packet, identifier, name) }
+pub fn parse_ipv6(arena: *mem.Arena, packet: []const u8, identifier: u16, name: []const u8) []Ipv6!io.IoErr {
   empty4: []Ipv4
   empty6: []Ipv6
-  if status.failed { return empty6 }
-  if conflicts(arena, packet) || conflicts(arena, name) {
-    fail.invalid(status, "parse DNS response", name, "the input lies in the arena's free space")
-    return empty6
-  }
-  count := parse(status, packet, identifier, name, empty4, empty6, 28, false)
-  if status.failed { return empty6 }
+  if conflicts(arena, packet) || conflicts(arena, name) { fail .InvalidInput }
+  count := try parse(packet, identifier, name, empty4, empty6, 28, false)
   output := mem.push_array<Ipv6>(arena, count)
-  _ = parse(status, packet, identifier, name, empty4, output, 28, true)
+  _ = try parse(packet, identifier, name, empty4, output, 28, true)
   return output
 }
 fn same_name(left: []const u8, right: []const u8) bool {
@@ -245,36 +213,29 @@ fn canonical_owner(packet: []const u8, start: usize, answers: usize, owner: []u8
   }
   return Name{offset: start}
 }
-fn parse(status: *fail.Status, packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv4, ipv6: []Ipv6, query_kind: u16, writing: bool) usize {
-  if packet.len < 12 { return malformed(status, "shorter than a header", packet.len, true) }
-  if load_u16(packet, 0) != identifier {
-    return malformed(status, "the identifier does not match", 0, false)
-  }
-  if (load_u16(packet, 2) & 32768) == 0 { return malformed(status, "malformed response", 2, true) }
+// A malformed response fails with InvalidInput.
+fn parse(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv4, ipv6: []Ipv6, query_kind: u16, writing: bool) usize!io.IoErr {
+  if packet.len < 12 { fail .InvalidInput }
+  if load_u16(packet, 0) != identifier { fail .InvalidInput }
+  if (load_u16(packet, 2) & 32768) == 0 { fail .InvalidInput }
   flags := load_u16(packet, 2)
-  if (flags & 31232) != 0 { return malformed(status, "malformed response", 2, true) }
+  if (flags & 31232) != 0 { fail .InvalidInput }
   if (flags & 15) != 0 {
     code := flags & 15
-    failure := fail.make(fail.Kind.System, "resolve", name, "the server failed")
-    if code == 3 {
-      failure = fail.make(fail.Kind.NotFound, "resolve", name, "no such name")
-    }
-    failure.native = 0 - #cast(isize, code)
-    fail.set(status, failure)
-    return 0
+    // NXDOMAIN.
+    if code == 3 { fail .NotFound }
+    fail io.IoErr.System(0 - #cast(isize, code))
   }
   questions := #cast(usize, load_u16(packet, 4))
   answers := #cast(usize, load_u16(packet, 6))
-  if questions != 1 { return malformed(status, "malformed response", 4, true) }
-  if !question_matches(packet, name) { return malformed(status, "malformed response", 12, true) }
+  if questions != 1 { fail .InvalidInput }
+  if !question_matches(packet, name) { fail .InvalidInput }
   cursor: usize = 12
   for q in 0..questions {
     cursor = skip_name(packet, cursor)
-    if cursor == 0 || cursor + 4 > packet.len {
-      return malformed(status, "malformed response", 12, true)
-    }
+    if cursor == 0 || cursor + 4 > packet.len { fail .InvalidInput }
     if load_u16(packet, cursor) != query_kind || load_u16(packet, cursor + 2) != 1 {
-      return malformed(status, "malformed response", cursor, true)
+      fail .InvalidInput
     }
     cursor += 4
   }
@@ -282,46 +243,36 @@ fn parse(status: *fail.Status, packet: []const u8, identifier: u16, name: []cons
   for index in 0..answers {
     record := scan
     end := skip_name(packet, scan)
-    if end == 0 || end + 10 > packet.len {
-      return malformed(status, "malformed response", record, true)
-    }
+    if end == 0 || end + 10 > packet.len { fail .InvalidInput }
     length := #cast(usize, load_u16(packet, end + 8))
     scan = end + 10
-    if length > packet.len - scan { return malformed(status, "malformed response", record, true) }
+    if length > packet.len - scan { fail .InvalidInput }
     kind := load_u16(packet, end)
     if load_u16(packet, end + 2) == 1 {
-      if (kind == 1 && length != 4) || (kind == 28 && length != 16) {
-        return malformed(status, "malformed response", record, true)
-      }
+      if (kind == 1 && length != 4) || (kind == 28 && length != 16) { fail .InvalidInput }
       if kind == 5 {
         target := skip_name(packet, scan)
-        if target == 0 || target != scan + length {
-          return malformed(status, "malformed response", record, true)
-        }
+        if target == 0 || target != scan + length { fail .InvalidInput }
       }
     }
     scan += length
   }
   owner: [254]u8
   canonical := canonical_owner(packet, cursor, answers, owner[..])
-  if !canonical.ok { return malformed(status, "malformed response", canonical.offset, true) }
+  if !canonical.ok { fail .InvalidInput }
   count: usize = 0
   for answer in 0..answers {
     record_owner: [254]u8
     parsed_owner := read_name(packet, cursor, record_owner[..])
-    if !parsed_owner.ok { return malformed(status, "malformed owner name", 0, false) }
+    if !parsed_owner.ok { fail .InvalidInput }
     matches := same_name(record_owner[..parsed_owner.length], owner[..canonical.length])
     cursor = parsed_owner.end
-    if cursor == 0 || cursor + 10 > packet.len {
-      return malformed(status, "a record runs past the packet", cursor, true)
-    }
+    if cursor == 0 || cursor + 10 > packet.len { fail .InvalidInput }
     kind := load_u16(packet, cursor)
     class := load_u16(packet, cursor + 2)
     length := #cast(usize, load_u16(packet, cursor + 8))
     cursor += 10
-    if cursor + length > packet.len {
-      return malformed(status, "a record runs past the packet", cursor, true)
-    }
+    if cursor + length > packet.len { fail .InvalidInput }
     if matches && kind == 1 && query_kind == 1 && class == 1 && length == 4 {
       if writing {
         addresses[count] = Ipv4{ a: packet[cursor], b: packet[cursor + 1], c: packet[cursor + 2], d: packet[cursor + 3] }
@@ -343,156 +294,116 @@ fn parse(status: *fail.Status, packet: []const u8, identifier: u16, name: []cons
 
 // The server transport address is IPv4; IPv6 refers to AAAA result records.
 // One deadline covers UDP, TCP connect, framing, and every partial transfer.
-pub fn resolve_ipv4(arena: *mem.Arena, status: *fail.Status, name: []const u8, server: *const network.Ipv4Address,
-  timeout_milliseconds: i32) []Ipv4 {
-  if status == nil { return resolve_ipv4(arena, &fail.Status{}, name, server, timeout_milliseconds) }
-  empty: []Ipv4
-  if status.failed { return empty }
-  if conflicts(arena, name) {
-    fail.invalid(status, "resolve", name, "the name lies in the arena's free space")
-    return empty
-  }
+// Running out of time fails with Interrupted.
+pub fn resolve_ipv4(arena: *mem.Arena, name: []const u8, server: *const network.Ipv4Address,
+  timeout_milliseconds: i32) []Ipv4!io.IoErr {
+  if conflicts(arena, name) { fail .InvalidInput }
   packet: [65535]u8
-  received := exchange(status, name, server, packet[..], timeout_milliseconds, 1)
-  if status.failed { return empty }
-  return parse_ipv4(arena, status, packet[..received.length], received.identifier, name)
+  received := try exchange(name, server, packet[..], timeout_milliseconds, 1)
+  return try parse_ipv4(arena, packet[..received.length], received.identifier, name)
 }
-pub fn resolve_ipv6(arena: *mem.Arena, status: *fail.Status, name: []const u8, server: *const network.Ipv4Address,
-  timeout_milliseconds: i32) []Ipv6 {
-  if status == nil { return resolve_ipv6(arena, &fail.Status{}, name, server, timeout_milliseconds) }
-  empty: []Ipv6
-  if status.failed { return empty }
-  if conflicts(arena, name) {
-    fail.invalid(status, "resolve", name, "the name lies in the arena's free space")
-    return empty
-  }
+pub fn resolve_ipv6(arena: *mem.Arena, name: []const u8, server: *const network.Ipv4Address,
+  timeout_milliseconds: i32) []Ipv6!io.IoErr {
+  if conflicts(arena, name) { fail .InvalidInput }
   packet: [65535]u8
-  received := exchange(status, name, server, packet[..], timeout_milliseconds, 28)
-  if status.failed { return empty }
-  return parse_ipv6(arena, status, packet[..received.length], received.identifier, name)
+  received := try exchange(name, server, packet[..], timeout_milliseconds, 28)
+  return try parse_ipv6(arena, packet[..received.length], received.identifier, name)
 }
 
 struct Packet { length: usize, identifier: u16 }
 
-fn timed_out(status: *fail.Status) {
-  failure := fail.make(fail.Kind.Interrupted, "resolve", "", "timed out")
-  failure.native = -110
-  fail.set(status, failure)
-}
-fn exchange_failed(status: *fail.Status, kind: fail.Kind, message: []const u8, native: isize) Packet {
-  failure := fail.make(kind, "resolve", "", message)
-  failure.native = native
-  fail.set(status, failure)
-  return Packet{}
-}
-
 // Waits until descriptor is ready for events, within the deadline.
-fn ready(status: *fail.Status, descriptor: isize, events: i16, deadline: *const time.Deadline, finite: bool) {
+fn ready(descriptor: isize, events: i16, deadline: *const time.Deadline, finite: bool) !io.IoErr {
   timeout: i32 = -1
   if finite {
     remaining := time.deadline_remaining(deadline)
-    if remaining == 0 {
-      timed_out(status)
-      return
-    }
+    if remaining == 0 { fail .Interrupted }
     timeout = #cast(i32, ((remaining + time.Millisecond - 1) / time.Millisecond))
   }
-  if network.wait(status, descriptor, events, timeout) == 0 && !status.failed {
-    timed_out(status)
-  }
+  if try network.wait(descriptor, events, timeout) == 0 { fail .Interrupted }
 }
-fn transfer(status: *fail.Status, descriptor: isize, buffer: []u8, sending: bool, deadline: *const time.Deadline, finite: bool) {
+// A server that closes the connection early fails with InvalidInput.
+fn transfer(descriptor: isize, buffer: []u8, sending: bool, deadline: *const time.Deadline, finite: bool) !io.IoErr {
   at: usize = 0
-  for at < buffer.len && !status.failed {
+  for at < buffer.len {
     events := network.PollReadable
     if sending {
       events = network.PollWritable
     }
-    ready(status, descriptor, events, deadline, finite)
-    if status.failed { return }
+    try ready(descriptor, events, deadline, finite)
     moved := network.Attempt{}
     if sending {
-      moved = network.try_send(status, descriptor, buffer[at..], 0)
+      moved = try network.try_send(descriptor, buffer[at..], 0)
     } else {
-      moved = network.try_receive(status, descriptor, buffer[at..], 0)
+      moved = try network.try_receive(descriptor, buffer[at..], 0)
     }
-    if status.failed || moved.blocked { continue }
-    if moved.count == 0 {
-      failure := fail.make(fail.Kind.InvalidInput, "resolve", "", "the server closed the connection early")
-      failure.native = -74
-      fail.set(status, failure)
-      return
-    }
+    if moved.blocked { continue }
+    if moved.count == 0 { fail .InvalidInput }
     at += moved.count
   }
 }
-fn tcp(status: *fail.Status, name: []const u8, server: *const network.Ipv4Address, packet: []u8,
-  identifier: u16, kind: u16, deadline: *const time.Deadline, finite: bool) Packet {
+fn tcp(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
+  identifier: u16, kind: u16, deadline: *const time.Deadline, finite: bool) Packet!io.IoErr {
   request := query(packet, name, identifier, kind)
-  if request.len == 0 { return exchange_failed(status, fail.Kind.InvalidInput, "invalid name", -22) }
-  descriptor := network.socket(status, network.AddressFamilyIpv4, network.SocketStream, 0)
-  if status.failed { return Packet{} }
+  if request.len == 0 { fail .InvalidInput }
+  descriptor := try network.socket(network.AddressFamilyIpv4, network.SocketStream, 0)
   defer {
     network.close(descriptor)
   }
-  network.nonblocking(status, descriptor, true)
-  if status.failed { return Packet{} }
-  connecting: fail.Status
-  network.connect_ipv4(&connecting, descriptor, server)
-  if connecting.failed {
-    if !network.would_block(&connecting.failure) {
-      fail.set(status, connecting.failure)
-      return Packet{}
-    }
-    ready(status, descriptor, network.PollWritable, deadline, finite)
-    network.socket_error(status, descriptor)
-    if status.failed { return Packet{} }
+  try network.nonblocking(descriptor, true)
+  pending := false
+  network.connect_ipv4(descriptor, server) catch err {
+    if !network.would_block(err) { fail err }
+    pending = true
+  }
+  if pending {
+    try ready(descriptor, network.PollWritable, deadline, finite)
+    try network.socket_error(descriptor)
   }
   prefix: [2]u8
   store_u16(prefix[..], 0, #cast(u16, request.len))
-  transfer(status, descriptor, prefix[..], true, deadline, finite)
-  transfer(status, descriptor, request, true, deadline, finite)
-  transfer(status, descriptor, prefix[..], false, deadline, finite)
-  if status.failed { return Packet{} }
+  try transfer(descriptor, prefix[..], true, deadline, finite)
+  try transfer(descriptor, request, true, deadline, finite)
+  try transfer(descriptor, prefix[..], false, deadline, finite)
   length := #cast(usize, load_u16(prefix[..], 0))
-  if length > packet.len { return exchange_failed(status, fail.Kind.Capacity, "the response is too large", -28) }
-  if length < 12 { return exchange_failed(status, fail.Kind.InvalidInput, "the response is shorter than a header", -74) }
-  transfer(status, descriptor, packet[..length], false, deadline, finite)
-  if status.failed { return Packet{} }
+  if length > packet.len { fail .Capacity }
+  if length < 12 { fail .InvalidInput }
+  try transfer(descriptor, packet[..length], false, deadline, finite)
   return Packet{ length: length, identifier: identifier }
 }
-fn exchange(status: *fail.Status, name: []const u8, server: *const network.Ipv4Address, packet: []u8,
-  timeout_milliseconds: i32, kind: u16) Packet {
+fn exchange(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
+  timeout_milliseconds: i32, kind: u16) Packet!io.IoErr {
   finite := timeout_milliseconds >= 0
   deadline := time.Deadline{}
   if finite {
     deadline = time.deadline_after(timeout_milliseconds * time.Millisecond)
   }
   entropy: [2]u8
-  random.fill(status, entropy[..])
-  if status.failed { return Packet{} }
+  drawing: fail.Status
+  random.fill(&drawing, entropy[..])
+  try io.check_status(&drawing)
   identifier := load_u16(entropy[..], 0)
   request := query(packet, name, identifier, kind)
-  if request.len == 0 { return exchange_failed(status, fail.Kind.InvalidInput, "invalid name", -22) }
-  descriptor := network.socket(status, network.AddressFamilyIpv4, network.SocketDatagram, 0)
-  if status.failed { return Packet{} }
+  if request.len == 0 { fail .InvalidInput }
+  descriptor := try network.socket(network.AddressFamilyIpv4, network.SocketDatagram, 0)
   defer {
     network.close(descriptor)
   }
-  network.nonblocking(status, descriptor, true)
-  network.connect_ipv4(status, descriptor, server)
-  sent := network.send(status, descriptor, request, 0)
-  if status.failed { return Packet{} }
-  if sent != request.len { return exchange_failed(status, fail.Kind.System, "the query was cut short", -5) }
+  try network.nonblocking(descriptor, true)
+  try network.connect_ipv4(descriptor, server)
+  sent := try network.send(descriptor, request, 0)
+  // The query was cut short: EIO.
+  if sent != request.len { fail io.IoErr.System(-5) }
   for {
-    ready(status, descriptor, network.PollReadable, &deadline, finite)
-    if status.failed { return Packet{} }
-    attempt: fail.Status
-    length := network.receive_packet(&attempt, descriptor, packet)
-    if attempt.failed {
-      if attempt.failure.native == -4 || network.would_block(&attempt.failure) { continue }
-      fail.set(status, attempt.failure)
-      return Packet{}
+    try ready(descriptor, network.PollReadable, &deadline, finite)
+    length := network.receive_packet(descriptor, packet) catch err {
+      case err {
+        .Interrupted => { continue }
+        _ => {
+          if network.would_block(err) { continue }
+          fail err
+        }
+      }
     }
     stored := length
     if stored > packet.len {
@@ -502,17 +413,15 @@ fn exchange(status: *fail.Status, name: []const u8, server: *const network.Ipv4A
     if stored < 12 || load_u16(response, 0) != identifier || (load_u16(response, 2) & 32768) == 0 {
       continue
     }
-    if (load_u16(response, 2) & 30720) != 0 || load_u16(response, 4) != 1 || !question_matches(response, name) {
-      return exchange_failed(status, fail.Kind.InvalidInput, "the response does not answer the question", -74)
-    }
+    // The response does not answer the question.
+    if (load_u16(response, 2) & 30720) != 0 || load_u16(response, 4) != 1 || !question_matches(response, name) { fail .InvalidInput }
     question_end := skip_name(response, 12)
-    if question_end == 0 || question_end + 4 > stored || load_u16(response, question_end) != kind || load_u16(response, question_end + 2) != 1 {
-      return exchange_failed(status, fail.Kind.InvalidInput, "the response does not answer the question", -74)
-    }
+    if question_end == 0 || question_end + 4 > stored || load_u16(response, question_end) != kind || load_u16(response, question_end + 2) != 1 { fail .InvalidInput }
     if length > packet.len || (load_u16(response, 2) & 512) != 0 {
-      return tcp(status, name, server, packet, identifier, kind, &deadline, finite)
+      return try tcp(name, server, packet, identifier, kind, &deadline, finite)
     }
     return Packet{ length: length, identifier: identifier }
   }
-  return Packet{}
+  empty: Packet
+  return empty
 }

@@ -1,17 +1,17 @@
 #target(kernel: windows)
 // Readiness uses WSAPoll. IOCP reports completion of submitted operations and
 // cannot replace readiness without a separate operation/buffer lifetime API.
-fn native_open(_status: *fail.Status) isize {
+fn native_open() isize!io.IoErr {
   return 0
 }
 fn native_close(_handle: isize) {
 }
-fn native_control(_status: *fail.Status, _queue: *Queue, _index: usize, _entry: Entry) {
+fn native_control(_queue: *Queue, _index: usize, _entry: Entry) !io.IoErr {
 }
 // Windows builds its poll list per wait from the entries.
 const NativeEventSize: usize = 0
 
-fn native_wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout: i32) []Event {
+fn native_wait(arena: *mem.Arena, queue: *Queue, timeout: i32) []Event!io.IoErr {
   count: usize = 0
   for entry in queue.entries {
     if entry.active {
@@ -29,7 +29,7 @@ fn native_wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout: 
       at += 1
     }
   }
-  ready := net.poll(status, native, timeout)
+  ready := try net.poll(native, timeout)
   events := mem.push_array<Event>(arena, ready)
   at = 0
   for i in 0..count {

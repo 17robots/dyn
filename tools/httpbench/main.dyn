@@ -61,34 +61,37 @@ fn now_micros() u64 {
 
 // One request and its full response. False on any error.
 fn exchange(connection: *net.Connection, request: []const u8, storage: []u8) bool {
-  status: fail.Status
-  _ = net.connection_write(&status, connection, request)
+  net.connection_write(connection, request) catch { return false }
   used: usize = 0
-  for !status.failed {
-    if used > 3 {
-      // An incomplete head does not parse yet: read more.
-      partial: fail.Status
-      head := http.parse_response(&partial, storage[..used])
-      if !partial.failed {
-        total := head.header_length + head.content_length
-        if total > storage.len { return false }
-        if used >= total { return true }
-      }
-    }
+  for {
+    // An incomplete head does not parse yet: read more.
+    if used > 3 && complete(storage, used) { return true }
+    if used > 3 && too_large(storage, used) { return false }
     if used == storage.len { return false }
-    read := net.connection_read(&status, connection, storage[used..])
+    read := net.connection_read(connection, storage[used..]) catch { return false }
     if read == 0 { return false }
     used += read
   }
   return false
 }
 
+fn complete(storage: []u8, used: usize) bool {
+  head := http.parse_response(storage[..used]) catch { return false }
+  return used >= head.header_length + head.content_length
+}
+
+fn too_large(storage: []u8, used: usize) bool {
+  head := http.parse_response(storage[..used]) catch { return false }
+  return head.header_length + head.content_length > storage.len
+}
+
 fn client_main(client: *Client) isize {
   storage: [ReceiveSize]u8
-  status: fail.Status
-  connection := net.tcp_connect_ipv4(&status, &client.shared.address)
-  net.no_delay(&status, connection.descriptor, true)
-  if status.failed {
+  connection := net.tcp_connect_ipv4(&client.shared.address) catch {
+    client.errors += 1
+    return 0
+  }
+  net.no_delay(connection.descriptor, true) catch {
     net.connection_close(&connection)
     client.errors += 1
     return 0

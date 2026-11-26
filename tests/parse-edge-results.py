@@ -6,7 +6,70 @@ import subprocess
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
-SOURCE = 'use "std/fail"\nuse semver "std/semver"\nuse url "std/net/url"\nuse mem "std/mem"\nuse strings "std/strings"\nuse "std/bytes"\nfn semver_failure(input: []const u8) fail.Failure {\n  status: fail.Status\n  _ = semver.parse(&status, input)\n  if !status.failed { #panic("semver should fail") }\n  return status.failure\n}\nfn main() {\n  checking: fail.Status\n  good := semver.parse(&checking, "1.2.3-alpha.1+build")\n  if checking.failed || good.major != 1 { #panic("semver valid") }\n  for input in ["", "01.2.3", "1", "1.x.3", "1.2", "1.2.x", "1.2.3-", "1.2.3+", "1.2.3x", "1.2.3-01"] {\n    if semver_failure(input).kind != fail.Kind.InvalidInput { #panic("semver invalid") }\n  }\n  if semver_failure("1.2.3-alpha.x!").offset != 13 || semver_failure("01.2.3").offset != 1 { #panic("semver offending byte") }\n  if semver_failure("").offset != 0 { #panic("semver zero") }\n  for input in ["4294967296.2.3", "1.4294967296.3", "1.2.4294967296"] {\n    if semver_failure(input).kind != fail.Kind.Overflow { #panic("semver overflow") }\n  }\n  status: fail.Status\n  parsed := url.parse(&status, "https://example.com/p?q#f")\n  if status.failed || !bytes.equal(parsed.path, "/p") { #panic("url valid") }\n  for input in [":x", "1:x", "a!:x"] {\n    bad: fail.Status\n    _ = url.parse(&bad, input)\n    if bad.failure.kind != fail.Kind.InvalidInput { #panic("url invalid") }\n  }\n  colon: fail.Status\n  _ = url.parse(&colon, ":x")\n  scheme: fail.Status\n  _ = url.parse(&scheme, "a!:x")\n  if colon.failure.offset != 0 || scheme.failure.offset != 1 { #panic("url offset") }\n  backing: [128+mem.ArenaBufferOverhead]u8\n  arena := mem.arena_from_buffer(backing[..])\n  _ = mem.push_bytes(arena, 7)\n  mark := mem.arena_mark(arena)\n  for input in ["%", "%0", "%gg", "%0g"] {\n    bad: fail.Status\n    decoded := url.percent_decode(arena, &bad, input)\n    if bad.failure.kind != fail.Kind.InvalidInput || bad.failure.offset != 0 || decoded.len != 0 || mem.arena_mark(arena) != mark { #panic("decode zero rollback") }\n  }\n  for input in ["abc%", "abc%0", "abc%gg", "abc%0g"] {\n    bad: fail.Status\n    _ = url.percent_decode(arena, &bad, input)\n    if bad.failure.kind != fail.Kind.InvalidInput || bad.failure.offset != 3 || mem.arena_mark(arena) != mark { #panic("decode offset rollback") }\n  }\n  good_decode := url.percent_decode(arena, &status, "a%20b+")\n  if status.failed || !bytes.equal(good_decode, "a b+") || mem.arena_mark(arena) != mark + 4 { #panic("decode success ownership") }\n  encoded := url.percent_encode(arena, "a b/")\n  if !bytes.equal(encoded, "a%20b%2f") || mem.arena_mark(arena) != mark + 12 { #panic("encode ownership") }\n  empty := url.percent_decode(arena, &status, "")\n  if status.failed || empty.len != 0 { #panic("decode empty") }\n}\n'
+SOURCE = r'''use "std/fail"
+use semver "std/semver"
+use url "std/net/url"
+use parse "std/parse"
+use mem "std/mem"
+use strings "std/strings"
+use "std/bytes"
+fn semver_failure(input: []const u8) fail.Failure {
+  status: fail.Status
+  _ = semver.parse(&status, input)
+  if !status.failed { #panic("semver should fail") }
+  return status.failure
+}
+// The offset of a malformed input; TooLarge is no answer here.
+fn invalid_at(err: parse.ParseErr) usize {
+  case err {
+    .Invalid(offset) => { return offset }
+    .TooLarge(offset) => { #panic("unexpected TooLarge") }
+  }
+}
+fn url_offset(input: []const u8) usize {
+  _ = url.parse(input) catch err { return invalid_at(err) }
+  #panic("url should fail")
+}
+fn decode_offset(arena: *mem.Arena, input: []const u8) usize {
+  _ = url.percent_decode(arena, input) catch err { return invalid_at(err) }
+  #panic("decode should fail")
+}
+fn main() {
+  checking: fail.Status
+  good := semver.parse(&checking, "1.2.3-alpha.1+build")
+  if checking.failed || good.major != 1 { #panic("semver valid") }
+  for input in ["", "01.2.3", "1", "1.x.3", "1.2", "1.2.x", "1.2.3-", "1.2.3+", "1.2.3x", "1.2.3-01"] {
+    if semver_failure(input).kind != fail.Kind.InvalidInput { #panic("semver invalid") }
+  }
+  if semver_failure("1.2.3-alpha.x!").offset != 13 || semver_failure("01.2.3").offset != 1 { #panic("semver offending byte") }
+  if semver_failure("").offset != 0 { #panic("semver zero") }
+  for input in ["4294967296.2.3", "1.4294967296.3", "1.2.4294967296"] {
+    if semver_failure(input).kind != fail.Kind.Overflow { #panic("semver overflow") }
+  }
+  parsed := url.parse("https://example.com/p?q#f") catch { #panic("url valid") }
+  if !bytes.equal(parsed.path, "/p") { #panic("url valid") }
+  for input in [":x", "1:x", "a!:x"] {
+    _ = url_offset(input)
+  }
+  if url_offset(":x") != 0 || url_offset("a!:x") != 1 { #panic("url offset") }
+  backing: [128+mem.ArenaBufferOverhead]u8
+  arena := mem.arena_from_buffer(backing[..])
+  _ = mem.push_bytes(arena, 7)
+  mark := mem.arena_mark(arena)
+  for input in ["%", "%0", "%gg", "%0g"] {
+    if decode_offset(arena, input) != 0 || mem.arena_mark(arena) != mark { #panic("decode zero rollback") }
+  }
+  for input in ["abc%", "abc%0", "abc%gg", "abc%0g"] {
+    if decode_offset(arena, input) != 3 || mem.arena_mark(arena) != mark { #panic("decode offset rollback") }
+  }
+  good_decode := url.percent_decode(arena, "a%20b+") catch { #panic("decode success") }
+  if !bytes.equal(good_decode, "a b+") || mem.arena_mark(arena) != mark + 4 { #panic("decode success ownership") }
+  encoded := url.percent_encode(arena, "a b/")
+  if !bytes.equal(encoded, "a%20b%2f") || mem.arena_mark(arena) != mark + 12 { #panic("encode ownership") }
+  empty := url.percent_decode(arena, "") catch { #panic("decode empty") }
+  if empty.len != 0 { #panic("decode empty") }
+}
+'''
 with tempfile.TemporaryDirectory(prefix='dyn-parse-edges-') as directory:
     work = Path(directory)
     (work/'main.dyn').write_text(SOURCE)

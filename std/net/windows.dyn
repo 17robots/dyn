@@ -1,5 +1,6 @@
 #target(kernel: windows)
 use win "std/os/windows"
+use "std/fail"
 pub const AddressFamilyIpv6: usize = 23
 pub type Descriptor = isize
 pub struct PollDescriptor { descriptor: Descriptor, events: i16, returned: i16, saved_events: i16 }
@@ -177,9 +178,7 @@ fn poll_native(items: []PollDescriptor, milliseconds: i32) isize {
 
 // Winsock fills the buffer before WSAEMSGSIZE on a truncated datagram.
 // Return a capacity+1 sentinel; consumers must not treat it as stored bytes.
-pub fn receive_packet(status: *fail.Status, descriptor: isize, bytes: []u8) usize {
-  if status == nil { return receive_packet(&fail.Status{}, descriptor, bytes) }
-  if status.failed { return 0 }
+pub fn receive_packet(descriptor: isize, bytes: []u8) usize!io.IoErr {
   data: *u8 = nil
   if bytes.len > 0 {
     data = &bytes[0]
@@ -189,55 +188,26 @@ pub fn receive_packet(status: *fail.Status, descriptor: isize, bytes: []u8) usiz
     value = native_receive(descriptor, data, bytes.len, 0, nil, nil)
   }
   if value == -10040 { return bytes.len + 1 }
-  if check(status, "receive", value) < 0 { return 0 }
+  _ = try check(value)
   return #cast(usize, value)
 }
 
 // Winsock reports WSA codes (10000 and up); adapter validation uses errno-style codes.
-fn native_failure(operation: []const u8, code: isize) fail.Failure {
+fn native_err(code: isize) io.IoErr {
   value := code
   if value < 0 {
     value = 0 - value
   }
-  if value < 10000 { return io.from_linux(operation, "", code) }
-  failure := fail.make(native_kind(code), operation, "", "")
-  failure.native = code
-  return failure
-}
-fn native_kind(code: isize) fail.Kind {
-  value := code
-  if value < 0 {
-    value = 0 - value
-  }
-  if value < 10000 { return io.linux(code) }
+  if value < 10000 { return io.linux_err(code) }
   case value {
-    10004 => {
-      return fail.Kind.Interrupted
-    }
-    10009, 10038, 10056, 10057 => {
-      return fail.Kind.InvalidState
-    }
-    10013 => {
-      return fail.Kind.PermissionDenied
-    }
-    10022 => {
-      return fail.Kind.InvalidInput
-    }
-    10035 => {
-      return fail.Kind.WouldBlock
-    }
-    10048 => {
-      return fail.Kind.AlreadyExists
-    }
-    10055 => {
-      return fail.Kind.Capacity
-    }
-    10045, 10047 => {
-      return fail.Kind.Unsupported
-    }
-    _ => {
-      return fail.Kind.System
-    }
+    10004 => { return io.IoErr.Interrupted }
+    10009, 10038, 10056, 10057, 10022 => { return io.IoErr.InvalidInput }
+    10013 => { return io.IoErr.PermissionDenied }
+    10035 => { return io.IoErr.WouldBlock }
+    10048 => { return io.IoErr.AlreadyExists }
+    10055 => { return io.IoErr.Capacity }
+    10045, 10047 => { return io.IoErr.Unsupported }
+    _ => { return io.IoErr.System(code) }
   }
 }
 

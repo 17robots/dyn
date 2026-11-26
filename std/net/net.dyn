@@ -1,7 +1,6 @@
 #target(pointer_bits: 64)
 
 
-use "std/fail"
 use io "std/io"
 use clock "std/time"
 
@@ -29,16 +28,8 @@ pub struct Address { bytes: [128]u8, length: usize }
 pub struct Connection { descriptor: isize, active: bool }
 pub struct Listener { descriptor: isize, active: bool }
 
-// Structured network error enum for T!NetErr APIs.
-pub enum NetErr {
-  Refused,
-  TimedOut,
-  Reset,
-  AddressInUse,
-  Closed,
-  InvalidAddress,
-  System(isize),
-}
+// Every call that can fail returns T!io.IoErr. A closed Connection or
+// Listener fails with InvalidInput.
 
 // Wraps an open socket descriptor; the result owns it and must be closed once.
 pub fn connection_from_descriptor(descriptor: isize) Connection {
@@ -48,29 +39,15 @@ pub fn listener_from_descriptor(descriptor: isize) Listener {
   return Listener{ descriptor: descriptor, active: descriptor >= 0 }
 }
 
-// Records a negative native result as a failure of operation; returns value.
-fn check(status: *fail.Status, operation: []const u8, value: isize) isize {
-  if value < 0 {
-    fail.set(status, native_failure(operation, value))
-  }
+// Fails with value's IoErr when value is a failure (negative); else value.
+fn check(value: isize) isize!io.IoErr {
+  if value < 0 { fail native_err(value) }
   return value
 }
-fn invalid(status: *fail.Status, operation: []const u8, message: []const u8) {
-  failure := fail.make(fail.Kind.InvalidInput, operation, "", message)
-  failure.native = -22
-  fail.set(status, failure)
-}
-fn closed(status: *fail.Status, operation: []const u8) {
-  failure := fail.make(fail.Kind.InvalidState, operation, "", "the socket is closed")
-  failure.native = -9
-  fail.set(status, failure)
-}
 
-// A new socket descriptor, or -1 after a failure.
-pub fn socket(status: *fail.Status, family: usize, kind: usize, protocol: usize) isize {
-  if status == nil { return socket(&fail.Status{}, family, kind, protocol) }
-  if status.failed { return -1 }
-  return check(status, "socket", native_socket(family, kind, protocol))
+// A new socket descriptor.
+pub fn socket(family: usize, kind: usize, protocol: usize) isize!io.IoErr {
+  return try check(native_socket(family, kind, protocol))
 }
 
 // Closes descriptor. Never retry a close: after a failure the descriptor may
@@ -78,21 +55,11 @@ pub fn socket(status: *fail.Status, family: usize, kind: usize, protocol: usize)
 pub fn close(descriptor: isize) {
   _ = native_close(descriptor)
 }
-pub fn listen(status: *fail.Status, descriptor: isize, backlog: usize) {
-  if status == nil {
-    listen(&fail.Status{}, descriptor, backlog)
-    return
-  }
-  if status.failed { return }
-  _ = check(status, "listen", native_listen(descriptor, backlog))
+pub fn listen(descriptor: isize, backlog: usize) !io.IoErr {
+  _ = try check(native_listen(descriptor, backlog))
 }
-pub fn shutdown(status: *fail.Status, descriptor: isize, how: usize) {
-  if status == nil {
-    shutdown(&fail.Status{}, descriptor, how)
-    return
-  }
-  if status.failed { return }
-  _ = check(status, "shutdown", native_shutdown(descriptor, how))
+pub fn shutdown(descriptor: isize, how: usize) !io.IoErr {
+  _ = try check(native_shutdown(descriptor, how))
 }
 
 pub fn ipv4_address(destination: []u8, a: u8, b: u8, c: u8, d: u8, port: u16) []u8 {
@@ -146,224 +113,132 @@ pub fn unix(path: []const u8) UnixAddress {
   return value
 }
 
-pub fn connect_ipv4(status: *fail.Status, descriptor: isize, address: *const Ipv4Address) {
-  if status == nil {
-    connect_ipv4(&fail.Status{}, descriptor, address)
-    return
-  }
-  connect(status, descriptor, address.bytes[..])
+pub fn connect_ipv4(descriptor: isize, address: *const Ipv4Address) !io.IoErr {
+  try connect(descriptor, address.bytes[..])
 }
-pub fn bind_ipv4(status: *fail.Status, descriptor: isize, address: *const Ipv4Address) {
-  if status == nil {
-    bind_ipv4(&fail.Status{}, descriptor, address)
-    return
-  }
-  bind(status, descriptor, address.bytes[..])
+pub fn bind_ipv4(descriptor: isize, address: *const Ipv4Address) !io.IoErr {
+  try bind(descriptor, address.bytes[..])
 }
-pub fn connect_ipv6(status: *fail.Status, descriptor: isize, address: *const Ipv6Address) {
-  if status == nil {
-    connect_ipv6(&fail.Status{}, descriptor, address)
-    return
-  }
-  connect(status, descriptor, address.bytes[..])
+pub fn connect_ipv6(descriptor: isize, address: *const Ipv6Address) !io.IoErr {
+  try connect(descriptor, address.bytes[..])
 }
-pub fn bind_ipv6(status: *fail.Status, descriptor: isize, address: *const Ipv6Address) {
-  if status == nil {
-    bind_ipv6(&fail.Status{}, descriptor, address)
-    return
-  }
-  bind(status, descriptor, address.bytes[..])
+pub fn bind_ipv6(descriptor: isize, address: *const Ipv6Address) !io.IoErr {
+  try bind(descriptor, address.bytes[..])
 }
-fn unix_bytes(status: *fail.Status, operation: []const u8, address: *const UnixAddress) []const u8 {
-  if address.length == 0 || address.length > address.bytes.len {
-    invalid(status, operation, "the Unix address is empty or too long")
-    return address.bytes[..0]
-  }
+// An empty or oversized Unix address fails with InvalidInput.
+fn unix_bytes(address: *const UnixAddress) []const u8!io.IoErr {
+  if address.length == 0 || address.length > address.bytes.len { fail .InvalidInput }
   return address.bytes[..address.length]
 }
-pub fn connect_unix(status: *fail.Status, descriptor: isize, address: *const UnixAddress) {
-  if status == nil {
-    connect_unix(&fail.Status{}, descriptor, address)
-    return
-  }
-  connect(status, descriptor, unix_bytes(status, "connect", address))
+pub fn connect_unix(descriptor: isize, address: *const UnixAddress) !io.IoErr {
+  try connect(descriptor, try unix_bytes(address))
 }
-pub fn bind_unix(status: *fail.Status, descriptor: isize, address: *const UnixAddress) {
-  if status == nil {
-    bind_unix(&fail.Status{}, descriptor, address)
-    return
-  }
-  bind(status, descriptor, unix_bytes(status, "bind", address))
+pub fn bind_unix(descriptor: isize, address: *const UnixAddress) !io.IoErr {
+  try bind(descriptor, try unix_bytes(address))
 }
 
-pub fn connect(status: *fail.Status, descriptor: isize, address: []const u8) {
-  if status == nil {
-    connect(&fail.Status{}, descriptor, address)
-    return
-  }
-  if status.failed { return }
-  if address.len == 0 {
-    invalid(status, "connect", "empty address")
-    return
-  }
-  _ = check(status, "connect", native_connect(descriptor, &address[0], address.len))
+// An empty address fails with InvalidInput.
+pub fn connect(descriptor: isize, address: []const u8) !io.IoErr {
+  if address.len == 0 { fail .InvalidInput }
+  _ = try check(native_connect(descriptor, &address[0], address.len))
 }
 
-pub fn bind(status: *fail.Status, descriptor: isize, address: []const u8) {
-  if status == nil {
-    bind(&fail.Status{}, descriptor, address)
-    return
-  }
-  if status.failed { return }
-  if address.len == 0 {
-    invalid(status, "bind", "empty address")
-    return
-  }
-  _ = check(status, "bind", native_bind(descriptor, &address[0], address.len))
+pub fn bind(descriptor: isize, address: []const u8) !io.IoErr {
+  if address.len == 0 { fail .InvalidInput }
+  _ = try check(native_bind(descriptor, &address[0], address.len))
 }
 
-// Accepts one connection: its descriptor, or -1 after a failure.
-pub fn accept(status: *fail.Status, descriptor: isize) isize {
-  if status == nil { return accept(&fail.Status{}, descriptor) }
-  if status.failed { return -1 }
-  return check(status, "accept", native_accept(descriptor, nil, nil, false))
+// Accepts one connection: its descriptor.
+pub fn accept(descriptor: isize) isize!io.IoErr {
+  return try check(native_accept(descriptor, nil, nil, false))
 }
 
-fn stream_listen(status: *fail.Status, family: usize, address: []const u8, backlog: usize, shared: bool) Listener {
-  descriptor := socket(status, family, SocketStream, 0)
+fn stream_listen(family: usize, address: []const u8, backlog: usize, shared: bool) Listener!io.IoErr {
+  descriptor := try socket(family, SocketStream, 0)
+  errdefer close(descriptor)
   // Unix path ownership controls rebinding. SO_REUSEADDR is an Internet
   // option and is not supported by every AF_UNIX implementation.
   if family != AddressFamilyUnix {
-    reuse_address(status, descriptor, true)
+    try reuse_address(descriptor, true)
   }
   if shared {
-    reuse_port(status, descriptor, true)
+    try reuse_port(descriptor, true)
   }
-  bind(status, descriptor, address)
-  listen(status, descriptor, backlog)
-  if status.failed {
-    if descriptor >= 0 {
-      close(descriptor)
-    }
-    return Listener{}
-  }
+  try bind(descriptor, address)
+  try listen(descriptor, backlog)
   return listener_from_descriptor(descriptor)
 }
 
-fn stream_connect(status: *fail.Status, family: usize, address: []const u8) Connection {
-  descriptor := socket(status, family, SocketStream, 0)
-  connect(status, descriptor, address)
-  if status.failed {
-    if descriptor >= 0 {
-      close(descriptor)
-    }
-    return Connection{}
-  }
+fn stream_connect(family: usize, address: []const u8) Connection!io.IoErr {
+  descriptor := try socket(family, SocketStream, 0)
+  errdefer close(descriptor)
+  try connect(descriptor, address)
   return connection_from_descriptor(descriptor)
 }
 
-pub fn tcp_listen_ipv4(status: *fail.Status, address: *const Ipv4Address, backlog: usize) Listener {
-  if status == nil { return tcp_listen_ipv4(&fail.Status{}, address, backlog) }
-  return stream_listen(status, AddressFamilyIpv4, address.bytes[..], backlog, false)
+pub fn tcp_listen_ipv4(address: *const Ipv4Address, backlog: usize) Listener!io.IoErr {
+  return try stream_listen(AddressFamilyIpv4, address.bytes[..], backlog, false)
 }
 // Like tcp_listen_ipv4 with SO_REUSEPORT set before bind. Several listeners on
 // one address then share incoming connections, balanced by the kernel. Linux
 // only: elsewhere it fails with Unsupported.
-pub fn tcp_listen_ipv4_shared(status: *fail.Status, address: *const Ipv4Address, backlog: usize) Listener {
-  if status == nil { return tcp_listen_ipv4_shared(&fail.Status{}, address, backlog) }
-  return stream_listen(status, AddressFamilyIpv4, address.bytes[..], backlog, true)
+pub fn tcp_listen_ipv4_shared(address: *const Ipv4Address, backlog: usize) Listener!io.IoErr {
+  return try stream_listen(AddressFamilyIpv4, address.bytes[..], backlog, true)
 }
-pub fn tcp_connect_ipv4(status: *fail.Status, address: *const Ipv4Address) Connection {
-  if status == nil { return tcp_connect_ipv4(&fail.Status{}, address) }
-  return stream_connect(status, AddressFamilyIpv4, address.bytes[..])
+pub fn tcp_connect_ipv4(address: *const Ipv4Address) Connection!io.IoErr {
+  return try stream_connect(AddressFamilyIpv4, address.bytes[..])
 }
-pub fn tcp_listen_ipv6(status: *fail.Status, address: *const Ipv6Address, backlog: usize) Listener {
-  if status == nil { return tcp_listen_ipv6(&fail.Status{}, address, backlog) }
-  return stream_listen(status, AddressFamilyIpv6, address.bytes[..], backlog, false)
+pub fn tcp_listen_ipv6(address: *const Ipv6Address, backlog: usize) Listener!io.IoErr {
+  return try stream_listen(AddressFamilyIpv6, address.bytes[..], backlog, false)
 }
-pub fn tcp_connect_ipv6(status: *fail.Status, address: *const Ipv6Address) Connection {
-  if status == nil { return tcp_connect_ipv6(&fail.Status{}, address) }
-  return stream_connect(status, AddressFamilyIpv6, address.bytes[..])
+pub fn tcp_connect_ipv6(address: *const Ipv6Address) Connection!io.IoErr {
+  return try stream_connect(AddressFamilyIpv6, address.bytes[..])
 }
 // The caller removes the filesystem socket path after closing the listener.
-pub fn unix_listen(status: *fail.Status, address: *const UnixAddress, backlog: usize) Listener {
-  if status == nil { return unix_listen(&fail.Status{}, address, backlog) }
-  return stream_listen(status, AddressFamilyUnix, unix_bytes(status, "listen", address), backlog, false)
+pub fn unix_listen(address: *const UnixAddress, backlog: usize) Listener!io.IoErr {
+  return try stream_listen(AddressFamilyUnix, try unix_bytes(address), backlog, false)
 }
-pub fn unix_connect(status: *fail.Status, address: *const UnixAddress) Connection {
-  if status == nil { return unix_connect(&fail.Status{}, address) }
-  return stream_connect(status, AddressFamilyUnix, unix_bytes(status, "connect", address))
+pub fn unix_connect(address: *const UnixAddress) Connection!io.IoErr {
+  return try stream_connect(AddressFamilyUnix, try unix_bytes(address))
 }
 
 // IPv4 multicast membership uses network-order octets for both addresses.
-// An all-zero interface selects the system default interface.
-pub fn multicast_join_ipv4(status: *fail.Status, descriptor: isize, group: [4]u8, interface: [4]u8) {
-  if status == nil {
-    multicast_join_ipv4(&fail.Status{}, descriptor, group, interface)
-    return
-  }
-  multicast_membership(status, descriptor, group, interface, MulticastJoinOption)
+// An all-zero interface selects the system default interface. A group that
+// is not a multicast address fails with InvalidInput.
+pub fn multicast_join_ipv4(descriptor: isize, group: [4]u8, interface: [4]u8) !io.IoErr {
+  try multicast_membership(descriptor, group, interface, MulticastJoinOption)
 }
-pub fn multicast_leave_ipv4(status: *fail.Status, descriptor: isize, group: [4]u8, interface: [4]u8) {
-  if status == nil {
-    multicast_leave_ipv4(&fail.Status{}, descriptor, group, interface)
-    return
-  }
-  multicast_membership(status, descriptor, group, interface, MulticastLeaveOption)
+pub fn multicast_leave_ipv4(descriptor: isize, group: [4]u8, interface: [4]u8) !io.IoErr {
+  try multicast_membership(descriptor, group, interface, MulticastLeaveOption)
 }
-fn multicast_membership(status: *fail.Status, descriptor: isize, group: [4]u8, interface: [4]u8, option: usize) {
-  if status.failed { return }
-  if group[0] < 224 || group[0] > 239 {
-    invalid(status, "multicast membership", "the group is not a multicast address")
-    return
-  }
+fn multicast_membership(descriptor: isize, group: [4]u8, interface: [4]u8, option: usize) !io.IoErr {
+  if group[0] < 224 || group[0] > 239 { fail .InvalidInput }
   request: [8]u8
   for i in 0..4 {
     request[i] = group[i]
     request[4 + i] = interface[i]
   }
-  _ = check(status, "multicast membership", native_set_option(descriptor, 0, option, &request[0], 8))
+  _ = try check(native_set_option(descriptor, 0, option, &request[0], 8))
 }
-pub fn multicast_interface_ipv4(status: *fail.Status, descriptor: isize, interface: [4]u8) {
-  if status == nil {
-    multicast_interface_ipv4(&fail.Status{}, descriptor, interface)
-    return
-  }
-  if status.failed { return }
-  _ = check(status, "multicast interface", native_set_option(descriptor, 0, MulticastInterfaceOption, &interface[0], 4))
+pub fn multicast_interface_ipv4(descriptor: isize, interface: [4]u8) !io.IoErr {
+  value := interface
+  _ = try check(native_set_option(descriptor, 0, MulticastInterfaceOption, &value[0], 4))
 }
-pub fn multicast_ttl_ipv4(status: *fail.Status, descriptor: isize, ttl: u8) {
-  if status == nil {
-    multicast_ttl_ipv4(&fail.Status{}, descriptor, ttl)
-    return
-  }
-  if status.failed { return }
-  _ = check(status, "multicast ttl", native_multicast_byte(descriptor, MulticastTtlOption, ttl))
+pub fn multicast_ttl_ipv4(descriptor: isize, ttl: u8) !io.IoErr {
+  _ = try check(native_multicast_byte(descriptor, MulticastTtlOption, ttl))
 }
 // POSIX controls outgoing loopback; Windows controls receipt on this socket.
-pub fn multicast_loop_ipv4(status: *fail.Status, descriptor: isize, enabled: bool) {
-  if status == nil {
-    multicast_loop_ipv4(&fail.Status{}, descriptor, enabled)
-    return
-  }
-  if status.failed { return }
+pub fn multicast_loop_ipv4(descriptor: isize, enabled: bool) !io.IoErr {
   value: u8 = 0
   if enabled {
     value = 1
   }
-  _ = check(status, "multicast loop", native_multicast_byte(descriptor, MulticastLoopOption, value))
+  _ = try check(native_multicast_byte(descriptor, MulticastLoopOption, value))
 }
 
-pub fn listener_accept(status: *fail.Status, listener: *Listener) Connection {
-  if status == nil { return listener_accept(&fail.Status{}, listener) }
-  if status.failed { return Connection{} }
-  if !listener.active {
-    closed(status, "accept")
-    return Connection{}
-  }
-  accepted := accept(status, listener.descriptor)
-  if status.failed { return Connection{} }
-  return connection_from_descriptor(accepted)
+pub fn listener_accept(listener: *Listener) Connection!io.IoErr {
+  if !listener.active { fail .InvalidInput }
+  return connection_from_descriptor(try accept(listener.descriptor))
 }
 
 pub fn listener_close(listener: *Listener) {
@@ -383,57 +258,30 @@ pub fn connection_close(connection: *Connection) {
 }
 
 // Reads what is available, up to destination; 0 at the end of the stream.
-pub fn connection_read(status: *fail.Status, connection: *Connection, destination: []u8) usize {
-  if status == nil { return connection_read(&fail.Status{}, connection, destination) }
-  if status.failed { return 0 }
-  if !connection.active {
-    closed(status, "read")
-    return 0
-  }
-  return receive(status, connection.descriptor, destination, 0)
+pub fn connection_read(connection: *Connection, destination: []u8) usize!io.IoErr {
+  if !connection.active { fail .InvalidInput }
+  return try receive(connection.descriptor, destination, 0)
 }
 
-// Writes all of source; the count written, short only after a failure.
-pub fn connection_write(status: *fail.Status, connection: *Connection, source: []const u8) usize {
-  if status == nil { return connection_write(&fail.Status{}, connection, source) }
-  if status.failed { return 0 }
-  if !connection.active {
-    closed(status, "write")
-    return 0
-  }
+// Writes all of source. A connection that takes no more bytes fails with
+// System(-32), EPIPE.
+pub fn connection_write(connection: *Connection, source: []const u8) !io.IoErr {
+  if !connection.active { fail .InvalidInput }
   total: usize = 0
   for total < source.len {
-    sent := send(status, connection.descriptor, source[total..], 0)
-    if status.failed { return total }
-    if sent == 0 {
-      failure := fail.make(fail.Kind.InvalidState, "write", "", "the connection accepts no more bytes")
-      failure.native = -32
-      fail.set(status, failure)
-      return total
-    }
+    sent := try send(connection.descriptor, source[total..], 0)
+    if sent == 0 { fail io.IoErr.System(-32) }
     total += sent
   }
-  return total
 }
 
 fn connection_reader_read(data: rawptr, destination: []u8) usize!io.IoErr {
-  status: fail.Status
-  count := connection_reader_read_status(data, &status, destination)
-  try io.check_status(&status)
-  return count
-}
-fn connection_reader_read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
-  return connection_read(status, #cast(*Connection, data), destination)
+  return try connection_read(#cast(*Connection, data), destination)
 }
 
 fn connection_writer_write(data: rawptr, source: []const u8) usize!io.IoErr {
-  status: fail.Status
-  count := connection_writer_write_status(data, &status, source)
-  try io.check_status(&status)
-  return count
-}
-fn connection_writer_write_status(data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return connection_write(status, #cast(*Connection, data), source)
+  try connection_write(#cast(*Connection, data), source)
+  return source.len
 }
 
 pub fn connection_reader(connection: *Connection) io.Reader {
@@ -446,99 +294,70 @@ pub fn connection_writer(connection: *Connection) io.Writer {
 
 // Accepts one connection and records its peer address. nonblocking sets the
 // new socket nonblocking in the same step where the platform allows it.
-// The new descriptor, or -1 after a failure.
-pub fn accept_address(status: *fail.Status, descriptor: isize, address: *Address, nonblocking: bool) isize {
-  if status == nil { return accept_address(&fail.Status{}, descriptor, address, nonblocking) }
-  if status.failed { return -1 }
+// The new descriptor.
+pub fn accept_address(descriptor: isize, address: *Address, nonblocking: bool) isize!io.IoErr {
   length: u32 = 128
-  value := check(status, "accept", native_accept(descriptor, &address.bytes[0], &length, nonblocking))
-  if value >= 0 {
-    address.length = length
-  }
+  value := try check(native_accept(descriptor, &address.bytes[0], &length, nonblocking))
+  address.length = length
   return value
 }
 
 // Like accept_address on a nonblocking listener, where no pending
 // connection is no failure: -1 with blocked true.
-pub fn try_accept_address(status: *fail.Status, descriptor: isize, address: *Address, nonblocking: bool) Accepted {
-  if status == nil { return try_accept_address(&fail.Status{}, descriptor, address, nonblocking) }
-  if status.failed { return Accepted{ descriptor: -1 } }
+pub fn try_accept_address(descriptor: isize, address: *Address, nonblocking: bool) Accepted!io.IoErr {
   length: u32 = 128
   value := native_accept(descriptor, &address.bytes[0], &length, nonblocking)
   if value < 0 {
     if native_would_block(value) { return Accepted{ descriptor: -1, blocked: true } }
-    fail.set(status, native_failure("accept", value))
-    return Accepted{ descriptor: -1 }
+    fail native_err(value)
   }
   address.length = length
   return Accepted{ descriptor: value }
 }
 pub struct Accepted { descriptor: isize, blocked: bool }
 
-pub fn local_address(status: *fail.Status, descriptor: isize, address: *Address) {
-  if status == nil {
-    local_address(&fail.Status{}, descriptor, address)
-    return
-  }
-  if status.failed { return }
+pub fn local_address(descriptor: isize, address: *Address) !io.IoErr {
   length: u32 = 128
-  if check(status, "local address", native_local(descriptor, &address.bytes[0], &length)) >= 0 {
-    address.length = length
-  }
+  _ = try check(native_local(descriptor, &address.bytes[0], &length))
+  address.length = length
 }
 
-pub fn peer_address(status: *fail.Status, descriptor: isize, address: *Address) {
-  if status == nil {
-    peer_address(&fail.Status{}, descriptor, address)
-    return
-  }
-  if status.failed { return }
+pub fn peer_address(descriptor: isize, address: *Address) !io.IoErr {
   length: u32 = 128
-  if check(status, "peer address", native_peer(descriptor, &address.bytes[0], &length)) >= 0 {
-    address.length = length
-  }
+  _ = try check(native_peer(descriptor, &address.bytes[0], &length))
+  address.length = length
 }
 
 // Sends what the socket takes now, up to all of bytes; the count sent.
-pub fn send(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize) usize {
-  if status == nil { return send(&fail.Status{}, descriptor, bytes, flags) }
-  if status.failed || bytes.len == 0 { return 0 }
-  value := send_native(descriptor, bytes, flags)
-  if check(status, "send", value) < 0 { return 0 }
-  return #cast(usize, value)
+pub fn send(descriptor: isize, bytes: []const u8, flags: usize) usize!io.IoErr {
+  if bytes.len == 0 { return 0 }
+  return #cast(usize, try check(send_native(descriptor, bytes, flags)))
 }
 
 // Receives what is available, up to bytes; 0 at the end of a stream.
-pub fn receive(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize) usize {
-  if status == nil { return receive(&fail.Status{}, descriptor, bytes, flags) }
-  if status.failed || bytes.len == 0 { return 0 }
-  value := receive_native(descriptor, bytes, flags)
-  if check(status, "receive", value) < 0 { return 0 }
-  return #cast(usize, value)
+pub fn receive(descriptor: isize, bytes: []u8, flags: usize) usize!io.IoErr {
+  if bytes.len == 0 { return 0 }
+  return #cast(usize, try check(receive_native(descriptor, bytes, flags)))
 }
 
 // For nonblocking sockets, where a socket that is not ready is no failure:
 // count is 0 and blocked is true. Otherwise as send and receive.
 pub struct Attempt { count: usize, blocked: bool }
-pub fn try_send(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize) Attempt {
-  if status == nil { return try_send(&fail.Status{}, descriptor, bytes, flags) }
-  if status.failed || bytes.len == 0 { return Attempt{} }
+pub fn try_send(descriptor: isize, bytes: []const u8, flags: usize) Attempt!io.IoErr {
+  if bytes.len == 0 { return Attempt{} }
   value := send_native(descriptor, bytes, flags)
   if value < 0 {
     if native_would_block(value) { return Attempt{ blocked: true } }
-    fail.set(status, native_failure("send", value))
-    return Attempt{}
+    fail native_err(value)
   }
   return Attempt{ count: #cast(usize, value) }
 }
-pub fn try_receive(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize) Attempt {
-  if status == nil { return try_receive(&fail.Status{}, descriptor, bytes, flags) }
-  if status.failed || bytes.len == 0 { return Attempt{} }
+pub fn try_receive(descriptor: isize, bytes: []u8, flags: usize) Attempt!io.IoErr {
+  if bytes.len == 0 { return Attempt{} }
   value := receive_native(descriptor, bytes, flags)
   if value < 0 {
     if native_would_block(value) { return Attempt{ blocked: true } }
-    fail.set(status, native_failure("receive", value))
-    return Attempt{}
+    fail native_err(value)
   }
   return Attempt{ count: #cast(usize, value) }
 }
@@ -560,14 +379,10 @@ fn receive_native(descriptor: isize, bytes: []u8, flags: usize) isize {
   return value
 }
 
-// Sends one datagram to address; the count sent.
-pub fn send_to(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize, address: []const u8) usize {
-  if status == nil { return send_to(&fail.Status{}, descriptor, bytes, flags, address) }
-  if status.failed { return 0 }
-  if address.len == 0 {
-    invalid(status, "send", "empty address")
-    return 0
-  }
+// Sends one datagram to address; the count sent. An empty address fails with
+// InvalidInput.
+pub fn send_to(descriptor: isize, bytes: []const u8, flags: usize, address: []const u8) usize!io.IoErr {
+  if address.len == 0 { fail .InvalidInput }
   // Empty UDP payloads are packets too; the kernel accepts a null buffer.
   data: *const u8 = nil
   if bytes.len > 0 {
@@ -579,14 +394,12 @@ pub fn send_to(status: *fail.Status, descriptor: isize, bytes: []const u8, flags
   for native_interrupted(value) {
     value = native_send(descriptor, data, bytes.len, flags, &address[0], address.len)
   }
-  if check(status, "send", value) < 0 { return 0 }
-  return #cast(usize, value)
+  return #cast(usize, try check(value))
 }
 
 // Receives one datagram and its sender's address; the count received.
-pub fn receive_from(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize, address: []u8, address_length: *u32) usize {
-  if status == nil { return receive_from(&fail.Status{}, descriptor, bytes, flags, address, address_length) }
-  if status.failed || bytes.len == 0 { return 0 }
+pub fn receive_from(descriptor: isize, bytes: []u8, flags: usize, address: []u8, address_length: *u32) usize!io.IoErr {
+  if bytes.len == 0 { return 0 }
   address_raw: *u8 = nil
   if address.len > 0 {
     address_raw = &address[0]
@@ -596,99 +409,60 @@ pub fn receive_from(status: *fail.Status, descriptor: isize, bytes: []u8, flags:
   for native_interrupted(value) {
     value = native_receive(descriptor, &bytes[0], bytes.len, flags, address_raw, address_length)
   }
-  if check(status, "receive", value) < 0 { return 0 }
-  return #cast(usize, value)
+  return #cast(usize, try check(value))
 }
 
-fn flag_option(status: *fail.Status, operation: []const u8, descriptor: isize, level: usize, option: usize, enabled: bool) {
-  if status.failed { return }
+fn flag_option(descriptor: isize, level: usize, option: usize, enabled: bool) !io.IoErr {
   value: i32 = 0
   if enabled {
     value = 1
   }
-  _ = check(status, operation, native_set_option(descriptor, level, option, &value, #sizeof(i32)))
+  _ = try check(native_set_option(descriptor, level, option, &value, #sizeof(i32)))
 }
 
-pub fn reuse_address(status: *fail.Status, descriptor: isize, enabled: bool) {
-  if status == nil {
-    reuse_address(&fail.Status{}, descriptor, enabled)
-    return
-  }
-  flag_option(status, "reuse address", descriptor, SocketLevel, ReuseOption, enabled)
+pub fn reuse_address(descriptor: isize, enabled: bool) !io.IoErr {
+  try flag_option(descriptor, SocketLevel, ReuseOption, enabled)
 }
 
 // TCP_NODELAY: send small segments at once instead of waiting for the peer's
 // ACK. Request/response servers want this; bulk senders usually do not.
-pub fn no_delay(status: *fail.Status, descriptor: isize, enabled: bool) {
-  if status == nil {
-    no_delay(&fail.Status{}, descriptor, enabled)
-    return
-  }
-  flag_option(status, "no delay", descriptor, TcpLevel, NoDelayOption, enabled)
+pub fn no_delay(descriptor: isize, enabled: bool) !io.IoErr {
+  try flag_option(descriptor, TcpLevel, NoDelayOption, enabled)
 }
 
 // SO_REUSEPORT with kernel load balancing. Unsupported where the platform has
 // only the non-balancing variant (macOS) or none (Windows).
-pub fn reuse_port(status: *fail.Status, descriptor: isize, enabled: bool) {
-  if status == nil {
-    reuse_port(&fail.Status{}, descriptor, enabled)
-    return
-  }
-  if status.failed { return }
-  if ReusePortOption == 0 {
-    failure := fail.make(fail.Kind.Unsupported, "reuse port", "", "this system has no balancing SO_REUSEPORT")
-    failure.native = -95
-    fail.set(status, failure)
-    return
-  }
-  flag_option(status, "reuse port", descriptor, SocketLevel, ReusePortOption, enabled)
+pub fn reuse_port(descriptor: isize, enabled: bool) !io.IoErr {
+  if ReusePortOption == 0 { fail .Unsupported }
+  try flag_option(descriptor, SocketLevel, ReusePortOption, enabled)
 }
 
 // Completes a nonblocking connect: the connect's failure, read from SO_ERROR.
-pub fn socket_error(status: *fail.Status, descriptor: isize) {
-  if status == nil {
-    socket_error(&fail.Status{}, descriptor)
-    return
-  }
-  if status.failed { return }
+pub fn socket_error(descriptor: isize) !io.IoErr {
   error: i32 = 0
   length: u32 = #cast(u32, #sizeof(i32))
-  queried := native_get_option(descriptor, SocketLevel, ErrorOption, &error, &length)
-  if check(status, "connect", queried) < 0 { return }
-  if error != 0 {
-    _ = check(status, "connect", 0 - #cast(isize, error))
-  }
+  _ = try check(native_get_option(descriptor, SocketLevel, ErrorOption, &error, &length))
+  if error != 0 { fail native_err(0 - #cast(isize, error)) }
 }
 
-pub fn nonblocking(status: *fail.Status, descriptor: isize, enabled: bool) {
-  if status == nil {
-    nonblocking(&fail.Status{}, descriptor, enabled)
-    return
-  }
-  if status.failed { return }
-  _ = check(status, "set nonblocking", native_nonblocking(descriptor, enabled))
+pub fn nonblocking(descriptor: isize, enabled: bool) !io.IoErr {
+  _ = try check(native_nonblocking(descriptor, enabled))
 }
-pub fn receive_timeout(status: *fail.Status, descriptor: isize, milliseconds: usize) {
-  if status == nil {
-    receive_timeout(&fail.Status{}, descriptor, milliseconds)
-    return
-  }
-  if status.failed { return }
-  _ = check(status, "set receive timeout", native_timeout(descriptor, milliseconds, false))
+pub fn receive_timeout(descriptor: isize, milliseconds: usize) !io.IoErr {
+  _ = try check(native_timeout(descriptor, milliseconds, false))
 }
-pub fn send_timeout(status: *fail.Status, descriptor: isize, milliseconds: usize) {
-  if status == nil {
-    send_timeout(&fail.Status{}, descriptor, milliseconds)
-    return
-  }
-  if status.failed { return }
-  _ = check(status, "set send timeout", native_timeout(descriptor, milliseconds, true))
+pub fn send_timeout(descriptor: isize, milliseconds: usize) !io.IoErr {
+  _ = try check(native_timeout(descriptor, milliseconds, true))
 }
 
-// Whether a failure is a socket timeout or a nonblocking socket that was not
+// Whether err is a socket timeout or a nonblocking socket that was not
 // ready, rather than a broken connection.
-pub fn would_block(failure: *const fail.Failure) bool {
-  return failure.kind == fail.Kind.WouldBlock || native_would_block(failure.native)
+pub fn would_block(err: io.IoErr) bool {
+  case err {
+    .WouldBlock => { return true }
+    .System(code) => { return native_would_block(code) }
+    _ => { return false }
+  }
 }
 
 // Called only after EINTR for finite waits: the milliseconds left, rounded
@@ -703,9 +477,7 @@ fn interrupted_timeout(start: clock.Instant, milliseconds: i32) i32 {
 
 // Waits for readiness on descriptors; the number ready, 0 on timeout. A
 // negative timeout waits indefinitely, zero polls.
-pub fn poll(status: *fail.Status, descriptors: []PollDescriptor, timeout_milliseconds: i32) usize {
-  if status == nil { return poll(&fail.Status{}, descriptors, timeout_milliseconds) }
-  if status.failed { return 0 }
+pub fn poll(descriptors: []PollDescriptor, timeout_milliseconds: i32) usize!io.IoErr {
   start := clock.Instant{}
   if timeout_milliseconds > 0 {
     start = clock.monotonic_now()
@@ -724,23 +496,19 @@ pub fn poll(status: *fail.Status, descriptors: []PollDescriptor, timeout_millise
     }
     value = poll_native(descriptors, remaining)
   }
-  if check(status, "poll", value) < 0 { return 0 }
-  return #cast(usize, value)
+  return #cast(usize, try check(value))
 }
 
 // Waits for events on one descriptor: the events that happened, 0 on timeout.
-pub fn wait(status: *fail.Status, descriptor: isize, events: i16, timeout_milliseconds: i32) i16 {
-  if status == nil { return wait(&fail.Status{}, descriptor, events, timeout_milliseconds) }
+pub fn wait(descriptor: isize, events: i16, timeout_milliseconds: i32) i16!io.IoErr {
   item := PollDescriptor{ descriptor: #cast(Descriptor, descriptor), events: events, returned: 0 }
-  if poll(status, #slice(&item, 1), timeout_milliseconds) == 0 { return 0 }
+  if try poll(#slice(&item, 1), timeout_milliseconds) == 0 { return 0 }
   return item.returned
 }
 
 pub fn poll_has(item: *const PollDescriptor, events: i16) bool {
   return (item.returned & events) != 0
 }
-
-
 
 // The IP of an IPv4 or IPv6 socket address: 4 or 16 bytes in network order,
 // and the port. Empty bytes for other families.

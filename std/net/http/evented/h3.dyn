@@ -137,7 +137,7 @@ fn write_varint(destination: []u8, value: u64) usize {
 pub struct Http3 {
   storage_size: fn(Config) usize,
   valid: fn(Config) bool,
-  start: fn(*mem.Arena, *fail.Status, *Worker),
+  start: fn(*mem.Arena, *Worker) !io.IoErr,
   close: fn(*Worker, *Connection),
   poll: fn(*Worker),
   stop: fn(*Worker),
@@ -165,31 +165,30 @@ fn h3_storage_size(config: Config) usize {
 
 // Opens the worker's UDP socket and QUIC listener on the TCP listener's
 // address, and the Alt-Svc value TCP responses advertise.
-fn h3_start(arena: *mem.Arena, status: *fail.Status, worker: *Worker) {
+// A QUIC listener that does not start fails with System(0).
+fn h3_start(arena: *mem.Arena, worker: *Worker) !io.IoErr {
   config := worker.config
-  if status.failed { return }
   worker.h2.read = mem.push_bytes(arena, MaxFrame + 1024)
   worker.h3_connections = mem.push_array<usize>(arena, config.http2_connections)
   address := network.Address{}
-  network.local_address(status, worker.listener.descriptor, &address)
+  try network.local_address(worker.listener.descriptor, &address)
   family := #cast(usize, address.bytes[0]) | (#cast(usize, address.bytes[1]) << 8)
-  descriptor := network.socket(status, family, network.SocketDatagram, 0)
-  if status.failed { return }
+  descriptor := try network.socket(family, network.SocketDatagram, 0)
   // Best effort: a second server on the port is the only one that needs them.
-  options: fail.Status
-  network.reuse_address(&options, descriptor, true)
-  network.reuse_port(&options, descriptor, true)
-  network.nonblocking(status, descriptor, true)
-  network.bind(status, descriptor, address.bytes[..address.length])
-  if status.failed {
+  network.reuse_address(descriptor, true) catch {}
+  network.reuse_port(descriptor, true) catch {}
+  network.nonblocking(descriptor, true) catch err {
     network.close(descriptor)
-    return
+    fail err
+  }
+  network.bind(descriptor, address.bytes[..address.length]) catch err {
+    network.close(descriptor)
+    fail err
   }
   listener := config.quic.listen(config.quic.data, descriptor)
   if listener == nil {
     network.close(descriptor)
-    fail.set(status, fail.make(fail.Kind.System, "start HTTP/3", "", "the QUIC listener did not start"))
-    return
+    fail io.IoErr.System(0)
   }
   worker.udp = descriptor
   worker.quic_listener = listener
@@ -200,7 +199,7 @@ fn h3_start(arena: *mem.Arena, status: *fail.Status, worker: *Worker) {
   at = append_text(worker.alt_svc[..], at.len, digits)
   at = append_text(worker.alt_svc[..], at.len, "\"; ma=86400")
   worker.alt_svc_length = at.len
-  event.add(status, &worker.queue, descriptor, event.Readable, QuicToken)
+  try event.add(&worker.queue, descriptor, event.Readable, QuicToken)
 }
 
 fn decimal_text(destination: []u8, value: u64) []const u8 {
@@ -217,8 +216,7 @@ fn decimal_text(destination: []u8, value: u64) []const u8 {
 
 fn h3_stop(worker: *Worker) {
   if worker.quic_listener == nil { return }
-  event.remove(&worker.io, &worker.queue, worker.udp)
-  _ = io_failed(worker)
+  event.remove(&worker.queue, worker.udp) catch {}
   worker.config.quic.close_listener(worker.quic_listener)
   worker.quic_listener = nil
   network.close(worker.udp)
@@ -703,8 +701,7 @@ fn h3_write(worker: *Worker, connection: *Connection, stream_index: usize, sourc
       if timer >= 0 && timer < 10 {
         wait = #cast(i32, timer)
       }
-      _ = network.wait(&worker.io, worker.udp, network.PollReadable, wait)
-      _ = io_failed(worker)
+      wait_udp(worker, wait)
     }
   }
   return true
@@ -747,4 +744,9 @@ fn h3_send_data(worker: *Worker, connection: *Connection, stream_index: usize, d
   }
   if end { return h3_write(worker, connection, stream_index, rest, true, blocking) }
   return true
+}
+
+// Waits for a datagram; a failure only ends the wait.
+fn wait_udp(worker: *Worker, milliseconds: i32) {
+  _ = network.wait(worker.udp, network.PollReadable, milliseconds) catch { return }
 }

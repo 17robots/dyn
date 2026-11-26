@@ -25,10 +25,10 @@ fn numeric(root: *const json.Value, key: []const u8) Number {
   // Integer fields normally use the integer reader. Fraction/exponent spellings
   // retain the same binary64 validation semantics as the other DOM ports.
   if strings.valid<u64>(node.text) {
-    integer := json.as<u64>(node)
+    integer := json.as<u64>(nil, node)
     return Number{ value: integer, ok: integer <= Maximum }
   }
-  value := json.as<f64>(node)
+  value := json.as<f64>(nil, node)
   if !(value >= 0.0 && value <= 9007199254740991.0) { return Number{} }
   integer := #cast(u64, value)
   return Number{ value: integer, ok: #cast(f64, integer) == value }
@@ -90,15 +90,14 @@ fn encoded_summary(arena: *mem.Arena, summary: *const Summary) []u8 {
   return json.encode(arena, root)
 }
 fn print_json(value: []const u8) {
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  io.write(&status, io.stdout(), value)
-  io.write(&status, io.stdout(), "\n")
+  io.write(io.stdout(), value) catch { #panic("write output") }
+  io.write(io.stdout(), "\n") catch { #panic("write output") }
 }
 fn report(file: []const u8) {
   input := mem.arena_alloc(mem.GiB)
   defer mem.arena_release(input)
   status := fail.Status{ on_failure: fail.panic_on_failure }
-  read := fs.read_all(input, &status, file, 1024 * mem.MiB)
+  read := fs.read_all(input, file, 1024 * mem.MiB) catch { #panic("read input") }
   scratch := mem.arena_alloc(0)
   defer mem.arena_release(scratch)
   summary: Summary
@@ -120,14 +119,14 @@ fn report(file: []const u8) {
   }
   print_json(encoded_summary(scratch, &summary))
 }
-fn search_walk(status: *fail.Status, directory: []const u8, result: *Search) {
+fn search_walk(directory: []const u8, result: *Search) !io.IoErr {
   buffer: [32768]u8
-  state := fs.open_directory(status, directory, buffer[..])
+  state := try fs.open_directory(directory, buffer[..])
   defer fs.close_directory(&state)
   scratch := mem.arena_alloc(0)
   defer mem.arena_release(scratch)
   for {
-    entry := fs.directory_next(status, &state)
+    entry := try fs.directory_next(&state)
     if state.ended { break }
     // Linux directory entry types: DT_DIR=4, DT_REG=8
     // Symlinks are skipped.
@@ -137,9 +136,9 @@ fn search_walk(status: *fail.Status, directory: []const u8, result: *Search) {
     if entry.kind != 4 && entry.kind != 8 { continue }
     joined := path.join(scratch, directory, entry.name)
     if entry.kind == 4 {
-      search_walk(status, joined, result)
+      try search_walk(joined, result)
     } else if bytes.ends_with(entry.name, ".txt") {
-      read := fs.read_all(scratch, status, joined, 1024 * mem.MiB)
+      read := try fs.read_all(scratch, joined, 1024 * mem.MiB)
       result.files += 1
       result.bytes += #cast(u64, read.len)
       at: usize
@@ -166,9 +165,11 @@ fn search_walk(status: *fail.Status, directory: []const u8, result: *Search) {
 }
 fn search(directory: []const u8) {
   result: Search
-  // A benchmark: any failure ends it with its description.
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  search_walk(&status, directory, &result)
+  // A benchmark: any failure ends it.
+  search_walk(directory, &result) catch err {
+    io.eprintln("search: {}", err)
+    #panic("search failed")
+  }
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   root := json.push_object(arena)
@@ -180,42 +181,42 @@ fn search(directory: []const u8) {
   print_json(json.encode(arena, root))
 }
 struct App { quit: sync.AtomicU32 }
-fn handle(status: *fail.Status, response: *http.Response, request: *const http.Request) {
+fn handle(response: *http.Response, request: *const http.Request) !io.IoErr {
   if bytes.equal(request.method, "GET") && bytes.equal(request.target, "/health") {
-    http.respond(status, response, "ok\n", http.ResponseOptions{ content_type: "text/plain", close_connection: true })
+    try http.respond(response, "ok\n", http.ResponseOptions{ content_type: "text/plain", close_connection: true })
     return
   }
   if bytes.equal(request.method, "POST") && bytes.equal(request.target, "/quit") {
-    http.respond(status, response, "bye\n", http.ResponseOptions{ close_connection: true })
+    try http.respond(response, "bye\n", http.ResponseOptions{ close_connection: true })
     sync.store_u32(&#cast(*App, request.context).quit, 1)
     return
   }
   if !bytes.equal(request.method, "POST") || !bytes.equal(request.target, "/summarize") {
-    http.respond(status, response, "not found\n", http.ResponseOptions{ status: 404, close_connection: true })
+    try http.respond(response, "not found\n", http.ResponseOptions{ status: 404, close_connection: true })
     return
   }
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   if request.body.len > mem.MiB {
-    http.respond(status, response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
+    try http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
     return
   }
   parsing: fail.Status
   root := json.parse(arena, &parsing, request.body)
   if parsing.failed || root.kind != json.KindArray {
-    http.respond(status, response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
+    try http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
     return
   }
   summary: Summary
   child := root.first
   for child != nil {
     if !add_record(&summary, child) {
-      http.respond(status, response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
+      try http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
       return
     }
     child = child.next
   }
-  http.respond(status, response, encoded_summary(arena, &summary), http.ResponseOptions{ content_type: "application/json", close_connection: true })
+  try http.respond(response, encoded_summary(arena, &summary), http.ResponseOptions{ content_type: "application/json", close_connection: true })
 }
 fn serve() {
   config := evented.default_config()
@@ -227,23 +228,18 @@ fn serve() {
   defer mem.arena_release(arena)
   state := mem.push<App>(arena)
   workers := mem.push_array<evented.Worker>(arena, 4)
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  _ = evented.start_shared(arena, &status, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, handle, state)
+  evented.start_shared(arena, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, handle, state) catch { #panic("start server") }
   io.println("port {}", evented.local_port(workers))
   for sync.load_u32(&state.quit) == 0 {
     time.sleep(time.Millisecond)
   }
   evented.stop(workers)
-  evented.join(&status, workers)
+  evented.join(workers) catch { #panic("join server") }
 }
 fn main() {
   arena := mem.arena_alloc(mem.GiB)
   defer mem.arena_release(arena)
-  arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
-  if arguments_status.failed {
-    #panic("arguments")
-  }
+  arguments := process.arguments(arena) catch { #panic("arguments") }
   args := arguments
   if args.len == 2 && bytes.equal(args[1], "serve") {
     serve()

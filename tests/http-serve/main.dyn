@@ -15,9 +15,9 @@ use "std/thread/pool"
 use "std/thread/posix"
 use "std/time"
 
-fn hello(status: *fail.Status, response: *http.Response, request: *const http.Request) {
+fn hello(response: *http.Response, request: *const http.Request) !io.IoErr {
   if bytes.equal(request.path, "/slow") { time.sleep(20 * time.Millisecond) }
-  http.text(status, response, 200, "hello\n")
+  try http.text(response, 200, "hello\n")
 }
 
 fn main() i32 {
@@ -35,7 +35,7 @@ fn main() i32 {
   if status.failed { return 1 }
   workers: [2]evented.Worker
   // Port 18097: the test connects there.
-  evented.serve(arena, &status, workers[..], net.ipv4(127, 0, 0, 1, 18097), config, hello, nil)
+  evented.serve(arena, workers[..], net.ipv4(127, 0, 0, 1, 18097), config, hello, nil) catch { return 1 }
   pool.stop(&status, raw)
   pool.stop(&status, libc)
   if status.failed { return 1 }

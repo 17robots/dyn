@@ -8,26 +8,14 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve()
 SOURCE = r'''
-use "std/fail"
 use io "std/io"
 use http "std/net/http"
-// A writer that fails its fail-th call with code, counting calls.
+// A writer that fails its fail-th call with System(code), counting calls.
 struct Sink { calls: usize, fail: usize, code: isize, partial: bool }
 fn write(raw: rawptr, source: []const u8) usize!io.IoErr {
-  status: fail.Status
-  count := write_status(raw, &status, source)
-  try io.check_status(&status)
-  return count
-}
-fn write_status(raw: rawptr, status: *fail.Status, source: []const u8) usize {
   s := #cast(*Sink, raw)
   s.calls += 1
-  if s.calls == s.fail {
-    failure := fail.make(fail.Kind.InvalidInput, "write", "", "sink failure")
-    failure.native = s.code
-    fail.set(status, failure)
-    return 0
-  }
+  if s.calls == s.fail { fail .System(s.code) }
   count := source.len
   if s.partial && count > 1 { count = 1 }
   return count
@@ -35,20 +23,9 @@ fn write_status(raw: rawptr, status: *fail.Status, source: []const u8) usize {
 struct Feed { calls: usize, wire: []const u8, code: isize, fail: bool, delivered: bool }
 // The wire once, then the end: a stream ends with a read that returns 0.
 fn read(raw: rawptr, destination: []u8) usize!io.IoErr {
-  status: fail.Status
-  count := read_status(raw, &status, destination)
-  try io.check_status(&status)
-  return count
-}
-fn read_status(raw: rawptr, status: *fail.Status, destination: []u8) usize {
   f := #cast(*Feed, raw)
   f.calls += 1
-  if f.fail {
-    failure := fail.make(fail.Kind.System, "read", "", "feed failure")
-    failure.native = f.code
-    fail.set(status, failure)
-    return 0
-  }
+  if f.fail { fail .System(f.code) }
   if f.delivered { return 0 }
   f.delivered = true
   count := f.wire.len
@@ -56,15 +33,46 @@ fn read_status(raw: rawptr, status: *fail.Status, destination: []u8) usize {
   for i in 0..count { destination[i] = f.wire[i] }
   return count
 }
-// A failure through io.Writer keeps its kind but not the native code.
-fn sink_failure(status: *const fail.Status, code: isize) {
-  _ = code
-  if !status.failed || status.failure.kind != fail.Kind.InvalidInput { #panic("first HTTP failure") }
+fn check(ok: bool, message: []const u8) { if !ok { #panic(message) } }
+// The writer's own failure, native code included.
+fn system(err: io.IoErr, code: isize) bool {
+  case err {
+    .System(native) => { return native == code }
+    _ => { return false }
+  }
 }
-// InvalidState from http directly, InvalidInput through io.Writer.
-fn finished(status: *const fail.Status) {
-  kind := status.failure.kind
-  if !status.failed || (kind != fail.Kind.InvalidState && kind != fail.Kind.InvalidInput) { #panic("finished after a failure") }
+// What http reports once a response, body or server has finished.
+fn finished(err: io.IoErr) bool {
+  case err {
+    .InvalidInput => { return true }
+    _ => { return false }
+  }
+}
+fn capacity(err: io.IoErr) bool {
+  case err {
+    .Capacity => { return true }
+    _ => { return false }
+  }
+}
+fn respond_err(response: *http.Response, body: []const u8) io.IoErr {
+  http.respond(response, body, http.ResponseOptions{}) catch err { return err }
+  #panic("respond unexpectedly succeeded")
+}
+fn stream_err(response: *http.Response) io.IoErr {
+  _ = http.respond_stream(response, http.ResponseOptions{}) catch err { return err }
+  #panic("respond_stream unexpectedly succeeded")
+}
+fn write_err(writer: io.Writer, text: []const u8) io.IoErr {
+  io.write(writer, text) catch err { return err }
+  #panic("body write unexpectedly succeeded")
+}
+fn finish_err(body: *http.Body) io.IoErr {
+  http.body_finish(body) catch err { return err }
+  #panic("body_finish unexpectedly succeeded")
+}
+fn receive_err(state: *http.Server) io.IoErr {
+  _ = http.receive(state) catch err { return err }
+  #panic("receive unexpectedly succeeded")
 }
 fn main() {
   for native in [0, -73] {
@@ -73,123 +81,91 @@ fn main() {
     for segment in 1..2 {
       sink := Sink{ fail: #cast(usize, segment), code: code }
       response := http.Response{ output: io.Writer{ data: &sink, write: write } }
-      first: fail.Status
-      http.respond(&first, &response, "body", http.ResponseOptions{})
-      sink_failure(&first, code)
+      check(system(respond_err(&response, "body"), code), "first HTTP failure")
       calls := sink.calls
-      again: fail.Status
-      http.respond(&again, &response, "", http.ResponseOptions{})
-      finished(&again)
-      stream: fail.Status
-      _ = http.respond_stream(&stream, &response, http.ResponseOptions{})
-      finished(&stream)
-      if sink.calls != calls { #panic("response retried IO") }
+      check(finished(respond_err(&response, "")), "respond after a failure")
+      check(finished(stream_err(&response)), "stream after a failure")
+      check(sink.calls == calls, "response retried IO")
     }
     // A chunk that fails finishes the body: later writes and the finish fail
     // without writing.
     for segment in 1..4 {
       sink := Sink{}
       response := http.Response{ output: io.Writer{ data: &sink, write: write } }
-      opened: fail.Status
-      body := http.respond_stream(&opened, &response, http.ResponseOptions{})
-      if opened.failed { #panic("open body") }
+      body := http.respond_stream(&response, http.ResponseOptions{}) catch { #panic("open body") }
       sink.fail = sink.calls + #cast(usize, segment)
       sink.code = code
       writer := http.body_writer(&body)
-      first: fail.Status
-      io.write_status(&first, writer, "abc")
-      if segment == 2 {
-        if first.failed { #panic("early failure") }
-        http.body_finish(&first, &body)
-      } else if segment == 3 {
-        // Partial writes in a later body chunk.
-        sink.partial = true
-        io.write_status(&first, writer, "later")
+      if segment == 1 {
+        check(system(write_err(writer, "abc"), code), "first body failure")
+      } else {
+        io.write(writer, "abc") catch { #panic("early failure") }
+        if segment == 2 {
+          check(system(finish_err(&body), code), "finish failure")
+        } else {
+          // Partial writes in a later body chunk.
+          sink.partial = true
+          check(system(write_err(writer, "later"), code), "partial body failure")
+        }
       }
-      sink_failure(&first, code)
       calls := sink.calls
-      replay: fail.Status
-      io.write_status(&replay, writer, "x")
-      finished(&replay)
-      ended: fail.Status
-      http.body_finish(&ended, &body)
-      finished(&ended)
-      if sink.calls != calls { #panic("body retried IO") }
+      check(finished(write_err(writer, "x")), "write after a failure")
+      check(finished(finish_err(&body)), "finish after a failure")
+      check(sink.calls == calls, "body retried IO")
     }
     // A failed receive leaves the server failed: later receives read nothing.
     feed := Feed{ fail: true, code: code }
     sink := Sink{}
     storage: [128]u8
     state := http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink, write: write }, storage[..])
-    first: fail.Status
-    _ = http.receive(&first, &state)
-    if !first.failed || first.failure.kind != fail.Kind.System || first.failure.native != code { #panic("receive IO failure") }
-    again: fail.Status
-    _ = http.receive(&again, &state)
-    finished(&again)
-    if feed.calls != 1 { #panic("receive IO replay") }
+    check(system(receive_err(&state), code), "receive IO failure")
+    check(finished(receive_err(&state)), "receive after a failure")
+    check(feed.calls == 1, "receive IO replay")
     state = http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink, write: write }, storage[..])
-    reset: fail.Status
-    _ = http.receive(&reset, &state)
-    if feed.calls != 2 { #panic("constructor reset") }
+    _ = receive_err(&state)
+    check(feed.calls == 2, "constructor reset")
   }
   for wire in ["bad\r\n\r\n", "GET / HTTP/1.1\r\nContent-Length: 999\r\n\r\n", "GET / HTTP/1.1\r\n"] {
     feed := Feed{ wire: wire }
     sink := Sink{}
     storage: [64]u8
     state := http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink, write: write }, storage[..])
-    first: fail.Status
-    _ = http.receive(&first, &state)
-    if !first.failed { #panic("terminal receive") }
+    _ = receive_err(&state)
     calls := feed.calls
-    again: fail.Status
-    _ = http.receive(&again, &state)
-    finished(&again)
-    if feed.calls != calls { #panic("receive terminal replay") }
+    check(finished(receive_err(&state)), "receive after a terminal request")
+    check(feed.calls == calls, "receive terminal replay")
   }
   for wire in ["", "GET / HTTP/1.1\r\n\r\n"] {
     feed := Feed{ wire: wire }
     sink := Sink{}
     storage: [64]u8
     state := http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink, write: write }, storage[..])
-    status: fail.Status
-    received := http.receive(&status, &state)
+    received := http.receive(&state) catch { #panic("clean end") }
     if !received.ended {
-      received = http.receive(&status, &state)
+      received = http.receive(&state) catch { #panic("clean end") }
     }
-    if status.failed || !received.ended { #panic("clean end") }
+    check(received.ended, "clean end")
   }
   feed := Feed{ wire: "GET / HTTP/1.1\r\n\r\n" }
   sink_zero := Sink{}
   empty: [0]u8
-  capacity := http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink_zero, write: write }, empty[..])
-  full: fail.Status
-  _ = http.receive(&full, &capacity)
-  if full.failure.kind != fail.Kind.Capacity || feed.calls != 0 { #panic("empty capacity IO") }
+  small := http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink_zero, write: write }, empty[..])
+  check(capacity(receive_err(&small)) && feed.calls == 0, "empty capacity IO")
   zero := http.Server{}
-  zero_status: fail.Status
-  _ = http.receive(&zero_status, &zero)
-  finished(&zero_status)
+  check(finished(receive_err(&zero)), "zero server")
   response := http.Response{}
-  zero_response: fail.Status
-  http.respond(&zero_response, &response, "", http.ResponseOptions{})
-  finished(&zero_response)
+  check(finished(respond_err(&response, "")), "zero response")
   body := http.Body{}
   writer := http.body_writer(&body)
-  zero_write: fail.Status
-  io.write_status(&zero_write, writer, "x")
-  zero_finish: fail.Status
-  http.body_finish(&zero_finish, &body)
-  if !zero_write.failed || !zero_finish.failed { #panic("zero body") }
+  _ = write_err(writer, "x")
+  _ = finish_err(&body)
   // Successful partial writes remain usable.
   sink := Sink{ partial: true }
   response = http.Response{ output: io.Writer{ data: &sink, write: write } }
-  status: fail.Status
-  opened := http.respond_stream(&status, &response, http.ResponseOptions{})
+  opened := http.respond_stream(&response, http.ResponseOptions{}) catch { #panic("partial open") }
   writer = http.body_writer(&opened)
-  io.write_status(&status, writer, "abc")
-  http.body_finish(&status, &opened)
-  if status.failed { #panic("partial success") }
+  io.write(writer, "abc") catch { #panic("partial write") }
+  http.body_finish(&opened) catch { #panic("partial finish") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-http-sticky-') as temporary:

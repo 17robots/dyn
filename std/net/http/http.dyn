@@ -22,13 +22,6 @@ struct Parsed { head: HttpHead, failed: bool, offset: usize }
 fn parsed_failure(offset: usize) Parsed {
   return Parsed{ failed: true, offset: offset }
 }
-// Records a malformed message at offset.
-fn malformed(status: *fail.Status, operation: []const u8, message: []const u8, offset: usize) {
-  failure := fail.make(fail.Kind.InvalidInput, operation, "", message)
-  failure.offset = offset
-  failure.has_offset = true
-  fail.set(status, failure)
-}
 
 // How a chunked-body scan ended: complete, needing more input, malformed,
 // or past the destination.
@@ -289,64 +282,35 @@ fn http_parse_head(input: []const u8, response: bool) Parsed {
   return parsed_failure(cursor)
 }
 
-fn parse_head(status: *fail.Status, input: []const u8, response: bool) HttpHead {
-  if status.failed { return HttpHead{} }
+fn parse_head(input: []const u8, response: bool) HttpHead!parse.ParseErr {
   parsed := http_parse_head(input, response)
-  if parsed.failed {
-    malformed(status, "parse HTTP head", "malformed HTTP head", parsed.offset)
-    return HttpHead{}
-  }
+  if parsed.failed { fail parse.ParseErr.Invalid(parsed.offset) }
   return parsed.head
 }
 // Parses a complete response or request head. A malformed head fails with
-// InvalidInput at the offset where it went wrong.
-pub fn parse_response(status: *fail.Status, input: []const u8) HttpHead {
-  if status == nil { return parse_response(&fail.Status{}, input) }
-  return parse_head(status, input, true)
+// Invalid at the offset where it went wrong.
+pub fn parse_response(input: []const u8) HttpHead!parse.ParseErr {
+  return try parse_head(input, true)
 }
-pub fn parse_request(status: *fail.Status, input: []const u8) HttpHead {
-  if status == nil { return parse_request(&fail.Status{}, input) }
-  return parse_head(status, input, false)
+pub fn parse_request(input: []const u8) HttpHead!parse.ParseErr {
+  return try parse_head(input, false)
 }
 
 // The value of the first header field called name, matched without case, in
-// a complete head; "" when it cannot be read, and then the status says why: a
-// missing field is NotFound, a malformed head InvalidInput at its offset.
-// Read an optional field with a status of its own.
-pub fn header(status: *fail.Status, input: []const u8, name: []const u8) []const u8 {
-  if status == nil { return header(&fail.Status{}, input, name) }
-  if status.failed { return input[..0] }
+// a complete head. A missing field fails with NotFound, a malformed head
+// with InvalidInput. Read an optional field with catch "".
+pub fn header(input: []const u8, name: []const u8) []const u8!io.IoErr {
   parsed := http_parse_head(input, starts_ascii_case(input, 0, "HTTP/"))
-  if parsed.failed {
-    malformed(status, "parse HTTP head", "malformed HTTP head", parsed.offset)
-    return input[..0]
-  }
-  return present(status, field(input, parsed.head, name), "read header", name)
+  if parsed.failed { fail .InvalidInput }
+  return try present(field(input, parsed.head, name))
 }
 
-// The value of found, or "" and NotFound naming the field ("\"Host\" is
-// missing"): the shared end of every public lookup.
-fn present(status: *fail.Status, found: HttpHeader, operation: []const u8, name: []const u8) []const u8 {
-  if status.failed { return found.value[..0] }
-  if found.found { return found.value }
-  missing(status, operation, name)
-  return found.value[..0]
+// The value of found, or NotFound: the shared end of every public lookup.
+fn present(found: HttpHeader) []const u8!io.IoErr {
+  if !found.found { fail .NotFound }
+  return found.value
 }
 
-fn missing(status: *fail.Status, operation: []const u8, name: []const u8) {
-  message: [160]u8
-  used: usize = 0
-  parts: [3][]const u8 = ["\"", name, "\" is missing"]
-  for part in parts {
-    for byte in part {
-      if used < message.len {
-        message[used] = byte
-        used += 1
-      }
-    }
-  }
-  fail.set(status, fail.make(fail.Kind.NotFound, operation, "", message[..used]))
-}
 
 // Finds name in the fields of a head already parsed: each line's end with
 // find_byte, its colon likewise.
@@ -576,7 +540,8 @@ enum ChunkPhase { Size, Extension, SizeEnd, Data, DataCr, DataLf, TrailerStart, 
 // consumed bytes of input were used; data, when not empty, is the next piece
 // of the body (it lies inside input[..consumed]). done once the final chunk
 // and trailers have been read: input[consumed..] then belongs to the next
-// message. Malformed framing fails with InvalidInput at its offset in input.
+// message. Malformed framing fails with Invalid at its offset in input; a
+// reader that already failed fails again at 0.
 pub struct ChunkStep { consumed: usize, data: []const u8, done: bool }
 
 pub fn chunk_reader() ChunkReader {
@@ -586,9 +551,7 @@ pub fn chunk_reader() ChunkReader {
 // Reads framing from input until it reaches data, the end of the body or the
 // end of input. Call again with input[consumed..] until consumed is zero or
 // done is set.
-pub fn chunk_step(status: *fail.Status, reader: *ChunkReader, input: []const u8) ChunkStep {
-  if status == nil { return chunk_step(&fail.Status{}, reader, input) }
-  if status.failed { return ChunkStep{} }
+pub fn chunk_step(reader: *ChunkReader, input: []const u8) ChunkStep!parse.ParseErr {
   at: usize = 0
   for at < input.len {
     byte := input[at]
@@ -597,32 +560,32 @@ pub fn chunk_step(status: *fail.Status, reader: *ChunkReader, input: []const u8)
         value := hex(byte)
         if value >= 0 {
           if reader.size > (#max(usize) - #cast(usize, value)) / 16 {
-            return chunk_failed(status, reader, at)
+            fail chunk_failed(reader, at)
           }
           reader.size = reader.size * 16 + #cast(usize, value)
           reader.name_length += 1
         } else if reader.name_length == 0 {
-          return chunk_failed(status, reader, at)
+          fail chunk_failed(reader, at)
         } else if byte == ';' {
           reader.phase = ChunkPhase.Extension
         } else if byte == '\r' {
           reader.phase = ChunkPhase.SizeEnd
         } else {
-          return chunk_failed(status, reader, at)
+          fail chunk_failed(reader, at)
         }
       }
       ChunkPhase.Extension => {
         if byte == '\r' {
           reader.phase = ChunkPhase.SizeEnd
-        } else if byte < 32 || byte == 127 { return chunk_failed(status, reader, at) }
+        } else if byte < 32 || byte == 127 { fail chunk_failed(reader, at) }
       }
       ChunkPhase.SizeEnd => {
-        if byte != '\n' { return chunk_failed(status, reader, at) }
+        if byte != '\n' { fail chunk_failed(reader, at) }
         reader.name_length = 0
         if reader.size == 0 {
           reader.phase = ChunkPhase.TrailerStart
         } else {
-          if reader.size > #max(usize) - reader.total { return chunk_failed(status, reader, at) }
+          if reader.size > #max(usize) - reader.total { fail chunk_failed(reader, at) }
           reader.phase = ChunkPhase.Data
         }
       }
@@ -639,11 +602,11 @@ pub fn chunk_step(status: *fail.Status, reader: *ChunkReader, input: []const u8)
         return ChunkStep{ consumed: at + count, data: input[at..at + count] }
       }
       ChunkPhase.DataCr => {
-        if byte != '\r' { return chunk_failed(status, reader, at) }
+        if byte != '\r' { fail chunk_failed(reader, at) }
         reader.phase = ChunkPhase.DataLf
       }
       ChunkPhase.DataLf => {
-        if byte != '\n' { return chunk_failed(status, reader, at) }
+        if byte != '\n' { fail chunk_failed(reader, at) }
         reader.phase = ChunkPhase.Size
       }
       ChunkPhase.TrailerStart => {
@@ -656,42 +619,39 @@ pub fn chunk_step(status: *fail.Status, reader: *ChunkReader, input: []const u8)
           trailer_name_byte(reader, byte)
           reader.phase = ChunkPhase.TrailerName
         } else {
-          return chunk_failed(status, reader, at)
+          fail chunk_failed(reader, at)
         }
       }
       ChunkPhase.TrailerName => {
         if byte == ':' {
           if (reader.maybe_length && reader.name_length == 14) || (reader.maybe_encoding && reader.name_length == 17) {
-            return chunk_failed(status, reader, at)
+            fail chunk_failed(reader, at)
           }
           reader.phase = ChunkPhase.TrailerValue
         } else if token_byte(byte) {
           trailer_name_byte(reader, byte)
         } else {
-          return chunk_failed(status, reader, at)
+          fail chunk_failed(reader, at)
         }
       }
       ChunkPhase.TrailerValue => {
         if byte == '\r' {
           reader.phase = ChunkPhase.TrailerLf
-        } else if (byte < 32 && byte != '\t') || byte == 127 { return chunk_failed(status, reader, at) }
+        } else if (byte < 32 && byte != '\t') || byte == 127 { fail chunk_failed(reader, at) }
       }
       ChunkPhase.TrailerLf => {
-        if byte != '\n' { return chunk_failed(status, reader, at) }
+        if byte != '\n' { fail chunk_failed(reader, at) }
         reader.phase = ChunkPhase.TrailerStart
       }
       ChunkPhase.EndLf => {
-        if byte != '\n' { return chunk_failed(status, reader, at) }
+        if byte != '\n' { fail chunk_failed(reader, at) }
         reader.phase = ChunkPhase.Done
         return ChunkStep{ consumed: at + 1, done: true }
       }
       ChunkPhase.Done => {
         return ChunkStep{ consumed: at, done: true }
       }
-      ChunkPhase.Failed => {
-        fail.set(status, fail.make(fail.Kind.InvalidState, "read chunked body", "", "the body already failed"))
-        return ChunkStep{ consumed: at }
-      }
+      ChunkPhase.Failed => { fail parse.ParseErr.Invalid(0) }
     }
     at += 1
   }
@@ -701,10 +661,10 @@ pub fn chunk_step(status: *fail.Status, reader: *ChunkReader, input: []const u8)
   return ChunkStep{ consumed: at, done: reader.phase == ChunkPhase.Done }
 }
 
-fn chunk_failed(status: *fail.Status, reader: *ChunkReader, at: usize) ChunkStep {
+// Malformed chunk framing at at; the reader stays failed.
+fn chunk_failed(reader: *ChunkReader, at: usize) parse.ParseErr {
   reader.phase = ChunkPhase.Failed
-  malformed(status, "read chunked body", "malformed chunk framing", at)
-  return ChunkStep{ consumed: at }
+  return parse.ParseErr.Invalid(at)
 }
 
 fn trailer_name_byte(reader: *ChunkReader, byte: u8) {
@@ -728,20 +688,11 @@ fn validate_borrow(arena: *memory.Arena, input: []const u8) {
 }
 
 // Validate the complete wire before allocating or writing decoded payload.
-// A malformed or incomplete body fails with InvalidInput at its offset.
-pub fn decode_chunked(arena: *memory.Arena, status: *fail.Status, input: []const u8) Chunked {
-  if status == nil { return decode_chunked(arena, &fail.Status{}, input) }
-  if status.failed { return Chunked{} }
+// A malformed or incomplete body fails with Invalid at its offset.
+pub fn decode_chunked(arena: *memory.Arena, input: []const u8) Chunked!parse.ParseErr {
   validate_borrow(arena, input)
   scanned := scan_chunked(input, arena.data[..0], false)
-  if scanned.scan == Scan.More {
-    malformed(status, "decode chunked body", "the body ends early", scanned.offset)
-    return Chunked{}
-  }
-  if scanned.scan != Scan.Done {
-    malformed(status, "decode chunked body", "malformed chunk framing", scanned.offset)
-    return Chunked{}
-  }
+  if scanned.scan != Scan.Done { fail parse.ParseErr.Invalid(scanned.offset) }
   destination := memory.push_bytes(arena, scanned.count)
   _ = scan_chunked(input[..scanned.consumed], destination, true)
   return Chunked{ value: destination, consumed: scanned.consumed }
@@ -750,24 +701,15 @@ pub fn decode_chunked(arena: *memory.Arena, status: *fail.Status, input: []const
 pub struct Chunked { value: []u8, consumed: usize }
 
 // An http or https URL with its host, port and request target. A malformed
-// URL fails with InvalidInput at the offset where it went wrong.
-fn url_failure(status: *fail.Status, message: []const u8, offset: usize) Url {
-  malformed(status, "parse URL", message, offset)
-  return Url{}
-}
-pub fn parse_url(status: *fail.Status, input: []const u8) Url {
-  if status == nil { return parse_url(&fail.Status{}, input) }
-  if status.failed { return Url{} }
-  value := urls.parse(status, input)
-  if status.failed { return Url{} }
+// URL fails with Invalid at the offset where it went wrong.
+pub fn parse_url(input: []const u8) Url!parse.ParseErr {
+  value := try urls.parse(input)
   secure := ascii_equal(value.scheme, "https")
-  if !secure && !ascii_equal(value.scheme, "http") {
-    return url_failure(status, "the scheme is not http or https", 0)
-  }
+  if !secure && !ascii_equal(value.scheme, "http") { fail parse.ParseErr.Invalid(0) }
   authority_at := value.scheme.len + 3
   authority := value.authority
   if authority.len == 0 || bytes.find_byte(authority, '@') < authority.len {
-    return url_failure(status, "malformed URL", authority_at + bytes.find_byte(authority, '@'))
+    fail parse.ParseErr.Invalid(authority_at + bytes.find_byte(authority, '@'))
   }
   host_end := authority.len
   port_start := authority.len
@@ -775,14 +717,12 @@ pub fn parse_url(status: *fail.Status, input: []const u8) Url {
   if authority[0] == '[' {
     bracket := bytes.find_byte(authority, ']')
     if bracket <= 1 || bracket == authority.len {
-      return url_failure(status, "malformed URL", authority_at + bracket)
+      fail parse.ParseErr.Invalid(authority_at + bracket)
     }
     host_start = 1
     host_end = bracket
     if host_end + 1 < authority.len {
-      if authority[host_end + 1] != ':' {
-        return url_failure(status, "malformed URL", authority_at + host_end + 1)
-      }
+      if authority[host_end + 1] != ':' { fail parse.ParseErr.Invalid(authority_at + host_end + 1) }
       port_start = host_end + 2
     }
   } else {
@@ -792,22 +732,20 @@ pub fn parse_url(status: *fail.Status, input: []const u8) Url {
       port_start = host_end + 1
     }
   }
-  if host_end == host_start {
-    return url_failure(status, "malformed URL", authority_at + host_start)
-  }
+  if host_end == host_start { fail parse.ParseErr.Invalid(authority_at + host_start) }
   port: u16 = 80
   if secure {
     port = 443
   }
   if port_start < authority.len {
     number := parse_decimal(authority, port_start, authority.len)
-    if !number.ok { return url_failure(status, "malformed URL", authority_at + number.offset) }
+    if !number.ok { fail parse.ParseErr.Invalid(authority_at + number.offset) }
     if number.value == 0 || number.value > 65535 {
-      return url_failure(status, "malformed URL", authority_at + port_start)
+      fail parse.ParseErr.Invalid(authority_at + port_start)
     }
     port = #cast(u16, number.value)
   } else if authority[authority.len - 1] == ':' {
-    return url_failure(status, "malformed URL", authority_at + authority.len)
+    fail parse.ParseErr.Invalid(authority_at + authority.len)
   }
   target: []const u8 = "/"
   // Borrow the original suffix to retain query bytes; fragments are never sent.
@@ -873,7 +811,7 @@ pub struct Request {
 }
 
 // A response being written. Once a write fails the response is finished:
-// later writes fail with InvalidState rather than send a broken message.
+// later writes fail with InvalidInput rather than send a broken message.
 pub struct Response {
   output: io.Writer,
   // Optional transport-owned response storage. Both callbacks use output.data.
@@ -881,7 +819,7 @@ pub struct Response {
   // commit_body queues a copied head followed by the first length body bytes,
   // and returns the count queued.
   reserve_body: fn(rawptr, usize) []u8,
-  commit_body: fn(rawptr, *fail.Status, []const u8, usize) usize,
+  commit_body: fn(rawptr, []const u8, usize) usize!io.IoErr,
   reserved: []u8,
   started: bool,
   finished: bool,
@@ -923,7 +861,7 @@ pub struct ResponseOptions {
 }
 
 // After a failure the stream position is lost, so the server stays failed:
-// later receives fail with InvalidState.
+// later receives fail with InvalidInput.
 pub struct Server {
   failed: bool,
   ended: bool,
@@ -951,9 +889,10 @@ pub struct Body {
   staging: []u8,
 }
 
-// Handles one request: writes the response, and records any failure in
-// status. What a server does after a failure depends on the server.
-pub type Handler = fn(*fail.Status, *Response, *const Request)
+// Handles one request: writes the response. A failure is a failed write;
+// what a server does then depends on the server. Application failures are
+// responses the handler writes, such as 404.
+pub type Handler = fn(*Response, *const Request) !io.IoErr
 
 pub struct ClientResponse {
   raw: []u8,
@@ -972,14 +911,14 @@ fn method_matches(route: []const u8, method: []const u8) bool {
 // while any server uses the Binding.
 pub struct Typed<T> {
   state: *T,
-  handler: fn(*fail.Status, *Response, *const Request, *T),
+  handler: fn(*Response, *const Request, *T) !io.IoErr,
 }
 
 pub struct Binding { handler: Handler, context: rawptr }
 
-fn typed_dispatch<T>(status: *fail.Status, response: *Response, request: *const Request) {
+fn typed_dispatch<T>(response: *Response, request: *const Request) !io.IoErr {
   typed := #cast(*Typed<T>, request.context)
-  typed.handler(status, response, request, typed.state)
+  try typed.handler(response, request, typed.state)
 }
 
 pub fn bind<T>(typed: *Typed<T>) Binding {
@@ -993,14 +932,14 @@ pub fn bind<T>(typed: *Typed<T>) Binding {
 pub struct TypedRoute<T> {
   method: []const u8,
   pattern: []const u8,
-  handler: fn(*fail.Status, *Response, *const Request, *T),
+  handler: fn(*Response, *const Request, *T) !io.IoErr,
 }
 
 pub struct Routes<T> {
   routes: []TypedRoute<T>,
   count: usize,
   state: *T,
-  fallback: fn(*fail.Status, *Response, *const Request, *T),
+  fallback: fn(*Response, *const Request, *T) !io.IoErr,
 }
 
 // Route storage is caller-supplied; method and pattern strings are borrowed.
@@ -1009,36 +948,21 @@ pub fn typed_routes<T>(storage: []TypedRoute<T>, state: *T) Routes<T> {
 }
 
 // Adds a route. A pattern that is not a path or has more than MaxParams
-// :name segments is InvalidInput; a full route table is Capacity.
-pub fn add<T>(status: *fail.Status, router: *Routes<T>, method: []const u8, pattern: []const u8, handler: fn(*fail.Status, *Response, *const Request, *T)) {
-  if status == nil {
-    add(&fail.Status{}, router, method, pattern, handler)
-    return
-  }
-  if status.failed { return }
-  if handler == nil || pattern.len == 0 || pattern[0] != '/' || pattern_params(pattern) > MaxParams {
-    fail.invalid(status, "add route", pattern, "a route needs a handler and a path pattern with at most MaxParams parameters")
-    return
-  }
-  if router.count >= router.routes.len {
-    fail.set(status, fail.make(fail.Kind.Capacity, "add route", pattern, "the route table is full"))
-    return
-  }
+// :name segments fails with InvalidInput; a full route table with Capacity.
+pub fn add<T>(router: *Routes<T>, method: []const u8, pattern: []const u8, handler: fn(*Response, *const Request, *T) !io.IoErr) !io.IoErr {
+  if handler == nil || pattern.len == 0 || pattern[0] != '/' || pattern_params(pattern) > MaxParams { fail .InvalidInput }
+  if router.count >= router.routes.len { fail .Capacity }
   router.routes[router.count] = TypedRoute<T>{ method: method, pattern: pattern, handler: handler }
   router.count += 1
 }
 
-fn routes_dispatch<T>(status: *fail.Status, response: *Response, request: *const Request) {
-  serve_routes(status, #cast(*Routes<T>, request.context), response, request)
+fn routes_dispatch<T>(response: *Response, request: *const Request) !io.IoErr {
+  try serve_routes(#cast(*Routes<T>, request.context), response, request)
 }
 
 // Runs the matching route. Use it from a Typed handler that wraps routing
 // with its own work, such as counting or authentication.
-pub fn serve_routes<T>(status: *fail.Status, router: *Routes<T>, response: *Response, request: *const Request) {
-  if status == nil {
-    serve_routes(&fail.Status{}, router, response, request)
-    return
-  }
+pub fn serve_routes<T>(router: *Routes<T>, response: *Response, request: *const Request) !io.IoErr {
   captures: [MaxParams]Header
   allow_storage: [128]u8
   allow_used: usize = 0
@@ -1048,7 +972,7 @@ pub fn serve_routes<T>(status: *fail.Status, router: *Routes<T>, response: *Resp
     if count < 0 { continue }
     if method_matches(candidate.method, request.method) {
       if count == 0 {
-        candidate.handler(status, response, request, router.state)
+        try candidate.handler(response, request, router.state)
         return
       }
       // Only a pattern with :name segments pays for a Request copy.
@@ -1057,7 +981,7 @@ pub fn serve_routes<T>(status: *fail.Status, router: *Routes<T>, response: *Resp
         matched.params[k] = captures[k]
       }
       matched.param_count = #cast(usize, count)
-      candidate.handler(status, response, &matched, router.state)
+      try candidate.handler(response, &matched, router.state)
       return
     }
     if allow_used > 0 {
@@ -1067,15 +991,15 @@ pub fn serve_routes<T>(status: *fail.Status, router: *Routes<T>, response: *Resp
   }
   if allow_used > 0 && allow_used <= allow_storage.len {
     headers: [1]Header = [Header{ name: "Allow", value: allow_storage[..allow_used] }]
-    respond(status, response, "method not allowed\n", ResponseOptions{ status: StatusMethodNotAllowed,
+    try respond(response, "method not allowed\n", ResponseOptions{ status: StatusMethodNotAllowed,
       content_type: "text/plain; charset=utf-8", headers: headers[..] })
     return
   }
   if router.fallback != nil {
-    router.fallback(status, response, request, router.state)
+    try router.fallback(response, request, router.state)
     return
   }
-  respond(status, response, "not found\n", ResponseOptions{ status: StatusNotFound, content_type: "text/plain; charset=utf-8" })
+  try respond(response, "not found\n", ResponseOptions{ status: StatusNotFound, content_type: "text/plain; charset=utf-8" })
 }
 
 // Binds a router for a server start, like bind.
@@ -1134,11 +1058,10 @@ fn match_captures(pattern: []const u8, path: []const u8, captures: []Header) isi
   return #cast(isize, count)
 }
 
-// Path parameter captured by a Routes pattern, still percent-encoded; ""
-// and NotFound when the pattern has no such parameter.
-pub fn param(status: *fail.Status, request: *const Request, name: []const u8) []const u8 {
-  if status == nil { return param(&fail.Status{}, request, name) }
-  return present(status, find_param(request, name), "read path parameter", name)
+// Path parameter captured by a Routes pattern, still percent-encoded.
+// NotFound when the pattern has no such parameter.
+pub fn param(request: *const Request, name: []const u8) []const u8!io.IoErr {
+  return try present(find_param(request, name))
 }
 
 fn find_param(request: *const Request, name: []const u8) HttpHeader {
@@ -1295,28 +1218,21 @@ pub fn frame_request_head(input: []const u8, capacity: usize) FrameResult {
     body_length: head.content_length, chunked: head.chunked }
 }
 
-fn receive_failed(status: *fail.Status, state: *Server, kind: fail.Kind, message: []const u8, offset: usize) Received {
+// Marks the server failed: the stream position is lost.
+fn receive_failed(state: *Server, err: io.IoErr) io.IoErr {
   state.failed = true
-  failure := fail.make(kind, "receive request", "", message)
-  if offset != 0 {
-    failure.offset = offset
-    failure.has_offset = true
-  }
-  fail.set(status, failure)
-  return Received{}
+  return err
 }
 
-// The next request. Malformed requests fail with InvalidInput (at the
-// offset where they went wrong), requests larger than the storage with
-// Capacity. A clean end of the stream between requests is no failure:
+// The next request. Malformed requests fail with InvalidInput, requests
+// larger than the storage with Capacity. A clean end of the stream between requests is no failure:
 // ended is set. Request slices borrow state.storage and stay valid only
 // until the next receive.
-pub fn receive(status: *fail.Status, state: *Server) Received {
-  if status == nil { return receive(&fail.Status{}, state) }
-  if status.failed { return Received{} }
-  if state.failed { return receive_failed(status, state, fail.Kind.InvalidState, "an earlier receive failed", 0) }
+pub fn receive(state: *Server) Received!io.IoErr {
+  // An earlier receive failed, or the server is not set up.
+  if state.failed { fail .InvalidInput }
   if state.used > state.storage.len || state.consumed > state.used || state.input.read == nil || state.output.write == nil {
-    return receive_failed(status, state, fail.Kind.InvalidState, "the server is not set up", 0)
+    fail receive_failed(state, io.IoErr.InvalidInput)
   }
   shift_consumed(state)
   head := HttpHead{}
@@ -1328,17 +1244,13 @@ pub fn receive(status: *fail.Status, state: *Server) Received {
       head = parsed.head
       head_checked = true
       // More bytes cannot repair a complete head that does not parse.
-      if parsed.failed { return receive_failed(status, state, fail.Kind.InvalidInput, "malformed request head", parsed.offset) }
+      if parsed.failed { fail receive_failed(state, io.IoErr.InvalidInput) }
     }
     if head_checked && head.chunked {
       // Decoded in place once the whole body is here.
       framed := frame_request_decoding(state.storage[..state.used], state.storage.len)
-      if framed.status == FrameStatus.Invalid {
-        return receive_failed(status, state, fail.Kind.InvalidInput, "malformed chunked body", framed.offset)
-      }
-      if framed.status == FrameStatus.Capacity {
-        return receive_failed(status, state, fail.Kind.Capacity, "the request does not fit the storage", 0)
-      }
+      if framed.status == FrameStatus.Invalid { fail receive_failed(state, io.IoErr.InvalidInput) }
+      if framed.status == FrameStatus.Capacity { fail receive_failed(state, io.IoErr.Capacity) }
       if framed.status == FrameStatus.Ready {
         request := framed.request
         request.context = state.context
@@ -1347,13 +1259,13 @@ pub fn receive(status: *fail.Status, state: *Server) Received {
       }
     } else if head_checked {
       if head.content_length > state.storage.len - head.header_length {
-        return receive_failed(status, state, fail.Kind.Capacity, "the request does not fit the storage", 0)
+        fail receive_failed(state, io.IoErr.Capacity)
       }
       total := head.header_length + head.content_length
       if state.used >= total {
         request := request_parts(state.storage[..state.used], head)
         request.context = state.context
-        if request.method.len == 0 { return receive_failed(status, state, fail.Kind.InvalidInput, "malformed request line", 0) }
+        if request.method.len == 0 { fail receive_failed(state, io.IoErr.InvalidInput) }
         state.consumed = total
         return Received{ request: request, response: Response{ output: state.output, head_only: bytes.equal(request.method, "HEAD") } }
       }
@@ -1361,14 +1273,10 @@ pub fn receive(status: *fail.Status, state: *Server) Received {
     // End is a transport state until all buffered requests have been consumed.
     if state.ended {
       if state.used == 0 { return Received{ ended: true } }
-      return receive_failed(status, state, fail.Kind.InvalidInput, "the stream ended inside a request", state.used)
+      fail receive_failed(state, io.IoErr.InvalidInput)
     }
-    if state.used == state.storage.len { return receive_failed(status, state, fail.Kind.Capacity, "the request does not fit the storage", 0) }
-    count := io.read_status(status, state.input, state.storage[state.used..])
-    if status.failed {
-      state.failed = true
-      return Received{}
-    }
+    if state.used == state.storage.len { fail receive_failed(state, io.IoErr.Capacity) }
+    count := io.read(state.input, state.storage[state.used..]) catch err { fail receive_failed(state, err) }
     state.used += count
     if count == 0 {
       state.ended = true
@@ -1501,15 +1409,10 @@ fn two_digits(text: []const u8, at: usize) i64 {
 }
 
 // Unix seconds from an IMF-fixdate, as in If-Modified-Since. The obsolete
-// RFC 850 and asctime forms fail with InvalidInput.
-pub fn parse_date(status: *fail.Status, text: []const u8) i64 {
-  if status == nil { return parse_date(&fail.Status{}, text) }
-  if status.failed { return 0 }
+// RFC 850 and asctime forms fail with Invalid.
+pub fn parse_date(text: []const u8) i64!parse.ParseErr {
   if text.len != DateLength || text[3] != ',' || text[4] != ' ' || text[7] != ' ' || text[11] != ' ' ||
-    text[16] != ' ' || text[19] != ':' || text[22] != ':' || !bytes.equal(text[25..], " GMT") {
-    malformed(status, "parse date", "not an IMF-fixdate", 0)
-    return 0
-  }
+    text[16] != ' ' || text[19] != ':' || text[22] != ':' || !bytes.equal(text[25..], " GMT") { fail parse.ParseErr.Invalid(0) }
   month: usize = 12
   for i in 0..12 {
     if bytes.equal(text[8..11], MonthNames[i * 3..i * 3 + 3]) {
@@ -1523,15 +1426,9 @@ pub fn parse_date(status: *fail.Status, text: []const u8) i64 {
   minute := two_digits(text, 20)
   second := two_digits(text, 23)
   if month == 12 || day < 1 || day > 31 || century < 0 || year_low < 0 || hour < 0 || hour > 23 || minute < 0 ||
-    minute > 59 || second < 0 || second > 60 {
-    malformed(status, "parse date", "a date field is out of range", 5)
-    return 0
-  }
+    minute > 59 || second < 0 || second > 60 { fail parse.ParseErr.Invalid(5) }
   year := century * 100 + year_low
-  if year < 1 {
-    malformed(status, "parse date", "the year is out of range", 12)
-    return 0
-  }
+  if year < 1 { fail parse.ParseErr.Invalid(12) }
   days := clock.days_from_civil(#cast(i32, year), #cast(u8, month + 1), #cast(u8, day))
   return days * 86400 + hour * 3600 + minute * 60 + second
 }
@@ -1556,19 +1453,12 @@ fn decimal(destination: []u8, value: usize) []const u8 {
   return destination[..count]
 }
 
-fn response_invalid(status: *fail.Status, message: []const u8) {
-  fail.set(status, fail.make(fail.Kind.InvalidInput, "respond", "", message))
-}
-fn response_state(status: *fail.Status, message: []const u8) {
-  fail.set(status, fail.make(fail.Kind.InvalidState, "respond", "", message))
-}
-
 // Writes source to the client. A failure finishes the response.
-fn response_output(status: *fail.Status, response: *Response, source: []const u8) {
-  io.write_status(status, response.output, source)
-  if status.failed {
+fn response_output(response: *Response, source: []const u8) !io.IoErr {
+  io.write(response.output, source) catch err {
     response.started = true
     response.finished = true
+    fail err
   }
 }
 
@@ -1591,10 +1481,10 @@ fn text_valid(value: []const u8) bool {
 
 enum HeadMode { Stage, Direct }
 // Stage counts every byte in used, and sets overflow once one does not fit.
-struct HeadWriter { mode: HeadMode, staging: []u8, used: usize, overflow: bool, response: *Response, status: *fail.Status }
-fn head_emit(writer: *HeadWriter, piece: []const u8) {
+struct HeadWriter { mode: HeadMode, staging: []u8, used: usize, overflow: bool, response: *Response }
+fn head_emit(writer: *HeadWriter, piece: []const u8) !io.IoErr {
   if writer.mode == HeadMode.Direct {
-    response_output(writer.status, writer.response, piece)
+    try response_output(writer.response, piece)
   } else if writer.overflow || piece.len > writer.staging.len - writer.used {
     writer.overflow = true
     writer.used += piece.len
@@ -1602,61 +1492,58 @@ fn head_emit(writer: *HeadWriter, piece: []const u8) {
     writer.used = append_bytes(writer.staging, writer.used, piece)
   }
 }
-fn head_write(writer: *HeadWriter, options: ResponseOptions, status: u16, reason: []const u8, content_type: []const u8, body_length: usize, chunked: bool, date: []const u8) {
+fn head_write(writer: *HeadWriter, options: ResponseOptions, status: u16, reason: []const u8, content_type: []const u8, body_length: usize, chunked: bool, date: []const u8) !io.IoErr {
   number_storage: [20]u8
-  head_emit(writer, "HTTP/1.1 ")
-  head_emit(writer, decimal(number_storage[..], status))
-  head_emit(writer, " ")
-  head_emit(writer, reason)
+  try head_emit(writer, "HTTP/1.1 ")
+  try head_emit(writer, decimal(number_storage[..], status))
+  try head_emit(writer, " ")
+  try head_emit(writer, reason)
   if status_has_body(status) {
     if content_type.len > 0 {
-      head_emit(writer, "\r\nContent-Type: ")
-      head_emit(writer, content_type)
+      try head_emit(writer, "\r\nContent-Type: ")
+      try head_emit(writer, content_type)
     }
     if chunked {
-      head_emit(writer, "\r\nTransfer-Encoding: chunked")
+      try head_emit(writer, "\r\nTransfer-Encoding: chunked")
     } else {
-      head_emit(writer, "\r\nContent-Length: ")
-      head_emit(writer, decimal(number_storage[..], body_length))
+      try head_emit(writer, "\r\nContent-Length: ")
+      try head_emit(writer, decimal(number_storage[..], body_length))
     }
   }
   if date.len > 0 {
-    head_emit(writer, "\r\nDate: ")
-    head_emit(writer, date)
+    try head_emit(writer, "\r\nDate: ")
+    try head_emit(writer, date)
   }
   if writer.response.alt_svc.len > 0 {
-    head_emit(writer, "\r\nAlt-Svc: ")
-    head_emit(writer, writer.response.alt_svc)
+    try head_emit(writer, "\r\nAlt-Svc: ")
+    try head_emit(writer, writer.response.alt_svc)
   }
   for item in options.headers {
-    head_emit(writer, "\r\n")
-    head_emit(writer, item.name)
-    head_emit(writer, ": ")
-    head_emit(writer, item.value)
+    try head_emit(writer, "\r\n")
+    try head_emit(writer, item.name)
+    try head_emit(writer, ": ")
+    try head_emit(writer, item.value)
   }
   for item in options.cookies {
     // Checked in response_begin, so formatting succeeds here.
     storage: [CookieLength]u8
-    formatting: fail.Status
-    head_emit(writer, "\r\nSet-Cookie: ")
-    head_emit(writer, set_cookie(&formatting, storage[..], item))
+    try head_emit(writer, "\r\nSet-Cookie: ")
+    try head_emit(writer, set_cookie(storage[..], item) catch storage[..0])
   }
   if options.close_connection || writer.response.closing {
-    head_emit(writer, "\r\nConnection: close\r\n\r\n")
+    try head_emit(writer, "\r\nConnection: close\r\n\r\n")
   } else {
-    head_emit(writer, "\r\nConnection: keep-alive\r\n\r\n")
+    try head_emit(writer, "\r\nConnection: keep-alive\r\n\r\n")
   }
 }
 
 // Writes the response head, followed by body when given. Head and body leave in
 // one write when they fit in a stack staging buffer: separate small writes on a
 // keep-alive socket stall on Nagle plus delayed ACK (about 40 ms per response).
-fn response_begin(status: *fail.Status, response: *Response, options: ResponseOptions, body_length: usize, chunked: bool, body: []const u8, buffered: bool) {
-  if status.failed { return }
-  if response.started || response.finished || response.output.write == nil {
-    response_state(status, "already responded")
-    return
-  }
+// Bad options, or a response already started, fail with InvalidInput.
+fn response_begin(response: *Response, options: ResponseOptions, body_length: usize, chunked: bool, body: []const u8, buffered: bool) !io.IoErr {
+  // Already responded.
+  if response.started || response.finished || response.output.write == nil { fail .InvalidInput }
   if !buffered { response.reserved = response.reserved[..0] }
   code := options.status
   if code == 0 {
@@ -1672,24 +1559,15 @@ fn response_begin(status: *fail.Status, response: *Response, options: ResponseOp
   }
   // Rejected before any byte is written; the response stays unstarted.
   // 1xx, 204 and 304 carry no content and are never chunked.
-  if !status_has_body(code) && (body_length > 0 || chunked) {
-    response_invalid(status, "this status carries no body")
-    return
-  }
-  if !text_valid(reason) || !text_valid(content_type) {
-    response_invalid(status, "the reason or content type holds CR, LF or NUL")
-    return
-  }
+  if !status_has_body(code) && (body_length > 0 || chunked) { fail .InvalidInput }
+  // CR, LF or NUL in the reason or content type, or a bad header.
+  if !text_valid(reason) || !text_valid(content_type) { fail .InvalidInput }
   for item in options.headers {
-    if !header_valid(item) {
-      response_invalid(status, "a header name is not a token or its value holds CR, LF or NUL")
-      return
-    }
+    if !header_valid(item) { fail .InvalidInput }
   }
   for item in options.cookies {
     storage: [CookieLength]u8
-    _ = set_cookie(status, storage[..], item)
-    if status.failed { return }
+    _ = try set_cookie(storage[..], item)
   }
   response.status = code
   date_storage: [DateLength]u8
@@ -1707,39 +1585,40 @@ fn response_begin(status: *fail.Status, response: *Response, options: ResponseOp
   // The head (and a small body) is composed in staging: the server's, or
   // 8 KiB on this stack, which is zeroed on every call.
   if response.staging.len >= 8 * memory.KiB {
-    response_send(status, response, options, code, reason, content_type, body_length, chunked, date, payload, buffered,
+    try response_send(response, options, code, reason, content_type, body_length, chunked, date, payload, buffered,
       response.staging[..8 * memory.KiB])
     return
   }
   staging: [8 * memory.KiB]u8
-  response_send(status, response, options, code, reason, content_type, body_length, chunked, date, payload, buffered, staging[..])
+  try response_send(response, options, code, reason, content_type, body_length, chunked, date, payload, buffered, staging[..])
 }
 
-fn response_send(status: *fail.Status, response: *Response, options: ResponseOptions, code: u16, reason: []const u8,
+fn response_send(response: *Response, options: ResponseOptions, code: u16, reason: []const u8,
   content_type: []const u8, body_length: usize, chunked: bool, date: []const u8, payload: []const u8, buffered: bool,
-  staging: []u8) {
+  staging: []u8) !io.IoErr {
   // One pass: the head goes straight into staging, and overflow says when it
   // did not fit (then it is written out directly, or refused when buffered).
-  stage := HeadWriter{ mode: HeadMode.Stage, staging: staging, response: response, status: status }
-  head_write(&stage, options, code, reason, content_type, body_length, chunked && !buffered, date)
+  stage := HeadWriter{ mode: HeadMode.Stage, staging: staging, response: response }
+  try head_write(&stage, options, code, reason, content_type, body_length, chunked && !buffered, date)
   head_length := stage.used
   if buffered {
-    if stage.overflow {
-      fail.set(status, fail.make(fail.Kind.Capacity, "respond", "", "the head does not fit 8 KiB"))
-      return
-    }
+    // The head does not fit 8 KiB.
+    if stage.overflow { fail .Capacity }
     sent_length := body_length
     if response.head_only {
       sent_length = 0
     }
-    written := response.commit_body(response.output.data, status, staging[..head_length], sent_length)
-    response.reserved = response.reserved[..0]
     response.started = true
-    if !status.failed && written != head_length + sent_length {
-      fail.set(status, fail.make(fail.Kind.InvalidState, "respond", "", "the transport queued part of the response"))
-    }
-    if status.failed {
+    written := response.commit_body(response.output.data, staging[..head_length], sent_length) catch err {
+      response.reserved = response.reserved[..0]
       response.finished = true
+      fail err
+    }
+    response.reserved = response.reserved[..0]
+    // The transport queued part of the response.
+    if written != head_length + sent_length {
+      response.finished = true
+      fail .InvalidInput
     }
     return
   }
@@ -1748,25 +1627,24 @@ fn response_send(status: *fail.Status, response: *Response, options: ResponseOpt
       // Common case: head and body in one write.
       used := append_bytes(staging, head_length, payload)
       response.started = true
-      response_output(status, response, staging[..used])
+      try response_output(response, staging[..used])
       return
     }
     response.started = true
-    response_output(status, response, staging[..head_length])
+    try response_output(response, staging[..head_length])
   } else {
     response.started = true
-    direct := HeadWriter{ mode: HeadMode.Direct, response: response, status: status }
-    head_write(&direct, options, code, reason, content_type, body_length, chunked, date)
+    direct := HeadWriter{ mode: HeadMode.Direct, response: response }
+    try head_write(&direct, options, code, reason, content_type, body_length, chunked, date)
   }
-  response_output(status, response, payload)
+  try response_output(response, payload)
 }
 
 // The value of the first request header named name (ASCII case-insensitive),
-// borrowing request.raw; "" and NotFound when there is none. Each call scans
-// the head. Read an optional header with a status of its own.
-pub fn request_header(status: *fail.Status, request: *const Request, name: []const u8) []const u8 {
-  if status == nil { return request_header(&fail.Status{}, request, name) }
-  return present(status, find_header(request, name), "read header", name)
+// borrowing request.raw; NotFound when there is none. Each call scans the
+// head. Read an optional header with catch "".
+pub fn request_header(request: *const Request, name: []const u8) []const u8!io.IoErr {
+  return try present(find_header(request, name))
 }
 
 // The head was validated when the request was framed: no second parse.
@@ -1776,11 +1654,10 @@ fn find_header(request: *const Request, name: []const u8) HttpHeader {
 }
 
 // Value of cookie name from the request's Cookie headers (RFC 6265 5.4).
-// Surrounding double quotes are removed; the value borrows request.raw. ""
-// and NotFound when the request has no such cookie.
-pub fn cookie(status: *fail.Status, request: *const Request, name: []const u8) []const u8 {
-  if status == nil { return cookie(&fail.Status{}, request, name) }
-  return present(status, find_cookie(request, name), "read cookie", name)
+// Surrounding double quotes are removed; the value borrows request.raw.
+// NotFound when the request has no such cookie.
+pub fn cookie(request: *const Request, name: []const u8) []const u8!io.IoErr {
+  return try present(find_cookie(request, name))
 }
 
 fn find_cookie(request: *const Request, name: []const u8) HttpHeader {
@@ -1798,11 +1675,10 @@ fn find_cookie(request: *const Request, name: []const u8) HttpHeader {
   return HttpHeader{}
 }
 
-// The cookie named name in one Cookie header value, such as "a=1; b=2"; ""
-// and NotFound when it is not there.
-pub fn cookie_in(status: *fail.Status, header_value: []const u8, name: []const u8) []const u8 {
-  if status == nil { return cookie_in(&fail.Status{}, header_value, name) }
-  return present(status, find_cookie_in(header_value, name), "read cookie", name)
+// The cookie named name in one Cookie header value, such as "a=1; b=2";
+// NotFound when it is not there.
+pub fn cookie_in(header_value: []const u8, name: []const u8) []const u8!io.IoErr {
+  return try present(find_cookie_in(header_value, name))
 }
 
 fn find_cookie_in(header_value: []const u8, name: []const u8) HttpHeader {
@@ -1822,16 +1698,6 @@ fn find_cookie_in(header_value: []const u8, name: []const u8) HttpHeader {
     rest = rest[end + 1..]
   }
   return HttpHeader{}
-}
-
-fn text_failure(status: *fail.Status, destination: []u8, kind: fail.Kind, message: []const u8, offset: usize) []u8 {
-  failure := fail.make(kind, "format", "", message)
-  if offset != 0 {
-    failure.offset = offset
-    failure.has_offset = true
-  }
-  fail.set(status, failure)
-  return destination[..0]
 }
 
 pub enum SameSite { Default, Lax, Strict, None }
@@ -1869,25 +1735,21 @@ fn attribute_valid(value: []const u8) bool {
 }
 
 // Writes the Set-Cookie header value for cookie into destination. Fails with
-// Syntax when the name is not a token, the value has bytes outside
-// cookie-octet, an attribute has ';' or control bytes, or SameSite None lacks
-// secure; with Capacity when destination is too small.
-pub fn set_cookie(status: *fail.Status, destination: []u8, item: Cookie) []u8 {
-  if status == nil { return set_cookie(&fail.Status{}, destination, item) }
-  if status.failed { return destination[..0] }
-  if item.name.len == 0 { return text_failure(status, destination, fail.Kind.InvalidInput, "invalid character", 0) }
+// InvalidInput when the name is not a token, the value has bytes outside
+// cookie-octet, an attribute has ';' or control bytes, SameSite None lacks
+// secure, or expires is out of range; with Capacity when destination is too
+// small.
+pub fn set_cookie(destination: []u8, item: Cookie) []u8!io.IoErr {
+  if item.name.len == 0 { fail .InvalidInput }
   for byte in item.name {
-    if !token_byte(byte) { return text_failure(status, destination, fail.Kind.InvalidInput, "invalid character", 0) }
+    if !token_byte(byte) { fail .InvalidInput }
   }
   for byte in item.value {
-    if !cookie_octet(byte) {
-      return text_failure(status, destination, fail.Kind.InvalidInput, "invalid cookie value", item.name.len + 1)
-    }
+    if !cookie_octet(byte) { fail .InvalidInput }
   }
-  if !attribute_valid(item.path) || !attribute_valid(item.domain) || (item.same_site == SameSite.None && !item.secure) {
-    return text_failure(status, destination, fail.Kind.InvalidInput, "invalid character", 0)
-  }
-  out := format.buffer(status, destination)
+  if !attribute_valid(item.path) || !attribute_valid(item.domain) || (item.same_site == SameSite.None && !item.secure) { fail .InvalidInput }
+  writing: fail.Status
+  out := format.buffer(&writing, destination)
   format.write(&out, item.name)
   format.write_byte(&out, '=')
   format.write(&out, item.value)
@@ -1908,7 +1770,7 @@ pub fn set_cookie(status: *fail.Status, destination: []u8, item: Cookie) []u8 {
   if item.expires != 0 {
     date_storage: [DateLength]u8
     date := format_date(date_storage[..], item.expires)
-    if date.len == 0 { return text_failure(status, destination, fail.Kind.Overflow, "expires is out of range", 0) }
+    if date.len == 0 { fail .InvalidInput }
     format.write(&out, "; Expires=")
     format.write(&out, date)
   }
@@ -1927,28 +1789,23 @@ pub fn set_cookie(status: *fail.Status, destination: []u8, item: Cookie) []u8 {
   if item.partitioned {
     format.write(&out, "; Partitioned")
   }
-  if status.failed { return destination[..0] }
+  if writing.failed { fail .Capacity }
   return destination[..out.length]
 }
 
 // One Server-Sent Events message: optional event and id fields, a data line
 // for each line of data (CR, LF or CRLF), then a blank line. Empty event or
-// id is left out. Fails with Syntax when event or id holds CR or LF, or id
-// holds NUL; with Capacity when destination is too small.
-pub fn sse_event(status: *fail.Status, destination: []u8, event: []const u8, id: []const u8, data: []const u8) []u8 {
-  if status == nil { return sse_event(&fail.Status{}, destination, event, id, data) }
-  if status.failed { return destination[..0] }
+// id is left out. Fails with InvalidInput when event or id holds CR or LF,
+// or id holds NUL; with Capacity when destination is too small.
+pub fn sse_event(destination: []u8, event: []const u8, id: []const u8, data: []const u8) []u8!io.IoErr {
   for byte in event {
-    if byte == '\r' || byte == '\n' {
-      return text_failure(status, destination, fail.Kind.InvalidInput, "invalid character", 0)
-    }
+    if byte == '\r' || byte == '\n' { fail .InvalidInput }
   }
   for byte in id {
-    if byte == '\r' || byte == '\n' || byte == 0 {
-      return text_failure(status, destination, fail.Kind.InvalidInput, "invalid character", 0)
-    }
+    if byte == '\r' || byte == '\n' || byte == 0 { fail .InvalidInput }
   }
-  out := format.buffer(status, destination)
+  writing: fail.Status
+  out := format.buffer(&writing, destination)
   if event.len > 0 {
     format.write(&out, "event: ")
     format.write(&out, event)
@@ -1975,33 +1832,22 @@ pub fn sse_event(status: *fail.Status, destination: []u8, event: []const u8, id:
     start = end + 1
   }
   format.write_byte(&out, '\n')
-  if status.failed { return destination[..0] }
+  if writing.failed { fail .Capacity }
   return destination[..out.length]
 }
 
 
 // application/x-www-form-urlencoded value into destination: '+' becomes a
-// space and %XX a byte. Fails with InvalidInput on a bad escape and Capacity
-// when destination is too small; destination contents are then unspecified.
-pub fn form_decode(status: *fail.Status, destination: []u8, source: []const u8) []u8 {
-  if status == nil { return form_decode(&fail.Status{}, destination, source) }
-  if status.failed { return destination[..0] }
+// space and %XX a byte. Fails with Invalid at a bad escape and TooLarge
+// where destination runs out; destination contents are then unspecified.
+pub fn form_decode(destination: []u8, source: []const u8) []u8!parse.ParseErr {
   at: usize = 0
   i: usize = 0
   for i < source.len {
-    if at == destination.len {
-      failure := fail.make(fail.Kind.Capacity, "decode form", "", "the value does not fit the storage")
-      failure.offset = i
-      failure.has_offset = true
-      fail.set(status, failure)
-      return destination[..0]
-    }
+    if at == destination.len { fail parse.ParseErr.TooLarge(i) }
     byte := source[i]
     if byte == '%' {
-      if source.len - i < 3 || hex(source[i + 1]) < 0 || hex(source[i + 2]) < 0 {
-        malformed(status, "decode form", "malformed %XX escape", i)
-        return destination[..0]
-      }
+      if source.len - i < 3 || hex(source[i + 1]) < 0 || hex(source[i + 2]) < 0 { fail parse.ParseErr.Invalid(i) }
       destination[at] = #cast(u8, hex(source[i + 1]) * 16 + hex(source[i + 2]))
       i += 3
     } else {
@@ -2017,10 +1863,9 @@ pub fn form_decode(status: *fail.Status, destination: []u8, source: []const u8) 
 }
 
 // Raw, still-encoded value of the first field named name in an urlencoded
-// form or query string; "" and NotFound when there is none.
-pub fn form_field(status: *fail.Status, form: []const u8, name: []const u8) []const u8 {
-  if status == nil { return form_field(&fail.Status{}, form, name) }
-  return present(status, find_form_field(form, name), "read form field", name)
+// form or query string; NotFound when there is none.
+pub fn form_field(form: []const u8, name: []const u8) []const u8!io.IoErr {
+  return try present(find_form_field(form, name))
 }
 
 fn find_form_field(form: []const u8, name: []const u8) HttpHeader {
@@ -2044,28 +1889,28 @@ pub fn query_has(request: *const Request, name: []const u8) bool {
   return find_form_field(request.query, name).found
 }
 
-// Decoded query parameter name into destination; empty when it cannot be
-// read, and then the status says why: NotFound when absent, InvalidInput for
-// bad percent-encoding, Capacity when destination is too small.
-pub fn query_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) []u8 {
-  if status == nil { return query_value(&fail.Status{}, request, name, destination) }
-  return decoded_field(status, find_form_field(request.query, name), "read query parameter", name, destination)
+// Decoded query parameter name into destination. Fails with NotFound when
+// absent, InvalidInput for bad percent-encoding, Capacity when destination
+// is too small.
+pub fn query_value(request: *const Request, name: []const u8, destination: []u8) []u8!io.IoErr {
+  return try decoded_field(find_form_field(request.query, name), destination)
 }
 
-fn decoded_field(status: *fail.Status, found: HttpHeader, operation: []const u8, name: []const u8, destination: []u8) []u8 {
-  if status.failed { return destination[..0] }
-  if !found.found {
-    missing(status, operation, name)
-    return destination[..0]
+fn decoded_field(found: HttpHeader, destination: []u8) []u8!io.IoErr {
+  if !found.found { fail .NotFound }
+  decoded := form_decode(destination, found.value) catch err {
+    case err {
+      .TooLarge(_) => { fail .Capacity }
+      .Invalid(_) => { fail .InvalidInput }
+    }
   }
-  return form_decode(status, destination, found.value)
+  return decoded
 }
 
 // Decoded urlencoded body field name into destination, by the rules of
 // query_value. The caller checks the content type when it matters.
-pub fn form_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) []u8 {
-  if status == nil { return form_value(&fail.Status{}, request, name, destination) }
-  return decoded_field(status, find_form_field(request.body, name), "read form field", name, destination)
+pub fn form_value(request: *const Request, name: []const u8, destination: []u8) []u8!io.IoErr {
+  return try decoded_field(find_form_field(request.body, name), destination)
 }
 
 // Returns exclusive transport-owned body storage, or empty when unavailable.
@@ -2082,41 +1927,25 @@ pub fn body_buffer(response: *Response, capacity: usize) []u8 {
 }
 
 // Commit the initialized prefix of body_buffer without copying its body.
-// Invalid options/length leave the reservation available for correction.
-pub fn respond_buffered(status: *fail.Status, response: *Response, length: usize, options: ResponseOptions) {
-  if status == nil {
-    respond_buffered(&fail.Status{}, response, length, options)
-    return
-  }
-  if status.failed { return }
-  if response.commit_body == nil || response.reserved.len == 0 || length > response.reserved.len {
-    response_invalid(status, "the length is past the body_buffer storage")
-    return
-  }
-  response_begin(status, response, options, length, false, "", true)
-  if !status.failed {
-    response.finished = true
-  }
+// Invalid options/length leave the reservation available for correction. A
+// length past the body_buffer storage fails with InvalidInput.
+pub fn respond_buffered(response: *Response, length: usize, options: ResponseOptions) !io.IoErr {
+  if response.commit_body == nil || response.reserved.len == 0 || length > response.reserved.len { fail .InvalidInput }
+  try response_begin(response, options, length, false, "", true)
+  response.finished = true
 }
 
-// Writes the whole response: head and body.
-pub fn respond(status: *fail.Status, response: *Response, body: []const u8, options: ResponseOptions) {
-  if status == nil {
-    respond(&fail.Status{}, response, body, options)
-    return
-  }
-  response_begin(status, response, options, body.len, false, body, false)
-  if response.started {
-    response.finished = true
-  }
+// Writes the whole response: head and body. Bad options, or a response
+// already started, fail with InvalidInput before anything is written.
+pub fn respond(response: *Response, body: []const u8, options: ResponseOptions) !io.IoErr {
+  try response_begin(response, options, body.len, false, body, false)
+  response.finished = true
 }
 
 // Writes the head of a chunked response; write the body through body_writer
 // and end it with body_finish.
-pub fn respond_stream(status: *fail.Status, response: *Response, options: ResponseOptions) Body {
-  if status == nil { return respond_stream(&fail.Status{}, response, options) }
-  response_begin(status, response, options, 0, true, "", false)
-  if status.failed { return Body{ finished: true } }
+pub fn respond_stream(response: *Response, options: ResponseOptions) Body!io.IoErr {
+  try response_begin(response, options, 0, true, "", false)
   response.finished = true
   return Body{ output: response.output, discard: response.head_only, staging: response.staging }
 }
@@ -2139,57 +1968,44 @@ fn hex_size(destination: []u8, value: usize) []const u8 {
 }
 
 // Writes source to the client. A failure finishes the body.
-fn body_output(status: *fail.Status, body: *Body, source: []const u8) {
+fn body_output(body: *Body, source: []const u8) !io.IoErr {
   if body.discard { return }
-  io.write_status(status, body.output, source)
-  if status.failed {
+  io.write(body.output, source) catch err {
     body.finished = true
+    fail err
   }
 }
 
-fn body_finished(status: *fail.Status) {
-  fail.set(status, fail.make(fail.Kind.InvalidState, "write body", "", "the body is finished"))
-}
-
+// A finished body fails with InvalidInput.
 fn body_write(data: rawptr, source: []const u8) usize!io.IoErr {
-  status: fail.Status
-  count := body_write_status(data, &status, source)
-  try io.check_status(&status)
-  return count
-}
-fn body_write_status(data: rawptr, status: *fail.Status, source: []const u8) usize {
   body := #cast(*Body, data)
-  if body.finished || body.output.write == nil {
-    body_finished(status)
-    return 0
-  }
+  if body.finished || body.output.write == nil { fail .InvalidInput }
   if source.len == 0 { return 0 }
   size_storage: [16]u8
   size := hex_size(size_storage[..], source.len)
   // A small chunk leaves in one write: four writes per chunk would each be a
   // segment, and stall on Nagle with delayed ACK.
   if body.staging.len >= 4 * memory.KiB {
-    chunk_write(status, body, size, source, body.staging[..4 * memory.KiB])
+    try chunk_write(body, size, source, body.staging[..4 * memory.KiB])
   } else {
     staging: [4 * memory.KiB]u8
-    chunk_write(status, body, size, source, staging[..])
+    try chunk_write(body, size, source, staging[..])
   }
-  if status.failed { return 0 }
   return source.len
 }
 
-fn chunk_write(status: *fail.Status, body: *Body, size: []const u8, source: []const u8, staging: []u8) {
+fn chunk_write(body: *Body, size: []const u8, source: []const u8, staging: []u8) !io.IoErr {
   if source.len <= staging.len - size.len - 4 {
     used := append_bytes(staging[..], 0, size)
     used = append_bytes(staging[..], used, "\r\n")
     used = append_bytes(staging[..], used, source)
     used = append_bytes(staging[..], used, "\r\n")
-    body_output(status, body, staging[..used])
+    try body_output(body, staging[..used])
   } else {
-    body_output(status, body, size)
-    body_output(status, body, "\r\n")
-    body_output(status, body, source)
-    body_output(status, body, "\r\n")
+    try body_output(body, size)
+    try body_output(body, "\r\n")
+    try body_output(body, source)
+    try body_output(body, "\r\n")
   }
 }
 
@@ -2198,18 +2014,11 @@ pub fn body_writer(body: *Body) io.Writer {
   return io.Writer{ data: body, write: body_write }
 }
 
-// Ends the body with the last chunk.
-pub fn body_finish(status: *fail.Status, body: *Body) {
-  if status == nil {
-    body_finish(&fail.Status{}, body)
-    return
-  }
-  if status.failed { return }
-  if body.finished || body.output.write == nil {
-    body_finished(status)
-    return
-  }
-  body_output(status, body, "0\r\n\r\n")
+// Ends the body with the last chunk. A finished body fails with
+// InvalidInput.
+pub fn body_finish(body: *Body) !io.IoErr {
+  if body.finished || body.output.write == nil { fail .InvalidInput }
+  try body_output(body, "0\r\n\r\n")
   body.finished = true
 }
 
@@ -2223,79 +2032,67 @@ pub fn body_abort(body: *Body) {
 // embedded server, and for tests; evented is the multi-connection server.
 // Every Request carries context, borrowed application state the handler casts
 // back to its own type (http.bind does that cast). The caller keeps it alive.
-// A handler's failure ends serving, with that failure in status; when the
-// handler had not responded, the client gets 500 first.
-pub fn serve_stream(status: *fail.Status, input: io.Reader, output: io.Writer, storage: []u8, handler: Handler, context: rawptr) {
-  if status == nil {
-    serve_stream(&fail.Status{}, input, output, storage, handler, context)
-    return
-  }
-  if status.failed { return }
-  if handler == nil || storage.len == 0 {
-    fail.invalid(status, "serve", "", "serving needs a handler and storage")
-    return
-  }
+// A handler's failure ends serving with that failure; when the handler had
+// not responded, the client gets 500 first. A malformed or too large request
+// gets 400 or 413, then fails with InvalidInput or Capacity. A nil handler
+// or empty storage fails with InvalidInput.
+pub fn serve_stream(input: io.Reader, output: io.Writer, storage: []u8, handler: Handler, context: rawptr) !io.IoErr {
+  if handler == nil || storage.len == 0 { fail .InvalidInput }
   state := server(input, output, storage)
   state.context = context
-  for !status.failed {
-    received := receive(status, &state)
-    if received.ended { return }
-    if status.failed {
+  for {
+    received := receive(&state) catch err {
       // Tell the client why the connection closes. The reply is best effort:
       // the receive failure is reported either way.
-      kind := status.failure.kind
-      if kind == fail.Kind.InvalidInput || kind == fail.Kind.Capacity {
-        rejected := Response{ output: output }
-        options := ResponseOptions{ status: StatusBadRequest, content_type: "text/plain; charset=utf-8", close_connection: true }
-        body := "bad request\n"
-        if kind == fail.Kind.Capacity {
-          options.status = StatusPayloadTooLarge
-          body = "request too large\n"
-        }
-        reply: fail.Status
-        respond(&reply, &rejected, body, options)
-      }
-      return
+      reply_rejected(output, err)
+      fail err
     }
-    handler(status, &received.response, &received.request)
-    if status.failed && !received.response.started {
-      received.response.closing = true
-      answering: fail.Status
-      respond(&answering, &received.response, "internal server error\n", ResponseOptions{ status: StatusInternalServerError,
-        content_type: "text/plain; charset=utf-8" })
+    if received.ended { return }
+    handler(&received.response, &received.request) catch err {
+      if !received.response.started {
+        received.response.closing = true
+        respond(&received.response, "internal server error\n", ResponseOptions{ status: StatusInternalServerError,
+          content_type: "text/plain; charset=utf-8" }) catch {}
+      }
+      fail err
     }
     if !received.request.keep_alive { return }
   }
 }
 
-// Complete exchange; returned response slices belong to arena. Failures rewind.
-pub fn client_do(arena: *memory.Arena, status: *fail.Status, input: io.Reader, output: io.Writer,
-  method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse {
-  if status == nil { return client_do(arena, &fail.Status{}, input, output, method, target, host, body) }
-  if status.failed { return ClientResponse{} }
+// 400 for a malformed request, 413 for one too large; nothing otherwise.
+fn reply_rejected(output: io.Writer, err: io.IoErr) {
+  rejected := Response{ output: output }
+  options := ResponseOptions{ status: StatusBadRequest, content_type: "text/plain; charset=utf-8", close_connection: true }
+  body := "bad request\n"
+  case err {
+    .InvalidInput => {}
+    .Capacity => {
+      options.status = StatusPayloadTooLarge
+      body = "request too large\n"
+    }
+    _ => { return }
+  }
+  respond(&rejected, body, options) catch {}
+}
+
+// Complete exchange; returned response slices belong to arena. Failures
+// rewind. A malformed or cut-short response fails with InvalidInput.
+pub fn client_do(arena: *memory.Arena, input: io.Reader, output: io.Writer,
+  method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse!io.IoErr {
   validate_borrow(arena, method)
   validate_borrow(arena, target)
   validate_borrow(arena, host)
   validate_borrow(arena, body)
   mark := memory.arena_mark(arena)
+  errdefer memory.arena_rewind(arena, mark)
   request_bytes := write_request(arena, method, target, host, body)
-  io.write_status(status, output, request_bytes)
+  try io.write(output, request_bytes)
   memory.arena_rewind(arena, mark)
-  result := client_receive(arena, status, input, method)
-  if status.failed {
-    memory.arena_rewind(arena, mark)
-    return ClientResponse{}
-  }
-  return result
+  return try client_receive(arena, input, method)
 }
 
-fn client_failed(status: *fail.Status, message: []const u8, offset: usize) ClientResponse {
-  malformed(status, "receive response", message, offset)
-  return ClientResponse{}
-}
-
-fn client_receive(arena: *memory.Arena, status: *fail.Status, input: io.Reader, method: []const u8) ClientResponse {
-  if status.failed { return ClientResponse{} }
+fn client_receive(arena: *memory.Arena, input: io.Reader, method: []const u8) ClientResponse!io.IoErr {
   // The response is the arena's last allocation: it grows by moving into a
   // larger one, and completion rewinds the arena to its end.
   response_storage: []u8
@@ -2310,7 +2107,7 @@ fn client_receive(arena: *memory.Arena, status: *fail.Status, input: io.Reader, 
       parsed := http_parse_head(response_storage[..used], true)
       head = parsed.head
       head_checked = true
-      if parsed.failed { return client_failed(status, "malformed response head", parsed.offset) }
+      if parsed.failed { fail .InvalidInput }
     }
     if head_checked {
       if head.code >= 100 && head.code < 200 && head.code != 101 {
@@ -2348,9 +2145,7 @@ fn client_receive(arena: *memory.Arena, status: *fail.Status, input: io.Reader, 
         if decoded.scan == Scan.Done {
           body_length = decoded.count
           complete = true
-        } else if decoded.scan != Scan.More {
-          return client_failed(status, "malformed chunked body", head.header_length + decoded.offset)
-        }
+        } else if decoded.scan != Scan.More { fail .InvalidInput }
       }
       if complete {
         total := head.header_length + body_length
@@ -2361,24 +2156,22 @@ fn client_receive(arena: *memory.Arena, status: *fail.Status, input: io.Reader, 
         return ClientResponse{ raw: response_storage[..total], body: response_storage[head.header_length..total], status: head.code }
       }
     }
-    if ended { return client_failed(status, "the response ends early", used) }
+    if ended { fail .InvalidInput }
     if response_storage.len - used < 4096 {
       grown := memory.push_bytes(arena, 2 * response_storage.len + 4096)
       _ = memory.copy(grown, response_storage[..used])
       response_storage = grown
     }
-    count := io.read_status(status, input, response_storage[used..])
-    if status.failed { return ClientResponse{} }
+    count := try io.read(input, response_storage[used..])
     used += count
     ended = count == 0
   }
   return ClientResponse{}
 }
 
-pub fn client_do_connection(arena: *memory.Arena, status: *fail.Status, connection: *network.Connection,
-  method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse {
-  if status == nil { return client_do_connection(arena, &fail.Status{}, connection, method, target, host, body) }
-  return client_do(arena, status, network.connection_reader(connection), network.connection_writer(connection),
+pub fn client_do_connection(arena: *memory.Arena, connection: *network.Connection,
+  method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse!io.IoErr {
+  return try client_do(arena, network.connection_reader(connection), network.connection_writer(connection),
     method, target, host, body)
 }
 

@@ -24,6 +24,17 @@ use "std/fail"
 use mem "std/mem"
 use random "std/crypto/random"
 fn require(value: bool, message: []const u8) { if !value { #panic(message) } }
+// NXDOMAIN is NotFound.
+fn not_found(arena: *mem.Arena, server: *const net.Ipv4Address) bool {
+  _ = dns.resolve_ipv4(arena, "missing.test", server, 4000) catch err {
+    case err {
+      .NotFound => { return true }
+      _ => { return false }
+    }
+  }
+  return false
+}
+
 fn main() {
   bytes: [515]u8
   sizes: [4]usize = [0,1,257,513]
@@ -38,18 +49,15 @@ fn main() {
   server := net.ipv4(127,0,0,1,PORT)
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  status: fail.Status
-  result := dns.resolve_ipv4(arena,&status,"a.test",&server,4000)
-  require(!status.failed && result.len == 1,"A response")
+  result := dns.resolve_ipv4(arena,"a.test",&server,4000) catch { #panic("A response") }
+  require(result.len == 1,"A response")
   require(result[0].a == 1 && result[0].b == 2 && result[0].c == 3 && result[0].d == 4,"A value / nonce filtering")
-  result6 := dns.resolve_ipv6(arena,&status,"aaaa.test",&server,4000)
-  require(!status.failed && result6.len == 1,"AAAA response")
+  result6 := dns.resolve_ipv6(arena,"aaaa.test",&server,4000) catch { #panic("AAAA response") }
+  require(result6.len == 1,"AAAA response")
   for i in 0..16 { require(result6[0].bytes[i] == #cast(u8, i),"AAAA value") }
-  missing: fail.Status
-  _ = dns.resolve_ipv4(arena,&missing,"missing.test",&server,4000)
-  require(missing.failure.kind == fail.Kind.NotFound && missing.failure.native == -3,"NXDOMAIN response")
-  result = dns.resolve_ipv4(arena,&status,"large.test",&server,4000)
-  require(!status.failed && result.len == 1,"UDP truncation TCP fallback")
+  require(not_found(arena, &server),"NXDOMAIN response")
+  result = dns.resolve_ipv4(arena,"large.test",&server,4000) catch { #panic("UDP truncation TCP fallback") }
+  require(result.len == 1,"UDP truncation TCP fallback")
   require(result[0].a == 9 && result[0].b == 8 && result[0].c == 7 && result[0].d == 6,"TCP response value")
 }
 '''

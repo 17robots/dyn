@@ -174,13 +174,12 @@ pub fn find_asset(assets: *const Assets, path: []const u8) *const Asset {
 
 // Every regular file below root, recursively, read into arena as assets in
 // storage, sorted. Names starting with '.' are skipped. Fails with Capacity
-// when storage is too small or a file exceeds maximum bytes; with the
-// operating system's failure when a directory or file cannot be read.
-pub fn load_directory(arena: *memory.Arena, status: *fail.Status, root: []const u8, storage: []Asset, maximum: usize) Assets {
-  if status == nil { return load_directory(arena, &fail.Status{}, root, storage, maximum) }
+// when storage is too small or a file exceeds maximum bytes, InvalidInput
+// for directories nested more than 32 deep, and with the operating system's
+// failure when a directory or file cannot be read.
+pub fn load_directory(arena: *memory.Arena, root: []const u8, storage: []Asset, maximum: usize) Assets!io.IoErr {
   assets := Assets{ items: storage }
-  load_tree(arena, status, root, "", &assets, maximum, 0)
-  if status.failed { return Assets{ items: storage[..0] } }
+  try load_tree(arena, root, "", &assets, maximum, 0)
   sort_assets(&assets)
   return assets
 }
@@ -198,45 +197,30 @@ fn join_path(arena: *memory.Arena, left: []const u8, right: []const u8) []u8 {
   return joined
 }
 
-fn load_tree(arena: *memory.Arena, status: *fail.Status, root: []const u8, relative: []const u8, assets: *Assets, maximum: usize, depth: usize) {
-  if status.failed { return }
-  if depth > 32 {
-    fail.invalid(status, "load", root, "directories nested more than 32 deep")
-    return
-  }
+fn load_tree(arena: *memory.Arena, root: []const u8, relative: []const u8, assets: *Assets, maximum: usize, depth: usize) !io.IoErr {
+  if depth > 32 { fail .InvalidInput }
   directory_path := root
   if relative.len > 0 {
     directory_path = join_path(arena, root, relative)
   }
   listing: [4096]u8
-  directory := files.open_directory(directory_path, listing[..]) catch err {
-    fail.set(status, io.failure_of(err, "load", directory_path))
-    return
-  }
+  directory := try files.open_directory(directory_path, listing[..])
   defer files.close_directory(&directory)
   for {
-    entry := files.directory_next(&directory) catch err {
-      fail.set(status, io.failure_of(err, "load", directory_path))
-      return
-    }
+    entry := try files.directory_next(&directory)
     if directory.ended { return }
     if entry.name.len == 0 || entry.name[0] == '.' { continue }
     child := join_path(arena, relative, entry.name)
     if entry.kind == 4 {
-      load_tree(arena, status, root, child, assets, maximum, depth + 1)
+      try load_tree(arena, root, child, assets, maximum, depth + 1)
       continue
     }
     if entry.kind != 8 { continue }
-    if assets.count == assets.items.len {
-      fail.set(status, fail.make(fail.Kind.Capacity, "load", root, "more files than asset storage"))
-      return
-    }
+    // More files than asset storage.
+    if assets.count == assets.items.len { fail .Capacity }
     path := join_path(arena, root, child)
     // A failed read must not become an empty asset.
-    contents := files.read_all(arena, path, maximum) catch err {
-      fail.set(status, io.failure_of(err, "load", path))
-      return
-    }
+    contents := try files.read_all(arena, path, maximum)
     assets.items[assets.count] = make_asset(arena, child, contents)
     assets.count += 1
   }
@@ -319,24 +303,22 @@ fn decimal_value(text: []const u8) Decimal {
 // NotFound without a usable single bytes range (absent, another unit,
 // several ranges, or bad syntax): send the whole representation.
 // InvalidInput when the range starts past the end: answer 416.
-pub fn byte_range(status: *fail.Status, request: *const Request, length: usize) ByteRange {
-  if status == nil { return byte_range(&fail.Status{}, request, length) }
-  if status.failed { return ByteRange{} }
+pub fn byte_range(request: *const Request, length: usize) ByteRange!io.IoErr {
   header := find_header(request, "Range")
-  if !header.found { return no_range(status, "no Range header") }
+  if !header.found { fail .NotFound }
   value := trim_ows(header.value)
   if value.len < 7 || !ascii_equal(value[..6], "bytes=") || bytes.find_byte(value, ',') != value.len {
-    return no_range(status, "not a single bytes range")
+    fail .NotFound
   }
   spec := trim_ows(value[6..])
   dash := bytes.find_byte(spec, '-')
-  if dash == spec.len { return no_range(status, "bad range syntax") }
+  if dash == spec.len { fail .NotFound }
   first_text := trim_ows(spec[..dash])
   last_text := trim_ows(spec[dash + 1..])
   if first_text.len == 0 {
     suffix := decimal_value(last_text)
-    if !suffix.ok { return no_range(status, "bad range syntax") }
-    if suffix.value == 0 || length == 0 { return past_end(status) }
+    if !suffix.ok { fail .NotFound }
+    if suffix.value == 0 || length == 0 { fail .InvalidInput }
     take := suffix.value
     if take > length {
       take = length
@@ -344,27 +326,30 @@ pub fn byte_range(status: *fail.Status, request: *const Request, length: usize) 
     return ByteRange{ start: length - take, end: length }
   }
   first := decimal_value(first_text)
-  if !first.ok { return no_range(status, "bad range syntax") }
+  if !first.ok { fail .NotFound }
   end := length
   if last_text.len > 0 {
     last := decimal_value(last_text)
-    if !last.ok || last.value < first.value { return no_range(status, "bad range syntax") }
+    if !last.ok || last.value < first.value { fail .NotFound }
     if last.value < length {
       end = last.value + 1
     }
   }
-  if first.value >= length { return past_end(status) }
+  if first.value >= length { fail .InvalidInput }
   return ByteRange{ start: first.value, end: end }
 }
 
-fn no_range(status: *fail.Status, message: []const u8) ByteRange {
-  fail.set(status, fail.make(fail.Kind.NotFound, "read byte range", "", message))
-  return ByteRange{}
-}
-
-fn past_end(status: *fail.Status) ByteRange {
-  fail.invalid(status, "read byte range", "", "the range starts past the end")
-  return ByteRange{}
+// 0 for a usable range, 1 for none (send everything), 2 past the end (416).
+fn range_outcome(request: *const Request, length: usize, wanted: *ByteRange) u8 {
+  if !bytes.equal(request.method, "GET") && !bytes.equal(request.method, "HEAD") { return 1 }
+  found := byte_range(request, length) catch err {
+    case err {
+      .NotFound => { return 1 }
+      _ => { return 2 }
+    }
+  }
+  wanted.* = found
+  return 0
 }
 
 // If-Range (RFC 9110 13.1.5): the range applies only while the validator
@@ -374,9 +359,8 @@ fn range_current(request: *const Request, asset: *const Asset) bool {
   if !header.found { return true }
   value := trim_ows(header.value)
   if value.len > 0 && value[0] == '"' { return bytes.equal(value, asset.etag) }
-  date: fail.Status
-  parsed := parse_date(&date, value)
-  return asset.modified != 0 && !date.failed && parsed == asset.modified
+  parsed := parse_date(value) catch { return false }
+  return asset.modified != 0 && parsed == asset.modified
 }
 
 fn put_decimal(destination: []u8, at: usize, value: usize) usize {
@@ -390,11 +374,7 @@ fn put_decimal(destination: []u8, at: usize, value: usize) usize {
 // accepts gzip. cache_control is sent
 // as Cache-Control when not empty, such as "public, max-age=31536000,
 // immutable" for fingerprinted names or "no-cache" to revalidate each time.
-pub fn serve_asset(status: *fail.Status, response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8) {
-  if status == nil {
-    serve_asset(&fail.Status{}, response, request, asset, cache_control)
-    return
-  }
+pub fn serve_asset(response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8) !io.IoErr {
   headers: [7]Header
   count: usize = 0
   headers[count] = Header{ name: "ETag", value: asset.etag }
@@ -418,33 +398,27 @@ pub fn serve_asset(status: *fail.Status, response: *Response, request: *const Re
   } else if asset.modified != 0 {
     since := find_header(request, "If-Modified-Since")
     if since.found {
-      date: fail.Status
-      parsed := parse_date(&date, since.value)
-      not_modified = !date.failed && parsed >= asset.modified
+      parsed := parse_date(since.value) catch 0
+      not_modified = parsed != 0 && parsed >= asset.modified
     }
   }
   if not_modified {
-    respond(status, response, "", ResponseOptions{ status: StatusNotModified, headers: headers[..count] })
+    try respond(response, "", ResponseOptions{ status: StatusNotModified, headers: headers[..count] })
     return
   }
   headers[count] = Header{ name: "Accept-Ranges", value: "bytes" }
   count += 1
-  ranged: fail.Status
   wanted := ByteRange{}
-  if bytes.equal(request.method, "GET") || bytes.equal(request.method, "HEAD") {
-    wanted = byte_range(&ranged, request, asset.body.len)
-  } else {
-    _ = no_range(&ranged, "not GET or HEAD")
-  }
-  if ranged.failure.kind != fail.Kind.NotFound && range_current(request, asset) {
+  outcome := range_outcome(request, asset.body.len, &wanted)
+  if outcome != 1 && range_current(request, asset) {
     range_storage: [64]u8
     at := append_bytes(range_storage[..], 0, "bytes ")
-    if ranged.failed {
+    if outcome == 2 {
       at = append_bytes(range_storage[..], at, "*/")
       at = put_decimal(range_storage[..], at, asset.body.len)
       headers[count] = Header{ name: "Content-Range", value: range_storage[..at] }
       count += 1
-      respond(status, response, "", ResponseOptions{ status: StatusRangeNotSatisfiable, content_type: asset.content_type,
+      try respond(response, "", ResponseOptions{ status: StatusRangeNotSatisfiable, content_type: asset.content_type,
         headers: headers[..count] })
       return
     }
@@ -455,15 +429,15 @@ pub fn serve_asset(status: *fail.Status, response: *Response, request: *const Re
     at = put_decimal(range_storage[..], at, asset.body.len)
     headers[count] = Header{ name: "Content-Range", value: range_storage[..at] }
     count += 1
-    respond(status, response, asset.body[wanted.start..wanted.end], ResponseOptions{ status: StatusPartialContent,
+    try respond(response, asset.body[wanted.start..wanted.end], ResponseOptions{ status: StatusPartialContent,
       content_type: asset.content_type, headers: headers[..count] })
     return
   }
   if asset.gzip.len > 0 && accepts_encoding(request, "gzip") {
     headers[count] = Header{ name: "Content-Encoding", value: "gzip" }
     count += 1
-    respond(status, response, asset.gzip, ResponseOptions{ content_type: asset.content_type, headers: headers[..count] })
+    try respond(response, asset.gzip, ResponseOptions{ content_type: asset.content_type, headers: headers[..count] })
     return
   }
-  respond(status, response, asset.body, ResponseOptions{ content_type: asset.content_type, headers: headers[..count] })
+  try respond(response, asset.body, ResponseOptions{ content_type: asset.content_type, headers: headers[..count] })
 }

@@ -61,44 +61,75 @@ pub fn i64_decimal(status: *fail.Status, text: []const u8) i64 {
   return #cast(i64, magnitude)
 }
 
-// Structured error enum for T!ParseErr parsing APIs.
+// Why input could not be parsed, with the byte offset from the start of the
+// input where it went wrong: Invalid for malformed input, TooLarge for a value
+// or a piece of input past a limit. Every parser and decoder fails with it.
 pub enum ParseErr {
-  Empty,
-  InvalidDigit(usize),
-  Overflow(usize),
+  Invalid(usize),
+  TooLarge(usize),
 }
 
-// Parses a decimal u64, returning u64!ParseErr.
+// The offset where err happened.
+pub fn offset(err: ParseErr) usize {
+  case err {
+    .Invalid(at) => { return at }
+    .TooLarge(at) => { return at }
+  }
+}
+
+// err moved by start bytes, for a parser that worked on a part of its input.
+pub fn shifted(err: ParseErr, start: usize) ParseErr {
+  case err {
+    .Invalid(at) => { return ParseErr.Invalid(at + start) }
+    .TooLarge(at) => { return ParseErr.TooLarge(at + start) }
+  }
+}
+
+// Bridges for modules that still report through fail.Status. They go away
+// with std/fail.
+pub fn failure_of(err: ParseErr, operation: []const u8) fail.Failure {
+  kind := fail.Kind.InvalidInput
+  case err {
+    .Invalid(_) => {}
+    .TooLarge(_) => { kind = fail.Kind.Overflow }
+  }
+  failure := fail.make(kind, operation, "", "")
+  failure.offset = offset(err)
+  failure.has_offset = true
+  return failure
+}
+pub fn err_of(failure: fail.Failure) ParseErr {
+  if failure.kind == fail.Kind.Overflow || failure.kind == fail.Kind.Capacity { return ParseErr.TooLarge(failure.offset) }
+  return ParseErr.Invalid(failure.offset)
+}
+
+// Whole text as a decimal u64: one or more ASCII digits, nothing else.
+// Invalid at the first bad byte (0 for empty text); TooLarge past the u64
+// range.
 pub fn parse_u64(text: str) u64!ParseErr {
-  if text.len == 0 { fail ParseErr.Empty }
+  if text.len == 0 { fail ParseErr.Invalid(0) }
   value: u64 = 0
   for i in 0..text.len {
     byte := text[i]
-    if byte < '0' || byte > '9' { fail ParseErr.InvalidDigit(i) }
+    if byte < '0' || byte > '9' { fail ParseErr.Invalid(i) }
     digit := #cast(u64, byte - '0')
-    if value > (18446744073709551615 - digit) / 10 { fail ParseErr.Overflow(i) }
+    if value > (18446744073709551615 - digit) / 10 { fail ParseErr.TooLarge(i) }
     value = value * 10 + digit
   }
   return value
 }
 
-// Parses a decimal i64 with an optional leading '-', returning i64!ParseErr.
+// Whole text as a decimal i64 with an optional leading '-'.
 pub fn parse_i64(text: str) i64!ParseErr {
-  if text.len == 0 { fail ParseErr.Empty }
+  if text.len == 0 { fail ParseErr.Invalid(0) }
   negative := text[0] == '-'
   start: usize = 0
   if negative { start = 1 }
-  magnitude := parse_u64(text[start..]) catch err {
-    case err {
-      .Empty => { fail ParseErr.Empty }
-      .InvalidDigit(at) => { fail ParseErr.InvalidDigit(at + start) }
-      .Overflow(at) => { fail ParseErr.Overflow(at + start) }
-    }
-  }
+  magnitude := parse_u64(text[start..]) catch err { fail shifted(err, start) }
   if negative {
-    if magnitude > 9223372036854775808 { fail ParseErr.Overflow(start) }
+    if magnitude > 9223372036854775808 { fail ParseErr.TooLarge(start) }
     return #cast(i64, #wrapping(0 - magnitude))
   }
-  if magnitude > 9223372036854775807 { fail ParseErr.Overflow(start) }
+  if magnitude > 9223372036854775807 { fail ParseErr.TooLarge(start) }
   return #cast(i64, magnitude)
 }

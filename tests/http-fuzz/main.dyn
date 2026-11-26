@@ -49,13 +49,11 @@ fn form_round_trip(context: rawptr, input: []const u8) bool {
     encoded[3 * i + 2] = hex_digit(input[i] & 15)
   }
   decoded: [256]u8
-  status: fail.Status
-  value := http.form_decode(&status, decoded[..], encoded[..3 * input.len])
-  if status.failed || !bytes.equal(value, input) { return false }
+  value := http.form_decode(decoded[..], encoded[..3 * input.len]) catch { return false }
+  if !bytes.equal(value, input) { return false }
   small: [8]u8
-  raw_status: fail.Status
-  raw := http.form_decode(&raw_status, small[..], input)
-  return raw_status.failed || raw.len <= input.len
+  raw := http.form_decode(small[..], input) catch { return true }
+  return raw.len <= input.len
 }
 
 // Splits input at the first zero byte into pattern and path. Captures must be
@@ -100,9 +98,7 @@ fn header_injection(context: rawptr, input: []const u8) bool {
   capture := Capture{}
   response := http.Response{ output: io.Writer{ data: &capture, write: capture_write } }
   headers: [1]http.Header = [http.Header{ name: input[..split], value: input[split + 1..] }]
-  sent: fail.Status
-  http.respond(&sent, &response, "", http.ResponseOptions{ content_type: "text/plain", headers: headers[..] })
-  if sent.failed { return capture.length == 0 }
+  http.respond(&response, "", http.ResponseOptions{ content_type: "text/plain", headers: headers[..] }) catch { return capture.length == 0 }
   head := capture.bytes[..capture.length]
   lines: usize = 0
   for i in 0..head.len {

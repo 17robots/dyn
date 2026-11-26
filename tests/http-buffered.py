@@ -7,7 +7,6 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve()
 SOURCE=r'''
-use "std/fail"
 use "std/io"
 use "std/net/http"
 struct Sink { body: [32]u8, reserves: usize, commits: usize, writes: usize, fail: bool, code: isize }
@@ -17,24 +16,13 @@ fn reserve(raw: rawptr, size: usize) []u8 {
   if size > 32 { return sink.body[..0] }
   return sink.body[..size]
 }
-fn commit(raw: rawptr, status: *fail.Status, head: []const u8, size: usize) usize {
+fn commit(raw: rawptr, head: []const u8, size: usize) usize!io.IoErr {
   sink := #cast(*Sink, raw)
   sink.commits += 1
-  if sink.fail {
-    failure := fail.make(fail.Kind.System, "commit", "", "sink failure")
-    failure.native = sink.code
-    fail.set(status, failure)
-    return 0
-  }
+  if sink.fail { fail .System(sink.code) }
   return head.len + size
 }
 fn write(raw: rawptr, source: []const u8) usize!io.IoErr {
-  status: fail.Status
-  count := write_status(raw, &status, source)
-  try io.check_status(&status)
-  return count
-}
-fn write_status(raw: rawptr, status: *fail.Status, source: []const u8) usize {
   sink := #cast(*Sink, raw)
   sink.writes += 1
   return source.len
@@ -42,11 +30,27 @@ fn write_status(raw: rawptr, status: *fail.Status, source: []const u8) usize {
 fn response(sink: *Sink) http.Response {
   return http.Response{ output: io.Writer{ data: sink, write: write }, reserve_body: reserve, commit_body: commit }
 }
-// Whether a respond_buffered with these arguments fails, with kind.
-fn rejected(r: *http.Response, length: usize, options: http.ResponseOptions, kind: fail.Kind) bool {
-  status: fail.Status
-  http.respond_buffered(&status, r, length, options)
-  return status.failed && status.failure.kind == kind
+fn buffered_err(r: *http.Response, length: usize, options: http.ResponseOptions) io.IoErr {
+  http.respond_buffered(r, length, options) catch err { return err }
+  #panic("respond_buffered unexpectedly succeeded")
+}
+fn invalid(err: io.IoErr) bool {
+  case err {
+    .InvalidInput => { return true }
+    _ => { return false }
+  }
+}
+fn capacity(err: io.IoErr) bool {
+  case err {
+    .Capacity => { return true }
+    _ => { return false }
+  }
+}
+fn system(err: io.IoErr, code: isize) bool {
+  case err {
+    .System(native) => { return native == code }
+    _ => { return false }
+  }
 }
 fn main() {
   plain := http.Response{}
@@ -58,34 +62,30 @@ fn main() {
   if storage.len != 8 { #panic("reserve") }
   storage[0] = 'x'
   if http.body_buffer(&r, 8).len != 0 || sink.reserves != 2 { #panic("repeat reserve") }
-  if !rejected(&r, 9, http.ResponseOptions{}, fail.Kind.InvalidInput) { #panic("length") }
-  if !rejected(&r, 1, http.ResponseOptions{ content_type: "bad\r\n" }, fail.Kind.InvalidInput) { #panic("header injection") }
+  if !invalid(buffered_err(&r, 9, http.ResponseOptions{})) { #panic("length") }
+  if !invalid(buffered_err(&r, 1, http.ResponseOptions{ content_type: "bad\r\n" })) { #panic("header injection") }
   huge: [9000]u8
   for i in 0..huge.len { huge[i] = 'a' }
-  if !rejected(&r, 1, http.ResponseOptions{ reason: huge[..] }, fail.Kind.Capacity) { #panic("head capacity") }
+  if !capacity(buffered_err(&r, 1, http.ResponseOptions{ reason: huge[..] })) { #panic("head capacity") }
   if sink.commits != 0 || r.started { #panic("published invalid head") }
-  status: fail.Status
-  http.respond_buffered(&status, &r, 1, http.ResponseOptions{})
-  if status.failed || !r.finished || sink.commits != 1 || sink.writes != 0 { #panic("commit") }
-  if !rejected(&r, 1, http.ResponseOptions{}, fail.Kind.InvalidInput) || sink.commits != 1 { #panic("recommit") }
+  http.respond_buffered(&r, 1, http.ResponseOptions{}) catch { #panic("commit") }
+  if !r.finished || sink.commits != 1 || sink.writes != 0 { #panic("commit") }
+  if !invalid(buffered_err(&r, 1, http.ResponseOptions{})) || sink.commits != 1 { #panic("recommit") }
   for native in [0, -73] {
     failing := Sink{ fail: true, code: #cast(isize, native) }
     failed := response(&failing)
     _ = http.body_buffer(&failed, 1)
-    first: fail.Status
-    http.respond_buffered(&first, &failed, 0, http.ResponseOptions{})
-    if first.failure.kind != fail.Kind.System || first.failure.native != #cast(isize, native) { #panic("native failure") }
+    if !system(buffered_err(&failed, 0, http.ResponseOptions{}), #cast(isize, native)) { #panic("native failure") }
     // The failed response is finished: nothing more is written.
-    if !rejected(&failed, 0, http.ResponseOptions{}, fail.Kind.InvalidInput) { #panic("buffered replay") }
-    replay: fail.Status
-    http.respond(&replay, &failed, "retry", http.ResponseOptions{})
-    if replay.failure.kind != fail.Kind.InvalidState || failing.commits != 1 || failing.writes != 0 { #panic("finished after failure") }
+    if !invalid(buffered_err(&failed, 0, http.ResponseOptions{})) { #panic("buffered replay") }
+    refused := false
+    http.respond(&failed, "retry", http.ResponseOptions{}) catch err { refused = invalid(err) }
+    if !refused || failing.commits != 1 || failing.writes != 0 { #panic("finished after failure") }
   }
   fallback := response(&sink)
   _ = http.body_buffer(&fallback, 8)
-  plain_status: fail.Status
-  http.respond(&plain_status, &fallback, "fallback", http.ResponseOptions{})
-  if plain_status.failed || fallback.reserved.len != 0 { #panic("cancel reservation") }
+  http.respond(&fallback, "fallback", http.ResponseOptions{}) catch { #panic("fallback") }
+  if fallback.reserved.len != 0 { #panic("cancel reservation") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-http-buffered-') as tmp:

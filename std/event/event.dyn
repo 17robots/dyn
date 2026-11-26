@@ -1,6 +1,6 @@
 #target(pointer_bits: 64)
 use mem "std/mem"
-use "std/fail"
+use io "std/io"
 use net "std/net"
 use clock "std/time"
 
@@ -13,7 +13,7 @@ struct Entry { descriptor: isize, token: u64, events: u32, active: bool }
 // One owner, one thread. Storage belongs to the opening arena. Remove each
 // descriptor before closing/reusing it. A queue never owns its descriptors.
 // A native control failure poisons the queue: later calls fail with
-// InvalidState. Close and rebuild it, since a platform may have applied part
+// InvalidInput. Close and rebuild it, since a platform may have applied part
 // of a multi-filter update.
 // Lookups are O(1): free entry indices are a stack, and an open-addressed
 // table maps descriptor to entry. wait asks the kernel for at most batch
@@ -33,15 +33,10 @@ const SlotEmpty: u32 = 0
 const SlotRemoved: u32 = 4294967295
 const MaxBatch: usize = 512
 
-pub fn open(arena: *mem.Arena, status: *fail.Status, capacity: usize) Queue {
-  if status == nil { return open(arena, &fail.Status{}, capacity) }
-  if status.failed { return Queue{} }
-  if capacity == 0 || capacity > 2147483647 {
-    fail.invalid(status, "open event queue", "", "capacity must be 1 to 2147483647")
-    return Queue{}
-  }
-  handle := native_open(status)
-  if status.failed { return Queue{} }
+// A capacity outside 1 to 2147483647 fails with InvalidInput.
+pub fn open(arena: *mem.Arena, capacity: usize) Queue!io.IoErr {
+  if capacity == 0 || capacity > 2147483647 { fail .InvalidInput }
+  handle := try native_open()
   table_size: usize = 8
   for table_size < 2 * capacity {
     table_size *= 2
@@ -107,85 +102,49 @@ fn table_rebuild(queue: *Queue) {
     }
   }
 }
-// Whether queue can take a call; records why not.
-fn usable(status: *fail.Status, queue: *Queue, operation: []const u8) bool {
-  if status.failed { return false }
-  if !queue.active {
-    fail.set(status, fail.make(fail.Kind.InvalidState, operation, "", "the queue is closed"))
-    return false
-  }
-  if queue.failed {
-    fail.set(status, fail.make(fail.Kind.InvalidState, operation, "", "an earlier change failed; close and rebuild the queue"))
-    return false
-  }
-  return true
+// A closed queue, or one an earlier change failed on (close and rebuild
+// it), fails with InvalidInput.
+fn usable(queue: *Queue) !io.IoErr {
+  if !queue.active || queue.failed { fail .InvalidInput }
 }
-fn control(status: *fail.Status, queue: *Queue, index: usize, entry: Entry) {
-  native_control(status, queue, index, entry)
-  if status.failed {
+fn control(queue: *Queue, index: usize, entry: Entry) !io.IoErr {
+  native_control(queue, index, entry) catch err {
     queue.failed = true
-    return
+    fail err
   }
   queue.entries[index] = entry
 }
-pub fn add(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, token: u64) {
-  if status == nil {
-    add(&fail.Status{}, queue, descriptor, events, token)
-    return
-  }
-  if !usable(status, queue, "add") { return }
-  if descriptor < 0 || #cast(net.Descriptor, descriptor) != descriptor || events == 0 || (events & ~#cast(u32, 5)) != 0 {
-    fail.invalid(status, "add", "", "events must be Readable and/or Writable on a valid descriptor")
-    return
-  }
-  if find(queue, descriptor) != queue.entries.len {
-    fail.set(status, fail.make(fail.Kind.AlreadyExists, "add", "", "the descriptor is already in the queue"))
-    return
-  }
-  if queue.free_count == 0 {
-    fail.set(status, fail.make(fail.Kind.Capacity, "add", "", "the queue is full"))
-    return
-  }
+// events must be Readable and/or Writable on a valid descriptor, else
+// InvalidInput. A descriptor already in the queue fails with AlreadyExists,
+// a full queue with Capacity.
+pub fn add(queue: *Queue, descriptor: isize, events: u32, token: u64) !io.IoErr {
+  try usable(queue)
+  if descriptor < 0 || #cast(net.Descriptor, descriptor) != descriptor || events == 0 || (events & ~#cast(u32, 5)) != 0 { fail .InvalidInput }
+  if find(queue, descriptor) != queue.entries.len { fail .AlreadyExists }
+  if queue.free_count == 0 { fail .Capacity }
   index := #cast(usize, queue.free[queue.free_count - 1])
-  control(status, queue, index, Entry{ descriptor: descriptor, token: token, events: events, active: true })
-  if status.failed { return }
+  try control(queue, index, Entry{ descriptor: descriptor, token: token, events: events, active: true })
   queue.free_count -= 1
   if 4 * (queue.used_slots + 1) > 3 * queue.table.len {
     table_rebuild(queue)
   }
   table_place(queue, descriptor, index)
 }
-pub fn modify(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, token: u64) {
-  if status == nil {
-    modify(&fail.Status{}, queue, descriptor, events, token)
-    return
-  }
-  if !usable(status, queue, "modify") { return }
-  if events == 0 || (events & ~#cast(u32, 5)) != 0 {
-    fail.invalid(status, "modify", "", "events must be Readable and/or Writable")
-    return
-  }
+// A descriptor not in the queue fails with NotFound.
+pub fn modify(queue: *Queue, descriptor: isize, events: u32, token: u64) !io.IoErr {
+  try usable(queue)
+  if events == 0 || (events & ~#cast(u32, 5)) != 0 { fail .InvalidInput }
   index := find(queue, descriptor)
-  if index == queue.entries.len {
-    fail.set(status, fail.make(fail.Kind.NotFound, "modify", "", "the descriptor is not in the queue"))
-    return
-  }
-  control(status, queue, index, Entry{ descriptor: descriptor, token: token, events: events, active: true })
+  if index == queue.entries.len { fail .NotFound }
+  try control(queue, index, Entry{ descriptor: descriptor, token: token, events: events, active: true })
 }
-pub fn remove(status: *fail.Status, queue: *Queue, descriptor: isize) {
-  if status == nil {
-    remove(&fail.Status{}, queue, descriptor)
-    return
-  }
-  if !usable(status, queue, "remove") { return }
+// A descriptor not in the queue fails with NotFound.
+pub fn remove(queue: *Queue, descriptor: isize) !io.IoErr {
+  try usable(queue)
   slot := find_slot(queue, descriptor)
-  if slot == queue.table.len {
-    fail.set(status, fail.make(fail.Kind.NotFound, "remove", "", "the descriptor is not in the queue"))
-    return
-  }
+  if slot == queue.table.len { fail .NotFound }
   index := #cast(usize, queue.table[slot] - 1)
-  control(status, queue, index, Entry{})
-  if status.failed { return }
+  try control(queue, index, Entry{})
   queue.table[slot] = SlotRemoved
   queue.free[queue.free_count] = #cast(u32, index)
   queue.free_count += 1
@@ -196,10 +155,9 @@ pub fn remove(status: *fail.Status, queue: *Queue, descriptor: isize) {
 // from the queue's storage. No callbacks or hidden threads run here. An
 // interrupted wait continues with the time left; at the end of it the result
 // is empty.
-pub fn wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout_milliseconds: i32) []Event {
-  if status == nil { return wait(arena, &fail.Status{}, queue, timeout_milliseconds) }
+pub fn wait(arena: *mem.Arena, queue: *Queue, timeout_milliseconds: i32) []Event!io.IoErr {
   empty: []Event
-  if !usable(status, queue, "wait") { return empty }
+  try usable(queue)
   start := clock.Instant{}
   if timeout_milliseconds > 0 {
     start = clock.monotonic_now()
@@ -207,20 +165,21 @@ pub fn wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout_mill
   remaining := timeout_milliseconds
   mark := mem.arena_mark(arena)
   for {
-    attempt: fail.Status
-    events := native_wait(arena, &attempt, queue, remaining)
-    if !attempt.failed { return events }
-    if attempt.failure.kind != fail.Kind.Interrupted {
-      fail.set(status, attempt.failure)
-      return empty
+    events := native_wait(arena, queue, remaining) catch err {
+      case err {
+        .Interrupted => {}
+        _ => { fail err }
+      }
+      mem.arena_rewind(arena, mark)
+      if timeout_milliseconds > 0 {
+        elapsed := clock.elapsed(start, clock.monotonic_now())
+        duration := timeout_milliseconds * clock.Millisecond
+        if elapsed >= duration { return empty }
+        remaining = #cast(i32, ((duration - elapsed + clock.Millisecond - 1) / clock.Millisecond))
+      }
+      continue
     }
-    mem.arena_rewind(arena, mark)
-    if timeout_milliseconds > 0 {
-      elapsed := clock.elapsed(start, clock.monotonic_now())
-      duration := timeout_milliseconds * clock.Millisecond
-      if elapsed >= duration { return empty }
-      remaining = #cast(i32, ((duration - elapsed + clock.Millisecond - 1) / clock.Millisecond))
-    }
+    return events
   }
   return empty
 }
@@ -237,21 +196,15 @@ pub fn close(queue: *Queue) {
 // then look at everything posted.
 pub struct Waker { descriptor: isize, active: bool }
 
-pub fn waker_open(status: *fail.Status) Waker {
-  if status == nil { return waker_open(&fail.Status{}) }
-  descriptor := net.socket(status, net.AddressFamilyIpv4, net.SocketDatagram, 0)
+pub fn waker_open() Waker!io.IoErr {
+  descriptor := try net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
+  errdefer net.close(descriptor)
   local := net.ipv4(127, 0, 0, 1, 0)
-  net.bind_ipv4(status, descriptor, &local)
+  try net.bind_ipv4(descriptor, &local)
   address := net.Address{}
-  net.local_address(status, descriptor, &address)
-  net.connect(status, descriptor, address.bytes[..address.length])
-  net.nonblocking(status, descriptor, true)
-  if status.failed {
-    if descriptor >= 0 {
-      net.close(descriptor)
-    }
-    return Waker{}
-  }
+  try net.local_address(descriptor, &address)
+  try net.connect(descriptor, address.bytes[..address.length])
+  try net.nonblocking(descriptor, true)
   return Waker{ descriptor: descriptor, active: true }
 }
 
@@ -259,8 +212,7 @@ pub fn waker_open(status: *fail.Status) Waker {
 pub fn wake(waker: *const Waker) {
   if !waker.active { return }
   signal: [1]u8 = [1]
-  ignored: fail.Status
-  _ = net.try_send(&ignored, waker.descriptor, signal[..], 0)
+  _ = net.try_send(waker.descriptor, signal[..], 0) catch { return }
 }
 
 // Discards pending wakes. Call on the owner's thread before reading posts.
@@ -268,9 +220,8 @@ pub fn waker_drain(waker: *const Waker) {
   if !waker.active { return }
   storage: [64]u8
   for i in 0..1024 {
-    drained: fail.Status
-    received := net.try_receive(&drained, waker.descriptor, storage[..], 0)
-    if drained.failed || received.count == 0 { return }
+    received := net.try_receive(waker.descriptor, storage[..], 0) catch { return }
+    if received.count == 0 { return }
   }
 }
 
