@@ -1,57 +1,39 @@
-use "std/fail"
+use parse "std/parse"
+use io "std/io"
 use mem "std/mem"
 use deflate "std/compress/deflate"
 
 pub struct Info { width: usize, height: usize, channels: u8 }
-// Malformed data fails with
-// InvalidInput (at its offset when known), an impossible size with Overflow,
-// data past the codec's working limits with Capacity.
+// Decoding fails with Invalid for malformed data, at its offset when known, and
+// TooLarge for an impossible size or data past the codec's working limits.
+// Encoding fails with InvalidInput or Capacity.
 pub struct Image { info: Info, pixels: []u8 }
 struct DecodeWork { info: Info, pixels: []u8, error: isize, ok: bool, offset: usize }
 struct EncodeWork { data: []u8, error: isize, ok: bool }
 
-fn codec_failure(status: *fail.Status, operation: []const u8, detail: isize, offset: usize, located: bool) {
-  kind := fail.Kind.InvalidInput
-  message: []const u8 = "malformed PNG"
-  if detail == -75 {
-    kind = fail.Kind.Overflow
-    message = "the image is too large"
-  } else if detail == -28 {
-    kind = fail.Kind.Capacity
-    message = "the image exceeds the codec's limits"
-  } else if !located {
-    message = "invalid pixels or size"
-  }
-  failure := fail.make(kind, operation, "", message)
-  failure.offset = offset
-  failure.has_offset = located
-  fail.set(status, failure)
+// A failed codec step: -75 is an impossible size, -28 data past the codec's
+// working limits, anything else malformed data at offset.
+fn decode_failure(detail: isize, offset: usize) parse.ParseErr {
+  if detail == -75 || detail == -28 { return parse.ParseErr.TooLarge(offset) }
+  return parse.ParseErr.Invalid(offset)
 }
 
 // The header's description of the image, without decoding it.
-pub fn inspect(status: *fail.Status, source: []const u8) Info {
-  if status == nil { return inspect(&fail.Status{}, source) }
-  if status.failed { return Info{} }
+pub fn inspect(source: []const u8) Info!parse.ParseErr {
   info := inspect_info(source)
-  if info.width == 0 {
-    fail.at(status, fail.Kind.InvalidInput, "inspect PNG", "malformed PNG header", 0)
-    return Info{}
-  }
+  if info.width == 0 { fail parse.ParseErr.Invalid(0) }
   return info
 }
 
-fn decode_result(status: *fail.Status, work: DecodeWork) Image {
-  if !work.ok {
-    codec_failure(status, "decode PNG", work.error, work.offset, true)
-    return Image{}
-  }
+fn decode_result(work: DecodeWork) Image!parse.ParseErr {
+  if !work.ok { fail decode_failure(work.error, work.offset) }
   return Image{ info: work.info, pixels: work.pixels }
 }
 
-fn encode_result(status: *fail.Status, work: EncodeWork) []u8 {
+fn encode_result(work: EncodeWork) []u8!io.IoErr {
   if !work.ok {
-    codec_failure(status, "encode PNG", work.error, 0, false)
-    return work.data[..0]
+    if work.error == -75 || work.error == -28 { fail .Capacity }
+    fail .InvalidInput
   }
   return work.data
 }
@@ -364,61 +346,29 @@ fn pixel_count(width: usize, height: usize, channels: u8) usize {
   return count * channels
 }
 
-pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image {
-  if status == nil { return decode(arena, &fail.Status{}, source) }
-  if status.failed { return Image{} }
+pub fn decode(arena: *mem.Arena, source: []const u8) Image!parse.ParseErr {
   info := inspect_info(source)
-  if info.width == 0 {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "decode PNG", "", "malformed PNG"))
-    return Image{}
-  }
+  if info.width == 0 { fail parse.ParseErr.Invalid(0) }
   size := pixel_count(info.width, info.height, info.channels)
   limit := #max(usize)
-  if size == 0 || size > limit - info.height {
-    fail.set(status, fail.make(fail.Kind.Overflow, "decode PNG", "", "the PNG is too large"))
-    return Image{}
-  }
+  if size == 0 || size > limit - info.height { fail parse.ParseErr.TooLarge(0) }
   scan := size + info.height
-  if size > limit - scan || source.len > limit - size - scan {
-    fail.set(status, fail.make(fail.Kind.Overflow, "decode PNG", "", "the PNG is too large"))
-    return Image{}
-  }
-  return decode_result(status, decode_work(arena, source))
+  if size > limit - scan || source.len > limit - size - scan { fail parse.ParseErr.TooLarge(0) }
+  return try decode_result(decode_work(arena, source))
 }
 
-pub fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8) []u8 {
-  if status == nil { return encode(arena, &fail.Status{}, pixels, width, height, channels) }
-  empty: []u8
-  if status.failed { return empty }
-  if width == 0 || height == 0 || channels < 1 || channels > 4 {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "encode PNG", "", "invalid pixels or size"))
-    return empty
-  }
+pub fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8) []u8!io.IoErr {
+  if width == 0 || height == 0 || channels < 1 || channels > 4 { fail .InvalidInput }
   size := pixel_count(width, height, channels)
   limit := #max(usize)
-  if size == 0 || size > limit - height {
-    fail.set(status, fail.make(fail.Kind.Overflow, "encode PNG", "", "the PNG is too large"))
-    return empty
-  }
-  if size != pixels.len {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "encode PNG", "", "invalid pixels or size"))
-    return empty
-  }
+  if size == 0 || size > limit - height { fail .Capacity }
+  if size != pixels.len { fail .InvalidInput }
   scan := size + height
   overhead := (scan / 65535 + 1) * 5 + 6
-  if scan > limit - overhead {
-    fail.set(status, fail.make(fail.Kind.Overflow, "encode PNG", "", "the PNG is too large"))
-    return empty
-  }
+  if scan > limit - overhead { fail .Capacity }
   compressed := scan + overhead
-  if scan > limit - 64 || compressed > (limit - 64 - scan) / 2 {
-    fail.set(status, fail.make(fail.Kind.Overflow, "encode PNG", "", "the PNG is too large"))
-    return empty
-  }
+  if scan > limit - 64 || compressed > (limit - 64 - scan) / 2 { fail .Capacity }
   // PNG stores its IDAT length in a u32.
-  if compressed > 4294967295 {
-    fail.set(status, fail.make(fail.Kind.Overflow, "encode PNG", "", "the PNG is too large"))
-    return empty
-  }
-  return encode_result(status, encode_work(arena, pixels, width, height, channels))
+  if compressed > 4294967295 { fail .Capacity }
+  return try encode_result(encode_work(arena, pixels, width, height, channels))
 }

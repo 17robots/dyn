@@ -1,5 +1,4 @@
 use mem "std/mem"
-use "std/fail"
 use io "std/io"
 use builder "std/bytes/builder"
 

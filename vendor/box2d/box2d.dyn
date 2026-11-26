@@ -1,4 +1,4 @@
-use "std/fail"
+use io "std/io"
 #link("dyn_box2d")
 // Box2D 3.1.1 C ABI adapter. Provider owns worlds, bodies and shapes.
 // Destroy a world to destroy all its children; IDs are generation-checked.
@@ -9,49 +9,30 @@ pub type Shape = u64
 pub struct Position { x: f32, y: f32 }
 // Bad numbers (not finite, sizes not positive) or a stale ID fail with
 // InvalidInput. Destroying a stale ID does nothing.
-pub fn create_owned(status: *fail.Status, gravity_x: f32, gravity_y: f32) World {
-  if status == nil { return create_owned(&fail.Status{}, gravity_x, gravity_y) }
-  if status.failed { return 0 }
+pub fn create_owned(gravity_x: f32, gravity_y: f32) World!io.IoErr {
   world := native_world_create(gravity_x, gravity_y)
-  if world == 0 {
-    fail.invalid(status, "create world", "", "gravity is not finite")
-  }
+  if world == 0 { fail .InvalidInput }
   return world
 }
 pub fn destroy_owned(world: World) {
   _ = native_world_destroy(world)
 }
 // dt must be finite, >0 and <=1 second; substeps 1..64.
-pub fn step(status: *fail.Status, world: World, dt: f32, substeps: i32) {
-  if status == nil {
-    step(&fail.Status{}, world, dt, substeps)
-    return
-  }
-  if status.failed { return }
-  if !native_step(world, dt, substeps) {
-    fail.invalid(status, "step world", "", "invalid world, dt or substeps")
-  }
+pub fn step(world: World, dt: f32, substeps: i32) !io.IoErr {
+  if !native_step(world, dt, substeps) { fail .InvalidInput }
 }
-pub fn body_create(status: *fail.Status, world: World, x: f32, y: f32, dynamic: bool) Body {
-  if status == nil { return body_create(&fail.Status{}, world, x, y, dynamic) }
-  if status.failed { return 0 }
+pub fn body_create(world: World, x: f32, y: f32, dynamic: bool) Body!io.IoErr {
   body := native_body(world, x, y, dynamic)
-  if body == 0 {
-    fail.invalid(status, "create body", "", "invalid world or position")
-  }
+  if body == 0 { fail .InvalidInput }
   return body
 }
 pub fn body_destroy(body: Body) {
   _ = native_body_destroy(body)
 }
 // Positive finite half-extents and nonnegative finite density. Body owns shape.
-pub fn box_create(status: *fail.Status, body: Body, half_width: f32, half_height: f32, density: f32) Shape {
-  if status == nil { return box_create(&fail.Status{}, body, half_width, half_height, density) }
-  if status.failed { return 0 }
+pub fn box_create(body: Body, half_width: f32, half_height: f32, density: f32) Shape!io.IoErr {
   shape := native_box(body, half_width, half_height, density)
-  if shape == 0 {
-    fail.invalid(status, "create box", "", "invalid body, size or density")
-  }
+  if shape == 0 { fail .InvalidInput }
   return shape
 }
 extern fn native_world_create "dyn_b2_world_create"(gravity_x: f32, gravity_y: f32) World
@@ -61,60 +42,35 @@ extern fn native_body "dyn_b2_body"(world: World, x: f32, y: f32, dynamic: bool)
 extern fn native_body_destroy "dyn_b2_body_destroy"(body: Body) bool
 extern fn native_box "dyn_b2_box"(body: Body, half_width: f32, half_height: f32, density: f32) Shape
 // A destroyed or invalid body fails with InvalidInput.
-pub fn position(status: *fail.Status, body: Body) Position {
-  if status == nil { return position(&fail.Status{}, body) }
-  if status.failed { return Position{} }
+pub fn position(body: Body) Position!io.IoErr {
   result := Position{}
-  if !native_position(body, &result.x, &result.y) {
-    fail.invalid(status, "read position", "", "invalid body")
-    return Position{}
-  }
+  if !native_position(body, &result.x, &result.y) { fail .InvalidInput }
   return result
 }
 extern fn native_position "dyn_b2_position"(body: Body, x: *f32, y: *f32) bool
 
 pub type Joint = u64
-pub fn circle_create(status: *fail.Status, body: Body, radius: f32, density: f32) Shape {
-  if status == nil { return circle_create(&fail.Status{}, body, radius, density) }
-  if status.failed { return 0 }
+pub fn circle_create(body: Body, radius: f32, density: f32) Shape!io.IoErr {
   shape := native_circle(body, radius, density)
-  if shape == 0 {
-    fail.invalid(status, "create circle", "", "invalid body, radius or density")
-  }
+  if shape == 0 { fail .InvalidInput }
   return shape
 }
 // Rigid distance joint anchored at body origins; bodies must share a world.
-pub fn distance_joint(status: *fail.Status, first: Body, second: Body, length: f32) Joint {
-  if status == nil { return distance_joint(&fail.Status{}, first, second, length) }
-  if status.failed { return 0 }
+pub fn distance_joint(first: Body, second: Body, length: f32) Joint!io.IoErr {
   joint := native_distance(first, second, length)
-  if joint == 0 {
-    fail.invalid(status, "create joint", "", "invalid bodies or length")
-  }
+  if joint == 0 { fail .InvalidInput }
   return joint
 }
 pub fn joint_destroy(joint: Joint) {
   _ = native_joint_destroy(joint)
 }
-pub fn contact_events(status: *fail.Status, shape: Shape, enabled: bool) {
-  if status == nil {
-    contact_events(&fail.Status{}, shape, enabled)
-    return
-  }
-  if status.failed { return }
-  if !native_events(shape, enabled) {
-    fail.invalid(status, "contact events", "", "invalid shape")
-  }
+pub fn contact_events(shape: Shape, enabled: bool) !io.IoErr {
+  if !native_events(shape, enabled) { fail .InvalidInput }
 }
 // Read after step and before modifying the world.
-pub fn contact_count(status: *fail.Status, world: World, begin: bool) usize {
-  if status == nil { return contact_count(&fail.Status{}, world, begin) }
-  if status.failed { return 0 }
+pub fn contact_count(world: World, begin: bool) usize!io.IoErr {
   count := native_contact_count(world, begin)
-  if count < 0 {
-    fail.invalid(status, "count contacts", "", "invalid world")
-    return 0
-  }
+  if count < 0 { fail .InvalidInput }
   return #cast(usize, count)
 }
 extern fn native_circle "dyn_b2_circle"(body: Body, radius: f32, density: f32) Shape
@@ -125,13 +81,10 @@ extern fn native_contact_count "dyn_b2_contact_count"(world: World, begin: bool)
 pub struct Contact { first: Shape, second: Shape }
 // Contact event index of this step. NotFound for an index past contact_count
 // or an invalid world.
-pub fn contact(status: *fail.Status, world: World, begin: bool, index: usize) Contact {
-  if status == nil { return contact(&fail.Status{}, world, begin, index) }
-  if status.failed { return Contact{} }
+pub fn contact(world: World, begin: bool, index: usize) Contact!io.IoErr {
   result := Contact{}
   if index > 2147483647 || !native_contact(world, begin, #cast(i32, index), &result.first, &result.second) {
-    fail.set(status, fail.make(fail.Kind.NotFound, "read contact", "", "no contact at that index"))
-    return Contact{}
+    fail .NotFound
   }
   return result
 }
@@ -139,18 +92,13 @@ pub struct Query { total: usize, written: usize }
 // Broad-phase AABB candidates, not exact geometry overlap. Output order is
 // unspecified. total may exceed capacity; written reports the copied prefix.
 // An invalid world or box fails with InvalidInput.
-pub fn query(status: *fail.Status, world: World, x0: f32, y0: f32, x1: f32, y1: f32, output: []Shape) Query {
-  if status == nil { return query(&fail.Status{}, world, x0, y0, x1, y1, output) }
-  if status.failed { return Query{} }
+pub fn query(world: World, x0: f32, y0: f32, x1: f32, y1: f32, output: []Shape) Query!io.IoErr {
   data: *Shape = nil
   if output.len != 0 {
     data = &output[0]
   }
   count := native_query(world, x0, y0, x1, y1, data, output.len)
-  if count < 0 {
-    fail.invalid(status, "query world", "", "invalid world or box")
-    return Query{}
-  }
+  if count < 0 { fail .InvalidInput }
   total := #cast(usize, count)
   written := total
   if written > output.len {

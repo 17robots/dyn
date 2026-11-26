@@ -1,4 +1,6 @@
-struct Outline { points: []Point, ends: []usize, origin: Point, advance: Point, kind: fail.Kind, ok: bool }
+// What stopped reading an outline.
+enum Problem { None, Invalid, TooLarge, Unsupported }
+struct Outline { points: []Point, ends: []usize, origin: Point, advance: Point, kind: Problem, ok: bool }
 struct OutlineBudget { points: usize, nodes: usize, path: [17]u16 }
 fn metric_origin(face: *const Face, index: u16, xmin: i16) Point {
   at := #cast(usize, index) * 4 + 2
@@ -15,11 +17,11 @@ fn metric_advance(face: *const Face, index: u16) Point {
   return Point{ x: u16be(face.hmtx, metric * 4) }
 }
 fn read_outline(arena: *mem.Arena, face: *const Face, index: u16, depth: usize, budget: *OutlineBudget) Outline {
-  if index >= face.glyphs { return Outline{ kind: fail.Kind.InvalidInput } }
+  if index >= face.glyphs { return Outline{ kind: Problem.Invalid } }
   for i in 0..depth {
-    if budget.path[i] == index { return Outline{ kind: fail.Kind.InvalidInput } }
+    if budget.path[i] == index { return Outline{ kind: Problem.Invalid } }
   }
-  if depth >= 16 || budget.nodes == 0 { return Outline{ kind: fail.Kind.Capacity } }
+  if depth >= 16 || budget.nodes == 0 { return Outline{ kind: Problem.TooLarge } }
   budget.nodes -= 1
   budget.path[depth] = index
   start := location(face, index)
@@ -28,47 +30,47 @@ fn read_outline(arena: *mem.Arena, face: *const Face, index: u16, depth: usize, 
   if start == end {
     return Outline{ origin: metric_origin(face, index, 0), advance: metric_advance(face, index), ok: true }
   }
-  if data.len < 10 { return Outline{ kind: fail.Kind.InvalidInput } }
+  if data.len < 10 { return Outline{ kind: Problem.Invalid } }
   contours := i16be(data, 0)
   x0 := i16be(data, 2)
   y0 := i16be(data, 4)
   x1 := i16be(data, 6)
   y1 := i16be(data, 8)
-  if x0 > x1 || y0 > y1 { return Outline{ kind: fail.Kind.InvalidInput } }
+  if x0 > x1 || y0 > y1 { return Outline{ kind: Problem.Invalid } }
   origin := metric_origin(face, index, x0)
   advance := metric_advance(face, index)
   if contours < 0 { return composite_outline(arena, face, data, origin, advance, depth, budget) }
   if contours == 0 { return Outline{ origin: origin, advance: advance, ok: true } }
-  if !fits(data, 10, #cast(usize, contours) * 2 + 2) { return Outline{ kind: fail.Kind.InvalidInput } }
+  if !fits(data, 10, #cast(usize, contours) * 2 + 2) { return Outline{ kind: Problem.Invalid } }
   count := #cast(usize, u16be(data, 10 + (#cast(usize, contours) - 1) * 2)) + 1
-  if count > budget.points { return Outline{ kind: fail.Kind.Capacity } }
+  if count > budget.points { return Outline{ kind: Problem.TooLarge } }
   budget.points -= count
   ends := mem.push_array<usize>(arena, #cast(usize, contours))
   for i in 0..ends.len {
     ends[i] = u16be(data, 10 + i * 2)
     if (i != 0 && ends[i] <= ends[i - 1]) || ends[i] >= count {
-      return Outline{ kind: fail.Kind.InvalidInput }
+      return Outline{ kind: Problem.Invalid }
     }
   }
   at := 10 + ends.len * 2
   instructions := #cast(usize, u16be(data, at))
   at += 2
-  if !fits(data, at, instructions) { return Outline{ kind: fail.Kind.InvalidInput } }
+  if !fits(data, at, instructions) { return Outline{ kind: Problem.Invalid } }
   at += instructions
   flags := mem.push_array<u8>(arena, count)
   points := mem.push_array<Point>(arena, count)
   i: usize = 0
   for i < count {
-    if !fits(data, at, 1) { return Outline{ kind: fail.Kind.InvalidInput } }
+    if !fits(data, at, 1) { return Outline{ kind: Problem.Invalid } }
     flag := data[at]
     at += 1
     repeat: usize = 1
     if (flag & 8) != 0 {
-      if !fits(data, at, 1) { return Outline{ kind: fail.Kind.InvalidInput } }
+      if !fits(data, at, 1) { return Outline{ kind: Problem.Invalid } }
       repeat += data[at]
       at += 1
     }
-    if repeat > count - i { return Outline{ kind: fail.Kind.InvalidInput } }
+    if repeat > count - i { return Outline{ kind: Problem.Invalid } }
     for j in 0..repeat {
       flags[i + j] = flag
     }
@@ -85,24 +87,24 @@ fn read_outline(arena: *mem.Arena, face: *const Face, index: u16, depth: usize, 
     for j in 0..count {
       delta: i32 = 0
       if (flags[j] & short) != 0 {
-        if !fits(data, at, 1) { return Outline{ kind: fail.Kind.InvalidInput } }
+        if !fits(data, at, 1) { return Outline{ kind: Problem.Invalid } }
         delta = data[at]
         at += 1
         if (flags[j] & same) == 0 {
           delta = 0 - delta
         }
       } else if (flags[j] & same) == 0 {
-        if !fits(data, at, 2) { return Outline{ kind: fail.Kind.InvalidInput } }
+        if !fits(data, at, 2) { return Outline{ kind: Problem.Invalid } }
         delta = i16be(data, at)
         at += 2
       }
       coordinate += delta
       if axis == 0 {
-        if coordinate < x0 || coordinate > x1 { return Outline{ kind: fail.Kind.InvalidInput } }
+        if coordinate < x0 || coordinate > x1 { return Outline{ kind: Problem.Invalid } }
         points[j].x = coordinate
         points[j].on = (flags[j] & 1) != 0
       } else {
-        if coordinate < y0 || coordinate > y1 { return Outline{ kind: fail.Kind.InvalidInput } }
+        if coordinate < y0 || coordinate > y1 { return Outline{ kind: Problem.Invalid } }
         points[j].y = coordinate
       }
     }

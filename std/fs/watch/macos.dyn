@@ -1,6 +1,5 @@
 #target(kernel: darwin)
 use io "std/io"
-use "std/fail"
 use mem "std/mem"
 use c "std/c"
 use sync "std/sync"
@@ -62,16 +61,13 @@ extern fn queue_sync "dispatch_sync_f"(queue: rawptr, context: rawptr, callback:
 extern fn queue_release "dispatch_release"(queue: rawptr)
 fn symbol(handle: rawptr, name: []const u8) rawptr {
   backing: [128 + mem.ArenaBufferOverhead]u8
-  status: fail.Status
-  value := c.string_into(&status, backing[..], name)
-  if handle == nil || status.failed { return nil }
+  if handle == nil { return nil }
+  value := c.string_into(backing[..], name) catch { return nil }
   return library_symbol(handle, value)
 }
 fn library(path: []const u8) rawptr {
   backing: [256 + mem.ArenaBufferOverhead]u8
-  status: fail.Status
-  value := c.string_into(&status, backing[..], path)
-  if status.failed { return nil }
+  value := c.string_into(backing[..], path) catch { return nil }
   return library_open(value, 2)
 }
 fn unload(api: *API) {
@@ -181,9 +177,11 @@ fn callback(_stream: rawptr, info: rawptr, count: usize, paths: rawptr, flags: *
     if rescan {
       sync.store_u32(&slot.owner.lost, 1)
     }
-    reading: fail.Status
-    path := c.bytes_from_string(&reading, names[i], 1024)
-    if reading.failed || !utf8.valid(path) {
+    path := c.bytes_from_string(names[i], 1024) catch {
+      sync.store_u32(&slot.owner.lost, 1)
+      continue
+    }
+    if !utf8.valid(path) {
       sync.store_u32(&slot.owner.lost, 1)
       continue
     }
@@ -245,16 +243,14 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) i32!io.IoErr {
     fail .Unsupported
   }
   input: [1024 + mem.ArenaBufferOverhead]u8
-  terminated := c.string_into(nil, input[..], path)
-  if terminated == nil { fail io.darwin_err(-22) }
+  terminated := c.string_into(input[..], path) catch { fail io.darwin_err(-22) }
   canonical: [1024]u8
   if state.api.canonical(terminated, &canonical[0]) == nil {
     code := 0 - #cast(isize, native_errno().*)
     fail io.darwin_err(code)
   }
-  canonical_status: fail.Status
-  rooted_path := c.bytes_from_string(&canonical_status, &canonical[0], 1024)
-  if canonical_status.failed || !utf8.valid(rooted_path) { fail io.darwin_err(-22) }
+  rooted_path := c.bytes_from_string(&canonical[0], 1024) catch { fail io.darwin_err(-22) }
+  if !utf8.valid(rooted_path) { fail io.darwin_err(-22) }
   // FSEvents watches trees; this adapter promises only direct directory children.
   directory := #syscall(sys.Open, &canonical[0], 17858560, 0) // O_CLOEXEC|O_DIRECTORY|O_EVTONLY
   if directory < 0 { fail io.darwin_err(directory) }

@@ -41,7 +41,6 @@ use bytes "std/bytes"
 use gzip "std/compress/gzip"
 use event "std/event"
 use format "std/fmt"
-use "std/fail"
 use io "std/io"
 use log "std/log"
 use mem "std/mem"
@@ -504,11 +503,9 @@ fn log_request(worker: *const Worker, remote: *const network.Address, request: *
   address: [64]u8
   status: [8]u8
   micros: [24]u8
-  // These fit their storage, so this status never fails.
-  rendering: fail.Status
-  status_text := format.buffer(&rendering, status[..])
+  status_text := format.buffer(status[..])
   format.write_u64(&status_text, response.status)
-  micros_text := format.buffer(&rendering, micros[..])
+  micros_text := format.buffer(micros[..])
   format.write_i64(&micros_text, elapsed)
   fields: [5]log.Field = [
     log.Field{ name: "client", value: network.ip_text(address[..], network.address_ip(remote)) },
@@ -518,14 +515,12 @@ fn log_request(worker: *const Worker, remote: *const network.Address, request: *
     log.Field{ name: "us", value: format.bytes(&micros_text) },
   ]
   // A failed log write does not fail the request.
-  logged: fail.Status
-  log.write(&logged, worker.config.access_log, log.Level.Info, "request", fields[..])
+  log.write(worker.config.access_log, log.Level.Info, "request", fields[..]) catch {}
 }
 
 fn log_slow(worker: *const Worker, request: *const http.Request, elapsed: i64) {
   micros: [24]u8
-  rendering: fail.Status
-  micros_text := format.buffer(&rendering, micros[..])
+  micros_text := format.buffer(micros[..])
   format.write_i64(&micros_text, elapsed)
   fields: [3]log.Field = [
     log.Field{ name: "method", value: request.method },
@@ -535,8 +530,7 @@ fn log_slow(worker: *const Worker, request: *const http.Request, elapsed: i64) {
   standard := log.logger(io.stderr(), log.Level.Warning)
   destination := worker.config.access_log
   if destination == nil { destination = &standard }
-  logged: fail.Status
-  log.write(&logged, destination, log.Level.Warning, "slow handler", fields[..])
+  log.write(destination, log.Level.Warning, "slow handler", fields[..]) catch {}
 }
 
 fn now_milliseconds() i64 {
@@ -578,8 +572,7 @@ fn log_failure(worker: *const Worker, request: *const http.Request, err: io.IoEr
     log.Field{ name: "error", value: io.text(err) },
   ]
   // A failed log write does not fail the request.
-  logged: fail.Status
-  log.write(&logged, worker.config.access_log, log.Level.Error, "handler failed", fields[..])
+  log.write(worker.config.access_log, log.Level.Error, "handler failed", fields[..]) catch {}
 }
 
 fn connection_read(connection: *Connection, destination: []u8) TransportIo {
@@ -1536,9 +1529,7 @@ fn start_worker(outer: *mem.Arena, worker: *Worker) !io.IoErr {
     if worker.native == nil { fail io.IoErr.System(0) }
   } else {
     stack := mem.push_bytes(arena, config.stack_size)
-    spawning: fail.Status
-    worker.thread = threading.spawn(arena, &spawning, stack, worker_main, worker)
-    try io.check_status(&spawning)
+    worker.thread = try threading.spawn(arena, stack, worker_main, worker)
   }
 }
 
@@ -1647,15 +1638,15 @@ pub fn join(workers: []Worker) !io.IoErr {
       }
       worker.native = nil
     } else {
-      joined: fail.Status
-      threading.join(&joined, worker.thread)
-      if joined.failed {
+      joined := true
+      threading.join(worker.thread) catch err {
         if !failed {
           failed = true
-          first = io.err_of(joined.failure)
+          first = err
         }
-        continue
+        joined = false
       }
+      if !joined { continue }
     }
     worker.thread = nil
     if worker.own_listener.active {
@@ -2005,8 +1996,7 @@ pub fn job<T>(response: *http.Response) *T {
 
 fn job_too_large(name: []const u8, size: usize, limit: usize) {
   storage: [192]u8
-  rendering: fail.Status
-  message := format.buffer(&rendering, storage[..])
+  message := format.buffer(storage[..])
   format.print(&message, "evented.job: {} needs {} bytes, but Config.job_size is {}; raise job_size", name, size, limit)
   #panic(format.bytes(&message))
 }

@@ -9,7 +9,6 @@
 
 use "std/bytes"
 use "std/container/array"
-use "std/fail"
 use "std/fs"
 use "std/html"
 use "std/io"
@@ -55,10 +54,9 @@ fn build_page(keep: *mem.Arena, scratch: *mem.Arena, source: []const u8, output:
   read := try fs.read_all(scratch, input, MaxPageBytes)
   // Escaping turns one byte into at most six ("&quot;"), plus room for tags.
   // Sized for the worst case of escaping, so the writer cannot run out.
-  rendering: fail.Status
-  writer := html.writer(&rendering, mem.push_bytes(scratch, 6 * read.len + 1024))
+  writer := html.writer(mem.push_bytes(scratch, 6 * read.len + 1024))
   render_page(&writer, read)
-  if rendering.failed { fail .Capacity }
+  if html.overflowed(&writer) { fail .Capacity }
 
   stem := file_name[..file_name.len - ".txt".len]
   page_name := strings.format(scratch, "{}.html", stem)
@@ -74,8 +72,7 @@ fn build_index(scratch: *mem.Arena, output: []const u8, pages: []const Page) !io
   for page in pages {
     size += 6 * (page.name.len + page.title.len) + 64
   }
-  rendering: fail.Status
-  writer := html.writer(&rendering, mem.push_bytes(scratch, size))
+  writer := html.writer(mem.push_bytes(scratch, size))
   header(&writer, "All pages")
   open_tag(&writer, "<ul>\n")
   for page in pages {
@@ -87,7 +84,7 @@ fn build_index(scratch: *mem.Arena, output: []const u8, pages: []const Page) !io
   }
   open_tag(&writer, "</ul>\n")
   footer(&writer)
-  if rendering.failed { fail .Capacity }
+  if html.overflowed(&writer) { fail .Capacity }
   target := path.join(scratch, output, "index.html")
   try fs.write_all(target, html.output(&writer).bytes)
 }

@@ -1,4 +1,4 @@
-use "std/fail"
+use io "std/io"
 use "std/c"
 use "std/mem"
 #link("curl")
@@ -7,19 +7,13 @@ use "std/mem"
 pub struct Response { written: usize, http_status: c.long }
 struct Sink { destination: []u8, used: usize, full: bool }
 // Call once before starting worker threads; cleanup only after all transfers end.
-pub fn init(status: *fail.Status) {
-  if status == nil {
-    init(&fail.Status{})
-    return
-  }
-  if status.failed { return }
+pub fn init() !io.IoErr {
   code := native_init(#cast(c.long, 3))
-  if code != 0 {
-    reading: fail.Status
-    failure := fail.make(fail.Kind.System, "start curl", "", c.bytes_from_string(&reading, native_error_text(code), 160))
-    failure.native = code
-    fail.set(status, failure)
-  }
+  if code != 0 { fail io.IoErr.System(code) }
+}
+// curl's text for a code from a System failure.
+pub fn error_text(code: isize) []const u8 {
+  return c.bytes_from_string(native_error_text(#cast(i32, code)), 160) catch ""
 }
 pub fn cleanup() {
   native_cleanup()
@@ -46,23 +40,15 @@ fn receive(data: *const u8, size: usize, count: usize, context: rawptr) usize {
 // Synchronous HTTP(S) GET. URL copied through caller scratch; response goes into
 // caller storage. TLS verification remains enabled. Redirects are not followed.
 // An HTTP error response is not a failure: inspect http_status. A response
-// larger than destination fails with Capacity; transport failures carry
-// curl's message, with its code in native. On failure destination holds
-// partial bytes, not a response. No borrows escape.
-pub fn get_into(status: *fail.Status, url: []const u8, url_buffer: []u8, destination: []u8, timeout_ms: i32) Response {
-  if status == nil { return get_into(&fail.Status{}, url, url_buffer, destination, timeout_ms) }
-  if status.failed { return Response{} }
-  if timeout_ms <= 0 {
-    fail.invalid(status, "GET", url, "the timeout must be positive")
-    return Response{}
-  }
-  encoded := c.string_into(status, url_buffer, url)
-  if status.failed { return Response{} }
+// larger than destination fails with Capacity; a timeout with Interrupted, an
+// unknown host with NotFound, a bad URL with InvalidInput, and other transport
+// failures with System and curl's code (error_text gives curl's message). On
+// failure destination holds partial bytes, not a response. No borrows escape.
+pub fn get_into(url: []const u8, url_buffer: []u8, destination: []u8, timeout_ms: i32) Response!io.IoErr {
+  if timeout_ms <= 0 { fail .InvalidInput }
+  encoded := try c.string_into(url_buffer, url)
   easy := native_easy_init()
-  if easy == nil {
-    fail.set(status, fail.make(fail.Kind.Capacity, "GET", url, "no memory for a transfer"))
-    return Response{}
-  }
+  if easy == nil { fail .Capacity }
   defer native_easy_cleanup(easy)
   sink := Sink{ destination: destination }
   protocols: [11]u8 = ['h', 't', 't', 'p', ',', 'h', 't', 't', 'p', 's', 0]
@@ -90,20 +76,12 @@ pub fn get_into(status: *fail.Status, url: []const u8, url_buffer: []u8, destina
     code = native_getinfo(easy, 2097154, &http_status)
   }
   if sink.full {
-    fail.set(status, fail.make(fail.Kind.Capacity, "GET", url, "the response does not fit destination"))
+    fail .Capacity
   } else if code != 0 {
-    kind := fail.Kind.System
-    if code == 28 {
-      kind = fail.Kind.Interrupted
-    } else if code == 6 {
-      kind = fail.Kind.NotFound
-    } else if code == 1 || code == 3 {
-      kind = fail.Kind.InvalidInput
-    }
-    reading: fail.Status
-    failure := fail.make(kind, "GET", url, c.bytes_from_string(&reading, native_error_text(code), 160))
-    failure.native = code
-    fail.set(status, failure)
+    if code == 28 { fail .Interrupted }
+    if code == 6 { fail .NotFound }
+    if code == 1 || code == 3 { fail .InvalidInput }
+    fail io.IoErr.System(code)
   }
   return Response{ written: sink.used, http_status: http_status }
 }

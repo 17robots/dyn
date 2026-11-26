@@ -22,13 +22,15 @@ search for a word finds the function that does it.
 - **Failure is a return value.** A function the world can make fail returns
   `T!E`: `io.IoErr` for the filesystem, processes and the network (one shared
   set of kinds, with `System(code)` keeping the system's code), and
-  `parse.ParseErr` (`Invalid(offset)` or `TooLarge(offset)`) for parsers.
+  `parse.ParseErr` (`Invalid(offset)`, `TooLarge(offset)` or
+  `Unsupported(offset)`) for parsers and decoders.
   Callers use `try` to pass a failure on, `catch` to handle it, and
   `catch value` for a fallback. See [idiomatic Dyn](idiomatic-dyn.md#errors-and-cleanup)
-  for the rules. Modules not yet migrated still take a `*fail.Status`
-  (std/fail): the first failure stays there with its kind, native code,
-  operation, path and reason, and every later call given that status does
-  nothing. Scanners and readers that fail stay failed.
+  for the rules. A module with failures of its own names them in an enum
+  (`flags.ArgsErr`, `text_edits.EditErr`); a core-layer primitive such as a
+  cipher fails with a bare `!`. Builders into fixed storage keep their first
+  overflow and fail once at `finish`. Scanners and readers that fail stay
+  failed.
   Predicates return `bool`, and end of input is an ordinary result. A
   migrated lookup fails with `NotFound` when the value is missing, so an
   optional value reads as `http.request_header(request, "x-tag") catch ""`.
@@ -59,7 +61,7 @@ search for a word finds the function that does it.
 Every std module belongs to one of three layers, listed in `std/layers.txt`:
 
 - **core**: no operating system and no memory source. Bytes, UTF-8, hashing,
-  crypto primitives, intrusive containers, `std/fail`, `std/math`.
+  crypto primitives, intrusive containers, `std/parse`, `std/math`.
 - **heap**: arenas from `std/mem`, plus everything built on them: formatting,
   strings, parsers and codecs, images, `std/io` streams.
 - **std**: needs an operating system: files, sockets, processes, threads,

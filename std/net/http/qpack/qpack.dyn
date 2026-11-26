@@ -5,7 +5,7 @@
 // The encoder here likewise sends static indexes and literals, Huffman-coded
 // when shorter (the code is HPACK's).
 use hpack "std/net/http/hpack"
-use "std/fail"
+use parse "std/parse"
 
 pub const StaticCount: usize = 99
 
@@ -66,15 +66,11 @@ fn static_value(index: usize) []const u8 {
   return StaticText[start..start + StaticValueLength[index]]
 }
 
-// Malformed or truncated input fails with InvalidInput, a field larger than
-// scratch with Capacity, at the offending offset in the block.
-fn failed(status: *fail.Status, kind: fail.Kind, offset: usize) Field {
-  message: []const u8 = "malformed QPACK field"
-  if kind == fail.Kind.Capacity {
-    message = "the field does not fit scratch"
-  }
-  fail.at(status, kind, "decode QPACK", message, offset)
-  return Field{}
+// Malformed or truncated input fails with Invalid, a field larger than
+// scratch with TooLarge, at the offending offset in the block.
+fn failed(too_large: bool, offset: usize) parse.ParseErr {
+  if too_large { return parse.ParseErr.TooLarge(offset) }
+  return parse.ParseErr.Invalid(offset)
 }
 
 fn copy_into(destination: []u8, source: []const u8) bool {
@@ -96,49 +92,41 @@ pub fn decode_prefix(section: []const u8) Prefix {
 }
 
 // Decodes the field line at the start of section into scratch. A reference
-// to the dynamic table fails with Syntax (QPACK_DECOMPRESSION_FAILED).
-pub fn decode_field(status: *fail.Status, section: []const u8, scratch: []u8) Field {
-  if status == nil { return decode_field(&fail.Status{}, section, scratch) }
-  if status.failed { return Field{} }
-  if section.len == 0 { return failed(status, fail.Kind.InvalidInput, 0) }
+// to the dynamic table fails with Invalid (QPACK_DECOMPRESSION_FAILED).
+pub fn decode_field(section: []const u8, scratch: []u8) Field!parse.ParseErr {
+  if section.len == 0 { fail failed(false, 0) }
   first := section[0]
   if (first & 0x80) != 0 {
     // Indexed field line; T (0x40) selects the static table.
     index := read_integer(section, 6)
-    if (first & 0x40) == 0 || !index.valid || index.value >= StaticCount {
-      return failed(status, fail.Kind.InvalidInput, 0)
-    }
+    if (first & 0x40) == 0 || !index.valid || index.value >= StaticCount { fail failed(false, 0) }
     name := static_name(index.value)
     value := static_value(index.value)
-    if !copy_into(scratch, name) || !copy_into(scratch[name.len..], value) {
-      return failed(status, fail.Kind.Capacity, 0)
-    }
+    if !copy_into(scratch, name) || !copy_into(scratch[name.len..], value) { fail failed(true, 0) }
     return Field{ name: scratch[..name.len], value: scratch[name.len..name.len + value.len], consumed: index.consumed }
   }
   if (first & 0xc0) == 0x40 {
     // Literal with a name reference; T (0x10) selects the static table.
     index := read_integer(section, 4)
-    if (first & 0x10) == 0 || !index.valid || index.value >= StaticCount {
-      return failed(status, fail.Kind.InvalidInput, 0)
-    }
+    if (first & 0x10) == 0 || !index.valid || index.value >= StaticCount { fail failed(false, 0) }
     name := static_name(index.value)
-    if !copy_into(scratch, name) { return failed(status, fail.Kind.Capacity, 0) }
+    if !copy_into(scratch, name) { fail failed(true, 0) }
     value := read_string(section[index.consumed..], 7, scratch[name.len..])
-    if !value.valid { return failed(status, fail.Kind.InvalidInput, index.consumed) }
+    if !value.valid { fail failed(false, index.consumed) }
     return Field{ name: scratch[..name.len], value: scratch[name.len..name.len + value.length],
       consumed: index.consumed + value.consumed }
   }
   if (first & 0xe0) == 0x20 {
     // Literal with a literal name: H at 0x08, a 3-bit length.
     name := read_string(section, 3, scratch)
-    if !name.valid { return failed(status, fail.Kind.InvalidInput, 0) }
+    if !name.valid { fail failed(false, 0) }
     value := read_string(section[name.consumed..], 7, scratch[name.length..])
-    if !value.valid { return failed(status, fail.Kind.InvalidInput, name.consumed) }
+    if !value.valid { fail failed(false, name.consumed) }
     return Field{ name: scratch[..name.length], value: scratch[name.length..name.length + value.length],
       consumed: name.consumed + value.consumed }
   }
   // Post-base references need the dynamic table.
-  return failed(status, fail.Kind.InvalidInput, 0)
+  fail failed(false, 0)
 }
 
 // ---------------------------------------------------------------- encoding

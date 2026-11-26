@@ -5,7 +5,6 @@ use builder "std/bytes/builder"
 use memory "std/mem"
 use testing "std/testing"
 use io "std/io"
-use "std/fail"
 use utf8 "std/unicode/utf8"
 
 struct Entry { key: []const u8, hash: u64, hash_next: *Entry, bytes: [1]u8, value: usize }
@@ -18,8 +17,7 @@ fn main() {
   for i in 0..haystack.len { haystack[i] = 'a' }
   for i in 0..needle.len { needle[i] = 'a' }
   needle[127] = 'b'
-  preparing := fail.Status{ on_failure: fail.panic_on_failure }
-  pattern := search.prepare(&preparing, needle[..], table[..])
+  pattern := search.prepare(needle[..], table[..]) catch { #panic("unexpected failure") }
   copied: [128]u8
   encoded: [4]u8 = [240, 159, 152, 128]
   checksum: i64 = 0

@@ -1,5 +1,5 @@
+use io "std/io"
 use "std/mem"
-use "std/fail"
 #link("dyn_stb")
 // Integer skyline packing, no rotation. Caller owns rectangles; scratch arena is
 // rewound before return. Inputs must not overlap newly allocated scratch storage.
@@ -7,22 +7,11 @@ pub struct Rectangle { width: i32, height: i32, x: i32, y: i32, was_packed: i32 
 // The count packed; was_packed marks each one. A partial fit is not a
 // failure: compare the count. Bad sizes fail with InvalidInput. An exhausted
 // scratch arena panics.
-pub fn pack(scratch: *mem.Arena, status: *fail.Status, width: usize, height: usize, rectangles: []Rectangle) usize {
-  if status == nil { return pack(scratch, &fail.Status{}, width, height, rectangles) }
-  if status.failed { return 0 }
-  if scratch == nil {
-    fail.invalid(status, "pack rectangles", "", "no scratch arena")
-    return 0
-  }
-  if width > 32768 || height > 32768 {
-    fail.invalid(status, "pack rectangles", "", "the atlas is larger than 32768")
-    return 0
-  }
+pub fn pack(scratch: *mem.Arena, width: usize, height: usize, rectangles: []Rectangle) usize!io.IoErr {
+  if scratch == nil { fail .InvalidInput }
+  if width > 32768 || height > 32768 { fail .InvalidInput }
   size := native_size(#cast(i32, width), rectangles.len)
-  if size == 0 {
-    fail.invalid(status, "pack rectangles", "", "bad width or count")
-    return 0
-  }
+  if size == 0 { fail .InvalidInput }
   mark := mem.arena_mark(scratch)
   defer mem.arena_rewind(scratch, mark)
   work := aligned_work(scratch, size)
@@ -31,10 +20,7 @@ pub fn pack(scratch: *mem.Arena, status: *fail.Status, width: usize, height: usi
     data = &rectangles[0]
   }
   code := native_pack(#cast(i32, width), #cast(i32, height), data, rectangles.len, #cast(rawptr, &work[0]), size)
-  if code < 0 {
-    fail.invalid(status, "pack rectangles", "", "bad rectangle sizes")
-    return 0
-  }
+  if code < 0 { fail .InvalidInput }
   count: usize = 0
   for rectangle in rectangles {
     if rectangle.was_packed != 0 {

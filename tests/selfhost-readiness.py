@@ -13,7 +13,6 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 SOURCE = r'''use "std/bytes"
-use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/process"
@@ -99,9 +98,8 @@ fn expression(p: *Compiler, symbols: *const Symbols, depth: usize) {
 fn main() {
   storage: [16384]u8
   arena := mem.arena_from_buffer(storage[..])
-  arguments_status: fail.Status
   arguments := process.arguments(arena) catch { #panic("cannot read arguments") }
-  if arguments_status.failed || arguments.len != 2 { #panic("arguments") }
+  if arguments.len != 2 { #panic("arguments") }
   symbols := Symbols{}
   if !insert(&symbols, "alpha", '4') || !insert(&symbols, "beta", '7') { #panic("insert") }
   if insert(&symbols, "alpha", '8') || lookup(&symbols, "absent").ok { #panic("symbols") }

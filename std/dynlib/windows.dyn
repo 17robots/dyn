@@ -6,29 +6,23 @@ extern fn native_open "dyn_win_load_library"(path: *const u8) rawptr
 extern fn native_symbol "dyn_win_get_symbol"(handle: rawptr, name: *const u8) rawptr
 extern fn native_close "dyn_win_free_library"(handle: rawptr) i32
 
-fn windows_failed(status: *fail.Status, operation: []const u8, path: []const u8) {
-  fail.set(status, io.from_windows(operation, path, #cast(isize, native_windows.last_error_raw())))
+fn windows_failed() io.IoErr {
+  return io.windows_err(#cast(isize, native_windows.last_error_raw()))
 }
 
 // LoadLibraryA takes the active code page; ASCII paths are portable.
-fn platform_open(status: *fail.Status, path: *const u8, text: []const u8, _flags: i32) Handle {
+fn platform_open(path: *const u8, _flags: i32) Handle!io.IoErr {
   value := native_open(path)
-  if value == nil {
-    windows_failed(status, "load library", text)
-  }
+  if value == nil { fail windows_failed() }
   return value
 }
 
-fn platform_symbol(status: *fail.Status, handle: Handle, name: *const u8, text: []const u8) rawptr {
+fn platform_symbol(handle: Handle, name: *const u8) rawptr!io.IoErr {
   value := native_symbol(handle, name)
-  if value == nil {
-    windows_failed(status, "find symbol", text)
-  }
+  if value == nil { fail windows_failed() }
   return value
 }
 
-fn platform_close(status: *fail.Status, handle: Handle) {
-  if native_close(handle) == 0 {
-    windows_failed(status, "close library", "")
-  }
+fn platform_close(handle: Handle) !io.IoErr {
+  if native_close(handle) == 0 { fail windows_failed() }
 }

@@ -1,6 +1,5 @@
 use memory "std/mem"
 use byte_ops "std/bytes"
-use "std/fail"
 use io "std/io"
 
 // UTF-8 strings are immutable byte slices. Operations work on bytes unless named otherwise.
@@ -628,12 +627,6 @@ pub fn glob_match(pattern: []const u8, text: []const u8) bool {
 }
 
 fn count_write(data: rawptr, source: []const u8) usize!io.IoErr {
-  status: fail.Status
-  count := count_write_status(data, &status, source)
-  try io.check_status(&status)
-  return count
-}
-fn count_write_status(data: rawptr, _status: *fail.Status, source: []const u8) usize {
   total := #cast(*usize, data)
   total.* += source.len
   return source.len
@@ -646,12 +639,11 @@ pub fn format_arguments(arena: *memory.Arena, template: []const u8, arguments: [
   size: usize = 0
   // A template that does not match its arguments formats with markers; see
   // io.print_arguments.
-  counting: fail.Status
-  io.print_status(&counting, io.Writer{ data: &size, write: count_write }, template, arguments)
+  // Neither writer can fail: one counts, the other has exactly that room.
+  io.print_arguments(io.Writer{ data: &size, write: count_write }, template, arguments) catch { #panic("strings.format: count") }
   output := memory.push_bytes(arena, size)
   buffer := io.buffer_writer(output)
-  writing: fail.Status
-  io.print_status(&writing, io.buffer_writer_adapter(&buffer), template, arguments)
+  io.print_arguments(io.buffer_writer_adapter(&buffer), template, arguments) catch { #panic("strings.format: write") }
   return output
 }
 

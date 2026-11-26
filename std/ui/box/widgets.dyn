@@ -1,4 +1,3 @@
-use "std/fail"
 // Widgets are builder code over boxes. Each returns its Signal; state such as
 // a checkbox value or text buffer belongs to the caller.
 
@@ -168,7 +167,8 @@ pub struct Edit {
   // Horizontal scroll in physical pixels; managed by text_field.
   scroll_x: f32,
 }
-pub struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool, correction_error: fail.Kind }
+// correction_failed: a correction was offered and rejected, for correction_error.
+pub struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool, correction_failed: bool, correction_error: text_edits.EditErr }
 
 fn previous_boundary(text: []const u8, at: usize) usize {
   index := at
@@ -239,14 +239,19 @@ fn space(byte: u8) bool {
   return byte == 32 || byte == 9 || byte == 10 || byte == 13
 }
 
+// A context for the native input method, or why there is none.
+struct Snapshot { context: text_edits.Context, failed: bool, error: text_edits.EditErr }
+fn take_snapshot(tracker: *text_edits.Tracker, owner: u64, text: []const u8, cursor, anchor: usize, cause: text_edits.Cause) Snapshot {
+  context := text_edits.snapshot(tracker, owner, text, cursor, anchor, cause) catch err { return Snapshot{ failed: true, error: err } }
+  return Snapshot{ context: context }
+}
+
 fn word_boundary(state: *State, text: []const u8, at: usize, forward: bool) usize {
   mark := mem.arena_mark(state.frame)
   defer {
     mem.arena_rewind(state.frame, mark)
   }
-  status: fail.Status
-  boundaries := unicode_text.word_breaks(state.frame, &status, text)
-  if status.failed { return at }
+  boundaries := unicode_text.word_breaks(state.frame, text) catch { return at }
   if forward {
     target := text.len
     for boundary in boundaries {
@@ -330,8 +335,8 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     if edit.selecting {
       anchor = edit.anchor
     }
-    published: fail.Status
-    before := text_edits.snapshot(&published, &state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, text_edits.Cause.Other)
+    published := take_snapshot(&state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, text_edits.Cause.Other)
+    before := published.context
     if state.input.correction != nil {
       replacement := state.input.correction
       invalid := state.input.text.len != 0 || state.input.backspace || state.input.delete || state.input.left || state.input.right || state.input.home || state.input.end ||
@@ -342,22 +347,26 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
         }
       }
       if published.failed {
-        result.correction_error = published.failure.kind
+        result.correction_failed = true
+        result.correction_error = published.error
       } else if invalid {
-        result.correction_error = fail.Kind.InvalidInput
+        result.correction_failed = true
+        result.correction_error = text_edits.EditErr.InvalidInput
       } else {
         buffer := text_edits.Buffer{ storage: storage, length: edit.length, cursor: edit.cursor, anchor: anchor, token: before.token }
-        applied: fail.Status
-        text_edits.apply(state.frame, &applied, &buffer, replacement)
-        if !applied.failed {
+        applied := true
+        text_edits.apply(state.frame, &buffer, replacement) catch err {
+          applied = false
+          result.correction_failed = true
+          result.correction_error = err
+        }
+        if applied {
           edit.length = buffer.length
           edit.cursor = buffer.cursor
           edit.anchor = buffer.anchor
           edit.selecting = false
           result.changed = true
           correction_applied = true
-        } else {
-          result.correction_error = applied.failure.kind
         }
       }
       text_edits.invalidate(&state.text_tracker)
@@ -553,11 +562,11 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     if edit.selecting {
       anchor = edit.anchor
     }
-    snapshot: fail.Status
-    context := text_edits.snapshot(&snapshot, &state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, cause)
-    state.text_context = context
+    snapshot := take_snapshot(&state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, cause)
+    state.text_context = snapshot.context
     if snapshot.failed {
-      state.text_context_error = snapshot.failure.kind
+      state.text_context_failed = true
+      state.text_context_error = snapshot.error
     }
     state.text_input_rect[0] = box.rect[0] + caret.floating[0]
     state.text_input_rect[1] = box.rect[1] + (box.size[1] - state.line_height) / 2.0

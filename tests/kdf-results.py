@@ -14,27 +14,22 @@ use kdf "std/crypto/kdf"
 use password "std/crypto/password"
 use chacha "std/crypto/chacha20"
 use bytes "std/bytes"
-use "std/fail"
 fn check(ok: bool) { if !ok { #panic("KDF contract") } }
 fn hkdf_ok(destination: []u8, salt: []const u8, material: []const u8, info: []const u8, scratch: []u8) bool {
- status: fail.Status
- kdf.hkdf(&status, destination, salt, material, info, scratch)
- return !status.failed
+ kdf.hkdf(destination, salt, material, info, scratch) catch { return false }
+ return true
 }
 fn expand_ok(destination: []u8, key: []const u8, info: []const u8, scratch: []u8) bool {
- status: fail.Status
- kdf.hkdf_expand(&status, destination, key, info, scratch)
- return !status.failed
+ kdf.hkdf_expand(destination, key, info, scratch) catch { return false }
+ return true
 }
 fn pbkdf2_ok(destination: []u8, secret: []const u8, salt: []const u8, iterations: u32, scratch: []u8) bool {
- status: fail.Status
- password.pbkdf2_sha256(&status, destination, secret, salt, iterations, scratch)
- return !status.failed
+ password.pbkdf2_sha256(destination, secret, salt, iterations, scratch) catch { return false }
+ return true
 }
 fn xor_ok(destination: []u8, input: []const u8, key: []const u8, nonce: []const u8, counter: u32) bool {
- status: fail.Status
- chacha.xor(&status, destination, input, key, nonce, counter)
- return !status.failed
+ chacha.xor(destination, input, key, nonce, counter) catch { return false }
+ return true
 }
 fn filled(data: []const u8, value: u8) bool { for byte in data { if byte != value { return false } }
  return true }

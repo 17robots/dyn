@@ -31,6 +31,7 @@ fn failure(err: parse.ParseErr) Decoded {
   case err {
     .Invalid(at) => { return Decoded{ failed: true, offset: at } }
     .TooLarge(at) => { #panic("unexpected TooLarge") }
+    .Unsupported(at) => { #panic("unexpected TooLarge") }
   }
 }
 fn hd(a: *mem.Arena, input: []const u8) Decoded {

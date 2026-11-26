@@ -45,8 +45,7 @@ pub fn open(storage: []u8) Watcher!io.IoErr {
 pub fn add(state: *Watcher, path: []const u8, mask: u32) i32!io.IoErr {
   if path.len == 0 || !state.active { fail io.linux_err(-22) }
   storage: [4096 + mem.ArenaBufferOverhead]u8
-  name := c.string_into(nil, storage[..], path)
-  if name == nil { fail io.linux_err(-36) }
+  name := c.string_into(storage[..], path) catch { fail io.linux_err(-36) }
   value := #syscall(sys.InotifyAddWatch, state.descriptor, name, mask)
   if value < 0 { fail io.linux_err(value) }
   return #cast(i32, value)

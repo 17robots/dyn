@@ -1,11 +1,11 @@
 use mem "std/mem"
 use cabi "std/c"
-use "std/fail"
+use io "std/io"
 // Dynamic-loader adapter for Linux, macOS and Windows. Handles own loader
 // references; symbols borrow them. Symbols are invalid after the library is
 // successfully closed. On Linux, linking requires libc (or libdl on older
 // systems). Flags apply only to POSIX loaders; Windows ignores them.
-// Failures carry the loader's own text (dlerror) or the Windows error code.
+// Windows failures carry the system's error code.
 pub type Handle = rawptr
 
 pub const Lazy: i32 = 1
@@ -13,59 +13,31 @@ pub const Now: i32 = 2
 pub const Local: i32 = 0
 pub const Global: i32 = 256
 
-// Opens the library at path; nil after a failure.
-pub fn open(status: *fail.Status, path: []const u8, flags: i32) Handle {
-  if status == nil { return open(&fail.Status{}, path, flags) }
-  if status.failed { return nil }
+// Opens the library at path. The loader gives no reason on POSIX, so a
+// library that does not load fails with NotFound; Windows keeps its code. A
+// path too long to pass fails with InvalidInput.
+pub fn open(path: []const u8, flags: i32) Handle!io.IoErr {
   storage: [4096 + mem.ArenaBufferOverhead]u8
-  if path.len >= storage.len {
-    fail.invalid(status, "load library", path, "the path is too long")
-    return nil
-  }
-  name := cabi.string_into(status, storage[..], path)
-  if status.failed { return nil }
-  return platform_open(status, name, path, flags)
+  if path.len >= storage.len { fail .InvalidInput }
+  name := try cabi.string_into(storage[..], path)
+  return try platform_open(name, flags)
 }
 
-// The address of the symbol called name; nil after a failure. A symbol may
-// itself be nil: check status.failed, not the address.
-pub fn symbol(status: *fail.Status, handle: Handle, name: []const u8) rawptr {
-  if status == nil { return symbol(&fail.Status{}, handle, name) }
-  if status.failed { return nil }
-  if handle == nil {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "find symbol", name, "the library is not open"))
-    return nil
-  }
+// The address of the symbol called name. A symbol may itself be nil; a
+// missing one fails with NotFound, and a handle that is not open with
+// InvalidInput.
+pub fn symbol(handle: Handle, name: []const u8) rawptr!io.IoErr {
+  if handle == nil { fail .InvalidInput }
   storage: [4096 + mem.ArenaBufferOverhead]u8
-  if name.len >= storage.len {
-    fail.invalid(status, "find symbol", name, "the name is too long")
-    return nil
-  }
-  native_name := cabi.string_into(status, storage[..], name)
-  if status.failed { return nil }
-  return platform_symbol(status, handle, native_name, name)
+  if name.len >= storage.len { fail .InvalidInput }
+  native_name := try cabi.string_into(storage[..], name)
+  return try platform_symbol(handle, native_name)
 }
 
-// Clears the owned handle only after a successful close. Failure retains ownership.
-pub fn close(status: *fail.Status, handle: *Handle) {
-  if status == nil {
-    close(&fail.Status{}, handle)
-    return
-  }
-  if status.failed { return }
-  if handle == nil || handle.* == nil {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "close library", "", "the library is not open"))
-    return
-  }
-  platform_close(status, handle.*)
-  if !status.failed {
-    handle.* = nil
-  }
-}
-
-// Records a POSIX loader failure with dlerror's text.
-fn loader_failed(status: *fail.Status, operation: []const u8, path: []const u8, message: *const u8) {
-  reading: fail.Status
-  text := cabi.bytes_from_string(&reading, message, 4096)
-  fail.set(status, fail.make(fail.Kind.System, operation, path, text))
+// Clears the owned handle only after a successful close. Failure retains
+// ownership; a handle that is not open fails with InvalidInput.
+pub fn close(handle: *Handle) !io.IoErr {
+  if handle == nil || handle.* == nil { fail .InvalidInput }
+  try platform_close(handle.*)
+  handle.* = nil
 }

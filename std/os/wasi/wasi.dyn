@@ -1,7 +1,6 @@
 #target(kernel: wasi)
 use wasi_raw "std/os/wasi/raw"
 use io "std/io"
-use "std/fail"
 use mem "std/mem"
 pub extern fn close "dyn_wasi_close"(fd: u32) u32
 extern fn native_sizes "dyn_wasi_args_sizes"(count: *usize, bytes: *usize) u32
@@ -10,42 +9,32 @@ extern fn native_open "dyn_wasi_open_read"(directory: u32, path: *const u8, leng
 extern fn native_random "dyn_wasi_random"(data: rawptr, length: usize) u32
 pub extern fn clock_time "dyn_wasi_clock"(clock: u32, precision: u64, time: *u64) u32
 
-fn wasi_failed(status: *fail.Status, operation: []const u8, path: []const u8, error: u32) {
-  fail.set(status, io.from_wasi(operation, path, 0 - #cast(isize, error)))
+fn wasi_failed(error: u32) io.IoErr {
+  return io.wasi_err(0 - #cast(isize, error))
 }
 
-// The count written; failures carry the negative WASI errno.
-pub fn write(status: *fail.Status, fd: u32, bytes: []const u8) usize {
-  if status == nil { return write(&fail.Status{}, fd, bytes) }
-  if status.failed || bytes.len == 0 { return 0 }
+// The count written.
+pub fn write(fd: u32, bytes: []const u8) usize!io.IoErr {
+  if bytes.len == 0 { return 0 }
   count: usize = 0
   error := wasi_raw.write(fd, #cast(rawptr, &bytes[0]), bytes.len, &count)
-  if error != 0 { wasi_failed(status, "write", "", error) }
+  if error != 0 { fail wasi_failed(error) }
   return count
 }
 // The count read; 0 at the end.
-pub fn read(status: *fail.Status, fd: u32, bytes: []u8) usize {
-  if status == nil { return read(&fail.Status{}, fd, bytes) }
-  if status.failed || bytes.len == 0 { return 0 }
+pub fn read(fd: u32, bytes: []u8) usize!io.IoErr {
+  if bytes.len == 0 { return 0 }
   count: usize = 0
   error := wasi_raw.read(fd, &bytes[0], bytes.len, &count)
-  if error != 0 {
-    wasi_failed(status, "read", "", error)
-    return 0
-  }
+  if error != 0 { fail wasi_failed(error) }
   return count
 }
 // Relative to a directory descriptor granted by the host. No implicit preopens.
-pub fn open_read(status: *fail.Status, directory: u32, path: []const u8) u32 {
-  if status == nil { return open_read(&fail.Status{}, directory, path) }
-  if status.failed { return 0 }
-  if path.len == 0 {
-    wasi_failed(status, "open", path, 28)
-    return 0
-  }
+pub fn open_read(directory: u32, path: []const u8) u32!io.IoErr {
+  if path.len == 0 { fail wasi_failed(28) }
   fd: u32 = 0
   error := native_open(directory, &path[0], path.len, &fd)
-  if error != 0 { wasi_failed(status, "open", path, error) }
+  if error != 0 { fail wasi_failed(error) }
   return fd
 }
 pub fn random(bytes: []u8) u32 {
@@ -53,18 +42,16 @@ pub fn random(bytes: []u8) u32 {
   return native_random(&bytes[0], bytes.len)
 }
 // Both strings and slice descriptors belong to the supplied arena. Failure rewinds.
-pub fn arguments(arena: *mem.Arena, status: *fail.Status) [][]const u8 {
-  if status == nil { return arguments(arena, &fail.Status{}) }
+pub fn arguments(arena: *mem.Arena) [][]const u8!io.IoErr {
   empty: [][]const u8
-  if status.failed { return empty }
   count: usize = 0
   size: usize = 0
   error := native_sizes(&count, &size)
-  if error != 0 { return arguments_failed(status, error) }
+  if error != 0 { fail wasi_failed(error) }
   if count == 0 { return empty }
   maximum := #max(usize)
   if count > maximum / #sizeof([]const u8) || count > maximum / #sizeof(*u8) || size == 0 {
-    return arguments_failed(status, 48)
+    fail wasi_failed(48)
   }
   mark := mem.arena_mark(arena)
   raw := mem.push_array<*u8>(arena, count)
@@ -74,14 +61,14 @@ pub fn arguments(arena: *mem.Arena, status: *fail.Status) [][]const u8 {
   error = native_args(#cast(*u8, &raw[0]), bytes)
   if error != 0 {
     mem.arena_rewind(arena, mark)
-    return arguments_failed(status, error)
+    fail wasi_failed(error)
   }
   i: usize = 0
   for i < count {
     offset := #cast(usize, raw[i]) - #cast(usize, bytes)
     if offset >= size {
       mem.arena_rewind(arena, mark)
-      return arguments_failed(status, 28)
+      fail wasi_failed(28)
     }
     tail := #slice(raw[i], size - offset)
     length: usize = 0
@@ -90,7 +77,7 @@ pub fn arguments(arena: *mem.Arena, status: *fail.Status) [][]const u8 {
     }
     if length == tail.len {
       mem.arena_rewind(arena, mark)
-      return arguments_failed(status, 28)
+      fail wasi_failed(28)
     }
     values[i] = tail[..length]
     i += 1
@@ -98,8 +85,3 @@ pub fn arguments(arena: *mem.Arena, status: *fail.Status) [][]const u8 {
   return values
 }
 
-fn arguments_failed(status: *fail.Status, error: u32) [][]const u8 {
-  wasi_failed(status, "read arguments", "", error)
-  empty: [][]const u8
-  return empty
-}

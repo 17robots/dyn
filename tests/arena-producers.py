@@ -23,7 +23,6 @@ SOURCE = f'''use mem "std/mem"
 use strings "std/strings"
 use "std/bytes"
 use fmt "std/fmt"
-use "std/fail"
 use base64 "std/encoding/base64"
 use json "std/encoding/json"
 use deflate "std/compress/deflate"
@@ -39,12 +38,10 @@ fn decode_fails(arena: *mem.Arena, text: []const u8) bool {{
   return false
 }}
 fn inflate_fails(arena: *mem.Arena, data: []const u8) bool {{
-  status: fail.Status
-  _ = deflate.inflate(arena, &status, data)
-  return status.failed
+  _ = deflate.inflate(arena, data) catch {{ return true }}
+  return false
 }}
 fn main() {{
-  status := fail.Status{{ on_failure: fail.panic_on_failure }}
   arena := mem.arena_alloc(0)
   check(bytes.equal(strings.join(arena, strings.split(arena, "a,b,c", ","), "+"), "a+b+c"), "join split")
   check(bytes.equal(strings.replace(arena, "a-b-c", "-", "::"), "a::b::c"), "replace")
@@ -62,10 +59,10 @@ fn main() {{
   _ = json.add_member(doc, "name", json.push_string(arena, "boss"))
   check(bytes.equal(json.encode(arena, doc), "{{\\"name\\":\\"boss\\"}}"), "json encode")
   mark := mem.arena_used(arena)
-  big := deflate.inflate(arena, &status, {literal(DEFLATED)})
+  big := deflate.inflate(arena, {literal(DEFLATED)}) catch {{ #panic("inflate") }}
   check(big.value.len == {len(PAYLOAD)} && big.value[{len(PAYLOAD) - 1}] == {PAYLOAD[-1]}, "inflate grows")
   check(mem.arena_used(arena) == mark + {len(PAYLOAD)}, "retries leave only the output")
-  member := gzip.decompress(arena, &status, {literal(GZIPPED)})
+  member := gzip.decompress(arena, {literal(GZIPPED)}) catch {{ #panic("gunzip") }}
   check(member.value.len == {len(PAYLOAD)} && member.consumed == {len(GZIPPED)}, "gunzip")
   check(inflate_fails(arena, "\\xff\\xff"), "corrupt inflate")
   joined := path.join(arena, "a/b", "c")

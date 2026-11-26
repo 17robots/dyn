@@ -1,4 +1,3 @@
-use "std/fail"
 use surrounding_edit "std/text/edit"
 use ordered "vendor/window/events"
 pub type OrderedEvent = ordered.Event
@@ -46,37 +45,18 @@ extern fn native_text_input "dyn_window_set_text_input"(handle: rawptr, enabled:
 extern fn native_listen_events "dyn_window_listen_events"(handle: rawptr, enabled: i32)
 extern fn native_next_event "dyn_window_next_event"(handle: rawptr, event: *OrderedEvent) i32
 extern fn native_wake "dyn_window_wake"(handle: rawptr) i32
-pub fn open(status: *fail.Status, window: *Window, title: []const u8, width, height: i32) {
-  if status == nil {
-    open(&fail.Status{}, window, title, width, height)
-    return
-  }
-  if status.failed { return }
-  if window.handle != nil {
-    window_failed(status, fail.Kind.InvalidState, "open")
-    return
-  }
-  if width <= 0 || height <= 0 || title.len > 4095 {
-    window_failed(status, fail.Kind.InvalidInput, "open")
-    return
-  }
+pub fn open(window: *Window, title: []const u8, width, height: i32) !io.IoErr {
+  if window.handle != nil { fail .InvalidInput }
+  if width <= 0 || height <= 0 || title.len > 4095 { fail .InvalidInput }
   storage: [4096]u8
-  converting: fail.Status
-  name := c.string_into(&converting, storage[..], title)
-  if converting.failed {
-    window_failed(status, fail.Kind.InvalidInput, "open")
-    return
+  name := c.string_into(storage[..], title) catch {
+    fail .InvalidInput
   }
   handle := native_open(name, width, height)
-  if handle == nil {
-    window_failed(status, fail.Kind.System, "open")
-    return
-  }
+  if handle == nil { fail io.IoErr.System(#cast(isize, 0)) }
   window.* = Window{handle:handle, width:width, height:height}
-  poll(status, window)
-  if status.failed {
-    close(window)
-  }
+  errdefer close(window)
+  try poll(window)
 }
 pub fn close(window: *Window) {
   if window.handle != nil {
@@ -84,22 +64,11 @@ pub fn close(window: *Window) {
     window.* = Window{}
   }
 }
-pub fn poll(status: *fail.Status, window: *Window) {
-  if status == nil {
-    poll(&fail.Status{}, window)
-    return
-  }
-  if status.failed { return }
-  if window.handle == nil {
-    window_failed(status, fail.Kind.InvalidState, "poll")
-    return
-  }
+pub fn poll(window: *Window) !io.IoErr {
+  if window.handle == nil { fail .InvalidInput }
   previous_composition := window.composition.active != 0
   frame := Frame{}
-  if native_poll(window.handle, &frame) == 0 {
-    window_failed(status, fail.Kind.System, "poll")
-    return
-  }
+  if native_poll(window.handle, &frame) == 0 { fail io.IoErr.System(#cast(isize, 0)) }
   window.width = frame.width
   window.height = frame.height
   window.close_requested = (frame.flags & 128) != 0
@@ -110,35 +79,13 @@ pub fn poll(status: *fail.Status, window: *Window) {
     window.desktop.keys |= 32768
   }
 }
-pub fn make_current(status: *fail.Status, window: *Window) {
-  if status == nil {
-    make_current(&fail.Status{}, window)
-    return
-  }
-  if status.failed { return }
-  if window.handle == nil {
-    window_failed(status, fail.Kind.InvalidState, "make current")
-    return
-  }
-  if native_current(window.handle) == 0 {
-    window_failed(status, fail.Kind.System, "make current")
-    return
-  }
+pub fn make_current(window: *Window) !io.IoErr {
+  if window.handle == nil { fail .InvalidInput }
+  if native_current(window.handle) == 0 { fail io.IoErr.System(#cast(isize, 0)) }
 }
-pub fn swap(status: *fail.Status, window: *Window) {
-  if status == nil {
-    swap(&fail.Status{}, window)
-    return
-  }
-  if status.failed { return }
-  if window.handle == nil {
-    window_failed(status, fail.Kind.InvalidState, "swap")
-    return
-  }
-  if native_swap(window.handle) == 0 {
-    window_failed(status, fail.Kind.System, "swap")
-    return
-  }
+pub fn swap(window: *Window) !io.IoErr {
+  if window.handle == nil { fail .InvalidInput }
+  if native_swap(window.handle) == 0 { fail io.IoErr.System(#cast(isize, 0)) }
 }
 
 // Offers text on the clipboard; longer text is truncated to 64 KiB.
@@ -214,20 +161,9 @@ pub fn next_event(window: *Window, output: *OrderedEvent) bool {
   return window.handle != nil && native_next_event(window.handle, output) != 0
 }
 // Thread-safe; join all wake callers before close. Wakes may coalesce.
-pub fn wake(status: *fail.Status, window: *const Window) {
-  if status == nil {
-    wake(&fail.Status{}, window)
-    return
-  }
-  if status.failed { return }
-  if window.handle == nil {
-    window_failed(status, fail.Kind.InvalidState, "wake")
-    return
-  }
-  if native_wake(window.handle) == 0 {
-    window_failed(status, fail.Kind.System, "wake")
-    return
-  }
+pub fn wake(window: *const Window) !io.IoErr {
+  if window.handle == nil { fail .InvalidInput }
+  if native_wake(window.handle) == 0 { fail io.IoErr.System(#cast(isize, 0)) }
 }
 
 // Opt-in before poll. Toggling clears queued events; disabled by default.
@@ -269,23 +205,13 @@ pub fn clipboard(window: *const Window) []const u8 {
 pub type Surrounding = surrounding_edit.Context
 // Publish after enabling ordered listening and before enabling a newly focused
 // field. The protocol copies text synchronously. Failure preserves old context.
-pub fn set_surrounding_text(status: *fail.Status, window: *Window, context: Surrounding) {
-  if status == nil {
-    set_surrounding_text(&fail.Status{}, window, context)
-    return
+pub fn set_surrounding_text(window: *Window, context: Surrounding) !io.IoErr {
+  if window.handle == nil { fail .InvalidInput }
+  surrounding_edit.validate(&context) catch {
+    fail .InvalidInput
   }
-  if status.failed { return }
-  if window.handle == nil {
-    window_failed(status, fail.Kind.InvalidState, "set surrounding text")
-    return
-  }
-  surrounding_edit.validate(status, &context)
-  if status.failed { return }
   for byte in context.text {
-    if byte == 0 {
-      window_failed(status, fail.Kind.InvalidInput, "set surrounding text")
-      return
-    }
+    if byte == 0 { fail .InvalidInput }
   }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
@@ -298,117 +224,54 @@ pub fn set_surrounding_text(status: *fail.Status, window: *Window, context: Surr
   }
   code := native_surrounding(window.handle, pointer, #cast(u32, context.text.len), #cast(u32, context.cursor), #cast(u32, context.anchor), context.token, cause)
   if code == 1 { return }
-  if code == -1 {
-    window_failed(status, fail.Kind.Unsupported, "set surrounding text")
-    return
-  }
-  if code == -2 {
-    window_failed(status, fail.Kind.Capacity, "set surrounding text")
-    return
-  }
-  window_failed(status, fail.Kind.InvalidState, "set surrounding text")
+  if code == -1 { fail .Unsupported }
+  if code == -2 { fail .Capacity }
+  fail .InvalidInput
 }
 
 // The native layer's status: 1 succeeds, negative codes name the failure.
-fn checked_status(status: *fail.Status, operation: []const u8, code: i32) {
-  if status.failed || code == 1 { return }
-  kind := fail.Kind.System
-  if code == -1 {
-    kind = fail.Kind.Unsupported
-  } else if code == -2 {
-    kind = fail.Kind.Capacity
-  } else if code == -3 {
-    kind = fail.Kind.InvalidInput
-  } else if code == -4 {
-    kind = fail.Kind.InvalidState
-  }
-  window_failed(status, kind, operation)
+fn checked_status(code: i32) !io.IoErr {
+  if code == 1 { return }
+  if code == -1 { fail .Unsupported }
+  if code == -2 { fail .Capacity }
+  if code == -3 || code == -4 { fail .InvalidInput }
+  fail io.IoErr.System(#cast(isize, code))
 }
-pub fn set_title(status: *fail.Status, window: *Window, title: []const u8) {
-  if status == nil {
-    set_title(&fail.Status{}, window, title)
-    return
-  }
-  if status.failed { return }
-  if window.handle == nil {
-    window_failed(status, fail.Kind.InvalidState, "set title")
-    return
-  }
-  if title.len > 4096 {
-    window_failed(status, fail.Kind.Capacity, "set title")
-    return
-  }
-  if !utf8.valid(title) {
-    window_failed(status, fail.Kind.InvalidInput, "set title")
-    return
-  }
+pub fn set_title(window: *Window, title: []const u8) !io.IoErr {
+  if window.handle == nil { fail .InvalidInput }
+  if title.len > 4096 { fail .Capacity }
+  if !utf8.valid(title) { fail .InvalidInput }
   for byte in title {
-    if byte == 0 {
-      window_failed(status, fail.Kind.InvalidInput, "set title")
-      return
-    }
+    if byte == 0 { fail .InvalidInput }
   }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
   if title.len != 0 {
     pointer = &title[0]
   }
-  checked_status(status, "set title", native_set_title(window.handle, pointer, #cast(u32, title.len)))
+  try checked_status(native_set_title(window.handle, pointer, #cast(u32, title.len)))
 }
-pub fn set_size(status: *fail.Status, window: *Window, width, height: i32) {
-  if status == nil {
-    set_size(&fail.Status{}, window, width, height)
-    return
-  }
-  if status.failed { return }
-  if window.handle == nil {
-    window_failed(status, fail.Kind.InvalidState, "set size")
-    return
-  }
-  if width <= 0 || height <= 0 {
-    window_failed(status, fail.Kind.InvalidInput, "set size")
-    return
-  }
-  checked_status(status, "set size", native_set_size(window.handle, width, height))
-  poll(status, window)
+pub fn set_size(window: *Window, width, height: i32) !io.IoErr {
+  if window.handle == nil { fail .InvalidInput }
+  if width <= 0 || height <= 0 { fail .InvalidInput }
+  try checked_status(native_set_size(window.handle, width, height))
+  try poll(window)
 }
-pub fn set_swap_interval(status: *fail.Status, window: *Window, interval: i32) {
-  if status == nil {
-    set_swap_interval(&fail.Status{}, window, interval)
-    return
-  }
-  if status.failed { return }
-  if window.handle == nil {
-    window_failed(status, fail.Kind.InvalidState, "set swap interval")
-    return
-  }
-  if interval < 0 {
-    window_failed(status, fail.Kind.InvalidInput, "set swap interval")
-    return
-  }
-  checked_status(status, "set swap interval", native_swap_interval(window.handle, interval))
+pub fn set_swap_interval(window: *Window, interval: i32) !io.IoErr {
+  if window.handle == nil { fail .InvalidInput }
+  if interval < 0 { fail .InvalidInput }
+  try checked_status(native_swap_interval(window.handle, interval))
 }
 // Checked publication copies all text or reports failure; no truncation.
-pub fn try_set_clipboard(status: *fail.Status, window: *Window, text: []const u8) {
-  if status == nil {
-    try_set_clipboard(&fail.Status{}, window, text)
-    return
-  }
-  if status.failed { return }
-  if window.handle == nil {
-    window_failed(status, fail.Kind.InvalidState, "try set clipboard")
-    return
-  }
-  if text.len > 4294967295 {
-    window_failed(status, fail.Kind.Capacity, "try set clipboard")
-    return
-  }
+pub fn try_set_clipboard(window: *Window, text: []const u8) !io.IoErr {
+  if window.handle == nil { fail .InvalidInput }
+  if text.len > 4294967295 { fail .Capacity }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
   if text.len != 0 {
     pointer = &text[0]
   }
-  checked_status(status, "try set clipboard", native_try_clipboard(window.handle, pointer, #cast(u32, text.len)))
+  try checked_status(native_try_clipboard(window.handle, pointer, #cast(u32, text.len)))
 }
 // Snapshot replies update clipboard without entering the ordered event stream.
 pub fn request_paste_snapshot(window: *Window) {
@@ -419,30 +282,8 @@ pub fn request_paste_snapshot(window: *Window) {
 pub fn paste_pending(window: *const Window) bool {
   return window.handle != nil && native_paste_pending(window.handle) != 0
 }
-pub fn paste_status(status: *fail.Status, window: *const Window) {
-  if status == nil {
-    paste_status(&fail.Status{}, window)
-    return
-  }
-  if status.failed { return }
-  if window.handle == nil {
-    window_failed(status, fail.Kind.InvalidState, "paste status")
-    return
-  }
-  checked_status(status, "paste status", native_paste_status(window.handle))
+pub fn paste_status(window: *const Window) !io.IoErr {
+  if window.handle == nil { fail .InvalidInput }
+  try checked_status(native_paste_status(window.handle))
 }
 
-// Records a window-system failure of kind for operation.
-fn window_failed(status: *fail.Status, kind: fail.Kind, operation: []const u8) {
-  message: []const u8 = "the window system failed"
-  if kind == fail.Kind.InvalidState {
-    message = "the window is not in a state to do this"
-  } else if kind == fail.Kind.InvalidInput {
-    message = "invalid argument"
-  } else if kind == fail.Kind.Capacity {
-    message = "too large"
-  } else if kind == fail.Kind.Unsupported {
-    message = "not supported by this window system"
-  }
-  fail.set(status, fail.make(kind, operation, "", message))
-}

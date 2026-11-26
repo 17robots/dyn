@@ -9,12 +9,11 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE='''use uart "std/embedded/uart"
 use timer "std/embedded/timer"
-use "std/fail"
 fn check(ok: bool) { if !ok { #panic("embedded helper") } }
-fn start(tick: *timer.SysTick, period: u32, interrupt: bool, clock: bool) fail.Kind {
-  status: fail.Status
-  timer.start(&status, tick, period, interrupt, clock)
-  return status.failure.kind
+// Whether starting the timer worked.
+fn start(tick: *timer.SysTick, period: u32, interrupt: bool, clock: bool) bool {
+  timer.start(tick, period, interrupt, clock) catch { return false }
+  return true
 }
 fn main() {
   registers: [8]u32
@@ -30,10 +29,10 @@ fn main() {
   uart.write_byte(&device, 88)
   check(registers[0] == 88)
   tick := timer.SysTick{ base: address }
-  check(start(&tick, 0, true, true) != fail.Kind.Ok && registers[0] == 88)
-  check(start(&tick, 1, true, true) != fail.Kind.Ok && registers[0] == 88)
-  check(start(&tick, 2, false, false) == fail.Kind.Ok && registers[1] == 1)
-  check(start(&tick, 100, true, true) == fail.Kind.Ok)
+  check(!start(&tick, 0, true, true) && registers[0] == 88)
+  check(!start(&tick, 1, true, true) && registers[0] == 88)
+  check(start(&tick, 2, false, false) && registers[1] == 1)
+  check(start(&tick, 100, true, true))
   check(registers[0] == 7 && registers[1] == 99 && registers[2] == 0)
   registers[2] = 0xff123456
   check(timer.current(&tick) == 0x123456)
@@ -41,8 +40,8 @@ fn main() {
   check(timer.elapsed(&tick))
   timer.stop(&tick)
   check(registers[0] == 0)
-  check(start(&tick, 16777216, false, false) == fail.Kind.Ok && registers[1] == 0xffffff)
-  check(start(&tick, 16777217, false, false) == fail.Kind.InvalidInput)
+  check(start(&tick, 16777216, false, false) && registers[1] == 0xffffff)
+  check(!start(&tick, 16777217, false, false))
   clock := timer.MachineTimer{ time: address, compare: address + 8 }
   registers[0] = 0x89abcdef
   registers[1] = 0x12345678

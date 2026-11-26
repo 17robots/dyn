@@ -6,7 +6,6 @@
 // Prints one line: requests, rate, p50/p99/max latency in microseconds and
 // errors. Latency is recorded in a log-linear histogram (about 1.5% error).
 use "std/fmt"
-use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/net"
@@ -158,12 +157,11 @@ fn main() i32 {
     }
   }
   request_storage: [1024]u8
-  request_status: fail.Status
-  request := fmt.buffer(&request_status, request_storage[..])
+  request := fmt.buffer(request_storage[..])
   fmt.write(&request, "GET ")
   fmt.write(&request, values[2])
   fmt.write(&request, " HTTP/1.1\r\nHost: bench\r\n\r\n")
-  if request_status.failed {
+  if fmt.overflowed(&request) {
     io.eprintln("httpbench: PATH too long")
     return 2
   }
@@ -175,9 +173,7 @@ fn main() i32 {
   started: usize = 0
   for i in 0..count {
     clients[i].shared = shared
-    spawning: fail.Status
-    clients[i].thread = thread.spawn_with_size(arena, &spawning, ReceiveSize + 128 * 1024, client_main, &clients[i])
-    if spawning.failed {
+    clients[i].thread = thread.spawn_with_size(arena, ReceiveSize + 128 * 1024, client_main, &clients[i]) catch {
       io.eprintln("httpbench: cannot start client threads")
       sync.store_u32(&shared.stopping, 1)
       break
@@ -192,8 +188,7 @@ fn main() i32 {
   requests: u64 = 0
   errors: u64 = 0
   for i in 0..started {
-    joining: fail.Status
-    thread.join(&joining, clients[i].thread)
+    thread.join(clients[i].thread) catch {}
     requests += clients[i].requests
     errors += clients[i].errors
     for b in 0..BucketCount {

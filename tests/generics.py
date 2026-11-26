@@ -63,15 +63,13 @@ pub fn count_down<T>(n: T) T {
 }
 '''
 
-MAIN = '''use "std/fail"
-use "std/io"
+MAIN = '''use "std/io"
 use "util"
 
 struct Cell { ch: u32, fg: u32 }
 
 fn main() {
   out := io.stdout()
-  printed: fail.Status
   cells: [3]Cell = [Cell{ch: 1}, Cell{ch: 2}, Cell{ch: 3}]
   util.fill(cells[..], Cell{ch: 9, fg: 1})
   io.println_to(out, "{} {}", cells[2].ch, cells[0].fg) catch {}
@@ -90,8 +88,7 @@ fn main() {
 '''
 EXPECTED = '9 1\n16 32 16\n11 13\n3 1.5\n2 1\n0 5'
 
-STD = '''use "std/fail"
-use "std/io"
+STD = '''use "std/io"
 use "std/mem"
 use "std/math"
 use "std/sort"
@@ -100,7 +97,6 @@ struct Node { value: i32, next: *Node }
 
 fn main() {
   out := io.stdout()
-  printed: fail.Status
   backing: [4096]u8
   arena := mem.arena_from_buffer(backing[..])
   node := mem.push<Node>(arena)

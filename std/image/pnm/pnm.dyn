@@ -1,4 +1,5 @@
-use "std/fail"
+use parse "std/parse"
+use io "std/io"
 use mem "std/mem"
 // P2/P3/P5/P6 portable graymaps/pixmaps. Samples up to 65535 are rounded
 // to 8 bits, without changing transfer functions. decode reads one image
@@ -48,12 +49,9 @@ fn decimal(cursor: *Cursor) u32 {
   }
   return value
 }
-pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decoded {
-  if status == nil { return decode(arena, &fail.Status{}, source) }
-  if status.failed { return Decoded{} }
+pub fn decode(arena: *mem.Arena, source: []const u8) Decoded!parse.ParseErr {
   if source.len < 3 || source[0] != 'P' || (source[1] != '2' && source[1] != '3' && source[1] != '5' && source[1] != '6') || !whitespace(source[2]) {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "decode PNM", "", "malformed PNM"))
-    return Decoded{}
+    fail parse.ParseErr.Invalid(0)
   }
   cursor := Cursor{ source: source, at: 2 }
   width := decimal(&cursor)
@@ -67,16 +65,14 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
     }
   }
   if cursor.failed || width == 0 || height == 0 || maxval == 0 || maxval > 65535 || cursor.at == source.len || !whitespace(source[cursor.at]) {
-    fail.at(status, fail.Kind.InvalidInput, "decode PNM", "malformed PNM", cursor.at)
-    return Decoded{}
+    fail parse.ParseErr.Invalid(cursor.at)
   }
   channels: usize = 1
   if source[1] == '3' || source[1] == '6' {
     channels = 3
   }
   if #cast(u64, width) * #cast(u64, height) > #cast(u64, #max(usize) / channels) {
-    fail.at(status, fail.Kind.Overflow, "decode PNM", "the PNM is too large", cursor.at)
-    return Decoded{}
+    fail parse.ParseErr.TooLarge(cursor.at)
   }
   count := #cast(usize, width) * #cast(usize, height) * channels
   plain := source[1] == '2' || source[1] == '3'
@@ -89,8 +85,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
   // before allocating
   // malformed input never causes dimension-sized storage.
   if (!plain && count > (source.len - cursor.at) / stride) || (plain && count > source.len - cursor.at) {
-    fail.at(status, fail.Kind.InvalidInput, "decode PNM", "malformed PNM", cursor.at)
-    return Decoded{}
+    fail parse.ParseErr.Invalid(cursor.at)
   }
   mark := mem.arena_mark(arena)
   pixels := mem.push_array<u8>(arena, count)
@@ -108,8 +103,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
     }
     if cursor.failed || value > maxval {
       mem.arena_rewind(arena, mark)
-      fail.at(status, fail.Kind.InvalidInput, "decode PNM", "malformed PNM", cursor.at)
-      return Decoded{}
+      fail parse.ParseErr.Invalid(cursor.at)
     }
     pixels[i] = #cast(u8, (value * 255 + maxval / 2) / maxval)
   }
@@ -136,24 +130,15 @@ fn write_decimal(output: []u8, at: *usize, value: usize) {
 }
 // Emit binary P5 (one channel) or P6 (three channels) with Maxval 255.
 // Input must not borrow unused output-arena storage. Failure allocates nothing.
-pub fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8) []u8 {
-  if status == nil { return encode(arena, &fail.Status{}, pixels, width, height, channels) }
+pub fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8) []u8!io.IoErr {
   empty: []u8
-  if status.failed { return empty }
-  if width == 0 || height == 0 || (channels != 1 && channels != 3) {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "encode PNM", "", "invalid pixels or size"))
-    return empty
-  }
+  if width == 0 || height == 0 || (channels != 1 && channels != 3) { fail .InvalidInput }
   header := 9 + digits(width) + digits(height)
   if #cast(u64, width) * #cast(u64, height) > #cast(u64, (#max(usize) - header) / channels) {
-    fail.set(status, fail.make(fail.Kind.Overflow, "encode PNM", "", "the PNM is too large"))
-    return empty
+    fail .Capacity
   }
   count := #cast(usize, width) * #cast(usize, height) * #cast(usize, channels)
-  if pixels.len != count {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "encode PNM", "", "invalid pixels or size"))
-    return empty
-  }
+  if pixels.len != count { fail .InvalidInput }
   output := mem.push_array<u8>(arena, header + count)
   output[0] = 'P'
   output[1] = '5'

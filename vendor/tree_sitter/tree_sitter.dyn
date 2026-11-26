@@ -1,5 +1,5 @@
+use io "std/io"
 use "std/c"
-use "std/fail"
 #link("tree-sitter")
 
 // Tree-sitter C ABI. Parser/Tree are provider-owned; Node borrows its Tree.
@@ -10,13 +10,9 @@ pub struct Point { row: u32, column: u32 }
 pub struct Edit { start_byte: u32, old_end_byte: u32, new_end_byte: u32, start_point: Point, old_end_point: Point, new_end_point: Point }
 pub struct Node { context: [4]u32, id: rawptr, tree: Tree }
 
-pub fn parser_create_owned(status: *fail.Status) Parser {
-  if status == nil { return parser_create_owned(&fail.Status{}) }
-  if status.failed { return nil }
+pub fn parser_create_owned() Parser!io.IoErr {
   parser := native_parser_new()
-  if parser == nil {
-    fail.set(status, fail.make(fail.Kind.Capacity, "create parser", "", "out of memory"))
-  }
+  if parser == nil { fail .Capacity }
   return parser
 }
 pub fn parser_destroy_owned(parser: Parser) {
@@ -25,40 +21,23 @@ pub fn parser_destroy_owned(parser: Parser) {
   }
 }
 // A grammar built for an incompatible Tree-sitter ABI fails with Unsupported.
-pub fn parser_language(status: *fail.Status, parser: Parser, language: Language) {
-  if status == nil {
-    parser_language(&fail.Status{}, parser, language)
-    return
-  }
-  if status.failed { return }
-  if parser == nil || language == nil {
-    fail.invalid(status, "set language", "", "no parser or language")
-    return
-  }
-  if !native_set_language(parser, language) {
-    fail.set(status, fail.make(fail.Kind.Unsupported, "set language", "", "the grammar ABI does not match this Tree-sitter"))
-  }
+pub fn parser_language(parser: Parser, language: Language) !io.IoErr {
+  if parser == nil || language == nil { fail .InvalidInput }
+  if !native_set_language(parser, language) { fail .Unsupported }
 }
 // Source borrowed only during call. Old tree remains caller-owned. Edit it first
 // when reparsing changed source. Syntax errors are represented in a successful
 // tree; the tree is the caller's to destroy. Without a language, or when the
 // parse is cancelled, fails with InvalidState.
-pub fn parse(status: *fail.Status, parser: Parser, old_tree: Tree, source: []const u8) Tree {
-  if status == nil { return parse(&fail.Status{}, parser, old_tree, source) }
-  if status.failed { return nil }
-  if parser == nil || source.len > 4294967295 {
-    fail.invalid(status, "parse", "", "no parser, or the source is too large")
-    return nil
-  }
+pub fn parse(parser: Parser, old_tree: Tree, source: []const u8) Tree!io.IoErr {
+  if parser == nil || source.len > 4294967295 { fail .InvalidInput }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
   if source.len > 0 {
     pointer = &source[0]
   }
   tree := native_parse(parser, old_tree, pointer, #cast(u32, source.len))
-  if tree == nil {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "parse", "", "the parser has no language or was cancelled"))
-  }
+  if tree == nil { fail .InvalidInput }
   return tree
 }
 pub fn tree_destroy_owned(tree: Tree) {
@@ -66,32 +45,19 @@ pub fn tree_destroy_owned(tree: Tree) {
     native_tree_delete(tree)
   }
 }
-pub fn tree_copy_owned(status: *fail.Status, tree: Tree) Tree {
-  if status == nil { return tree_copy_owned(&fail.Status{}, tree) }
-  if status.failed { return nil }
-  if tree == nil {
-    fail.invalid(status, "copy tree", "", "no tree")
-    return nil
-  }
+pub fn tree_copy_owned(tree: Tree) Tree!io.IoErr {
+  if tree == nil { fail .InvalidInput }
   copy := native_tree_copy(tree)
-  if copy == nil {
-    fail.set(status, fail.make(fail.Kind.Capacity, "copy tree", "", "out of memory"))
-  }
+  if copy == nil { fail .Capacity }
   return copy
 }
 // Coordinates are UTF-8 byte columns, not code points. Nodes obtained before an
 // edit must be reacquired (this wrapper does not expose ts_node_edit).
 // An edit whose start comes after its ends fails with InvalidInput.
-pub fn tree_edit(status: *fail.Status, tree: Tree, edit: *const Edit) {
-  if status == nil {
-    tree_edit(&fail.Status{}, tree, edit)
-    return
-  }
-  if status.failed { return }
+pub fn tree_edit(tree: Tree, edit: *const Edit) !io.IoErr {
   if tree == nil || edit == nil || edit.start_byte > edit.old_end_byte || edit.start_byte > edit.new_end_byte ||
     !point_before(edit.start_point, edit.old_end_point) || !point_before(edit.start_point, edit.new_end_point) {
-    fail.invalid(status, "edit tree", "", "no tree, or the edit starts after it ends")
-    return
+    fail .InvalidInput
   }
   native_tree_edit(tree, edit)
 }
@@ -128,6 +94,5 @@ pub fn child(node: Node, index: usize) Node {
 // The node's grammar name; empty for an invalid node.
 pub fn node_type(node: Node, maximum: usize) []const u8 {
   if !node_valid(node) { return "" }
-  reading: fail.Status
-  return c.bytes_from_string(&reading, native_type(node), maximum)
+  return c.bytes_from_string(native_type(node), maximum) catch ""
 }

@@ -4,32 +4,31 @@ import os,subprocess,tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];DYN=Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve()
 SOURCE=r'''
-use "std/fail"
 use sqlite "vendor/sqlite"
 extern fn db_mutex "sqlite3_db_mutex"(database:rawptr) rawptr
 extern fn threadsafe "sqlite3_threadsafe"() i32
 fn close(database: sqlite.Database) {
-  closing: fail.Status
-  sqlite.close(&closing, database)
+  sqlite.close(database) catch {}
 }
 fn fails(name: []const u8, scratch: []u8) bool {
-  status: fail.Status
-  _ = sqlite.open_with_options(&status, name, scratch, sqlite.OpenOptions{caller_serialized:true})
-  return status.failed
+  _ = sqlite.open_with_options(name, scratch, sqlite.OpenOptions{caller_serialized:true}) catch { return true }
+  return false
 }
 fn main() {
   scratch:[128]u8
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  defaults:=sqlite.open_with_options(&status,":memory:",scratch[..],sqlite.OpenOptions{})
+  defaults:=sqlite.open_with_options(":memory:",scratch[..],sqlite.OpenOptions{}) catch { #panic("open") }
   defer close(defaults)
   if threadsafe()==1 && db_mutex(defaults)==nil { #panic("default changed") }
-  owned:=sqlite.open_with_options(&status,":memory:",scratch[..],sqlite.OpenOptions{caller_serialized:true})
+  owned:=sqlite.open_with_options(":memory:",scratch[..],sqlite.OpenOptions{caller_serialized:true}) catch { #panic("open") }
   if db_mutex(owned)!=nil { #panic("caller serialized flag") }
   defer close(owned)
-  sqlite.execute(&status,owned,"CREATE TABLE counter(value INTEGER); INSERT INTO counter VALUES(0); UPDATE counter SET value=value+1",scratch[..])
-  statement:=sqlite.prepare(&status,owned,"SELECT value FROM counter").statement
+  sqlite.execute(owned,"CREATE TABLE counter(value INTEGER); INSERT INTO counter VALUES(0); UPDATE counter SET value=value+1",scratch[..]) catch { #panic("execute") }
+  prepared:=sqlite.prepare(owned,"SELECT value FROM counter") catch { #panic("prepare") }
+  statement:=prepared.statement
   defer sqlite.finalize(&statement)
-  if sqlite.step(&status,&statement)!=sqlite.State.Row || sqlite.column(&status,&statement,0).integer!=1 { #panic("query") }
+  stepped:=sqlite.step(&statement) catch { #panic("step") }
+  column:=sqlite.column(&statement,0) catch { #panic("column") }
+  if stepped!=sqlite.State.Row || column.integer!=1 { #panic("query") }
   if !fails("bad\0name",scratch[..]) { #panic("nul") }
   if !fails(":memory:",scratch[..0]) { #panic("capacity") }
   if !fails("/no-such-dyn-test-directory-7341/file.sqlite3",scratch[..]) { #panic("provider error") }
@@ -52,19 +51,24 @@ int sqlite3_close(void *db){if(db==(void *)(uintptr_t)0x123)closes++;return 0;}
 ''')
     obj=p/'provider.o';subprocess.run(['cc','-c',str(stub),'-o',str(obj)],check=True)
     (p/'main.dyn').write_text(r'''use sqlite "vendor/sqlite"
-use "std/fail"
 extern fn set_mode(value:i32)
 extern fn close_count() i32
 extern fn flag_check() i32
+// Whether opening fails with SQLITE_CANTOPEN, which is NotFound.
+fn cannot_open(scratch: []u8) bool {
+ _=sqlite.open_with_options(":memory:",scratch,sqlite.OpenOptions{caller_serialized:true}) catch err {
+  case err {
+   .NotFound => { return true }
+   _ => { return false }
+  }
+ }
+ return false
+}
 fn main(){
  scratch:[64]u8
- first: fail.Status
- database:=sqlite.open_with_options(&first,":memory:",scratch[..],sqlite.OpenOptions{caller_serialized:true})
- if !first.failed || first.failure.native!=14 || database!=nil || close_count()!=1 || flag_check()!=1 { #panic("owned failure cleanup") }
+ if !cannot_open(scratch[..]) || close_count()!=1 || flag_check()!=1 { #panic("owned failure cleanup") }
  set_mode(1)
- second: fail.Status
- _=sqlite.open_with_options(&second,":memory:",scratch[..],sqlite.OpenOptions{caller_serialized:true})
- if !second.failed || second.failure.native!=14 || close_count()!=1 { #panic("null failure cleanup") }
+ if !cannot_open(scratch[..]) || close_count()!=1 { #panic("null failure cleanup") }
 }
 ''')
     for mode in ['--debug','--release']:

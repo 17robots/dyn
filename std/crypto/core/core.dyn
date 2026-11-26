@@ -1,4 +1,3 @@
-use "std/fail"
 // Private implementation shared by the public algorithm modules.
 // The algorithms' + and << are mod 2^32: they are written inside #wrapping.
 fn rotr(x: u32, n: u32) u32 {
@@ -280,9 +279,3 @@ pub fn equal_constant_time(left: []const u8, right: []const u8) bool {
   return difference == 0
 }
 
-// The system random source failed: System, with its code in native.
-fn random_failed(status: *fail.Status, code: isize) {
-  failure := fail.make(fail.Kind.System, "read random bytes", "", "the system random source failed")
-  failure.native = code
-  fail.set(status, failure)
-}

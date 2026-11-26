@@ -27,6 +27,7 @@ fn of_parse(err: parse.ParseErr) Failure {
   case err {
     .Invalid(at) => { return Failure{ kind: 1, offset: at } }
     .TooLarge(at) => { return Failure{ kind: 2, offset: at } }
+    .Unsupported(at) => { return Failure{ kind: 2, offset: at } }
   }
 }
 fn of_io(err: io.IoErr) Failure {

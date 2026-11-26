@@ -9,7 +9,6 @@
 use "std/container/map"
 use "std/encoding/csv"
 use "std/fmt"
-use "std/fail"
 use "std/fs"
 use "std/io"
 use "std/math"
@@ -110,8 +109,8 @@ fn main() i32 {
   print_sorted("month", &months, arena, earlier_name)
   io.println("")
   storage_line: [64]u8
-  // Any amount of cents fits 64 bytes: nil, since nothing can fail.
-  money := fmt.buffer(nil, storage_line[..])
+  // Any amount of cents fits 64 bytes, so the buffer cannot overflow.
+  money := fmt.buffer(storage_line[..])
   write_cents(&money, largest.amount)
   io.println("largest: {} ({}, line {})", largest.description, fmt.bytes(&money), largest.line)
   if skipped > 0 {

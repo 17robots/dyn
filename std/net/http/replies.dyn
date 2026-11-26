@@ -26,8 +26,8 @@ pub fn redirect(response: *Response, location: []const u8, cookies: []const Cook
 // that do not fit stop the writer; page then fails with Capacity.
 pub fn page_writer(response: *Response, fallback: []u8) html.Writer {
   storage := body_buffer(response, fallback.len)
-  if storage.len == 0 { return html.writer(nil, fallback) }
-  return html.writer(nil, storage)
+  if storage.len == 0 { return html.writer(fallback) }
+  return html.writer(storage)
 }
 
 // Sends the page from page_writer with code as text/html, not cached, with

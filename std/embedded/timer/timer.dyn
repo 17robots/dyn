@@ -1,5 +1,4 @@
 use mmio "std/mmio"
-use "std/fail"
 // Little-endian split 64-bit MTIME/MTIMECMP registers. These descriptors borrow
 // hardware registers; clock frequency and hart ownership belong to the caller.
 // Split accesses require strongly ordered device I/O (the RISC-V MTIMER
@@ -33,16 +32,8 @@ pub const systick: SysTick = SysTick{ base: 0xe000e010 }
 // processor clock frequency remain caller responsibilities. Invalid periods
 // leave registers untouched and fail with InvalidInput. CTRL reads clear
 // COUNTFLAG on real hardware.
-pub fn start(status: *fail.Status, timer: *const SysTick, period: u32, interrupt: bool, processor_clock: bool) {
-  if status == nil {
-    start(&fail.Status{}, timer, period, interrupt, processor_clock)
-    return
-  }
-  if status.failed { return }
-  if period < 2 || period > 16777216 {
-    fail.invalid(status, "start timer", "", "the period must be 2 to 2^24 ticks")
-    return
-  }
+pub fn start(timer: *const SysTick, period: u32, interrupt: bool, processor_clock: bool) ! {
+  if period < 2 || period > 16777216 { fail }
   control: u32 = 1
   if interrupt {
     control |= 2

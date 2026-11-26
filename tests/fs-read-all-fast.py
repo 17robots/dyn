@@ -3,8 +3,7 @@
 import os,subprocess,tempfile,threading
 from pathlib import Path
 R=Path(__file__).resolve().parents[1];DYN=str(Path(os.environ.get('DYN',R/'build/dyn-release')).resolve())
-SOURCE=r'''use "std/fail"
-use "std/fs"
+SOURCE=r'''use "std/fs"
 use "std/io"
 use "std/mem"
 use "std/bytes"

@@ -1,5 +1,4 @@
 use "std/bytes"
-use "std/fail"
 use "std/fmt"
 use "std/fs"
 use "std/io"
@@ -22,8 +21,7 @@ fn main() i32 {
     return 1
   }
   text := mem.push_bytes(arena, 64 * 1024)
-  rendering: fail.Status
-  lines := fmt.buffer(&rendering, text)
+  lines := fmt.buffer(text)
   total: usize = 0
   for entry in entries {
     if !bytes.ends_with(entry.name, ".txt") { continue }
@@ -37,7 +35,7 @@ fn main() i32 {
     total += count
   }
   fmt.print(&lines, "total {}\n", total)
-  if rendering.failed {
+  if fmt.overflowed(&lines) {
     io.eprintln("summary: the summary does not fit 64 KiB")
     return 1
   }

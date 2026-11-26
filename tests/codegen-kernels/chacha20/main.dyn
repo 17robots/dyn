@@ -1,6 +1,5 @@
 // ChaCha20 over 128 MiB in 64 KiB pieces.
 use "std/crypto/chacha20"
-use "std/fail"
 use "std/io"
 
 fn main() {
@@ -9,10 +8,9 @@ fn main() {
   key: [32]u8
   nonce: [12]u8
   check: u64 = 0
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   for i in 0..2048 {
     nonce[0] = #cast(u8, i)
-    chacha20.xor(&status, out[..], data[..], key[..], nonce[..], 1)
+    chacha20.xor(out[..], data[..], key[..], nonce[..], 1) catch { #panic("unexpected failure") }
     check += #cast(u64, out[i % 65536])
   }
   io.println("{}", check)

@@ -1,4 +1,3 @@
-use "std/fail"
 use "std/c"
 use "std/io"
 // OpenGL 3.3 core subset. No link dependency: caller supplies context loader.
@@ -129,126 +128,118 @@ pub struct Api {
 }
 fn symbol(loader: Loader, name: []const u8) rawptr {
   buffer: [64]u8
-  converting: fail.Status
-  encoded := c.string_into(&converting, buffer[..], name)
-  if converting.failed { return nil }
+  encoded := c.string_into(buffer[..], name) catch { return nil }
   return loader(encoded)
 }
 // Loader must be usable synchronously with a current GL 3.3+ core context.
-// A missing function fails with NotFound, its name as the failure's path, and
-// returns no callable table.
-fn missing(status: *fail.Status, name: []const u8) Api {
-  message: []const u8 = "the OpenGL loader lacks this function"
-  if name[0] != 'g' {
-    message = "no loader"
-  }
-  fail.set(status, fail.make(fail.Kind.NotFound, "load OpenGL", name, message))
-  return Api{}
+// A missing loader or function fails with NotFound, and returns no callable
+// table. name says which, for a reader of this code.
+fn missing(name: []const u8) Api!io.IoErr {
+  _ = name
+  fail .NotFound
 }
-pub fn load(status: *fail.Status, loader: Loader) Api {
-  if status == nil { return load(&fail.Status{}, loader) }
-  if status.failed { return Api{} }
-  if loader == nil { return missing(status, "loader") }
+pub fn load(loader: Loader) Api!io.IoErr {
+  if loader == nil { return try missing("loader") }
   api := Api{}
   api.clear_color = #cast(fn(f32, f32, f32, f32), symbol(loader, "glClearColor"))
-  if api.clear_color == nil { return missing(status, "glClearColor") }
+  if api.clear_color == nil { return try missing("glClearColor") }
   api.clear = #cast(fn(u32), symbol(loader, "glClear"))
-  if api.clear == nil { return missing(status, "glClear") }
+  if api.clear == nil { return try missing("glClear") }
   api.viewport = #cast(fn(i32, i32, i32, i32), symbol(loader, "glViewport"))
-  if api.viewport == nil { return missing(status, "glViewport") }
+  if api.viewport == nil { return try missing("glViewport") }
   api.get_error = #cast(fn() u32, symbol(loader, "glGetError"))
-  if api.get_error == nil { return missing(status, "glGetError") }
+  if api.get_error == nil { return try missing("glGetError") }
   api.create_shader = #cast(fn(u32) u32, symbol(loader, "glCreateShader"))
-  if api.create_shader == nil { return missing(status, "glCreateShader") }
+  if api.create_shader == nil { return try missing("glCreateShader") }
   api.shader_source = #cast(fn(u32, i32, **const u8, *const i32), symbol(loader, "glShaderSource"))
-  if api.shader_source == nil { return missing(status, "glShaderSource") }
+  if api.shader_source == nil { return try missing("glShaderSource") }
   api.compile_shader = #cast(fn(u32), symbol(loader, "glCompileShader"))
-  if api.compile_shader == nil { return missing(status, "glCompileShader") }
+  if api.compile_shader == nil { return try missing("glCompileShader") }
   api.get_shader_iv = #cast(fn(u32, u32, *i32), symbol(loader, "glGetShaderiv"))
-  if api.get_shader_iv == nil { return missing(status, "glGetShaderiv") }
+  if api.get_shader_iv == nil { return try missing("glGetShaderiv") }
   api.get_shader_log = #cast(fn(u32, i32, *i32, *u8), symbol(loader, "glGetShaderInfoLog"))
-  if api.get_shader_log == nil { return missing(status, "glGetShaderInfoLog") }
+  if api.get_shader_log == nil { return try missing("glGetShaderInfoLog") }
   api.delete_shader = #cast(fn(u32), symbol(loader, "glDeleteShader"))
-  if api.delete_shader == nil { return missing(status, "glDeleteShader") }
+  if api.delete_shader == nil { return try missing("glDeleteShader") }
   api.create_program = #cast(fn() u32, symbol(loader, "glCreateProgram"))
-  if api.create_program == nil { return missing(status, "glCreateProgram") }
+  if api.create_program == nil { return try missing("glCreateProgram") }
   api.attach_shader = #cast(fn(u32, u32), symbol(loader, "glAttachShader"))
-  if api.attach_shader == nil { return missing(status, "glAttachShader") }
+  if api.attach_shader == nil { return try missing("glAttachShader") }
   api.link_program = #cast(fn(u32), symbol(loader, "glLinkProgram"))
-  if api.link_program == nil { return missing(status, "glLinkProgram") }
+  if api.link_program == nil { return try missing("glLinkProgram") }
   api.get_program_iv = #cast(fn(u32, u32, *i32), symbol(loader, "glGetProgramiv"))
-  if api.get_program_iv == nil { return missing(status, "glGetProgramiv") }
+  if api.get_program_iv == nil { return try missing("glGetProgramiv") }
   api.get_program_log = #cast(fn(u32, i32, *i32, *u8), symbol(loader, "glGetProgramInfoLog"))
-  if api.get_program_log == nil { return missing(status, "glGetProgramInfoLog") }
+  if api.get_program_log == nil { return try missing("glGetProgramInfoLog") }
   api.use_program = #cast(fn(u32), symbol(loader, "glUseProgram"))
-  if api.use_program == nil { return missing(status, "glUseProgram") }
+  if api.use_program == nil { return try missing("glUseProgram") }
   api.delete_program = #cast(fn(u32), symbol(loader, "glDeleteProgram"))
-  if api.delete_program == nil { return missing(status, "glDeleteProgram") }
+  if api.delete_program == nil { return try missing("glDeleteProgram") }
   api.gen_vertex_arrays = #cast(fn(i32, *u32), symbol(loader, "glGenVertexArrays"))
-  if api.gen_vertex_arrays == nil { return missing(status, "glGenVertexArrays") }
+  if api.gen_vertex_arrays == nil { return try missing("glGenVertexArrays") }
   api.bind_vertex_array = #cast(fn(u32), symbol(loader, "glBindVertexArray"))
-  if api.bind_vertex_array == nil { return missing(status, "glBindVertexArray") }
+  if api.bind_vertex_array == nil { return try missing("glBindVertexArray") }
   api.delete_vertex_arrays = #cast(fn(i32, *const u32), symbol(loader, "glDeleteVertexArrays"))
-  if api.delete_vertex_arrays == nil { return missing(status, "glDeleteVertexArrays") }
+  if api.delete_vertex_arrays == nil { return try missing("glDeleteVertexArrays") }
   api.gen_buffers = #cast(fn(i32, *u32), symbol(loader, "glGenBuffers"))
-  if api.gen_buffers == nil { return missing(status, "glGenBuffers") }
+  if api.gen_buffers == nil { return try missing("glGenBuffers") }
   api.bind_buffer = #cast(fn(u32, u32), symbol(loader, "glBindBuffer"))
-  if api.bind_buffer == nil { return missing(status, "glBindBuffer") }
+  if api.bind_buffer == nil { return try missing("glBindBuffer") }
   api.buffer_data = #cast(fn(u32, isize, rawptr, u32), symbol(loader, "glBufferData"))
-  if api.buffer_data == nil { return missing(status, "glBufferData") }
+  if api.buffer_data == nil { return try missing("glBufferData") }
   api.delete_buffers = #cast(fn(i32, *const u32), symbol(loader, "glDeleteBuffers"))
-  if api.delete_buffers == nil { return missing(status, "glDeleteBuffers") }
+  if api.delete_buffers == nil { return try missing("glDeleteBuffers") }
   api.enable_vertex_attribute = #cast(fn(u32), symbol(loader, "glEnableVertexAttribArray"))
-  if api.enable_vertex_attribute == nil { return missing(status, "glEnableVertexAttribArray") }
+  if api.enable_vertex_attribute == nil { return try missing("glEnableVertexAttribArray") }
   api.vertex_attribute = #cast(fn(u32, i32, u32, u8, i32, rawptr), symbol(loader, "glVertexAttribPointer"))
-  if api.vertex_attribute == nil { return missing(status, "glVertexAttribPointer") }
+  if api.vertex_attribute == nil { return try missing("glVertexAttribPointer") }
   api.draw_arrays = #cast(fn(u32, i32, i32), symbol(loader, "glDrawArrays"))
-  if api.draw_arrays == nil { return missing(status, "glDrawArrays") }
+  if api.draw_arrays == nil { return try missing("glDrawArrays") }
   api.read_pixels = #cast(fn(i32, i32, i32, i32, u32, u32, rawptr), symbol(loader, "glReadPixels"))
-  if api.read_pixels == nil { return missing(status, "glReadPixels") }
+  if api.read_pixels == nil { return try missing("glReadPixels") }
   api.get_integer = #cast(fn(u32, *i32), symbol(loader, "glGetIntegerv"))
-  if api.get_integer == nil { return missing(status, "glGetIntegerv") }
+  if api.get_integer == nil { return try missing("glGetIntegerv") }
   api.enable = #cast(fn(u32), symbol(loader, "glEnable"))
-  if api.enable == nil { return missing(status, "glEnable") }
+  if api.enable == nil { return try missing("glEnable") }
   api.disable = #cast(fn(u32), symbol(loader, "glDisable"))
-  if api.disable == nil { return missing(status, "glDisable") }
+  if api.disable == nil { return try missing("glDisable") }
   api.is_enabled = #cast(fn(u32) u8, symbol(loader, "glIsEnabled"))
-  if api.is_enabled == nil { return missing(status, "glIsEnabled") }
+  if api.is_enabled == nil { return try missing("glIsEnabled") }
   api.scissor = #cast(fn(i32, i32, i32, i32), symbol(loader, "glScissor"))
-  if api.scissor == nil { return missing(status, "glScissor") }
+  if api.scissor == nil { return try missing("glScissor") }
   api.blend_func_separate = #cast(fn(u32, u32, u32, u32), symbol(loader, "glBlendFuncSeparate"))
-  if api.blend_func_separate == nil { return missing(status, "glBlendFuncSeparate") }
+  if api.blend_func_separate == nil { return try missing("glBlendFuncSeparate") }
   api.blend_equation_separate = #cast(fn(u32, u32), symbol(loader, "glBlendEquationSeparate"))
-  if api.blend_equation_separate == nil { return missing(status, "glBlendEquationSeparate") }
+  if api.blend_equation_separate == nil { return try missing("glBlendEquationSeparate") }
   api.active_texture = #cast(fn(u32), symbol(loader, "glActiveTexture"))
-  if api.active_texture == nil { return missing(status, "glActiveTexture") }
+  if api.active_texture == nil { return try missing("glActiveTexture") }
   api.bind_sampler = #cast(fn(u32, u32), symbol(loader, "glBindSampler"))
-  if api.bind_sampler == nil { return missing(status, "glBindSampler") }
+  if api.bind_sampler == nil { return try missing("glBindSampler") }
   api.gen_textures = #cast(fn(i32, *u32), symbol(loader, "glGenTextures"))
-  if api.gen_textures == nil { return missing(status, "glGenTextures") }
+  if api.gen_textures == nil { return try missing("glGenTextures") }
   api.bind_texture = #cast(fn(u32, u32), symbol(loader, "glBindTexture"))
-  if api.bind_texture == nil { return missing(status, "glBindTexture") }
+  if api.bind_texture == nil { return try missing("glBindTexture") }
   api.delete_textures = #cast(fn(i32, *const u32), symbol(loader, "glDeleteTextures"))
-  if api.delete_textures == nil { return missing(status, "glDeleteTextures") }
+  if api.delete_textures == nil { return try missing("glDeleteTextures") }
   api.tex_image_2d = #cast(fn(u32, i32, i32, i32, i32, i32, u32, u32, rawptr), symbol(loader, "glTexImage2D"))
-  if api.tex_image_2d == nil { return missing(status, "glTexImage2D") }
+  if api.tex_image_2d == nil { return try missing("glTexImage2D") }
   api.tex_sub_image_2d = #cast(fn(u32, i32, i32, i32, i32, i32, u32, u32, rawptr), symbol(loader, "glTexSubImage2D"))
-  if api.tex_sub_image_2d == nil { return missing(status, "glTexSubImage2D") }
+  if api.tex_sub_image_2d == nil { return try missing("glTexSubImage2D") }
   api.tex_parameter_i = #cast(fn(u32, u32, i32), symbol(loader, "glTexParameteri"))
-  if api.tex_parameter_i == nil { return missing(status, "glTexParameteri") }
+  if api.tex_parameter_i == nil { return try missing("glTexParameteri") }
   api.pixel_store_i = #cast(fn(u32, i32), symbol(loader, "glPixelStorei"))
-  if api.pixel_store_i == nil { return missing(status, "glPixelStorei") }
+  if api.pixel_store_i == nil { return try missing("glPixelStorei") }
   api.get_uniform_location = #cast(fn(u32, *const u8) i32, symbol(loader, "glGetUniformLocation"))
-  if api.get_uniform_location == nil { return missing(status, "glGetUniformLocation") }
+  if api.get_uniform_location == nil { return try missing("glGetUniformLocation") }
   api.uniform_1i = #cast(fn(i32, i32), symbol(loader, "glUniform1i"))
-  if api.uniform_1i == nil { return missing(status, "glUniform1i") }
+  if api.uniform_1i == nil { return try missing("glUniform1i") }
   api.uniform_2f = #cast(fn(i32, f32, f32), symbol(loader, "glUniform2f"))
-  if api.uniform_2f == nil { return missing(status, "glUniform2f") }
+  if api.uniform_2f == nil { return try missing("glUniform2f") }
   api.uniform_4f = #cast(fn(i32, f32, f32, f32, f32), symbol(loader, "glUniform4f"))
-  if api.uniform_4f == nil { return missing(status, "glUniform4f") }
+  if api.uniform_4f == nil { return try missing("glUniform4f") }
   api.color_mask = #cast(fn(u8, u8, u8, u8), symbol(loader, "glColorMask"))
-  if api.color_mask == nil { return missing(status, "glColorMask") }
+  if api.color_mask == nil { return try missing("glColorMask") }
   api.polygon_mode = #cast(fn(u32, u32), symbol(loader, "glPolygonMode"))
-  if api.polygon_mode == nil { return missing(status, "glPolygonMode") }
+  if api.polygon_mode == nil { return try missing("glPolygonMode") }
   return api
 }

@@ -1,12 +1,20 @@
 // Prints the results of std/net/http and std/encoding/json helpers, one per
 // line, for tests/http-helpers.py to compare.
 use "std/encoding/json"
-use "std/fail"
 use "std/io"
 use "std/net"
 use "std/net/http"
 use "std/parse"
 
+// The JSON a writer finished, or "" when it failed.
+fn finished(w: *const json.Writer) []const u8 {
+  return json.finish(w) catch ""
+}
+// Whether finishing the writer fails.
+fn finish_failed(w: *const json.Writer) bool {
+  _ = json.finish(w) catch { return true }
+  return false
+}
 fn request(raw: []const u8) http.Request {
   framed := http.frame_request(raw, 8192)
   if framed.status != http.FrameStatus.Ready {
@@ -125,8 +133,7 @@ fn main() {
     }
     io.println("part {} {} {} {}", part.name, part.filename, part.content_type, part.body.len)
   }
-  out_status: fail.Status
-  out := json.writer(&out_status, storage[..])
+  out := json.writer(storage[..])
   json.object_begin(&out)
   json.key(&out, "a")
   json.array_begin(&out)
@@ -142,16 +149,14 @@ fn main() {
   json.object_begin(&out)
   json.object_end(&out)
   json.object_end(&out)
-  io.println("{}", json.output(&out))
-  unfinished_status: fail.Status
-  unfinished := json.writer(&unfinished_status, storage[..])
+  io.println("{}", finished(&out))
+  unfinished := json.writer(storage[..])
   json.array_begin(&unfinished)
-  io.println("{} {}", unfinished_status.failed, json.output(&unfinished).len)
-  wrong_status: fail.Status
-  wrong := json.writer(&wrong_status, storage[..])
+  io.println("{} {}", finish_failed(&unfinished), finished(&unfinished).len)
+  wrong := json.writer(storage[..])
   json.object_begin(&wrong)
   json.integer(&wrong, 1)
-  io.println("{}", wrong_status.failed)
+  io.println("{}", finish_failed(&wrong))
   buckets: [16]http.Bucket
   limit := http.limiter(buckets[..], 3, 1, 1000)
   allowed: usize = 0
@@ -171,8 +176,7 @@ fn main() {
   address_text: [64]u8
   io.println("{}", net.ip_text(address_text[..], six))
   tiny: [4]u8
-  small_status: fail.Status
-  small := json.writer(&small_status, tiny[..])
+  small := json.writer(tiny[..])
   json.text(&small, "too long")
-  io.println("{}", small_status.failed)
+  io.println("{}", finish_failed(&small))
 }

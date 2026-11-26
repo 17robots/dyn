@@ -1,4 +1,3 @@
-use "std/fail"
 use memory "std/mem"
 use format "std/fmt"
 // Byte streams. A Reader or Writer is a data pointer and one function that
@@ -124,10 +123,9 @@ fn print_value(writer: Writer, value: any) !IoErr {
       // TypeInfo; a type with no text form prints as a marker rather than
       // ending the line.
       text: [1024]u8
-      rendering: fail.Status
-      rendered := format.buffer(&rendering, text[..])
+      rendered := format.buffer(text[..])
       format.write_value(&rendered, value)
-      if rendering.failed || format.bytes(&rendered).len == 0 {
+      if format.overflowed(&rendered) || format.bytes(&rendered).len == 0 {
         try write(writer, "{?}")
       } else {
         try write(writer, format.bytes(&rendered))

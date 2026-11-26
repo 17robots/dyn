@@ -10,7 +10,6 @@ DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/mem"
 use "std/bytes"
 use errors "std/io"
-use "std/fail"
 use b32 "std/encoding/base32"
 use b64 "std/encoding/base64"
 use "std/encoding/hex"
@@ -54,7 +53,6 @@ fn main() {
  mark:=mem.arena_mark(f.arena)
  check(b64_fails(f.arena,tail[..4]) && mem.arena_mark(f.arena)==mark)
  check(bytes.equal(tail[..4],"Y!=="))
- status:fail.Status
  decoded:=b64.decode(f.arena,"aGVsbG8=") catch { #panic("base64") }
  check(bytes.equal(decoded,"hello"))
  decoded=b32.decode(f.arena,"NBSWY3DP") catch { #panic("base32") }
@@ -64,15 +62,15 @@ fn main() {
  root:=json.parse(f.arena,"{\"answer\":42,\"text\":\"hello\"}") catch { #panic("json") }
  check((json.get<i64>(root, "answer") catch 0)==42)
  chunked:=http.decode_chunked(f.arena,"5\r\nhello\r\n0\r\n\r\n") catch { #panic("chunked") }
- check(!status.failed && bytes.equal(chunked.value,"hello"))
+ check(bytes.equal(chunked.value,"hello"))
  packet:[46]u8=[18,52,129,128,0,1,0,1,0,0,0,0,7,101,120,97,109,112,108,101,4,116,101,115,116,0,0,1,0,1,192,12,0,1,0,1,0,0,0,1,0,4,1,2,3,4]
  answers:=dns.parse_ipv4(f.arena,packet[..],0x1234,"example.test") catch { #panic("dns") }
- check(!status.failed && answers.len==1 && answers[0].a==1 && answers[0].d==4)
+ check(answers.len==1 && answers[0].a==1 && answers[0].d==4)
  key:[32]u8
  nonce:[12]u8
- sealed:=aead.seal(f.arena,&status,aead.Cipher.Aes256Gcm,"hello","",key[..],nonce[..])
- opened:=aead.open(f.arena,&status,aead.Cipher.Aes256Gcm,sealed.ciphertext,sealed.tag,"",key[..],nonce[..])
- check(!status.failed && bytes.equal(opened,"hello"))
+ sealed:=aead.seal(f.arena,aead.Cipher.Aes256Gcm,"hello","",key[..],nonce[..]) catch { #panic("seal") }
+ opened:=aead.open(f.arena,aead.Cipher.Aes256Gcm,sealed.ciphertext,sealed.tag,"",key[..],nonce[..]) catch { #panic("open") }
+ check(bytes.equal(opened,"hello"))
  PROCESS_CASE
  intact(f)
 }

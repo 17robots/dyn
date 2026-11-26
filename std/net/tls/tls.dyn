@@ -1,6 +1,5 @@
 use provider "vendor/openssl/tls"
 use memory "std/mem"
-use "std/fail"
 use io "std/io"
 pub type Context = provider.Context
 pub type Connection = provider.Connection
@@ -18,17 +17,13 @@ pub type Attempt = provider.Attempt
 
 // The provider copies the protocol wire bytes during this call.
 pub fn set_alpn_protocols(connection: Connection, protocols: []const u8) !io.IoErr {
-  status: fail.Status
-  provider.set_alpn_protocols(&status, connection, protocols)
-  try io.check_status(&status)
+  try provider.set_alpn_protocols(connection, protocols)
 }
 // Server ALPN: each handshake picks the first protocol of preference (wire
 // format, such as "\x02h2\x08http/1.1") the client offers. preference must
 // outlive the context; a string literal does.
 pub fn server_alpn(context: Context, preference: *const []const u8) !io.IoErr {
-  status: fail.Status
-  provider.set_server_alpn(&status, context, preference)
-  try io.check_status(&status)
+  try provider.set_server_alpn(context, preference)
 }
 // Borrows provider connection memory. Invalid after connection_release or a
 // renegotiation that replaces the negotiated protocol; copy before either.
@@ -49,9 +44,7 @@ pub fn certificate_release(certificate: *Certificate) {
 // empty value and consumes no arena bytes. Exhaustion panics.
 // https://github.com/openssl/openssl/blob/master/crypto/x509/x509_obj.c
 pub fn certificate_subject(arena: *memory.Arena, certificate: Certificate) []u8!io.IoErr {
-  status: fail.Status
-  formatted := provider.subject_text_owned(&status, certificate)
-  try io.check_status(&status)
+  formatted := try provider.subject_text_owned(certificate)
   defer provider.subject_text_free_owned(formatted)
   length: usize = 0
   for (#cast(*const u8, #cast(usize, formatted) + length)).* != 0 {
@@ -67,38 +60,23 @@ pub fn certificate_subject(arena: *memory.Arena, certificate: Certificate) []u8!
 // Runs the handshake. On a nonblocking socket it may stop with a want; call
 // it again once the socket is ready. Want.Nothing means it completed.
 pub fn handshake(connection: Connection) Want!io.IoErr {
-  status: fail.Status
-  want := provider.handshake(&status, connection)
-  try io.check_status(&status)
-  return want
+  return try provider.handshake(connection)
 }
 pub fn server_handshake(connection: Connection) Want!io.IoErr {
-  status: fail.Status
-  want := provider.server_handshake(&status, connection)
-  try io.check_status(&status)
-  return want
+  return try provider.server_handshake(connection)
 }
 // Reads what is available; count 0 with no want is the end of the stream.
 pub fn read(connection: Connection, destination: []u8) Attempt!io.IoErr {
-  status: fail.Status
-  result := provider.read(&status, connection, destination)
-  try io.check_status(&status)
-  return result
+  return try provider.read(connection, destination)
 }
 pub fn write(connection: Connection, source: []const u8) Attempt!io.IoErr {
-  status: fail.Status
-  result := provider.write(&status, connection, source)
-  try io.check_status(&status)
-  return result
+  return try provider.write(connection, source)
 }
 // Sends close_notify. Want.Read means it was sent and the peer's is pending;
 // call again to finish the exchange, or close the socket.
 // https://docs.openssl.org/3.4/man3/SSL_shutdown/
 pub fn shutdown(connection: Connection) Want!io.IoErr {
-  status: fail.Status
-  want := provider.shutdown(&status, connection)
-  try io.check_status(&status)
-  return want
+  return try provider.shutdown(connection)
 }
 // The provider's text for an error code, in arena.
 pub fn error_string(arena: *memory.Arena, code: u64) []u8 {
@@ -110,20 +88,14 @@ pub fn error_string(arena: *memory.Arena, code: u64) []u8 {
 }
 
 pub fn client_config_create() Context!io.IoErr {
-  status: fail.Status
-  context := provider.context_create_owned(&status)
-  try io.check_status(&status)
-  return context
+  return try provider.context_create_owned()
 }
 pub fn server_config_create(
   arena: *memory.Arena,
   certificate: []const u8,
   key: []const u8,
 ) Context!io.IoErr {
-  status: fail.Status
-  context := provider.server_context_create(arena, &status, certificate, key)
-  try io.check_status(&status)
-  return context
+  return try provider.server_context_create(arena, certificate, key)
 }
 // Frees the configuration and clears the handle; releasing a cleared handle does nothing.
 pub fn config_release(context: *Context) {
@@ -137,16 +109,10 @@ pub fn client_connection_create(
   descriptor: i32,
   hostname: []const u8,
 ) Connection!io.IoErr {
-  status: fail.Status
-  connection := provider.connection_create(arena, &status, context, descriptor, hostname)
-  try io.check_status(&status)
-  return connection
+  return try provider.connection_create(arena, context, descriptor, hostname)
 }
 pub fn server_connection_create(context: Context, descriptor: i32) Connection!io.IoErr {
-  status: fail.Status
-  connection := provider.server_connection_create_owned(&status, context, descriptor)
-  try io.check_status(&status)
-  return connection
+  return try provider.server_connection_create_owned(context, descriptor)
 }
 // Frees the connection state and clears the handle. The socket stays open; close it separately.
 pub fn connection_release(connection: *Connection) {

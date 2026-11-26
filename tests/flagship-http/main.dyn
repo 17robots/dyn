@@ -4,7 +4,6 @@
 // listening on 127.0.0.1, then serves until a client posts /quit.
 use "std/bytes"
 use "std/fmt"
-use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/net"
@@ -86,7 +85,6 @@ fn main() {
   defer mem.arena_release(arena)
   state := mem.push<App>(arena)
   // Setup and shutdown failures end the program.
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   state.router = http.typed_routes(state.routes[..], state)
   http.add(&state.router, "GET", "/health", handle_health) catch { #panic("add route") }
   http.add(&state.router, "GET", "/notes", handle_list) catch { #panic("add route") }

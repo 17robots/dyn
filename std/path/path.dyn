@@ -1,6 +1,5 @@
 use mem "std/mem"
 use "std/bytes"
-use "std/fail"
 
 // Slash-separated lexical paths. Operations do not access filesystem.
 // A bounded producer's output; valid is false when it did not fit or the
@@ -289,31 +288,21 @@ pub fn clean(arena: *mem.Arena, path: []const u8) []u8 {
 }
 
 // root joined with a relative child that cannot climb out of root, in arena.
-// A child that is absolute or escapes root fails with InvalidInput.
-pub fn safe_join(arena: *mem.Arena, status: *fail.Status, root: []const u8, child: []const u8) []u8 {
-  if status == nil { return safe_join(arena, &fail.Status{}, root, child) }
-  empty: []u8
-  if status.failed { return empty }
+// A child that is absolute or escapes root fails, pushing nothing.
+pub fn safe_join(arena: *mem.Arena, root: []const u8, child: []const u8) []u8! {
   mark := mem.arena_mark(arena)
   space := mem.push_bytes(arena, root.len + child.len + 2)
   joined := finish(arena, mark, safe_join_into(space, root, child))
-  if !joined.valid {
-    fail.invalid(status, "join path", child, "the path is absolute or climbs out of its root")
-  }
+  if !joined.valid { fail }
   return joined.value
 }
 
 // The path from base to target, in arena. Both must be absolute or both
-// relative, and at most 4096 bytes; anything else fails with InvalidInput.
-pub fn relative(arena: *mem.Arena, status: *fail.Status, base: []const u8, target: []const u8) []u8 {
-  if status == nil { return relative(arena, &fail.Status{}, base, target) }
-  empty: []u8
-  if status.failed { return empty }
+// relative, and at most 4096 bytes; anything else fails, pushing nothing.
+pub fn relative(arena: *mem.Arena, base: []const u8, target: []const u8) []u8! {
   mark := mem.arena_mark(arena)
   space := mem.push_bytes(arena, 3 * base.len + target.len + 2)
   result := finish(arena, mark, relative_into(space, base, target))
-  if !result.valid {
-    fail.invalid(status, "relative path", target, "one path is absolute and the other relative, or one is over 4096 bytes")
-  }
+  if !result.valid { fail }
   return result.value
 }

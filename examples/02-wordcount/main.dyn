@@ -7,7 +7,6 @@
 //
 // Run: dyn run examples/02-wordcount -- examples/02-wordcount/poem.txt
 
-use "std/fail"
 use "std/fmt"
 use "std/fs"
 use "std/io"
@@ -79,12 +78,11 @@ fn add(total: *Counts, part: Counts) {
 }
 
 // One right-aligned row. A fmt.Buffer writes into storage you give it and
-// records into a status: after one write does not fit, the rest do nothing,
-// and the status says so once at the end.
+// keeps its overflow: after one write does not fit, the rest do nothing, and
+// fmt.overflowed says so once at the end.
 fn show(counts: Counts, name: []const u8) {
   storage: [256]u8
-  rendering: fail.Status
-  row := fmt.buffer(&rendering, storage[..])
+  row := fmt.buffer(storage[..])
   fmt.write_u64_width(&row, counts.lines, 8, ' ')
   fmt.write_u64_width(&row, counts.words, 8, ' ')
   fmt.write_u64_width(&row, counts.characters, 8, ' ')
@@ -93,7 +91,7 @@ fn show(counts: Counts, name: []const u8) {
     fmt.write(&row, " ")
     fmt.write(&row, name)
   }
-  if rendering.failed {
+  if fmt.overflowed(&row) {
     #panic("a row is longer than its buffer")
   }
   io.println("{}", fmt.bytes(&row))

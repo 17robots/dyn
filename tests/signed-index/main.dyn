@@ -1,6 +1,5 @@
 // Signed integers index arrays and slices; negative values fail the bounds check.
 use "std/io"
-use "std/fail"
 
 fn pick(values: []const u8, index: i32) u8 {
   return values[index]

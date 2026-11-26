@@ -1,5 +1,4 @@
 use parse "std/parse"
-use "std/fail"
 use io "std/io"
 use memory "std/mem"
 use network "std/net"
@@ -1748,8 +1747,7 @@ pub fn set_cookie(destination: []u8, item: Cookie) []u8!io.IoErr {
     if !cookie_octet(byte) { fail .InvalidInput }
   }
   if !attribute_valid(item.path) || !attribute_valid(item.domain) || (item.same_site == SameSite.None && !item.secure) { fail .InvalidInput }
-  writing: fail.Status
-  out := format.buffer(&writing, destination)
+  out := format.buffer(destination)
   format.write(&out, item.name)
   format.write_byte(&out, '=')
   format.write(&out, item.value)
@@ -1789,7 +1787,7 @@ pub fn set_cookie(destination: []u8, item: Cookie) []u8!io.IoErr {
   if item.partitioned {
     format.write(&out, "; Partitioned")
   }
-  if writing.failed { fail .Capacity }
+  if format.overflowed(&out) { fail .Capacity }
   return destination[..out.length]
 }
 
@@ -1804,8 +1802,7 @@ pub fn sse_event(destination: []u8, event: []const u8, id: []const u8, data: []c
   for byte in id {
     if byte == '\r' || byte == '\n' || byte == 0 { fail .InvalidInput }
   }
-  writing: fail.Status
-  out := format.buffer(&writing, destination)
+  out := format.buffer(destination)
   if event.len > 0 {
     format.write(&out, "event: ")
     format.write(&out, event)
@@ -1832,7 +1829,7 @@ pub fn sse_event(destination: []u8, event: []const u8, id: []const u8, data: []c
     start = end + 1
   }
   format.write_byte(&out, '\n')
-  if writing.failed { fail .Capacity }
+  if format.overflowed(&out) { fail .Capacity }
   return destination[..out.length]
 }
 
@@ -1901,7 +1898,7 @@ fn decoded_field(found: HttpHeader, destination: []u8) []u8!io.IoErr {
   decoded := form_decode(destination, found.value) catch err {
     case err {
       .TooLarge(_) => { fail .Capacity }
-      .Invalid(_) => { fail .InvalidInput }
+      _ => { fail .InvalidInput }
     }
   }
   return decoded

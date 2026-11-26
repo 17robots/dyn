@@ -1,8 +1,7 @@
 use "std/io"
-use "std/fail"
-// Buffered streams. Failures go in the caller's *fail.Status, like every
-// call that can fail; the buffers keep no failure of their own, so a fresh
-// status can retry a flush whose bytes are still buffered.
+// Buffered streams. Calls fail with io.IoErr; the buffers keep no failure of
+// their own, so a flush whose bytes are still buffered can be retried.
+// Positions past the storage are a bug and panic.
 
 // Collects small writes in storage and passes them on in large ones. Call
 // writer_flush when done; what is still buffered is not written.
@@ -21,51 +20,30 @@ pub fn writer_buffered(state: *const Writer) usize {
 }
 
 // Writes everything buffered. On a failure the bytes stay buffered.
-pub fn writer_flush(status: *fail.Status, state: *Writer) {
-  if status == nil {
-    writer_flush(&fail.Status{}, state)
-    return
-  }
-  if status.failed || state.used == 0 { return }
-  if state.used > state.storage.len {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "flush", "", "buffered count is past the storage"))
-    return
-  }
-  io.write_status(status, state.destination, state.storage[..state.used])
-  if !status.failed {
-    state.used = 0
-  }
+pub fn writer_flush(state: *Writer) !io.IoErr {
+  if state.used == 0 { return }
+  if state.used > state.storage.len { #panic("bufio: buffered count is past the storage") }
+  try io.write(state.destination, state.storage[..state.used])
+  state.used = 0
 }
 
 fn writer_write(data: rawptr, source: []const u8) usize!io.IoErr {
-  status: fail.Status
-  count := writer_write_status(data, &status, source)
-  try io.check_status(&status)
-  return count
-}
-fn writer_write_status(data: rawptr, status: *fail.Status, source: []const u8) usize {
   state := #cast(*Writer, data)
-  if state.used > state.storage.len {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "write", "", "buffered count is past the storage"))
-    return 0
-  }
+  if state.used > state.storage.len { #panic("bufio: buffered count is past the storage") }
   if state.storage.len == 0 {
-    io.write_status(status, state.destination, source)
-    if status.failed { return 0 }
+    try io.write(state.destination, source)
     return source.len
   }
   total: usize = 0
   for total < source.len {
     if state.used == state.storage.len {
-      writer_flush(status, state)
-      if status.failed { return total }
+      try writer_flush(state)
     }
     // Large writes need no staging copy when the buffer is empty. Keep the
     // final partial or full tail buffered so the buffered count stays the same.
     if state.used == 0 && source.len - total > state.storage.len {
       amount := ((source.len - total - 1) / state.storage.len) * state.storage.len
-      io.write_status(status, state.destination, source[total..total + amount])
-      if status.failed { return total }
+      try io.write(state.destination, source[total..total + amount])
       total += amount
     }
     available := state.storage.len - state.used
@@ -108,18 +86,15 @@ pub fn reader(source: io.Reader, storage: []u8) Reader {
   return Reader{ source: source, storage: storage }
 }
 
-fn reader_read(data: rawptr, destination: []u8) usize!io.IoErr {
-  status: fail.Status
-  count := reader_read_status(data, &status, destination)
-  try io.check_status(&status)
-  return count
-}
-fn reader_read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
-  state := #cast(*Reader, data)
+fn check_positions(state: *const Reader) {
   if state.start > state.end || state.end > state.storage.len || state.pending_count > 2 {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "read", "", "buffer positions are out of range"))
-    return 0
+    #panic("bufio: buffer positions are out of range")
   }
+}
+
+fn reader_read(data: rawptr, destination: []u8) usize!io.IoErr {
+  state := #cast(*Reader, data)
+  check_positions(state)
   total: usize = 0
   for total < destination.len {
     if state.pending_count > 0 {
@@ -130,21 +105,21 @@ fn reader_read_status(data: rawptr, status: *fail.Status, destination: []u8) usi
       continue
     }
     if state.start == state.end {
-      if state.input_done || status.failed { return total }
+      if state.input_done { return total }
       // With bytes in hand, return them rather than wait for more.
       if total > 0 { return total }
       if state.storage.len == 0 {
-        count := io.read_status(status, state.source, destination[total..])
+        count := try io.read(state.source, destination[total..])
         if count == 0 {
-          state.input_done = !status.failed
+          state.input_done = true
         }
         return total + count
       }
-      count := io.read_status(status, state.source, state.storage)
+      count := try io.read(state.source, state.storage)
       state.start = 0
       state.end = count
       if count == 0 {
-        state.input_done = !status.failed
+        state.input_done = true
       }
       continue
     }
@@ -182,13 +157,12 @@ fn unread(state: *Reader, byte: u8) {
   state.pending_count += 1
 }
 
-fn read_record(status: *fail.Status, state: *Reader, destination: []u8, delimiter: u8) ReadResult {
-  if status.failed { return ReadResult{ status: ReadStatus.End } }
+fn read_record(state: *Reader, destination: []u8, delimiter: u8) ReadResult!io.IoErr {
   if destination.len == 0 { return ReadResult{ status: ReadStatus.More } }
   total: usize = 0
   byte: [1]u8
   for {
-    if io.read_status(status, reader_adapter(state), byte[..]) == 0 {
+    if try io.read(reader_adapter(state), byte[..]) == 0 {
       return ReadResult{ transferred: total, status: ReadStatus.End }
     }
     if byte[0] == delimiter { return ReadResult{ transferred: total, status: ReadStatus.Complete } }
@@ -204,33 +178,24 @@ fn read_record(status: *fail.Status, state: *Reader, destination: []u8, delimite
 
 // Reads up to delimiter, which is consumed and left out. More means continue
 // this same record with another buffer; End may include a final unterminated
-// fragment, and also comes after a failure. No allocation.
-pub fn read_until(status: *fail.Status, state: *Reader, destination: []u8, delimiter: u8) ReadResult {
-  if status == nil { return read_until(&fail.Status{}, state, destination, delimiter) }
-  return read_record(status, state, destination, delimiter)
+// fragment. No allocation.
+pub fn read_until(state: *Reader, destination: []u8, delimiter: u8) ReadResult!io.IoErr {
+  return try read_record(state, destination, delimiter)
 }
 
 // The next line, without its LF or CRLF; a lone CR is kept. The line borrows
-// the reader's storage until the next read. At the end of the input, and
-// after a failure, it sets state.ended and returns "". A final line without
-// a line break is still returned. A line longer than the storage fails with
-// Capacity, and the next call, given a fresh status, continues after it.
-pub fn read_line(status: *fail.Status, state: *Reader) []const u8 {
-  if status == nil { return read_line(&fail.Status{}, state) }
+// the reader's storage until the next read. At the end of the input it sets
+// state.ended and returns "". A final line without a line break is still
+// returned. A line longer than the storage fails with Capacity, and the next
+// call continues after it. A reader with no storage fails with InvalidInput.
+pub fn read_line(state: *Reader) []const u8!io.IoErr {
   state.ended = false
-  if status.failed { return line_ended(state) }
-  if state.start > state.end || state.end > state.storage.len || state.pending_count > 2 {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "read line", "", "buffer positions are out of range"))
-    return line_ended(state)
-  }
-  if state.storage.len == 0 {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "read line", "", "the reader has no storage"))
-    return line_ended(state)
-  }
+  check_positions(state)
+  if state.storage.len == 0 { fail .InvalidInput }
   if state.pending_count > 0 {
     // Bytes read_until put back go in front of the buffered ones.
     compact(state)
-    if state.end + state.pending_count > state.storage.len { return line_too_long(status, state) }
+    if state.end + state.pending_count > state.storage.len { fail line_too_long(state) }
     at := state.end
     for at > 0 {
       at -= 1
@@ -271,9 +236,8 @@ pub fn read_line(status: *fail.Status, state: *Reader) []const u8 {
     }
     scanned -= state.start
     compact(state)
-    if state.end == state.storage.len { return line_too_long(status, state) }
-    count := io.read_status(status, state.source, state.storage[state.end..])
-    if status.failed { return line_ended(state) }
+    if state.end == state.storage.len { fail line_too_long(state) }
+    count := try io.read(state.source, state.storage[state.end..])
     if count == 0 {
       state.input_done = true
     }
@@ -287,11 +251,11 @@ fn line_ended(state: *Reader) []const u8 {
   return ""
 }
 
-fn line_too_long(status: *fail.Status, state: *Reader) []const u8 {
+// Drops the rest of a line longer than the storage.
+fn line_too_long(state: *Reader) io.IoErr {
   state.start = state.end
   state.skipping = true
-  fail.set(status, fail.make(fail.Kind.Capacity, "read line", "", "the line is longer than the reader's storage"))
-  return line_ended(state)
+  return io.IoErr.Capacity
 }
 
 // Moves the buffered bytes to the front of storage.

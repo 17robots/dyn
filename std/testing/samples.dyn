@@ -1,24 +1,15 @@
-use "std/fail"
 use sorting "std/sort"
 
 pub struct Samples { count: usize, minimum, median, p90, maximum: i64 }
 
 // Sorts caller-owned nanosecond samples in place; no allocation. No samples,
-// or a negative one, fails with InvalidInput without changing the samples.
+// or a negative one, fails without changing the samples.
 // Median is the lower middle observation; p90 uses the nearest-rank
 // definition. Measure batches to amortize clock costs.
-pub fn summarize(status: *fail.Status, samples: []i64) Samples {
-  if status == nil { return summarize(&fail.Status{}, samples) }
-  if status.failed { return Samples{} }
-  if samples.len == 0 {
-    fail.invalid(status, "summarize samples", "", "there are no samples")
-    return Samples{}
-  }
+pub fn summarize(samples: []i64) Samples! {
+  if samples.len == 0 { fail }
   for value in samples {
-    if value < 0 {
-      fail.invalid(status, "summarize samples", "", "a sample is negative")
-      return Samples{}
-    }
+    if value < 0 { fail }
   }
   sorting.sort(samples)
   count := samples.len

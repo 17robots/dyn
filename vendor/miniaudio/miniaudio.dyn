@@ -1,4 +1,4 @@
-use "std/fail"
+use io "std/io"
 use "std/mem"
 use "std/c"
 #link("dyn_miniaudio")
@@ -10,26 +10,16 @@ pub struct Read { samples: usize, ended: bool }
 
 // Records miniaudio's result code: -2 bad arguments, -4 out of memory, any
 // other code a system failure, kept in native.
-fn audio_failed(status: *fail.Status, operation: []const u8, code: i32) {
-  kind := fail.Kind.System
-  message: []const u8 = "miniaudio failed"
-  if code == -2 {
-    kind = fail.Kind.InvalidInput
-    message = "invalid argument"
-  } else if code == -4 {
-    kind = fail.Kind.Capacity
-    message = "out of memory"
-  }
-  failure := fail.make(kind, operation, "", message)
-  failure.native = code
-  fail.set(status, failure)
+fn audio_failed(operation: []const u8, code: i32) !io.IoErr {
+  _ = operation
+  if code == -2 { fail .InvalidInput }
+  if code == -4 { fail .Capacity }
+  fail io.IoErr.System(#cast(isize, code))
 }
 // A decoder in arena; nil on failure. Undecodable bytes fail with System.
-pub fn decoder_create(arena: *mem.Arena, status: *fail.Status, bytes: []const u8) rawptr {
-  if status == nil { return decoder_create(arena, &fail.Status{}, bytes) }
-  if status.failed { return nil }
+pub fn decoder_create(arena: *mem.Arena, bytes: []const u8) rawptr!io.IoErr {
   if arena == nil || bytes.len == 0 {
-    audio_failed(status, "open decoder", -2)
+    try audio_failed("open decoder", -2)
     return nil
   }
   mark := mem.arena_mark(arena)
@@ -37,23 +27,21 @@ pub fn decoder_create(arena: *mem.Arena, status: *fail.Status, bytes: []const u8
   code := decoder_init(state, #cast(rawptr, &bytes[0]), bytes.len)
   if code != 0 {
     mem.arena_rewind(arena, mark)
-    audio_failed(status, "open decoder", code)
+    try audio_failed("open decoder", code)
     return nil
   }
   return state
 }
 // output holds interleaved stereo; its length must be even.
-pub fn decoder_read(status: *fail.Status, decoder: rawptr, output: []f32) Read {
-  if status == nil { return decoder_read(&fail.Status{}, decoder, output) }
-  if status.failed { return Read{} }
+pub fn decoder_read(decoder: rawptr, output: []f32) Read!io.IoErr {
   if decoder == nil || output.len == 0 || output.len % 2 != 0 {
-    audio_failed(status, "decode", -2)
+    try audio_failed("decode", -2)
     return Read{}
   }
   frames: u64 = 0
   code := native_read(decoder, &output[0], (output.len / 2), &frames)
   if code != 0 && code != -17 {
-    audio_failed(status, "decode", code)
+    try audio_failed("decode", code)
     return Read{}
   }
   return Read{ samples: #cast(usize, frames) * 2, ended: code == -17 }
@@ -61,11 +49,9 @@ pub fn decoder_read(status: *fail.Status, decoder: rawptr, output: []f32) Read {
 pub extern fn decoder_close "dyn_ma_decoder_close"(decoder: rawptr)
 // device=false gives deterministic offline mixing. device=true opens the default
 // playback device; its availability/latency require hardware qualification.
-pub fn engine_create(arena: *mem.Arena, status: *fail.Status, device: bool) rawptr {
-  if status == nil { return engine_create(arena, &fail.Status{}, device) }
-  if status.failed { return nil }
+pub fn engine_create(arena: *mem.Arena, device: bool) rawptr!io.IoErr {
   if arena == nil {
-    audio_failed(status, "open engine", -2)
+    try audio_failed("open engine", -2)
     return nil
   }
   mark := mem.arena_mark(arena)
@@ -73,42 +59,34 @@ pub fn engine_create(arena: *mem.Arena, status: *fail.Status, device: bool) rawp
   code := engine_init(state, device)
   if code != 0 {
     mem.arena_rewind(arena, mark)
-    audio_failed(status, "open engine", code)
+    try audio_failed("open engine", code)
     return nil
   }
   return state
 }
 // Starts playing the file at path; buffer holds the C copy of path.
-pub fn play_file(status: *fail.Status, engine: rawptr, path: []const u8, buffer: []u8) {
-  if status == nil {
-    play_file(&fail.Status{}, engine, path, buffer)
-    return
-  }
-  if status.failed { return }
+pub fn play_file(engine: rawptr, path: []const u8, buffer: []u8) !io.IoErr {
   if engine == nil {
-    audio_failed(status, "play file", -2)
+    try audio_failed("play file", -2)
     return
   }
-  encoded := c.string_into(status, buffer, path)
-  if status.failed { return }
+  encoded := try c.string_into(buffer, path)
   code := native_play(engine, encoded)
   if code != 0 {
-    audio_failed(status, "play file", code)
+    try audio_failed("play file", code)
   }
 }
 // Offline engine only. Outputs interleaved stereo f32 at 48 kHz; the count
 // of values written.
-pub fn mix(status: *fail.Status, engine: rawptr, output: []f32) usize {
-  if status == nil { return mix(&fail.Status{}, engine, output) }
-  if status.failed { return 0 }
+pub fn mix(engine: rawptr, output: []f32) usize!io.IoErr {
   if engine == nil || output.len == 0 || output.len % 2 != 0 {
-    audio_failed(status, "mix", -2)
+    try audio_failed("mix", -2)
     return 0
   }
   frames: u64 = 0
   code := native_mix(engine, &output[0], (output.len / 2), &frames)
   if code != 0 {
-    audio_failed(status, "mix", code)
+    try audio_failed("mix", code)
     return 0
   }
   return #cast(usize, frames) * 2
@@ -117,63 +95,42 @@ pub extern fn engine_close "dyn_ma_engine_close"(engine: rawptr)
 
 // Sound state lives in arena; provider synchronously decodes the file. Close
 // sounds BEFORE their engine, then rewind/release storage. Starts paused.
-pub fn sound_create(arena: *mem.Arena, status: *fail.Status, engine: rawptr, path: []const u8, buffer: []u8) rawptr {
-  if status == nil { return sound_create(arena, &fail.Status{}, engine, path, buffer) }
-  if status.failed { return nil }
+pub fn sound_create(arena: *mem.Arena, engine: rawptr, path: []const u8, buffer: []u8) rawptr!io.IoErr {
   if arena == nil || engine == nil {
-    audio_failed(status, "open sound", -2)
+    try audio_failed("open sound", -2)
     return nil
   }
-  encoded := c.string_into(status, buffer, path)
-  if status.failed { return nil }
+  encoded := try c.string_into(buffer, path)
   mark := mem.arena_mark(arena)
   state := native_storage(arena, sound_size(), sound_align())
   code := sound_init(state, engine, encoded)
   if code != 0 {
     mem.arena_rewind(arena, mark)
-    audio_failed(status, "open sound", code)
+    try audio_failed("open sound", code)
     return nil
   }
   return state
 }
 // stop preserves position; rewind explicitly seeks to the start. Query ended
 // to distinguish EOF from a stop. A closed sound fails with InvalidInput.
-pub fn sound_start(status: *fail.Status, sound: rawptr) {
-  if status == nil {
-    sound_start(&fail.Status{}, sound)
-    return
-  }
-  sound_checked(status, "start sound", native_sound_start(sound))
+pub fn sound_start(sound: rawptr) !io.IoErr {
+  try sound_checked("start sound", native_sound_start(sound))
 }
-pub fn sound_stop(status: *fail.Status, sound: rawptr) {
-  if status == nil {
-    sound_stop(&fail.Status{}, sound)
-    return
-  }
-  sound_checked(status, "stop sound", native_sound_stop(sound))
+pub fn sound_stop(sound: rawptr) !io.IoErr {
+  try sound_checked("stop sound", native_sound_stop(sound))
 }
-pub fn sound_rewind(status: *fail.Status, sound: rawptr) {
-  if status == nil {
-    sound_rewind(&fail.Status{}, sound)
-    return
-  }
-  sound_checked(status, "rewind sound", native_sound_rewind(sound))
+pub fn sound_rewind(sound: rawptr) !io.IoErr {
+  try sound_checked("rewind sound", native_sound_rewind(sound))
 }
 // volume must be finite and not negative.
-pub fn sound_volume(status: *fail.Status, sound: rawptr, volume: f32) {
-  if status == nil {
-    sound_volume(&fail.Status{}, sound, volume)
-    return
-  }
-  if status.failed { return }
+pub fn sound_volume(sound: rawptr, volume: f32) !io.IoErr {
   if !native_sound_volume(sound, volume) {
-    audio_failed(status, "set volume", -2)
+    try audio_failed("set volume", -2)
   }
 }
-fn sound_checked(status: *fail.Status, operation: []const u8, code: i32) {
-  if status.failed { return }
+fn sound_checked(operation: []const u8, code: i32) !io.IoErr {
   if code != 0 {
-    audio_failed(status, operation, code)
+    try audio_failed(operation, code)
   }
 }
 pub extern fn sound_playing "dyn_ma_sound_playing"(sound: rawptr) bool

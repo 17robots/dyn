@@ -27,8 +27,7 @@ fn mac_error() isize {
 }
 // nil for text holding NUL.
 fn c_string(arena: *mem.Arena, value: []const u8) *const u8 {
-  status: fail.Status
-  return c.string_from_bytes(arena, &status, value)
+  return c.string_from_bytes(arena, value) catch nil
 }
 fn c_vector(arena: *mem.Arena, values: [][]const u8) *CString {
   if values.len > 2305843009213693950 { return nil }
@@ -194,13 +193,11 @@ fn sleep_native() {
 // A value longer than destination fails with Capacity.
 fn environment_native(name: []const u8, destination: []u8) []u8!io.IoErr {
   buffer: [4096]u8
-  key := c.string_into(nil, buffer[..], name)
-  if key == nil { fail .InvalidInput }
+  key := c.string_into(buffer[..], name) catch { fail .InvalidInput }
   value := native_environment(key)
   if value == nil { fail .NotFound }
-  limited: fail.Status
-  parsed := c.bytes_from_string(&limited, value, destination.len+1)
-  if limited.failed || parsed.len > destination.len { fail .Capacity }
+  parsed := c.bytes_from_string(value, destination.len+1) catch { fail .Capacity }
+  if parsed.len > destination.len { fail .Capacity }
   i: usize = 0
   for i < parsed.len {
     destination[i] = parsed[i]

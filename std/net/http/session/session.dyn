@@ -6,7 +6,6 @@
 use bytes "std/bytes"
 use versions "std/cache"
 use crypto "std/crypto/core"
-use "std/fail"
 use io "std/io"
 use random "std/crypto/random"
 use hex "std/encoding/hex"
@@ -81,12 +80,9 @@ pub fn remember(cache: *Cache, token: []const u8, user: i64, csrf: []const u8, d
 // system has no randomness.
 pub fn start(arena: *mem.Arena, seconds: i64) New!io.IoErr {
   raw: [32]u8
-  drawing: fail.Status
-  random.fill(&drawing, raw[..])
-  try io.check_status(&drawing)
+  random.fill(raw[..]) catch { fail io.IoErr.System(0) }
   token := hex.encode(arena, raw[..], false)
-  random.fill(&drawing, raw[..16])
-  try io.check_status(&drawing)
+  random.fill(raw[..16]) catch { fail io.IoErr.System(0) }
   csrf := hex.encode(arena, raw[..16], false)
   cookie := http.Cookie{ name: CookieName, value: token, path: "/", max_age: seconds, http_only: true, same_site: http.SameSite.Lax }
   return New{ token: token, csrf: csrf, cookie: cookie }

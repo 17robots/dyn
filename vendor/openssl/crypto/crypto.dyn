@@ -3,7 +3,7 @@
 
 pub const CipherAes256Gcm: u8 = 1
 pub const CipherChacha20Poly1305: u8 = 2
-// Each call takes the status first and returns the bytes written. Invalid
+// Each call returns the bytes written. Invalid
 // lengths or keys fail with InvalidInput; a provider failure is System with
 // OpenSSL's error code in failure.native.
 const AeadSetIvLength: i32 = 9
@@ -25,21 +25,15 @@ fn mutable_pointer(bytes: []u8) rawptr {
 }
 
 // Seals into ciphertext and separate 16-byte tag. All buffers caller-owned.
-pub fn aead_seal(status: *fail.Status, kind: u8, ciphertext: []u8, tag: []u8, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) usize {
-  if status == nil { return aead_seal(&fail.Status{}, kind, ciphertext, tag, plaintext, additional, key, nonce) }
-  if status.failed { return 0 }
+pub fn aead_seal(kind: u8, ciphertext: []u8, tag: []u8, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) usize!io.IoErr {
   provider_clear_error()
   selected := cipher(kind)
   if selected == nil || key.len != 32 || nonce.len == 0 || tag.len < 16 || ciphertext.len < plaintext.len ||
     plaintext.len > 2147483647 || additional.len > 2147483647 || nonce.len > 2147483647 {
-    crypto_failed(status, fail.Kind.InvalidInput, "aead seal", 0)
-    return 0
+    fail .InvalidInput
   }
   context := evp_context_new()
-  if context == nil {
-    crypto_failed(status, fail.Kind.System, "aead seal", provider_error())
-    return 0
-  }
+  if context == nil { fail io.IoErr.System(#cast(isize, provider_error())) }
   success := evp_encrypt_init(context, selected, nil, nil, nil) == 1
   if success {
     success = evp_control(context, AeadSetIvLength, #cast(i32, nonce.len), nil) == 1
@@ -67,30 +61,21 @@ pub fn aead_seal(status: *fail.Status, kind: u8, ciphertext: []u8, tag: []u8, pl
     code = provider_error()
   }
   evp_context_free(context)
-  if !success {
-    crypto_failed(status, fail.Kind.System, "aead seal", code)
-    return 0
-  }
+  if !success { fail io.IoErr.System(#cast(isize, code)) }
   return #cast(usize, (produced + final_count))
 }
 
-// Authentication failure fails the status like any provider failure; discard
+// Authentication failure fails like any provider failure; discard
 // destination then.
-pub fn aead_open(status: *fail.Status, kind: u8, plaintext: []u8, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) usize {
-  if status == nil { return aead_open(&fail.Status{}, kind, plaintext, ciphertext, tag, additional, key, nonce) }
-  if status.failed { return 0 }
+pub fn aead_open(kind: u8, plaintext: []u8, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) usize!io.IoErr {
   provider_clear_error()
   selected := cipher(kind)
   if selected == nil || key.len != 32 || nonce.len == 0 || tag.len != 16 || plaintext.len < ciphertext.len ||
     ciphertext.len > 2147483647 || additional.len > 2147483647 || nonce.len > 2147483647 {
-    crypto_failed(status, fail.Kind.InvalidInput, "aead open", 0)
-    return 0
+    fail .InvalidInput
   }
   context := evp_context_new()
-  if context == nil {
-    crypto_failed(status, fail.Kind.System, "aead open", provider_error())
-    return 0
-  }
+  if context == nil { fail io.IoErr.System(#cast(isize, provider_error())) }
   success := evp_decrypt_init(context, selected, nil, nil, nil) == 1
   if success {
     success = evp_control(context, AeadSetIvLength, #cast(i32, nonce.len), nil) == 1
@@ -118,29 +103,18 @@ pub fn aead_open(status: *fail.Status, kind: u8, plaintext: []u8, ciphertext: []
     code = provider_error()
   }
   evp_context_free(context)
-  if !success {
-    crypto_failed(status, fail.Kind.System, "aead open", code)
-    return 0
-  }
+  if !success { fail io.IoErr.System(#cast(isize, code)) }
   return #cast(usize, (produced + final_count))
 }
 
 const KeyX25519: i32 = 1034
 const KeyEd25519: i32 = 1087
 
-pub fn x25519_public(status: *fail.Status, destination: []u8, private_key: []const u8) usize {
-  if status == nil { return x25519_public(&fail.Status{}, destination, private_key) }
-  if status.failed { return 0 }
+pub fn x25519_public(destination: []u8, private_key: []const u8) usize!io.IoErr {
   provider_clear_error()
-  if destination.len < 32 || private_key.len != 32 {
-    crypto_failed(status, fail.Kind.InvalidInput, "x25519 public", 0)
-    return 0
-  }
+  if destination.len < 32 || private_key.len != 32 { fail .InvalidInput }
   key := evp_pkey_raw_private(KeyX25519, nil, pointer(private_key), 32)
-  if key == nil {
-    crypto_failed(status, fail.Kind.System, "x25519 public", provider_error())
-    return 0
-  }
+  if key == nil { fail io.IoErr.System(#cast(isize, provider_error())) }
   length: usize = 32
   success := evp_pkey_public_bytes(key, mutable_pointer(destination[..32]), &length) == 1 && length == 32
   code: u64 = 0
@@ -148,19 +122,13 @@ pub fn x25519_public(status: *fail.Status, destination: []u8, private_key: []con
     code = provider_error()
   }
   evp_pkey_free(key)
-  if !success {
-    crypto_failed(status, fail.Kind.System, "x25519 public", code)
-    return 0
-  }
+  if !success { fail io.IoErr.System(#cast(isize, code)) }
   return length
 }
-pub fn x25519_shared(status: *fail.Status, destination: []u8, private_key: []const u8, peer_public_key: []const u8) usize {
-  if status == nil { return x25519_shared(&fail.Status{}, destination, private_key, peer_public_key) }
-  if status.failed { return 0 }
+pub fn x25519_shared(destination: []u8, private_key: []const u8, peer_public_key: []const u8) usize!io.IoErr {
   provider_clear_error()
   if destination.len < 32 || private_key.len != 32 || peer_public_key.len != 32 {
-    crypto_failed(status, fail.Kind.InvalidInput, "x25519 shared", 0)
-    return 0
+    fail .InvalidInput
   }
   private := evp_pkey_raw_private(KeyX25519, nil, pointer(private_key), 32)
   peer := evp_pkey_raw_public(KeyX25519, nil, pointer(peer_public_key), 32)
@@ -172,8 +140,7 @@ pub fn x25519_shared(status: *fail.Status, destination: []u8, private_key: []con
     if peer != nil {
       evp_pkey_free(peer)
     }
-    crypto_failed(status, fail.Kind.System, "x25519 shared", failure_code)
-    return 0
+    fail io.IoErr.System(#cast(isize, failure_code))
   }
   context := evp_pkey_context_new(private, nil)
   success := context != nil
@@ -193,25 +160,14 @@ pub fn x25519_shared(status: *fail.Status, destination: []u8, private_key: []con
   }
   evp_pkey_free(peer)
   evp_pkey_free(private)
-  if !success {
-    crypto_failed(status, fail.Kind.System, "x25519 shared", code)
-    return 0
-  }
+  if !success { fail io.IoErr.System(#cast(isize, code)) }
   return length
 }
-pub fn ed25519_public(status: *fail.Status, destination: []u8, private_key: []const u8) usize {
-  if status == nil { return ed25519_public(&fail.Status{}, destination, private_key) }
-  if status.failed { return 0 }
+pub fn ed25519_public(destination: []u8, private_key: []const u8) usize!io.IoErr {
   provider_clear_error()
-  if destination.len < 32 || private_key.len != 32 {
-    crypto_failed(status, fail.Kind.InvalidInput, "ed25519 public", 0)
-    return 0
-  }
+  if destination.len < 32 || private_key.len != 32 { fail .InvalidInput }
   key := evp_pkey_raw_private(KeyEd25519, nil, pointer(private_key), 32)
-  if key == nil {
-    crypto_failed(status, fail.Kind.System, "ed25519 public", provider_error())
-    return 0
-  }
+  if key == nil { fail io.IoErr.System(#cast(isize, provider_error())) }
   length: usize = 32
   success := evp_pkey_public_bytes(key, mutable_pointer(destination[..32]), &length) == 1 && length == 32
   code: u64 = 0
@@ -219,20 +175,12 @@ pub fn ed25519_public(status: *fail.Status, destination: []u8, private_key: []co
     code = provider_error()
   }
   evp_pkey_free(key)
-  if !success {
-    crypto_failed(status, fail.Kind.System, "ed25519 public", code)
-    return 0
-  }
+  if !success { fail io.IoErr.System(#cast(isize, code)) }
   return length
 }
-pub fn ed25519_sign(status: *fail.Status, destination: []u8, message: []const u8, private_key: []const u8) usize {
-  if status == nil { return ed25519_sign(&fail.Status{}, destination, message, private_key) }
-  if status.failed { return 0 }
+pub fn ed25519_sign(destination: []u8, message: []const u8, private_key: []const u8) usize!io.IoErr {
   provider_clear_error()
-  if destination.len < 64 || private_key.len != 32 {
-    crypto_failed(status, fail.Kind.InvalidInput, "ed25519 sign", 0)
-    return 0
-  }
+  if destination.len < 64 || private_key.len != 32 { fail .InvalidInput }
   key := evp_pkey_raw_private(KeyEd25519, nil, pointer(private_key), 32)
   context := evp_digest_context_new()
   if key == nil || context == nil {
@@ -243,8 +191,7 @@ pub fn ed25519_sign(status: *fail.Status, destination: []u8, message: []const u8
     if context != nil {
       evp_digest_context_free(context)
     }
-    crypto_failed(status, fail.Kind.System, "ed25519 sign", failure_code)
-    return 0
+    fail io.IoErr.System(#cast(isize, failure_code))
   }
   length: usize = 64
   success := evp_digest_sign_init(context, nil, nil, nil, key) == 1
@@ -257,10 +204,7 @@ pub fn ed25519_sign(status: *fail.Status, destination: []u8, message: []const u8
   }
   evp_digest_context_free(context)
   evp_pkey_free(key)
-  if !success {
-    crypto_failed(status, fail.Kind.System, "ed25519 sign", code)
-    return 0
-  }
+  if !success { fail io.IoErr.System(#cast(isize, code)) }
   return length
 }
 pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool {
@@ -286,12 +230,3 @@ pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []
   return success
 }
 
-fn crypto_failed(status: *fail.Status, kind: fail.Kind, operation: []const u8, code: u64) {
-  message: []const u8 = "invalid key, nonce or buffer length"
-  if kind == fail.Kind.System {
-    message = "OpenSSL failed"
-  }
-  failure := fail.make(kind, operation, "", message)
-  failure.native = #cast(isize, code & 9223372036854775807)
-  fail.set(status, failure)
-}

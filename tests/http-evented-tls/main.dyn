@@ -3,7 +3,6 @@
 // Prints "port N" once listening on 127.0.0.1; POST /quit stops it.
 use "std/bytes"
 use "std/fmt"
-use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/net"

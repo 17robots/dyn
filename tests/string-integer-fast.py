@@ -10,7 +10,6 @@ def digits(n,b):
  return sign+(out or '0')
 header='''use io "std/io"
 use "std/strings"
-use "std/fail"
 use "std/fs"
 use "std/mem"
 fn require(ok: bool) { if !ok { #panic("integer parsing oracle") } }

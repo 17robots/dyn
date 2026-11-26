@@ -8,7 +8,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use window "vendor/window"
+SOURCE = r'''use io "std/io"
+use window "vendor/window"
 use gl "vendor/opengl"
 use gpu "vendor/ui/opengl"
 use ui "std/ui"
@@ -16,45 +17,60 @@ use box "std/ui/box"
 use software "std/ui/software"
 use mem "std/mem"
 use errors "std/io"
-use "std/fail"
-fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
-  status: fail.Status
-  window.open(&status, p0, p1, p2, p3)
-  return status.failure
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) Failure {
+  window.open(p0, p1, p2, p3) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_poll(p0: *window.Window) fail.Failure {
-  status: fail.Status
-  window.poll(&status, p0)
-  return status.failure
+fn window_poll(p0: *window.Window) Failure {
+  window.poll(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_swap(p0: *window.Window) fail.Failure {
-  status: fail.Status
-  window.swap(&status, p0)
-  return status.failure
+fn window_swap(p0: *window.Window) Failure {
+  window.swap(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn gpu_open_batch(p0: *gpu.Batch, p1: gl.Api) fail.Failure {
-  status: fail.Status
-  gpu.open_batch(&status, p0, p1)
-  return status.failure
+fn gpu_open_batch(p0: *gpu.Batch, p1: gl.Api) Failure {
+  gpu.open_batch(p0, p1) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn gpu_render_batch(p0: *gpu.Batch, p1: *const ui.Command, p2, p3: i32, p4: software.Font, p5: []f32) fail.Failure {
-  status: fail.Status
-  gpu.render_batch(&status, p0, p1, p2, p3, p4, p5)
-  return status.failure
+fn gpu_render_batch(p0: *gpu.Batch, p1: *const ui.Command, p2, p3: i32, p4: software.Font, p5: []f32) Failure {
+  gpu.render_batch(p0, p1, p2, p3, p4, p5) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn software_render(p0: *software.Surface, p1: *const ui.Command, p2: software.Font) fail.Failure {
-  status: fail.Status
-  software.render(&status, p0, p1, p2)
-  return status.failure
+fn software_render(p0: *software.Surface, p1: *const ui.Command, p2: software.Font) Failure {
+  software.render(p0, p1, p2) catch { return Failure{ kind: Kind.InvalidInput } }
+  return Failure{}
 }
 
-fn failed(failure: fail.Failure) bool {
-  return failure.kind != fail.Kind.Ok
+fn failed(failure: Failure) bool {
+  return failure.kind != Kind.Ok
 }
 
 
@@ -110,13 +126,11 @@ fn main() {
     }
   }
   host := window.Window{}
-  check(window_open(&host, "Dyn batched UI test", 160, 96).kind == fail.Kind.Ok, "window")
+  check(window_open(&host, "Dyn batched UI test", 160, 96).kind == Kind.Ok, "window")
   defer {
     window.close(&host)
   }
-  loading: fail.Status
-  api := gl.load(&loading, window.gl_proc)
-  check(!loading.failed, "gl")
+  api := gl.load(window.gl_proc) catch { #panic("gl") }
   batch := mem.push<gpu.Batch>(persistent_arena)
   check(!failed(gpu_open_batch(batch, api)), "open batch")
   defer {
@@ -166,27 +180,47 @@ fn main() {
   calls := batch.draw_calls
   check(!failed(gpu_render_batch(batch, ui.first(&context), 160, 96, font, tiny[..])), "tiny stream")
   check(batch.draw_calls - calls > 5, "tiny stream flushes often")
-  check(gpu_render_batch(batch, ui.first(&context), 160, 96, font, tiny[..10]).kind == fail.Kind.InvalidInput, "stream too small")
-  check(window_poll(&host).kind == fail.Kind.Ok && window_swap(&host).kind == fail.Kind.Ok, "present")
+  check(gpu_render_batch(batch, ui.first(&context), 160, 96, font, tiny[..10]).kind == Kind.InvalidInput, "stream too small")
+  check(window_poll(&host).kind == Kind.Ok && window_swap(&host).kind == Kind.Ok, "present")
 }
 
 persistent_arena: *mem.Arena
 '''
-CLIPBOARD = r'''use errors "std/io"
+CLIPBOARD = r'''use io "std/io"
+use errors "std/io"
 use window "vendor/window"
 use bytes "std/bytes"
 use time "std/time"
-use "std/fail"
-fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
-  status: fail.Status
-  window.open(&status, p0, p1, p2, p3)
-  return status.failure
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) Failure {
+  window.open(p0, p1, p2, p3) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_poll(p0: *window.Window) fail.Failure {
-  status: fail.Status
-  window.poll(&status, p0)
-  return status.failure
+fn window_poll(p0: *window.Window) Failure {
+  window.poll(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
 
@@ -199,11 +233,11 @@ fn check(ok: bool, message: []const u8) {
 fn main() {
   source := window.Window{}
   target := window.Window{}
-  check(window_open(&source, "source", 64, 64).kind == fail.Kind.Ok, "source")
+  check(window_open(&source, "source", 64, 64).kind == Kind.Ok, "source")
   defer {
     window.close(&source)
   }
-  check(window_open(&target, "target", 64, 64).kind == fail.Kind.Ok, "target")
+  check(window_open(&target, "target", 64, 64).kind == Kind.Ok, "target")
   defer {
     window.close(&target)
   }

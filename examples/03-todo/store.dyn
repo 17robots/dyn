@@ -2,7 +2,6 @@
 // arena and the tasks borrow it: nothing is copied or freed one by one.
 
 use "std/container/array"
-use "std/fail"
 use "std/fs"
 use "std/io"
 use "std/mem"
@@ -10,17 +9,20 @@ use "std/strings"
 
 const MaxFileBytes: usize = 1 << 20
 
+// What load fails with besides a failed read: a line that is not a task,
+// with its line number.
+enum StoreErr { BadLine(usize) }
+
 // Loads the list at path into tasks. A missing file is not a failure: it is
 // an empty list. A line that is not a task fails with its line number.
-fn load(tasks: *array.Array<Task>, arena: *mem.Arena, status: *fail.Status, path: []const u8) {
+fn load(tasks: *array.Array<Task>, arena: *mem.Arena, path: []const u8) !(io.IoErr | StoreErr) {
   // "Not found" means an empty list; any other failure goes on to the
   // caller.
   read := fs.read_all(arena, path, MaxFileBytes) catch err {
     case err {
-      .NotFound => {}
-      _ => { fail.set(status, io.failure_of(err, "read", path)) }
+      .NotFound => { return }
+      _ => { fail err }
     }
-    return
   }
   line_number: usize = 0
   scan := strings.scanner(read)
@@ -29,13 +31,10 @@ fn load(tasks: *array.Array<Task>, arena: *mem.Arena, status: *fail.Status, path
     if scan.ended { break }
     line_number += 1
     if line.len == 0 { continue }
-    // Each line gets a status of its own, so the message can name the line.
-    parsing: fail.Status
-    task := parse_task(&parsing, line)
-    if parsing.failed {
-      message := strings.format(arena, "line {}: {}", line_number, fail.message_text(&parsing.failure))
-      fail.invalid(status, "read", path, message)
-      return
+    // The parser's offset matters less than the line, so load fails with
+    // the line number instead.
+    task := parse_task(line) catch {
+      fail StoreErr.BadLine(line_number)
     }
     array.push(tasks, task)
   }

@@ -3,7 +3,7 @@
 // 32-bit, least significant first, with no leading zero limbs; zero has no
 // limbs and is never negative.
 
-use "std/fail"
+use parse "std/parse"
 use mem "std/mem"
 use io "std/io"
 pub struct Int { limbs: []const u32, negative: bool }
@@ -45,17 +45,9 @@ pub fn is_zero(value: Int) bool {
 
 // The value as a u64. A negative value fails with InvalidInput, one past
 // u64 with Overflow.
-pub fn to_u64(status: *fail.Status, value: Int) u64 {
-  if status == nil { return to_u64(&fail.Status{}, value) }
-  if status.failed { return 0 }
-  if value.negative {
-    fail.invalid(status, "convert to u64", "", "the value is negative")
-    return 0
-  }
-  if value.limbs.len > 2 {
-    fail.set(status, fail.make(fail.Kind.Overflow, "convert to u64", "", "the value does not fit in u64"))
-    return 0
-  }
+pub fn to_u64(value: Int) u64! {
+  if value.negative { fail }
+  if value.limbs.len > 2 { fail }
   result: u64 = 0
   for i in 0..value.limbs.len {
     result |= #cast(u64, value.limbs[i]) << #cast(u64, 32 * i)
@@ -257,13 +249,8 @@ fn divide_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32, quotient:
 
 // Truncated division: the quotient rounds toward zero and the remainder has
 // the sign of a. A zero b fails with InvalidInput.
-pub fn divide(arena: *mem.Arena, status: *fail.Status, a: Int, b: Int) Division {
-  if status == nil { return divide(arena, &fail.Status{}, a, b) }
-  if status.failed { return Division{} }
-  if is_zero(b) {
-    fail.invalid(status, "divide", "", "division by zero")
-    return Division{}
-  }
+pub fn divide(arena: *mem.Arena, a: Int, b: Int) Division! {
+  if is_zero(b) { fail }
   return divided(arena, a, b)
 }
 // divide for a nonzero b.
@@ -338,13 +325,8 @@ fn reduce(arena: *mem.Arena, value: Int, modulus: Int) Int {
 
 // base^exponent mod modulus by square and multiply. A modulus below one or a
 // negative exponent fails with InvalidInput. Not constant time.
-pub fn power_mod(arena: *mem.Arena, status: *fail.Status, base: Int, exponent: Int, modulus: Int) Int {
-  if status == nil { return power_mod(arena, &fail.Status{}, base, exponent, modulus) }
-  if status.failed { return Int{} }
-  if modulus.negative || is_zero(modulus) || exponent.negative {
-    fail.invalid(status, "power mod", "", "the modulus must be at least one and the exponent not negative")
-    return Int{}
-  }
+pub fn power_mod(arena: *mem.Arena, base: Int, exponent: Int, modulus: Int) Int! {
+  if modulus.negative || is_zero(modulus) || exponent.negative { fail }
   one := from_u64(arena, 1)
   if equal(modulus, one) { return Int{} }
   result := one
@@ -381,29 +363,19 @@ fn digit_value(byte: u8) u32 {
 }
 
 // Parses an optional sign and digits in base 2 through 36. Fails with
-// InvalidInput at the first invalid byte, and allocates nothing then.
-pub fn parse(arena: *mem.Arena, status: *fail.Status, text: []const u8, base: u32) Int {
-  if status == nil { return parse(arena, &fail.Status{}, text, base) }
-  if status.failed { return Int{} }
-  if base < 2 || base > 36 {
-    fail.invalid(status, "parse integer", "", "base must be 2 through 36")
-    return Int{}
-  }
+// Invalid at the first invalid byte, and allocates nothing then. A base
+// outside 2 through 36 panics.
+pub fn parse(arena: *mem.Arena, text: []const u8, base: u32) Int!parse.ParseErr {
+  if base < 2 || base > 36 { #panic("big.parse: base must be 2 through 36") }
   at: usize = 0
   negative := false
   if at < text.len && (text[at] == '-' || text[at] == '+') {
     negative = text[at] == '-'
     at += 1
   }
-  if at == text.len {
-    fail.at(status, fail.Kind.InvalidInput, "parse integer", "expected digits", at)
-    return Int{}
-  }
+  if at == text.len { fail parse.ParseErr.Invalid(at) }
   for i in at..text.len {
-    if digit_value(text[i]) >= base {
-      fail.at(status, fail.Kind.InvalidInput, "parse integer", "expected a digit", i)
-      return Int{}
-    }
+    if digit_value(text[i]) >= base { fail parse.ParseErr.Invalid(i) }
   }
   // Each digit needs at most log2(36) < 6 bits.
   limbs := mem.push_array<u32>(arena, (text.len - at) * 6 / 32 + 1)

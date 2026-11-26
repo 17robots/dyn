@@ -1,3 +1,4 @@
+use parse "std/parse"
 // Word boundaries (UAX #29) and line break opportunities (UAX #14), Unicode
 // 17 default rules. Both take the whole text and return byte offsets in the
 // caller's arena; working storage is proportional to the code point count and
@@ -148,16 +149,11 @@ fn mid_num_q(class: u8) bool {
 }
 
 // Word boundaries as byte offsets, excluding 0 and including #len(text) when
-// text is not empty. Invalid UTF-8 fails with InvalidInput at its offset and
+// text is not empty. Invalid UTF-8 fails with Invalid at its offset and
 // allocates nothing.
-pub fn word_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []usize {
-  if status == nil { return word_breaks(arena, &fail.Status{}, text) }
+pub fn word_breaks(arena: *mem.Arena, text: []const u8) []usize!parse.ParseErr {
   empty: []usize
-  if status.failed { return empty }
-  if !utf8.valid(text) {
-    fail.at(status, fail.Kind.InvalidInput, "find word breaks", "invalid UTF-8", first_invalid(text))
-    return empty
-  }
+  if !utf8.valid(text) { fail parse.ParseErr.Invalid(first_invalid(text)) }
   count := utf8.codepoint_count(text)
   n := count
   if n == 0 { return empty }
@@ -406,14 +402,9 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
 // 0. The last entry is #len(text) and is always mandatory. Mandatory breaks
 // follow hard line breaks (BK, CR, LF, NL).
 // Invalid UTF-8 fails as for word_breaks.
-pub fn line_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []LineBreak {
-  if status == nil { return line_breaks(arena, &fail.Status{}, text) }
+pub fn line_breaks(arena: *mem.Arena, text: []const u8) []LineBreak!parse.ParseErr {
   empty: []LineBreak
-  if status.failed { return empty }
-  if !utf8.valid(text) {
-    fail.at(status, fail.Kind.InvalidInput, "find line breaks", "invalid UTF-8", first_invalid(text))
-    return empty
-  }
+  if !utf8.valid(text) { fail parse.ParseErr.Invalid(first_invalid(text)) }
   count := utf8.codepoint_count(text)
   n := count
   if n == 0 { return empty }

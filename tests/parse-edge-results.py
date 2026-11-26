@@ -27,6 +27,7 @@ fn invalid_at(err: parse.ParseErr) usize {
   case err {
     .Invalid(offset) => { return offset }
     .TooLarge(offset) => { #panic("unexpected TooLarge") }
+    .Unsupported(offset) => { #panic("unexpected TooLarge") }
   }
 }
 fn url_offset(input: []const u8) usize {

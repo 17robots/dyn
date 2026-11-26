@@ -27,8 +27,7 @@ def run(*args, **kwargs):
 with tempfile.TemporaryDirectory(prefix='dyn-standard-streams-') as temporary:
     root = Path(temporary)
     project = root/'streams'; project.mkdir()
-    (project/'main.dyn').write_text('''use "std/fail"
-use "std/io"
+    (project/'main.dyn').write_text('''use "std/io"
 use "std/bufio"
 use "std/time"
 fn main() {
@@ -36,16 +35,12 @@ fn main() {
   _ = clock
   scratch: [64]u8
   input := bufio.reader(io.stdin(), scratch[..])
-  status: fail.Status
   for {
-    line := bufio.read_line(&status, &input)
-    if status.failed { #panic("input failed") }
+    line := bufio.read_line(&input) catch { #panic("input failed") }
     if input.ended { break }
-    io.println_to(io.stdout(), "[{}]", line) catch {}
-    if status.failed { #panic("output failed") }
+    io.println_to(io.stdout(), "[{}]", line) catch { #panic("output failed") }
   }
-  io.write_status(&status, io.stderr(), "done\\n")
-  if status.failed { #panic("stderr failed") }
+  io.write(io.stderr(), "done\\n") catch { #panic("stderr failed") }
 }
 ''')
     for options in ([], ['--release']):
@@ -92,14 +87,11 @@ fn main() {
         # Both public APIs must share one declaration for each runtime symbol.
         (project/'wasi.dyn').write_text('''#target(kernel: wasi)
 use "std/os/wasi"
-use "std/fail"
 fn check_descriptors() {
   bytes: [1]u8
-  empty: fail.Status
-  if wasi.read(&empty, 0, bytes[..0]) != 0 || empty.failed { #panic("empty descriptor read") }
-  invalid: fail.Status
-  _ = wasi.write(&invalid, 4294967295, "x")
-  if !invalid.failed || invalid.failure.native == 0 { #panic("descriptor error") }
+  if (wasi.read(0, bytes[..0]) catch 99) != 0 { #panic("empty descriptor read") }
+  _ = wasi.write(4294967295, "x") catch { return }
+  #panic("descriptor error")
 }
 ''')
         source = project/'main.dyn'
@@ -122,15 +114,14 @@ fn check_descriptors() {
                 print('PASS WASI standard-stream execution')
     project = root/'portable'; project.mkdir()
     (project/'main.dyn').write_text('''use "std/io"
-use "std/fail"
 use "std/time"
 fn main() {
-  status: fail.Status
-  date := time.parse_iso8601(&status, "2024-02-29T12:34:56Z")
-  if status.failed || !time.valid(&date) { #panic("date failed") }
+  date := time.parse_iso8601("2024-02-29T12:34:56Z") catch { #panic("date failed") }
+  if !time.valid(&date) { #panic("date failed") }
   cursor := io.cursor("ok")
   bytes: [2]u8
-  if io.read_exact_status(&status, io.cursor_reader(&cursor), bytes[..]) != 2 || status.failed { #panic("read failed") }
+  read := io.read_exact(io.cursor_reader(&cursor), bytes[..]) catch { #panic("read failed") }
+  if read != 2 { #panic("read failed") }
 }
 ''')
     for target in ('x86_64-windows', 'aarch64-macos', 'wasm32-browser', 'aarch64-linux'):

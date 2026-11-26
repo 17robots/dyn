@@ -10,7 +10,6 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build'/('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve())
 SOURCE = r'''use "std/net"
 use "std/thread"
-use "std/fail"
 use mem "std/mem"
 use "std/sync"
 use "std/bytes"
@@ -35,18 +34,25 @@ fn receive_would_block(udp: isize, buffer: []u8, address: []u8, length: *u32) bo
   _ = net.receive_from(udp, buffer, 0, address, length) catch err { return net.would_block(err) }
   return false
 }
+// Whether a spawn with too small a stack fails with InvalidInput.
+fn short_stack_rejected(arena: *mem.Arena, stack: []u8) bool {
+  _ = thread.spawn(arena, stack, worker, nil) catch err {
+    case err {
+      .InvalidInput => { return true }
+      _ => { return false }
+    }
+  }
+  return false
+}
 fn main() {
   arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   idle := thread.Thread{}
-  thread.join(&status, &idle)
+  thread.join(&idle) catch { #panic("unexpected failure") }
   if thread.id(&idle) != 0 { #panic("empty join") }
   stack: [131072]u8
   mark:=mem.arena_mark(arena)
-  short: fail.Status
-  rejected:=thread.spawn(arena, &short, stack[..0], worker, nil)
-  if short.failure.kind!=fail.Kind.InvalidInput || short.failure.native!=0 || rejected!=nil || mem.arena_mark(arena)!=mark { #panic("short stack") }
+  if !short_stack_rejected(arena, stack[..0]) || mem.arena_mark(arena)!=mark { #panic("short stack") }
   address := net.ipv4(127, 0, 0, 1, 0)
   shared := Context{ listener: net.tcp_listen_ipv4(&address, 4) catch { #panic("listen") } }
   defer { net.listener_close(&shared.listener) }
@@ -55,7 +61,7 @@ fn main() {
   if local.length != 16 { #panic("local address") }
   port := (#cast(u16, local.bytes[2]) << 8) | #cast(u16, local.bytes[3])
   if port == 0 { #panic("ephemeral port") }
-  active:=thread.spawn(arena, &status, stack[..], worker, &shared)
+  active:=thread.spawn(arena, stack[..], worker, &shared) catch { #panic("unexpected failure") }
   if active==nil || thread.id(active)==0 { #panic("active ownership") }
   sync.store_u32(&shared.ready, 1)
   address = net.ipv4(127, 0, 0, 1, port)
@@ -79,8 +85,8 @@ fn main() {
   if !bytes.equal(buffer[..], "pong") { #panic("response") }
   net.connection_close(&connection)
   net.connection_close(&connection)
-  thread.join(&status, active)
-  thread.join(&status, active)
+  thread.join(active) catch { #panic("unexpected failure") }
+  thread.join(active) catch { #panic("unexpected failure") }
   if thread.id(active) != 0 || sync.load_u64(&shared.count) != 10000 { #panic("join visibility") }
   udp := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0) catch { #panic("net.socket") }
   defer { net.close(udp) }

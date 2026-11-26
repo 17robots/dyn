@@ -66,6 +66,7 @@ fn parse(arena: *mem.Arena, source: []const u8) Parsed {
     case err {
       .Invalid(at) => { return Parsed{ root: &json.nil_value, offset: at, code: 1 } }
       .TooLarge(at) => { return Parsed{ root: &json.nil_value, offset: at, code: 2 } }
+      .Unsupported(at) => { return Parsed{ root: &json.nil_value, offset: at, code: 2 } }
     }
   }
   return Parsed{ root: root }

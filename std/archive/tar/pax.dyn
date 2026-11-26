@@ -1,5 +1,5 @@
+use parse "std/parse"
 use bytes "std/bytes"
-use "std/fail"
 
 struct Overrides { path: []const u8, link: []const u8, size: u64, has_path: bool, has_link: bool, has_size: bool, delete_size: bool }
 // offset is the position after the last entry. ended turns true when next
@@ -93,26 +93,24 @@ fn apply_overrides(entry: *Entry, values: Overrides) {
 // Names and payload borrow source. Metadata records are consumed internally.
 // A failed call leaves both offset and persistent PAX defaults unchanged, so
 // it fails again the same way. Malformed or truncated input fails with
-// InvalidInput at the offending header (or the end, for truncation).
-pub fn next(status: *fail.Status, state: *ArchiveReader) Entry {
-  if status == nil { return next(&fail.Status{}, state) }
-  if status.failed { return archive_ended(state) }
+// Invalid at the offending header (or the end, for truncation).
+pub fn next(state: *ArchiveReader) Entry!parse.ParseErr {
   cursor := state.offset
   global := state.defaults
   local := Overrides{}
   pending: bool = false
   for {
     record_start := cursor
-    if cursor > state.source.len { return malformed(status, state, cursor) }
+    if cursor > state.source.len { fail malformed(state, cursor) }
     if cursor == state.source.len {
-      if pending { return malformed(status, state, state.source.len) }
+      if pending { fail malformed(state, state.source.len) }
       return archive_ended(state)
     }
-    if state.source.len - cursor < 512 { return malformed(status, state, state.source.len) }
+    if state.source.len - cursor < 512 { fail malformed(state, state.source.len) }
     header := parse_header(state.source[cursor..cursor + 512])
-    if !header.ok { return malformed(status, state, record_start) }
+    if !header.ok { fail malformed(state, record_start) }
     if header.ended {
-      if pending { return malformed(status, state, record_start) }
+      if pending { fail malformed(state, record_start) }
       return archive_ended(state)
     }
     entry := header.entry
@@ -121,10 +119,10 @@ pub fn next(status: *fail.Status, state: *ArchiveReader) Entry {
       apply_overrides(&entry, combined_overrides(global, local))
     }
     start := cursor + 512
-    if entry.size > (state.source.len - start) { return malformed(status, state, state.source.len) }
+    if entry.size > (state.source.len - start) { fail malformed(state, state.source.len) }
     size := #cast(usize, entry.size)
     padding: usize = (512 - size % 512) % 512
-    if padding > state.source.len - start - size { return malformed(status, state, state.source.len) }
+    if padding > state.source.len - start - size { fail malformed(state, state.source.len) }
     entry.data = state.source[start..start + size]
     cursor = start + size + padding
     if !extension {
@@ -134,14 +132,14 @@ pub fn next(status: *fail.Status, state: *ArchiveReader) Entry {
     }
     pending = true
     if entry.kind == 'x' {
-      if !pax(entry.data, &local, false) { return malformed(status, state, record_start) }
+      if !pax(entry.data, &local, false) { fail malformed(state, record_start) }
     } else if entry.kind == 'g' {
-      if !pax(entry.data, &global, true) { return malformed(status, state, record_start) }
+      if !pax(entry.data, &global, true) { fail malformed(state, record_start) }
     } else {
-      if size == 0 || entry.data[size - 1] != 0 { return malformed(status, state, record_start) }
+      if size == 0 || entry.data[size - 1] != 0 { fail malformed(state, record_start) }
       value := entry.data[..size - 1]
       for byte in value {
-        if byte == 0 { return malformed(status, state, record_start) }
+        if byte == 0 { fail malformed(state, record_start) }
       }
       if entry.kind == 'L' {
         local.path = value
@@ -152,11 +150,11 @@ pub fn next(status: *fail.Status, state: *ArchiveReader) Entry {
       }
     }
   }
-  return malformed(status, state, cursor)
+  fail malformed(state, cursor)
 }
-fn malformed(status: *fail.Status, state: *ArchiveReader, offset: usize) Entry {
-  fail.at(status, fail.Kind.InvalidInput, "read TAR", "malformed TAR", offset)
-  return archive_ended(state)
+fn malformed(state: *ArchiveReader, offset: usize) parse.ParseErr {
+  _ = archive_ended(state)
+  return parse.ParseErr.Invalid(offset)
 }
 fn archive_ended(state: *ArchiveReader) Entry {
   state.ended = true

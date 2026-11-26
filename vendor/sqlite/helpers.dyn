@@ -1,57 +1,45 @@
 use "std/mem"
 
 // Shorter forms for the usual statement life: run a write, read a first row,
-// walk rows. Each takes the status, and each gives the statement back ready
-// for its next use, so the caller checks the status once where it matters.
+// walk rows. Each gives the statement back ready for its next use, also when
+// it fails.
 
 // Binds values to parameters 1, 2, ... (see bind_values), steps to the end
 // and gives the statement back. To react to a constraint (such as a UNIQUE
-// column), give the call its own status and ask constraint(&status.failure).
-pub fn run(status: *fail.Status, statement: *Statement, values: ...any) {
-  run_list(status, statement, values)
+// column), catch the failure and ask constraint(err).
+pub fn run(statement: *Statement, values: ...any) !io.IoErr {
+  try run_list(statement, values)
 }
 
-fn run_list(status: *fail.Status, statement: *Statement, values: []const any) {
-  if status == nil {
-    run_list(&fail.Status{}, statement, values)
-    return
-  }
-  // After a failure, such as a cached call that returned nil, do nothing.
-  if status.failed { return }
+fn run_list(statement: *Statement, values: []const any) !io.IoErr {
   done(statement)
-  bind_list(status, statement, values)
-  for !status.failed {
-    if step(status, statement) != State.Row { break }
-  }
-  done(statement)
+  defer done(statement)
+  try bind_list(statement, values)
+  for try step(statement) == State.Row {}
 }
 
 // Binds values and steps to the first row: true when a row is ready for the
 // column readers below. Read it, then done(statement), or defer that.
-pub fn first(status: *fail.Status, statement: *Statement, values: ...any) bool {
-  return first_list(status, statement, values)
+pub fn first(statement: *Statement, values: ...any) bool!io.IoErr {
+  return try first_list(statement, values)
 }
 
-fn first_list(status: *fail.Status, statement: *Statement, values: []const any) bool {
-  if status == nil { return first_list(&fail.Status{}, statement, values) }
-  if status.failed { return false }
+fn first_list(statement: *Statement, values: []const any) bool!io.IoErr {
   done(statement)
-  bind_list(status, statement, values)
-  return step(status, statement) == State.Row
+  try bind_list(statement, values)
+  return try step(statement) == State.Row
 }
 
-// Binds values for a query walked with next: for sqlite.next(&status, statement) { ... }.
+// Binds values for a query walked with next: for try sqlite.next(statement) { ... }.
 // Call done(statement) after the walk, or defer it.
-pub fn query(status: *fail.Status, statement: *Statement, values: ...any) {
-  if status != nil && status.failed { return }
+pub fn query(statement: *Statement, values: ...any) !io.IoErr {
   done(statement)
-  bind_list(status, statement, values)
+  try bind_list(statement, values)
 }
 
-// Steps to the next row; false at the end or after a failure.
-pub fn next(status: *fail.Status, statement: *Statement) bool {
-  if status == nil { return next(&fail.Status{}, statement) }
-  return step(status, statement) == State.Row
+// Steps to the next row; false at the end.
+pub fn next(statement: *Statement) bool!io.IoErr {
+  return try step(statement) == State.Row
 }
 
 // Column index of the current row as an integer, converted the way SQLite
@@ -77,9 +65,12 @@ pub fn text(arena: *mem.Arena, statement: *const Statement, index: usize) []cons
   return copy
 }
 
-// Whether failure is SQLite's SQLITE_CONSTRAINT, such as a UNIQUE column.
-pub fn constraint(failure: *const fail.Failure) bool {
-  return failure.kind == fail.Kind.InvalidInput && (failure.native & 255) == 19
+// Whether err is SQLite's SQLITE_CONSTRAINT, such as a UNIQUE column.
+pub fn constraint(err: io.IoErr) bool {
+  case err {
+    .System(code) => { return (code & 255) == 19 }
+    _ => { return false }
+  }
 }
 
 // Prepared statements of one connection, keyed by their SQL: each is
@@ -99,28 +90,19 @@ pub fn cache(database: Database) Cache {
   return Cache{ database: database }
 }
 
-// The statement for sql, prepared on first use. nil after a failure: the SQL
-// does not prepare, holds no statement (InvalidInput), or the cache is full
+// The statement for sql, prepared on first use. It fails when the SQL does
+// not prepare, holds no statement (InvalidInput), or the cache is full
 // (Capacity).
-pub fn cached(status: *fail.Status, statements: *Cache, sql: []const u8) *Statement {
-  if status == nil { return cached(&fail.Status{}, statements, sql) }
-  if status.failed { return nil }
+pub fn cached(statements: *Cache, sql: []const u8) *Statement!io.IoErr {
   for i in 0..statements.count {
     entry := &statements.entries[i]
     if entry.sql.len == sql.len && (sql.len == 0 || &entry.sql[0] == &sql[0] || equal(entry.sql, sql)) {
       return &entry.statement
     }
   }
-  if statements.count == CacheSize {
-    fail.set(status, fail.make(fail.Kind.Capacity, "prepare", "", "the statement cache is full"))
-    return nil
-  }
-  prepared := prepare(status, statements.database, sql)
-  if status.failed { return nil }
-  if prepared.empty {
-    fail.invalid(status, "prepare", "", "the SQL holds no statement")
-    return nil
-  }
+  if statements.count == CacheSize { fail .Capacity }
+  prepared := try prepare(statements.database, sql)
+  if prepared.empty { fail .InvalidInput }
   entry := &statements.entries[statements.count]
   entry.* = CacheEntry{ sql: sql, statement: prepared.statement }
   statements.count += 1
@@ -149,39 +131,26 @@ fn equal(left: []const u8, right: []const u8) bool {
 // A connection for one thread, ready to use: no SQLite mutex (only its
 // thread may use it), busy_wait for other connections' writes, and each
 // schema statement run (CREATE TABLE IF NOT EXISTS ..., PRAGMA ...). On
-// failure the connection is closed and nil returned.
-pub fn open_schema(status: *fail.Status, path: []const u8, schema: []const []const u8) Database {
-  if status == nil { return open_schema(&fail.Status{}, path, schema) }
+// failure the connection is closed.
+pub fn open_schema(path: []const u8, schema: []const []const u8) Database!io.IoErr {
   scratch: [1024]u8
-  database := open_with_options(status, path, scratch[..], OpenOptions{ caller_serialized: true })
+  database := try open_with_options(path, scratch[..], OpenOptions{ caller_serialized: true })
+  errdefer close(database) catch {}
   for sql in schema {
-    execute(status, database, sql, scratch[..])
+    try execute(database, sql, scratch[..])
   }
-  busy_wait(status, database)
-  if status.failed {
-    closing: fail.Status
-    close(&closing, database)
-    return nil
-  }
+  try busy_wait(database)
   return database
 }
 
 // Calls write for each of rows inside one IMMEDIATE transaction and commits.
-// When it cannot begin or commit, the transaction is rolled back; write
-// records each row's own outcome.
-pub fn transaction<R>(status: *fail.Status, database: Database, rows: []R, write: fn(*R)) {
-  if status == nil {
-    transaction(&fail.Status{}, database, rows, write)
-    return
-  }
-  begin(status, database, TransactionMode.Immediate)
-  if status.failed { return }
+// When it cannot commit, the transaction is rolled back; write records each
+// row's own outcome.
+pub fn transaction<R>(database: Database, rows: []R, write: fn(*R)) !io.IoErr {
+  try begin(database, TransactionMode.Immediate)
+  errdefer rollback(database) catch {}
   for i in 0..rows.len {
     write(&rows[i])
   }
-  commit(status, database)
-  if status.failed {
-    rolling: fail.Status
-    rollback(&rolling, database)
-  }
+  try commit(database)
 }

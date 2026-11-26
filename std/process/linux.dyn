@@ -5,16 +5,12 @@ use fs "std/fs"
 use time "std/time"
 use "std/os/linux/sys"
 fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) Child!io.IoErr {
-  status: fail.Status
-  process := os.spawn_environment(arena, &status, path, arguments, configuration.environment,
+  process := try os.spawn_environment(arena, path, arguments, configuration.environment,
     os.SpawnOptions{ input: native_stream(configuration.input), output: native_stream(configuration.output), error: native_stream(configuration.error), directory: configuration.directory })
-  try io.check_status(&status)
   return Child{ handle: process, active: true }
 }
 fn wait_native(child: *Child, nonblocking: bool) Exit!io.IoErr {
-  status: fail.Status
-  value := os.wait(&status, child.handle, nonblocking)
-  try io.check_status(&status)
+  value := try os.wait(child.handle, nonblocking)
   if value.process == 0 { return Exit{} }
   child.active = false
   if os.exited(value.wait_status) {
@@ -23,13 +19,11 @@ fn wait_native(child: *Child, nonblocking: bool) Exit!io.IoErr {
   return Exit{ signal: os.termination_signal(value.wait_status), finished: true }
 }
 fn terminate_native(child: *Child) !io.IoErr {
-  status: fail.Status
-  os.send_signal(&status, child.handle, 9)
-  try io.check_status(&status)
+  try os.send_signal(child.handle, 9)
 }
 fn close_native(handle: isize) {
-  ignored: fail.Status
-  os.close_descriptor(&ignored, handle)
+  // Never retry a failed close: the descriptor may already be reused.
+  os.close_descriptor(handle) catch {}
 }
 fn pipe_native() Pipe!io.IoErr {
   descriptors: [2]i32
@@ -63,10 +57,7 @@ fn sleep_native() {
   time.sleep(time.Millisecond)
 }
 fn environment_native(name: []const u8, destination: []u8) []u8!io.IoErr {
-  status: fail.Status
-  value := os.environment_get(&status, name, destination)
-  try io.check_status(&status)
-  return value
+  return try os.environment_get(name, destination)
 }
 
 fn duplicate_native(value: isize) isize!io.IoErr {

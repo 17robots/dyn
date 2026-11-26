@@ -21,8 +21,8 @@ exit code when it is not 0.
 | Project | You build | You learn |
 | --- | --- | --- |
 | [01-life](01-life/README.md) | Conway's Game of Life | constants, structs, fixed arrays, functions, loops, `for value, index`, pointers to mutate |
-| [02-wordcount](02-wordcount/README.md) | a `wc` clone | program arguments, files, a status per file, `io.Reader`, `defer`, exit codes, `fmt.Buffer` |
-| [03-todo](03-todo/README.md) | a task list saved to a file | modules of several files, enums, `case` on text, `array.Array`, a parser that fails, atomic saves |
+| [02-wordcount](02-wordcount/README.md) | a `wc` clone | program arguments, files, a failure per file, `io.Reader`, `defer`, exit codes, `fmt.Buffer` |
+| [03-todo](03-todo/README.md) | a task list saved to a file | modules of several files, enums, `case` on text, `array.Array`, a parser that fails, your own error enum, atomic saves |
 | [04-journal](04-journal/README.md) | an interactive note keeper | arenas and lifetimes: permanent, per-command frame, undo by rewinding, `bufio` input |
 | [05-calc](05-calc/README.md) | a calculator with variables | tagged enums, recursive descent parsing, trees in an arena, sticky failures, `map.Map` |
 | [06-ledger](06-ledger/README.md) | an expense report from CSV | `distinct type`, `std/encoding/csv`, totals in a map, `sort.sort_by`, function values, tables |
@@ -45,9 +45,9 @@ A few rules hold in every project, so it pays to know them up front.
 - **Memory is explicit.** Nothing allocates behind your back. Small things
   live on the stack; everything else goes into an arena you create, pass and
   release, chosen by how long the data must live.
-- **Failure is state.** A call that can fail takes a `*fail.Status`. The
-  first failure stays there and later calls given it do nothing, so you check
-  `status.failed` once, before acting on the results. A broken invariant is a
+- **Failure is a value.** A call that can fail returns `T!E`: its value, or
+  an error enum such as `io.IoErr`. `try` passes a failure up, and `catch`
+  handles it where you can do something about it. A broken invariant is a
   bug: `#panic` stops the program, and there is no recovery.
 - **No hidden costs.** No exceptions, garbage collector or implicit
   conversions that lose information. Array bounds and nil pointers are always

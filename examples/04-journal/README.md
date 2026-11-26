@@ -38,8 +38,8 @@ must live, and put it where it lives that long.
 - **Reading lines.** `bufio.reader` buffers standard input, and
   `bufio.read_line` returns the next line, borrowed from that buffer until
   the next read. `reader.ended` turns true at the end of the input. A line
-  longer than the buffer fails with `Capacity`; the next read, with a fresh
-  status, carries on after it.
+  longer than the buffer fails with `Capacity`, which `main` picks out with
+  `case`; the next read carries on after that line.
 
 ## Exercises
 

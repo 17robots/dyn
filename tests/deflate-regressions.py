@@ -14,18 +14,11 @@ DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name 
 SOURCE = r'''use deflate "std/compress/deflate"
 use gzip "std/compress/gzip"
 use io "std/io"
-use "std/fail"
 use fs "std/fs"
 use memory "std/mem"
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 struct Source { bytes: []const u8, at: usize, chunk: usize }
 fn source_read(data: rawptr, destination: []u8) usize!io.IoErr {
-  status: fail.Status
-  count := source_read_status(data, &status, destination)
-  try io.check_status(&status)
-  return count
-}
-fn source_read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
   source := #cast(*Source, data)
   amount := source.bytes.len - source.at
   if amount > destination.len { amount = destination.len }
@@ -43,13 +36,11 @@ fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool
   state := deflate.decoder(reader, compressed[..], history[..history_size])
   if wrapped { state = gzip.decoder(reader, compressed[..], history[..history_size]) }
   decoder := deflate.decoder_reader(&state)
-  empty: fail.Status
-  require(io.read_status(&empty, decoder, output[..0]) == 0 && source.at == 0, "zero destination")
+  empty := io.read(decoder, output[..0]) catch { #panic("zero destination") }
+  require(empty == 0 && source.at == 0, "zero destination")
   total: usize = 0
   for {
-    status: fail.Status
-    count := io.read_status(&status, decoder, output[..chunk])
-    if status.failed {
+    count := io.read(decoder, output[..chunk]) catch {
       require(corrupt, "unexpected decode error")
       return
     }
@@ -64,11 +55,8 @@ fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool
 }
 fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, corrupt: bool) {
   owned := memory.arena_alloc(4000000)
-  encoded_file: fail.Status
   encoded := fs.read_all(owned, encoded_path, 1000000) catch { #panic("cannot read a fixture") }
-  expected_file: fail.Status
   expected := fs.read_all(owned, expected_path, 1000000) catch { #panic("cannot read a fixture") }
-  require(!encoded_file.failed && !expected_file.failed, "read fixture")
   chunks: [5]usize = [1, 257, 258, 33025, 65536]
   for chunk in chunks {
     check(encoded, expected, wrapped, corrupt, chunk, 7, 33026)
@@ -78,9 +66,8 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
     if chunk != 1 { check(encoded, expected, wrapped, corrupt, chunk, 1024, 65536) }
   }
   if !wrapped && !corrupt {
-    inflating: fail.Status
-    inflated := deflate.inflate(owned, &inflating, encoded)
-    require(!inflating.failed && inflated.value.len == expected.len, "one-shot inflate")
+    inflated := deflate.inflate(owned, encoded) catch { #panic("one-shot inflate") }
+    require(inflated.value.len == expected.len, "one-shot inflate")
     for i in 0..inflated.value.len { require(inflated.value[i] == expected[i], "one-shot output") }
     destination := memory.push_bytes(owned, expected.len)
     result: deflate.Result

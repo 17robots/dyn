@@ -1,4 +1,3 @@
-use "std/fail"
 // Number parsing shared by the parsers and decoders, and ParseErr, the
 // failure every parser and decoder reports.
 
@@ -35,10 +34,13 @@ pub fn i64_decimal(text: []const u8) i64!ParseErr {
 
 // Why input could not be parsed, with the byte offset from the start of the
 // input where it went wrong: Invalid for malformed input, TooLarge for a value
-// or a piece of input past a limit. Every parser and decoder fails with it.
+// or a piece of input past a limit, Unsupported for well-formed input that uses
+// a feature the decoder does not handle. Every parser and decoder fails with
+// it.
 pub enum ParseErr {
   Invalid(usize),
   TooLarge(usize),
+  Unsupported(usize),
 }
 
 // The offset where err happened.
@@ -46,6 +48,7 @@ pub fn offset(err: ParseErr) usize {
   case err {
     .Invalid(at) => { return at }
     .TooLarge(at) => { return at }
+    .Unsupported(at) => { return at }
   }
 }
 
@@ -54,23 +57,6 @@ pub fn shifted(err: ParseErr, start: usize) ParseErr {
   case err {
     .Invalid(at) => { return ParseErr.Invalid(at + start) }
     .TooLarge(at) => { return ParseErr.TooLarge(at + start) }
+    .Unsupported(at) => { return ParseErr.Unsupported(at + start) }
   }
-}
-
-// Bridges for modules that still report through fail.Status. They go away
-// with std/fail.
-pub fn failure_of(err: ParseErr, operation: []const u8) fail.Failure {
-  kind := fail.Kind.InvalidInput
-  case err {
-    .Invalid(_) => {}
-    .TooLarge(_) => { kind = fail.Kind.Overflow }
-  }
-  failure := fail.make(kind, operation, "", "")
-  failure.offset = offset(err)
-  failure.has_offset = true
-  return failure
-}
-pub fn err_of(failure: fail.Failure) ParseErr {
-  if failure.kind == fail.Kind.Overflow || failure.kind == fail.Kind.Capacity { return ParseErr.TooLarge(failure.offset) }
-  return ParseErr.Invalid(failure.offset)
 }

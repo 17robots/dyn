@@ -823,7 +823,7 @@ static bool inline_small_type(const DynIrProgram *ir, DynType type) {
 /* A function that returns, takes or keeps a struct this large by value is
    not inlined: its body is mostly the struct's zeroing and copying, so each
    inlined copy adds that code to the caller and saves only the call. Such
-   functions are usually failure paths (fail.make, fail.set). */
+   functions are usually cold paths that build a large record. */
 static bool inline_large_value(const DynIrProgram *ir, DynType type) {
   if (!dyn_type_is_struct(type)) return false;
   size_t index = type - DYN_TYPE_STRUCT_BASE;

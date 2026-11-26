@@ -1,5 +1,4 @@
 // JSON: build a 1 MiB document, then parse it 60 times.
-use "std/fail"
 use "std/encoding/json"
 use "std/fmt"
 use "std/io"
@@ -9,8 +8,7 @@ fn main() {
   arena := mem.arena_alloc(512 * mem.MiB)
   defer mem.arena_release(arena)
   storage := mem.push_bytes(arena, 2 * mem.MiB)
-  out_status: fail.Status
-  out := fmt.buffer(&out_status, storage)
+  out := fmt.buffer(storage)
   fmt.write(&out, "[")
   for i in 0..12000 {
     if i > 0 {

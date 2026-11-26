@@ -227,70 +227,27 @@ Iterators return their value and set `ended` on their state at the end;
 the end of the input is not a failure. Cleanup cannot fail (`fs.close`,
 `mem.arena_release`), so it works in a `defer` after any failure.
 
-### Modules that still take a status
-
-The rest of std and the vendor packages are moving to `T!E`. Until then they
-take a `*fail.Status`, the way a function that allocates takes a
-`*mem.Arena`. The first failure is recorded in the status and stays there;
-every later call given that status does nothing and returns zero or empty.
-Code does not check after each call: it checks `status.failed` once, before it
-acts on the results, and prints `status.failure` with `fail.describe`.
-
-Three rules cover every such call:
-
-1. **If it can fail, it takes `&status`.** Its result is the value itself,
-   zero or empty after a failure.
-2. **A lookup always returns a usable value.** When it is not there the value
-   is zero or empty and the status records `NotFound`; when it is there but
-   wrong, `InvalidInput`. Read an optional value with a status of its own, so
-   a missing one stops nothing else, or pass `nil` when you do not care why.
-
-   `nil` works for every std and vendor call that takes a status: the call
-   does its work, records nothing, and returns zero or empty if it fails.
-   Inside, it still sees its own failures, so a reader given `nil` still
-   ends and a writer that runs out of room stops.
-
-   Iterators return their value too. The end of the input is not a failure,
-   so it does not go on the status: the call sets `ended` on the state you
-   passed (`scan.ended`, `reader.ended`) and returns zero.
-3. **Check `status.failed` before you use what you got:** before printing
-   results, reporting success, or using a computed number as a size or index.
-
-In a loop that keeps going after a failure (a server, a command loop, each of
-many files), give each item its own status. Cleanup uses functions that take
-no status (`fs.close`, `*_free_owned`, `*_destroy`), so it works after a
-failure. To react to one kind of failure, such as falling back when a file is
-missing, give that step its own status and look at `status.failure.kind`. An
-empty result is not a failure test; `status.failed` is, and `dyn vet` warns
-about a status that is never read, one given a new value before it is read, and
-an empty result used as the test.
-A failure keeps its own copy of its text; read the parts with
-`fail.operation_text`, `fail.path_text` and `fail.message_text`.
-
 ### Writing a library
 
-The same three rules, from the other side:
-
-1. **Take `status`, return the value.** No result struct, no error type of
-   your own: return zero or empty after a failure.
-2. **Pass the same status to everything you call.** A failure from `fs` or
-   `json` reaches your caller with its own operation, path and reason; there is
-   nothing to translate. Record your own failures one of three ways:
-   `fail.invalid(status, "config", path, "port out of range")` for bad input,
-   `fail.at(status, fail.Kind.InvalidInput, "read config", "expected '='",
-   offset)` for a place in the input, and `fail.set(status, fail.make(kind,
-   operation, path, message))` for anything else. Native codes become
-   failures with `io.from_linux` and its siblings.
-3. **Guard with `if status.failed { return }` only before work that does not
-   take the status:** raw system calls, writes into caller memory, loops that
-   only end on data. A function made only of status-taking calls needs no
-   check at all.
+1. **Return `T!E`.** System work fails with `io.IoErr`; decoders fail with
+   `parse.ParseErr` and the byte offset. A module whose failures mean
+   something of their own declares an enum for them, such as `flags.ArgsErr`
+   or `text_edits.EditErr`. A core module that cannot use `std/io`, such as a
+   crypto primitive, fails with a bare `!`.
+2. **Pass failures up with `try`.** A failure from `fs` or `json` reaches your
+   caller unchanged; there is nothing to translate. Fail with your own with
+   `fail .InvalidInput` or `fail .Invalid(offset)`. A native error code
+   becomes an `io.IoErr` with `io.linux_err` and its siblings.
+3. **A builder keeps its first failure.** A writer into fixed storage
+   (`fmt.Buffer`, the HTML and JSON writers) does nothing after a write does
+   not fit, and its `finish` fails once at the end, so the writes read
+   straight through.
 
 ```dyn
-pub fn unpack(arena: *mem.Arena, status: *fail.Status, data: []const u8, limit: usize) []const u8 {
-  inflated := deflate.inflate(arena, status, data)
+pub fn unpack(arena: *mem.Arena, data: []const u8, limit: usize) []const u8!parse.ParseErr {
+  inflated := try deflate.inflate(arena, data)
   if inflated.value.len > limit {
-    fail.invalid(status, "unpack", "", "the data is larger than the limit")
+    fail .TooLarge(limit)
   }
   return inflated.value
 }
@@ -310,22 +267,16 @@ Other outcomes are values, not failures:
   gives the zero value.
 - **A broken invariant** is `#panic`. There is no recovery.
 
-A scanner takes the status like any other call, so a loop over it reads
-straight through and checks once at the end. A failure also sets `ended`, so
-the loop stops either way:
+A scanner loop passes a failure up with `try` and stops at `ended`:
 
 ```dyn
-status: fail.Status
 reader := bufio.reader(input, storage[..])
 for {
-  line := bufio.read_line(&status, &reader)
+  line := try bufio.read_line(&reader)
   if reader.ended {
     break
   }
   apply(line)
-}
-if status.failed {
-  report(status.failure)
 }
 ```
 

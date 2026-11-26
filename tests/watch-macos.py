@@ -12,17 +12,14 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 NATIVE = platform.system() == 'Darwin' and platform.machine() == 'arm64'
 SOURCE = r'''use watch "./watch"
-use "std/fail"
 use io "std/io"
 use time "std/time"
 use bytes "std/bytes"
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn stage(name: []const u8) { io.println("{}",name) }
 fn await_event(state: *watch.Watcher, id: i32, name: []const u8, mask: u32, renamed: bool) {
-  status: fail.Status
   for attempt in 0..1500 {
-    result := watch.next(&status, state)
-    require(!status.failed,"event error")
+    result := watch.next(state) catch { #panic("event error") }
     if !state.ended && result.watch == id && (result.mask & mask) != 0 && bytes.equal(result.name,name) {
       if renamed { require(result.cookie == 0 && result.rescan && state.rescan_required,"rename rescan") }
       return
@@ -32,36 +29,33 @@ fn await_event(state: *watch.Watcher, id: i32, name: []const u8, mask: u32, rena
   #panic("event timed out")
 }
 fn added(state: *watch.Watcher, path: []const u8) i32 {
-  status: fail.Status
-  id := watch.add(&status, state, path, watch.Changes)
-  require(!status.failed,"add")
-  return id
+  return watch.add(state, path, watch.Changes) catch { #panic("add") }
 }
 fn rejected(state: *watch.Watcher, path: []const u8) bool {
-  status: fail.Status
-  _ = watch.add(&status, state, path, watch.Changes)
-  return status.failed
+  _ = watch.add(state, path, watch.Changes) catch { return true }
+  return false
 }
 fn removed(state: *watch.Watcher, id: i32) bool {
-  status: fail.Status
-  watch.remove(&status, state, id)
-  return !status.failed
+  watch.remove(state, id) catch { return false }
+  return true
+}
+fn next_fails(state: *watch.Watcher) bool {
+  _ = watch.next(state) catch { return true }
+  return false
+}
+fn open_fails(storage: []u8) bool {
+  failed := watch.open(storage) catch { return true }
+  watch.close(&failed)
+  return false
 }
 fn main() {
   watch.audit_callbacks()
   empty := watch.Watcher{}
   watch.close(&empty)
-  unopened: fail.Status
-  _ = watch.next(&unopened, &empty)
-  require(unopened.failed,"default next")
+  require(next_fails(&empty),"default next")
   storage: [1024]u8
-  short: fail.Status
-  failed := watch.open(&short, storage[..271])
-  watch.close(&failed)
-  require(short.failed,"short buffer")
-  status: fail.Status
-  opened := watch.open(&status, storage[..])
-  require(!status.failed,"FSEvents open")
+  require(open_fails(storage[..271]),"short buffer")
+  opened := watch.open(storage[..]) catch { #panic("FSEvents open") }
   defer { watch.close(&opened) }
   require(rejected(&opened,"missing-directory"),"missing path")
   require(rejected(&opened,"existing"),"file path")
@@ -86,16 +80,14 @@ fn main() {
   stage("removed")
   await_event(&opened,other,"third",watch.Create,false)
   for attempt in 0..50 {
-    result := watch.next(&status, &opened)
-    require(!status.failed,"after remove")
+    result := watch.next(&opened) catch { #panic("after remove") }
     require(opened.ended || result.watch != current,"removed watch delivery")
     time.sleep(time.Millisecond*10)
   }
   stage("close")
   // Each close invalidates pending callbacks before freeing/reusing contexts.
   for iteration in 0..16 {
-    pending := watch.open(&status, storage[..])
-    require(!status.failed,"pending open")
+    pending := watch.open(storage[..]) catch { #panic("pending open") }
     _ = added(&pending,".")
     time.sleep(time.Millisecond*5)
     watch.close(&pending)
@@ -111,15 +103,11 @@ fn main() {
 AUDIT = r'''
 struct Next { event: Event, found: bool }
 fn audit_next(watcher: *Watcher) Next {
-  status: fail.Status
-  item := next(&status, watcher)
-  if status.failed { #panic("audit next") }
+  item := next(watcher) catch { #panic("audit next") }
   return Next{ event: item, found: !watcher.ended }
 }
 fn audit_path(storage: []u8, text: []const u8) *const u8 {
-  status: fail.Status
-  path := c.string_into(&status, storage, text)
-  if status.failed { #panic("audit path") }
+  path := c.string_into(storage, text) catch { #panic("audit path") }
   return path
 }
 pub fn audit_callbacks() {

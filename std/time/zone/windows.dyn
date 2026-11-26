@@ -2,7 +2,6 @@ use native_windows "std/os/windows"
 #target(kernel: windows)
 
 use io "std/io"
-use "std/fail"
 use utf8 "std/unicode/utf8"
 use utf16 "std/unicode/utf16"
 
@@ -14,9 +13,10 @@ fn read_link(_path: []const u8, _storage: []u8) isize {
   return -1
 }
 
-fn platform_load(_arena: *mem.Arena, status: *fail.Status, name: []const u8) Zone {
-  fail.set(status, fail.make(fail.Kind.Unsupported, "load zone", name, "Windows has no zoneinfo database"))
-  return Zone{}
+// Windows has no zoneinfo database.
+fn platform_load(_arena: *mem.Arena, name: []const u8) Zone!io.IoErr {
+  _ = name
+  fail .Unsupported
 }
 
 fn word(data: []const u8, at: usize) u16 {
@@ -61,12 +61,10 @@ fn windows_rule(data: []const u8, at: usize) Rule {
 // DYNAMIC_TIME_ZONE_INFORMATION: Bias, StandardName[32], StandardDate,
 // StandardBias, DaylightName[32], DaylightDate, DaylightBias,
 // TimeZoneKeyName[128], DynamicDaylightTimeDisabled. Biases are minutes west.
-fn platform_system(arena: *mem.Arena, status: *fail.Status) Zone {
+fn platform_system(arena: *mem.Arena) Zone!io.IoErr {
   data: [432]u8
   if zone_information(&data[0]) == 4294967295 {
-    code := #cast(isize, native_windows.last_error_raw())
-    fail.set(status, io.from_windows("read system zone", "", code))
-    return Zone{}
+    fail io.windows_err(#cast(isize, native_windows.last_error_raw()))
   }
   bias := long(data[..], 0)
   zone := Zone{ name: name(arena, data[..], 172, 128), has_rule: true }

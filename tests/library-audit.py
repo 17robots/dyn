@@ -8,7 +8,6 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get("DYN", ROOT / "build/dyn-release")).resolve())
 CASES = {
     'json-format': r'''
-use "std/fail"
 use json "std/encoding/json"
 use memory "std/mem"
 use fmt "std/fmt"

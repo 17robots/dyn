@@ -1,4 +1,3 @@
-use "std/fail"
 use dynlib "std/dynlib"
 use io "std/io"
 use software "std/ui/software"
@@ -36,25 +35,13 @@ pub struct BitmapView { pixels: []const u8, width: i32, height: i32, stride: usi
 // Unscaled metrics from a live scalable FT_Face. Faces and their font bytes
 // remain caller-owned; variation changes can change these values.
 pub struct FaceMetrics { units_per_em: u16, ascent: i16, descent: i16, height: i16, glyph_count: u32, face_count: u32, face_index: u32 }
-pub fn face_metrics(status: *fail.Status, face: rawptr) FaceMetrics {
-  if status == nil { return face_metrics(&fail.Status{}, face) }
-  if status.failed { return FaceMetrics{} }
-  if face==nil {
-    ft_failed(status, fail.Kind.InvalidInput, "face metrics", 0)
-    return FaceMetrics{}
-  }
+pub fn face_metrics(face: rawptr) FaceMetrics!io.IoErr {
+  if face==nil { fail .InvalidInput }
   prefix:=#cast(*FacePrefix, face)
-  if (prefix.face_flags&1)==0 || prefix.units_per_em==0 {
-    ft_failed(status, fail.Kind.Unsupported, "face metrics", 0)
-    return FaceMetrics{}
-  }
-  if prefix.num_glyphs<0 || prefix.num_faces<=0 || prefix.face_index<0 {
-    ft_failed(status, fail.Kind.InvalidState, "face metrics", 0)
-    return FaceMetrics{}
-  }
+  if (prefix.face_flags&1)==0 || prefix.units_per_em==0 { fail .Unsupported }
+  if prefix.num_glyphs<0 || prefix.num_faces<=0 || prefix.face_index<0 { fail .InvalidInput }
   if #cast(u64, prefix.num_glyphs)>4294967295 || #cast(u64, prefix.num_faces)>4294967295 || #cast(u64, prefix.face_index)>4294967295 {
-    ft_failed(status, fail.Kind.Overflow, "face metrics", 0)
-    return FaceMetrics{}
+    fail .Capacity
   }
   return FaceMetrics{units_per_em:prefix.units_per_em, ascent:prefix.ascender, descent:prefix.descender, height:prefix.height, glyph_count:#cast(u32, prefix.num_glyphs), face_count:#cast(u32, prefix.num_faces), face_index:#cast(u32, prefix.face_index)}
 }
@@ -62,73 +49,44 @@ pub fn face_metrics(status: *fail.Status, face: rawptr) FaceMetrics {
 // ABI accessor for the public FreeType face/glyph records. Returned coverage is
 // borrowed until the next load/render on this face. Normal gray8 only; other
 // bitmap pixel modes or negative-pitch storage return Unsupported.
-pub fn bitmap(status: *fail.Status, face: rawptr) BitmapView {
-  if status == nil { return bitmap(&fail.Status{}, face) }
-  if status.failed { return BitmapView{} }
-  if face == nil {
-    ft_failed(status, fail.Kind.InvalidInput, "bitmap", 0)
-    return BitmapView{}
-  }
+pub fn bitmap(face: rawptr) BitmapView!io.IoErr {
+  if face == nil { fail .InvalidInput }
   prefix := #cast(*FacePrefix, face)
-  if prefix.glyph == nil {
-    ft_failed(status, fail.Kind.InvalidState, "bitmap", 0)
-    return BitmapView{}
-  }
+  if prefix.glyph == nil { fail .InvalidInput }
   slot := #cast(*SlotPrefix, prefix.glyph)
   value := slot.bitmap
-  if value.width > 2147483647 || value.rows > 2147483647 {
-    ft_failed(status, fail.Kind.Overflow, "bitmap", 0)
-    return BitmapView{}
-  }
+  if value.width > 2147483647 || value.rows > 2147483647 { fail .Capacity }
   result := BitmapView{width:#cast(i32, value.width), height:#cast(i32, value.rows), left:slot.bitmap_left, top:slot.bitmap_top, advance_x:slot.advance.x, advance_y:slot.advance.y}
   if value.width == 0 || value.rows == 0 { return result }
   if slot.format != 0x62697473 || value.pixel_mode != 2 || value.num_grays != 256 || value.pitch < 0 || #cast(u32, value.pitch) < value.width || value.buffer == nil {
-    ft_failed(status, fail.Kind.Unsupported, "bitmap", 0)
-    return BitmapView{}
+    fail .Unsupported
   }
   stride := #cast(usize, value.pitch)
   width := #cast(usize, value.width)
-  if (value.rows-1) > (#max(usize)-width)/stride {
-    ft_failed(status, fail.Kind.Overflow, "bitmap", 0)
-    return BitmapView{}
-  }
+  if (value.rows-1) > (#max(usize)-width)/stride { fail .Capacity }
   result.stride = stride
   result.pixels = #slice(value.buffer, (value.rows-1)*stride+width)
   return result
 }
-pub fn open(status: *fail.Status, font: *Font, api: Api, bytes: []const u8, index: u32, pixels: u32) {
-  if status == nil {
-    open(&fail.Status{}, font, api, bytes, index, pixels)
-    return
-  }
-  if status.failed { return }
-  if font.library != nil || font.face != nil {
-    ft_failed(status, fail.Kind.InvalidState, "open", 0)
-    return
-  }
+pub fn open(font: *Font, api: Api, bytes: []const u8, index: u32, pixels: u32) !io.IoErr {
+  if font.library != nil || font.face != nil { fail .InvalidInput }
   if bytes.len == 0 || #cast(u64, bytes.len) > #cast(u64, (~#cast(ULong, 0))>>1) || pixels == 0 || #cast(u64, index) > #cast(u64, (~#cast(ULong, 0))>>1) {
-    ft_failed(status, fail.Kind.InvalidInput, "open", 0)
-    return
+    fail .InvalidInput
   }
   library: rawptr
   error := api.init(&library)
-  if error != 0 {
-    ft_failed(status, fail.Kind.System, "open", error)
-    return
-  }
+  if error != 0 { fail io.IoErr.System(#cast(isize, error)) }
   face: rawptr
   error = api.new_memory_face(library, &bytes[0], #cast(Long, bytes.len), #cast(Long, index), &face)
   if error != 0 {
     _ = api.done(library)
-    ft_failed(status, fail.Kind.System, "open", error)
-    return
+    fail io.IoErr.System(#cast(isize, error))
   }
   error = api.set_pixel_sizes(face, 0, pixels)
   if error != 0 {
     _ = api.done_face(face)
     _ = api.done(library)
-    ft_failed(status, fail.Kind.System, "open", error)
-    return
+    fail io.IoErr.System(#cast(isize, error))
   }
   font.* = Font{api:api, library:library, face:face, bytes:bytes}
 }
@@ -144,92 +102,69 @@ pub fn close(font: *Font) {
 // Stable adapter address; font and its borrowed bytes outlive rendering.
 // baseline is relative to the pen; set to zero for baseline-positioned glyphs.
 // glyph_ids selects shaped glyph IDs instead of Unicode code points.
-pub struct Adapter { font: *Font, baseline: i32, line_height: i32, glyph_ids: bool, kind: fail.Kind, error: isize }
+// failed records the first failure, in failure: InvalidInput for no font or
+// line height, Capacity for a glyph outside i32, System with FreeType's code.
+pub struct Adapter { font: *Font, baseline: i32, line_height: i32, glyph_ids: bool, failed: bool, failure: io.IoErr }
+fn adapter_failed(adapter: *Adapter, err: io.IoErr) software.Glyph {
+  if !adapter.failed {
+    adapter.failed = true
+    adapter.failure = err
+  }
+  return software.Glyph{width:-1}
+}
 fn glyph(data: rawptr, codepoint: u32) software.Glyph {
   adapter := #cast(*Adapter, data)
-  if adapter.font == nil || adapter.font.face == nil {
-    adapter.kind = fail.Kind.InvalidState
-    return software.Glyph{width:-1}
-  }
+  if adapter.font == nil || adapter.font.face == nil { return adapter_failed(adapter, io.IoErr.InvalidInput) }
   index := codepoint
   if !adapter.glyph_ids {
     index = adapter.font.api.char_index(adapter.font.face, #cast(ULong, codepoint))
   }
   error := adapter.font.api.load_glyph(adapter.font.face, index, LoadRender)
-  if error != 0 {
-    adapter.kind = fail.Kind.System
-    adapter.error = error
-    return software.Glyph{width:-1}
-  }
-  rendering: fail.Status
-  value := bitmap(&rendering, adapter.font.face)
-  if rendering.failed {
-    adapter.kind = rendering.failure.kind
-    return software.Glyph{width:-1}
-  }
+  if error != 0 { return adapter_failed(adapter, io.IoErr.System(#cast(isize, error))) }
+  value := bitmap(adapter.font.face) catch err { return adapter_failed(adapter, err) }
   advance := value.advance_x/64
   offset := #cast(i64, adapter.baseline)-#cast(i64, value.top)
   if advance < 0 || advance > 2147483647 || offset < -2147483648 || offset > 2147483647 {
-    adapter.kind = fail.Kind.Overflow
-    return software.Glyph{width:-1}
+    return adapter_failed(adapter, io.IoErr.Capacity)
   }
   return software.Glyph{pixels:value.pixels, width:value.width, height:value.height, stride:value.stride, x_offset:value.left, y_offset:#cast(i32, offset), advance:#cast(i32, advance)}
 }
 pub fn renderer(adapter: *Adapter) software.Font {
   if adapter.font == nil || adapter.font.face == nil || adapter.line_height <= 0 {
-    adapter.kind = fail.Kind.InvalidInput
+    _ = adapter_failed(adapter, io.IoErr.InvalidInput)
     return software.Font{}
   }
   return software.Font{data:adapter, glyph:glyph, line_height:adapter.line_height}
 }
 
-fn missing(status: *fail.Status, name: []const u8) Api {
-  fail.set(status, fail.make(fail.Kind.NotFound, "load FreeType", name, "the library lacks this function"))
-  return Api{}
+fn missing(name: []const u8) Api!io.IoErr {
+  fail .NotFound
 }
 fn symbol(handle: dynlib.Handle, name: []const u8) rawptr {
-  status: fail.Status
-  return dynlib.symbol(&status, handle, name)
+  return dynlib.symbol(handle, name) catch nil
 }
 // A missing function fails with NotFound, its name as the failure's path.
-pub fn load(status: *fail.Status, handle: dynlib.Handle) Api {
-  if status == nil { return load(&fail.Status{}, handle) }
-  if status.failed { return Api{} }
+pub fn load(handle: dynlib.Handle) Api!io.IoErr {
   api := Api{}
   api.init = #cast(fn(*rawptr)i32, symbol(handle, "FT_Init_FreeType"))
-  if api.init == nil { return missing(status, "FT_Init_FreeType") }
+  if api.init == nil { return try missing("FT_Init_FreeType") }
   api.done = #cast(fn(rawptr)i32, symbol(handle, "FT_Done_FreeType"))
-  if api.done == nil { return missing(status, "FT_Done_FreeType") }
+  if api.done == nil { return try missing("FT_Done_FreeType") }
   api.new_memory_face = #cast(fn(rawptr, *const u8, Long, Long, *rawptr)i32, symbol(handle, "FT_New_Memory_Face"))
-  if api.new_memory_face == nil { return missing(status, "FT_New_Memory_Face") }
+  if api.new_memory_face == nil { return try missing("FT_New_Memory_Face") }
   api.done_face = #cast(fn(rawptr)i32, symbol(handle, "FT_Done_Face"))
-  if api.done_face == nil { return missing(status, "FT_Done_Face") }
+  if api.done_face == nil { return try missing("FT_Done_Face") }
   api.set_pixel_sizes = #cast(fn(rawptr, u32, u32)i32, symbol(handle, "FT_Set_Pixel_Sizes"))
-  if api.set_pixel_sizes == nil { return missing(status, "FT_Set_Pixel_Sizes") }
+  if api.set_pixel_sizes == nil { return try missing("FT_Set_Pixel_Sizes") }
   api.char_index = #cast(fn(rawptr, ULong)u32, symbol(handle, "FT_Get_Char_Index"))
-  if api.char_index == nil { return missing(status, "FT_Get_Char_Index") }
+  if api.char_index == nil { return try missing("FT_Get_Char_Index") }
   api.load_glyph = #cast(fn(rawptr, u32, i32)i32, symbol(handle, "FT_Load_Glyph"))
-  if api.load_glyph == nil { return missing(status, "FT_Load_Glyph") }
+  if api.load_glyph == nil { return try missing("FT_Load_Glyph") }
   api.render_glyph = #cast(fn(rawptr, u32)i32, symbol(handle, "FT_Render_Glyph"))
-  if api.render_glyph == nil { return missing(status, "FT_Render_Glyph") }
+  if api.render_glyph == nil { return try missing("FT_Render_Glyph") }
   api.kerning = #cast(fn(rawptr, u32, u32, u32, *Vector)i32, symbol(handle, "FT_Get_Kerning"))
-  if api.kerning == nil { return missing(status, "FT_Get_Kerning") }
+  if api.kerning == nil { return try missing("FT_Get_Kerning") }
   return api
 }
 
 // Records a FreeType failure: kind, and FreeType's error code in native.
-fn ft_failed(status: *fail.Status, kind: fail.Kind, operation: []const u8, error: isize) {
-  message: []const u8 = "FreeType failed"
-  if kind == fail.Kind.InvalidState {
-    message = "the face is not ready"
-  } else if kind == fail.Kind.InvalidInput {
-    message = "invalid argument"
-  } else if kind == fail.Kind.Unsupported {
-    message = "unsupported face or bitmap format"
-  } else if kind == fail.Kind.Overflow {
-    message = "too large"
-  }
-  failure := fail.make(kind, operation, "", message)
-  failure.native = error
-  fail.set(status, failure)
-}

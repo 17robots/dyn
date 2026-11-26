@@ -1,14 +1,13 @@
 use "std/encoding/binary"
 use format "std/fmt"
-use "std/fail"
 use utf8 "std/unicode/utf8"
 
 // JSON output into bounded caller storage, without a Value tree. Separators
 // are automatic: write a key before each object member, then its value.
-// Failures go on the writer's status and are sticky: a write that does not fit
-// fails it with Capacity; invalid UTF-8, a key outside an object, a value
-// without its key, nesting past MaxDepth or a number JSON cannot hold fail it
-// with InvalidInput. Later writes do nothing. Check the status once at the end.
+// Failures are sticky: after a write that does not fit, invalid UTF-8, a key
+// outside an object, a value without its key, nesting past MaxDepth or a
+// number JSON cannot hold, later writes do nothing. finish reports it once at
+// the end: Capacity for a write that did not fit, InvalidInput for the rest.
 pub const MaxDepth: usize = 64
 
 pub struct Writer {
@@ -19,25 +18,30 @@ pub struct Writer {
   depth: usize,
   // An object member's key was written and its value is due.
   keyed: bool,
+  // Misuse or a value JSON cannot hold stopped the writer.
+  invalid: bool,
 }
 
-pub fn writer(status: *fail.Status, storage: []u8) Writer {
-  return Writer{ buffer: format.buffer(status, storage) }
+pub fn writer(storage: []u8) Writer {
+  return Writer{ buffer: format.buffer(storage) }
 }
 
 fn failed(target: *const Writer) bool {
-  return target.buffer.broken || (target.buffer.status != nil && target.buffer.status.failed)
+  return target.buffer.broken
 }
-// Records misuse or a value JSON cannot hold, and stops the writer even when
-// its status is nil.
+// Records misuse or a value JSON cannot hold, and stops the writer. message
+// says what went wrong, for a reader of this code.
 fn rejected(target: *Writer, message: []const u8) {
+  _ = message
   target.buffer.broken = true
-  fail.invalid(target.buffer.status, "write JSON", "", message)
+  target.invalid = true
 }
 
-// The JSON written so far, or empty when failed or a container is still open.
-pub fn output(target: *const Writer) []const u8 {
-  if failed(target) || target.depth != 0 || target.keyed { return target.buffer.data[..0] }
+// The JSON written. Fails with Capacity when a write did not fit, and with
+// InvalidInput after misuse or while a container or member is still open.
+pub fn finish(target: *const Writer) []const u8!stream.IoErr {
+  if target.invalid || target.depth != 0 || target.keyed { fail .InvalidInput }
+  if target.buffer.broken { fail .Capacity }
   return format.bytes(&target.buffer)
 }
 

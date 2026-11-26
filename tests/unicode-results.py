@@ -15,33 +15,46 @@ def literal(value):
     return '"' + ''.join('\\x%02x' % byte for byte in value) + '"'
 
 
-SOURCE = '''use "std/fail"
-use text "std/unicode/text"
+SOURCE = '''use text "std/unicode/text"
 use mem "std/mem"
 use bytes "std/bytes"
+use parse "std/parse"
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
-struct Converted { value: []u8, offset: usize, failure: fail.Failure }
-struct Grapheme { value: []const u8, found: bool, offset: usize, failure: fail.Failure }
+enum Kind { Ok, InvalidInput, Capacity, Unsupported }
+struct Failure { kind: Kind, offset: usize }
+fn failure_of(err: parse.ParseErr) Failure {
+ case err {
+  .Invalid(at) => { return Failure{ kind: Kind.InvalidInput, offset: at } }
+  .TooLarge(at) => { return Failure{ kind: Kind.Capacity, offset: at } }
+  .Unsupported(at) => { return Failure{ kind: Kind.Unsupported, offset: at } }
+ }
+}
+struct Converted { value: []u8, offset: usize, failure: Failure }
+struct Grapheme { value: []const u8, found: bool, offset: usize, failure: Failure }
 fn next_grapheme(g: *text.Graphemes) Grapheme {
- status: fail.Status
- r := text.next_grapheme(&status, g)
- return Grapheme{ value: r, found: !g.ended, offset: status.failure.offset, failure: status.failure }
+ r := text.next_grapheme(g) catch err {
+  failure := failure_of(err)
+  return Grapheme{ found: !g.ended, offset: failure.offset, failure: failure }
+ }
+ return Grapheme{ value: r, found: !g.ended }
 }
 fn converted(r: Converted, expected: []const u8) {
- require(r.failure.kind == fail.Kind.Ok && bytes.equal(r.value, expected), "conversion golden")
- require(r.failure.kind == fail.Kind.Ok && r.offset == 0, "success diagnostics")
+ require(r.failure.kind == Kind.Ok && bytes.equal(r.value, expected), "conversion golden")
+ require(r.failure.kind == Kind.Ok && r.offset == 0, "success diagnostics")
+}
+fn failed(err: parse.ParseErr) Converted {
+ failure := failure_of(err)
+ return Converted{ offset: failure.offset, failure: failure }
 }
 fn convert(a: *mem.Arena, input: []const u8, mode: usize) Converted {
- status: fail.Status
- value: []u8
  if mode == 4 {
-  value = text.case_fold(a, &status, input)
- } else {
-  form := text.Form.NFD
-  if mode == 1 { form = text.Form.NFC } else if mode == 2 { form = text.Form.NFKD } else if mode == 3 { form = text.Form.NFKC }
-  value = text.normalize(a, &status, input, form)
+  folded := text.case_fold(a, input) catch err { return failed(err) }
+  return Converted{ value: folded }
  }
- return Converted{ value: value, offset: status.failure.offset, failure: status.failure }
+ form := text.Form.NFD
+ if mode == 1 { form = text.Form.NFC } else if mode == 2 { form = text.Form.NFKD } else if mode == 3 { form = text.Form.NFKC }
+ value := text.normalize(a, input, form) catch err { return failed(err) }
+ return Converted{ value: value }
 }
 fn good(input: []const u8, expected: []const u8, mode: usize) {
  backing: [8192+mem.ArenaBufferOverhead]u8
@@ -92,14 +105,14 @@ fn bad(input: []const u8, off: usize) {
   snapshot: [256+mem.ArenaBufferOverhead]u8
   _ = mem.copy(snapshot[..], backing[..])
   r := convert(a, input, mode)
-  require(r.failure.kind != fail.Kind.Ok && r.value.len == 0 && r.failure.kind == fail.Kind.InvalidInput && r.offset == off, "invalid diagnostics")
+  require(r.failure.kind != Kind.Ok && r.value.len == 0 && r.failure.kind == Kind.InvalidInput && r.offset == off, "invalid diagnostics")
   require(mem.arena_mark(a) == mem.ArenaHeader + 7, "invalid rollback")
   require(bytes.equal(backing[..], snapshot[..]), "validation wrote arena")
   empty: [mem.ArenaBufferOverhead]u8
   pad := (16-(#cast(usize,&empty[0])&15))&15
   full := mem.arena_from_buffer(empty[pad..pad+mem.ArenaHeader])
   r = convert(full, input, mode)
-  require(r.failure.kind != fail.Kind.Ok && r.offset == off && r.failure.kind == fail.Kind.InvalidInput && r.value.len == 0 && mem.arena_mark(full) == mem.ArenaHeader, "validate before allocation")
+  require(r.failure.kind != Kind.Ok && r.offset == off && r.failure.kind == Kind.InvalidInput && r.value.len == 0 && mem.arena_mark(full) == mem.ArenaHeader, "validate before allocation")
  }
 }
 fn overlap(start: usize, mode: usize) {
@@ -113,21 +126,21 @@ fn overlap(start: usize, mode: usize) {
  payload := a.data[mem.ArenaHeader..]
  _ = mem.copy(snapshot[..], payload)
  r := convert(a, a.data[at..at+4], mode)
- require(r.failure.kind != fail.Kind.Ok && r.value.len == 0 && r.failure.kind == fail.Kind.InvalidInput && r.offset == 0, "overlap diagnostics")
+ require(r.failure.kind != Kind.Ok && r.value.len == 0 && r.failure.kind == Kind.InvalidInput && r.offset == 0, "overlap diagnostics")
  require(mem.arena_mark(a) == mem.ArenaHeader + 8 && bytes.equal(payload, snapshot[..payload.len]), "overlap preserved bytes and mark")
 }
 fn end(r: Grapheme) {
- require(!r.found && r.value.len == 0 && r.failure.kind == fail.Kind.Ok && r.offset == 0, "ordinary EOF")
+ require(!r.found && r.value.len == 0 && r.failure.kind == Kind.Ok && r.offset == 0, "ordinary EOF")
 }
 fn cluster(r: Grapheme, expected: []const u8) {
- require(r.found && bytes.equal(r.value, expected) && r.failure.kind == fail.Kind.Ok && r.offset == 0, "grapheme value")
+ require(r.found && bytes.equal(r.value, expected) && r.failure.kind == Kind.Ok && r.offset == 0, "grapheme value")
 }
 fn sticky(input: []const u8, off: usize, start: usize) {
  g := text.graphemes(input)
  g.offset = start
  for repeat in 0..3 {
   r := next_grapheme(&g)
-  require(r.failure.kind != fail.Kind.Ok && r.value.len == 0 && r.failure.kind == fail.Kind.InvalidInput && r.offset == off, "sticky error diagnostics")
+  require(r.failure.kind != Kind.Ok && r.value.len == 0 && r.failure.kind == Kind.InvalidInput && r.offset == off, "sticky error diagnostics")
   require(g.offset == start && g.failed && g.error_offset == off, "sticky iterator state")
  }
 }
@@ -188,7 +201,7 @@ overlap(10, 4)
     program += 'cluster(next_grapheme(&partial), "a")\n'
     program += '''for repeat in 0..3 {
  r := next_grapheme(&partial)
- require(r.failure.kind != fail.Kind.Ok && r.value.len == 0 && r.failure.kind == fail.Kind.InvalidInput && r.offset == 2 && partial.offset == 1, "sticky after success")
+ require(r.failure.kind != Kind.Ok && r.value.len == 0 && r.failure.kind == Kind.InvalidInput && r.offset == 2 && partial.offset == 1, "sticky after success")
 }
 '''
     for raw, off, start in [(b'\xff', 0, 0), (b'a\xff', 1, 0),
@@ -217,16 +230,14 @@ def main():
                 build(work, mode, tree)
                 subprocess.run([str(work / 'run')], check=True, capture_output=True, timeout=30)
                 print(f'PASS Unicode {mode} {"tree" if tree else "SSA"}: {goldens} goldens, {invalid} invalid UTF-8 cases × 5 operations; 120 chained conversions, overlap, zero, grapheme EOF/sticky', flush=True)
-                for operation in ['text.case_fold(a, &status, "ABCD")', 'text.normalize(a, &status, "ABCD", text.Form.NFD)']:
+                for operation in ['text.case_fold(a, "ABCD")', 'text.normalize(a, "ABCD", text.Form.NFD)']:
                     (work / 'main.dyn').write_text('''use text "std/unicode/text"
     use mem "std/mem"
-    use "std/fail"
     fn main() {
-     status: fail.Status
      backing: [1+mem.ArenaBufferOverhead]u8
      pad := (16-(#cast(usize,&backing[0])&15))&15
      a := mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+1])
-     _ = OPERATION
+     _ = OPERATION catch { #panic("failed") }
     }
     '''.replace('OPERATION', operation))
                     build(work, mode, tree)

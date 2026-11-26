@@ -1,9 +1,10 @@
-use "std/fail"
+use parse "std/parse"
 use mem "std/mem"
 use utf8 "std/unicode/utf8"
 use bytes "std/bytes"
 pub const UnicodeVersion: []const u8 = "17.0.0"
-struct Result { written: usize, error: fail.Kind, ok: bool }
+// error: true for invalid input, false for output that did not fit.
+struct Result { written: usize, error: bool, ok: bool }
 pub enum Form { NFD, NFC, NFKD, NFKC }
 pub enum Category { Cn, Lu, Ll, Lt, Lm, Lo, Mn, Mc, Me, Nd, Nl, No, Pc, Pd, Ps, Pe, Pi, Pf, Po, Sm, Sc, Sk, So, Zs, Zl, Zp, Cc, Cf, Cs, Co }
 fn properties(codepoint: u32) u32 {
@@ -87,12 +88,12 @@ fn mapping(table: []const u32, codepoint: u32) []const u32 {
 // Locale-independent full default case folding, without normalization.
 // Overlap is rejected before writing. Other failures report a complete UTF-8 prefix.
 fn case_fold_into(destination: []u8, source: []const u8) Result {
-  if bytes.overlaps(destination, source) { return Result{ error: fail.Kind.InvalidInput } }
+  if bytes.overlaps(destination, source) { return Result{ error: true } }
   at: usize = 0
   written: usize = 0
   for at < source.len {
     decoded := utf8.decode(source, at)
-    if !decoded.valid { return Result{ written: written, error: fail.Kind.InvalidInput } }
+    if !decoded.valid { return Result{ written: written, error: true } }
     values := mapping(Folding[..], decoded.codepoint)
     scalar: [1]u32 = [decoded.codepoint]
     if values.len == 0 {
@@ -100,7 +101,7 @@ fn case_fold_into(destination: []u8, source: []const u8) Result {
     }
     for value in values {
       width := utf8.encode(destination[written..], value)
-      if width == 0 { return Result{ written: written, error: fail.Kind.Capacity } }
+      if width == 0 { return Result{ written: written, error: false } }
       written += width
     }
     at += decoded.width
@@ -133,11 +134,11 @@ fn compose(left: u32, right: u32) u32 {
 // one slot per fully decomposed scalar. Input/output/work must not overlap.
 // Errors may modify storage; written reports only the complete output prefix.
 fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32) Result {
-  if bytes.overlaps(destination, source) { return Result{ error: fail.Kind.InvalidInput } }
+  if bytes.overlaps(destination, source) { return Result{ error: true } }
   if work.len > 0 {
     workspace := #slice(#cast(*u8, &work[0]), work.len * 4)
     if bytes.overlaps(workspace, source) || bytes.overlaps(workspace, destination) {
-      return Result{ error: fail.Kind.InvalidInput }
+      return Result{ error: true }
     }
   }
   capacity := work.len / 2
@@ -151,7 +152,7 @@ fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32
   count: usize = 0
   for at < source.len {
     decoded := utf8.decode(source, at)
-    if !decoded.valid { return Result{ error: fail.Kind.InvalidInput } }
+    if !decoded.valid { return Result{ error: true } }
     scalar: [3]u32 = [decoded.codepoint, 0, 0]
     mapped := mapping(table, decoded.codepoint)
     if decoded.codepoint >= 44032 && decoded.codepoint < 55204 {
@@ -166,7 +167,7 @@ fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32
     } else if mapped.len == 0 {
       mapped = scalar[..1]
     }
-    if mapped.len > capacity - count { return Result{ error: fail.Kind.Capacity } }
+    if mapped.len > capacity - count { return Result{ error: false } }
     for value in mapped {
       values[count] = value
       count += 1
@@ -241,7 +242,7 @@ fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32
   written: usize = 0
   for scalar_value in values[..count] {
     width := utf8.encode(destination[written..], scalar_value)
-    if width == 0 { return Result{ written: written, error: fail.Kind.Capacity } }
+    if width == 0 { return Result{ written: written, error: false } }
     written += width
   }
   return Result{ written: written, ok: true }
@@ -264,15 +265,10 @@ fn invalid_utf8_offset(source: []const u8, start: usize) usize {
 }
 
 // Locale-independent full default case folding, without normalization, into arena.
-pub fn case_fold(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8 {
-  if status == nil { return case_fold(arena, &fail.Status{}, source) }
-  empty: []u8
-  if status.failed { return empty }
+// Invalid UTF-8 fails with Invalid at its offset.
+pub fn case_fold(arena: *mem.Arena, source: []const u8) []u8!parse.ParseErr {
   invalid := invalid_utf8_offset(source, 0)
-  if invalid != source.len {
-    fail.at(status, fail.Kind.InvalidInput, "convert text", "invalid UTF-8", invalid)
-    return empty
-  }
+  if invalid != source.len { fail parse.ParseErr.Invalid(invalid) }
   room := mem.arena_room(arena)
   capacity := 2 * source.len + 16
   if capacity > room {
@@ -287,10 +283,7 @@ pub fn case_fold(arena: *mem.Arena, status: *fail.Status, source: []const u8) []
       return space[..result.written]
     }
     mem.arena_rewind(arena, mark)
-    if result.error != fail.Kind.Capacity {
-      fail.set(status, fail.make(result.error, "convert text", "", "the text could not be converted"))
-      return empty
-    }
+    if result.error { fail parse.ParseErr.Invalid(result.written) }
     if capacity == room {
       #panic("arena exhausted: the output does not fit")
     }
@@ -303,15 +296,11 @@ pub fn case_fold(arena: *mem.Arena, status: *fail.Status, source: []const u8) []
 }
 
 // source in normalization form, into arena.
-pub fn normalize(arena: *mem.Arena, status: *fail.Status, source: []const u8, form: Form) []u8 {
-  if status == nil { return normalize(arena, &fail.Status{}, source, form) }
+// Invalid UTF-8 fails with Invalid at its offset.
+pub fn normalize(arena: *mem.Arena, source: []const u8, form: Form) []u8!parse.ParseErr {
   empty: []u8
-  if status.failed { return empty }
   invalid := invalid_utf8_offset(source, 0)
-  if invalid != source.len {
-    fail.at(status, fail.Kind.InvalidInput, "convert text", "invalid UTF-8", invalid)
-    return empty
-  }
+  if invalid != source.len { fail parse.ParseErr.Invalid(invalid) }
   // Each output byte needs eight work bytes beside it, plus alignment.
   room := mem.arena_room(arena)
   if room != #max(usize) {
@@ -344,10 +333,7 @@ pub fn normalize(arena: *mem.Arena, status: *fail.Status, source: []const u8, fo
       return allocation[..result.written]
     }
     mem.arena_rewind(arena, mark)
-    if result.error != fail.Kind.Capacity {
-      fail.set(status, fail.make(result.error, "convert text", "", "the text could not be converted"))
-      return empty
-    }
+    if result.error { fail parse.ParseErr.Invalid(result.written) }
     if capacity == room {
       #panic("arena exhausted: the output does not fit")
     }

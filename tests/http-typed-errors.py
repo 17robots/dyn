@@ -9,8 +9,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn')).resolve())
-PRELUDE = '''use "std/fail"
-use "std/html"
+PRELUDE = '''use "std/html"
 use "std/io"
 use "std/net/http"
 
@@ -31,11 +30,10 @@ CASES = {
   _ = http.bind(&typed)
   storage: [4]http.TypedRoute<App>
   router := http.typed_routes(storage[..], &app)
-  status: fail.Status
   http.add(&router, "GET", "/", for_app) catch { #panic("add route") }
   _ = http.bind_routes(&router)
   page_storage: [64]u8
-  page := html.writer(&status, page_storage[..])
+  page := html.writer(page_storage[..])
   html.markup(&page, html.trusted("<p>"))
   html.text(&page, "<script>")
 }
@@ -50,13 +48,12 @@ CASES = {
   app := App{}
   storage: [4]http.TypedRoute<App>
   router := http.typed_routes(storage[..], &app)
-  status: fail.Status
   http.add(&router, "GET", "/", for_other) catch { #panic("add route") }
 }
 ''', 'error'),
     'raw markup': ('''fn main() {
   page_storage: [64]u8
-  page := html.writer(status, page_storage[..])
+  page := html.writer(page_storage[..])
   html.markup(&page, "<p>")
 }
 ''', 'error'),

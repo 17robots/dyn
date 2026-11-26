@@ -1,4 +1,4 @@
-use "std/fail"
+use parse "std/parse"
 use mem "std/mem"
 use io "std/io"
 use utf8 "std/unicode/utf8"
@@ -33,17 +33,16 @@ fn step(cluster: Cluster, x: f64) f64 {
 // pair kerning. UAX #14 break opportunities and UAX #29 graphemes are reused.
 // Bidi reordering, OpenType substitutions and complex-script shaping belong to
 // the caller/provider (for example HarfBuzz), not this simple layout engine.
-pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: Font, requested: Options) Layout {
-  if status == nil { return build(arena, &fail.Status{}, source, font, requested) }
-  if status.failed { return Layout{} }
+// Invalid UTF-8, or a font that gives an invalid metric, fails with Invalid at
+// the offending byte; an invalid font or options with Invalid(0).
+pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Options) Layout!parse.ParseErr {
   options := requested
   if options.tab_columns == 0 {
     options.tab_columns = 4
   }
   if font.advance == nil || font.line_height <= 0 || options.width < 0 || options.tab_columns == 0 || options.tab_columns > 256 ||
     (options.alignment != Align.Left && options.alignment != Align.Center && options.alignment != Align.Right) {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "lay out text", "", "invalid font or options"))
-    return Layout{}
+    fail parse.ParseErr.Invalid(0)
   }
   mark := mem.arena_mark(arena)
   success := false
@@ -54,15 +53,13 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
   }
   text: []const u8
   if !options.no_normalize {
-    text = unicode.normalize(arena, status, source, unicode.Form.NFC)
-    if status.failed { return Layout{} }
+    text = try unicode.normalize(arena, source, unicode.Form.NFC)
   } else {
     copied := mem.push_array<u8>(arena, source.len)
     _ = mem.copy(copied, source)
     text = copied
   }
-  breaks := unicode.line_breaks(arena, status, text)
-  if status.failed { return Layout{} }
+  breaks := try unicode.line_breaks(arena, text)
   count := utf8.codepoint_count(text)
   work := mem.push_array<Glyph>(arena, count)
   clusters := mem.push_array<Cluster>(arena, count)
@@ -72,8 +69,7 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
   iterator := unicode.graphemes(text)
   for iterator.offset < text.len {
     start := iterator.offset
-    _ = unicode.next_grapheme(status, &iterator)
-    if status.failed { return Layout{} }
+    _ = try unicode.next_grapheme(&iterator)
     if iterator.ended { break }
     first := utf8.decode(text, start).codepoint
     cluster := Cluster{ start: start, end: iterator.offset, first: used, space: first == 32 || first == 9 || first == 0x200b,
@@ -87,10 +83,7 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
     }
     if cluster.tab {
       width := font.advance(font.data, 32)
-      if !valid_metric(width) || width < 0.0 {
-        fail.at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", start)
-        return Layout{}
-      }
+      if !valid_metric(width) || width < 0.0 { fail parse.ParseErr.Invalid(start) }
       cluster.advance = width * #cast(f64, options.tab_columns)
     } else if !cluster.hard && first != 0x200b {
       at := start
@@ -103,19 +96,13 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
           cp = 45
         }
         advance := font.advance(font.data, cp)
-        if !valid_metric(advance) || advance < 0.0 {
-          fail.at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", at)
-          return Layout{}
-        }
+        if !valid_metric(advance) || advance < 0.0 { fail parse.ParseErr.Invalid(at) }
         combining := unicode.combining_class(cp) != 0
         adjustment: f64 = 0.0
         if has_previous && !combining {
           adjustment = kern(font, previous, cp)
         }
-        if !valid_metric(adjustment) {
-          fail.at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", at)
-          return Layout{}
-        }
+        if !valid_metric(adjustment) { fail parse.ParseErr.Invalid(at) }
         cluster.advance += adjustment
         work[used] = Glyph{ codepoint: cp, start: cluster.start, end: cluster.end, x: cluster.advance }
         if !combining {
@@ -158,10 +145,7 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
       if has_previous && cluster.count > 0 && !cluster.soft {
         adjustment = kern(font, previous, cluster.first_cp)
       }
-      if !valid_metric(adjustment) {
-        fail.at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", cluster.start)
-        return Layout{}
-      }
+      if !valid_metric(adjustment) { fail parse.ParseErr.Invalid(cluster.start) }
       next_width := width + adjustment + step(cluster, width + adjustment)
       if !options.no_wrap && options.width > 0 && next_width > options.width && cursor > begin {
         if candidate > begin {
@@ -187,10 +171,7 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
           if has_previous {
             soft_adjustment = kern(font, previous, cluster.first_cp)
           }
-          if !valid_metric(soft_adjustment) {
-            fail.at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", cluster.start)
-            return Layout{}
-          }
+          if !valid_metric(soft_adjustment) { fail parse.ParseErr.Invalid(cluster.start) }
           break_width += cluster.advance + soft_adjustment
         }
         if options.width == 0 || break_width <= options.width {
@@ -218,10 +199,7 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
       if has_previous && cluster.count > 0 {
         adjustment = kern(font, previous, cluster.first_cp)
       }
-      if !valid_metric(adjustment) {
-        fail.at(status, fail.Kind.InvalidInput, "lay out text", "the font gave an invalid metric", cluster.start)
-        return Layout{}
-      }
+      if !valid_metric(adjustment) { fail parse.ParseErr.Invalid(cluster.start) }
       x += adjustment
       for j in 0..cluster.count {
         glyph := work[cluster.first + j]

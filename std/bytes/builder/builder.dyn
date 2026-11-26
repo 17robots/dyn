@@ -1,5 +1,4 @@
 use memory "std/mem"
-use "std/fail"
 
 // Byte and UTF-8 string construction share this byte-oriented builder. No UTF-8
 // validation is implied. A builder borrows storage; arena growth is explicit.
@@ -47,23 +46,14 @@ fn at_cursor(arena: *const memory.Arena, bytes: []const u8, extra: usize) bool {
   return #cast(usize, &bytes[0]) + bytes.len == cursor && block.data.len - block.offset >= extra
 }
 
-// Bounded append supports overlap/self-append. Fails with Capacity, writing
-// nothing, when source does not fit the storage left.
+// Bounded append supports overlap/self-append. Fails, writing nothing, when
+// source does not fit the storage left. A length past the storage panics.
 // Allocation: none; capacity is fixed until an explicit reserve or append_grow.
-pub fn append(status: *fail.Status, state: *Builder, source: []const u8) {
-  if status == nil {
-    append(&fail.Status{}, state, source)
-    return
-  }
-  if status.failed { return }
+pub fn append(state: *Builder, source: []const u8) ! {
   if state.length > state.storage.len {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "append", "", "builder length is past its storage"))
-    return
+    #panic("builder length is past its storage")
   }
-  if source.len > state.storage.len - state.length {
-    fail.set(status, fail.make(fail.Kind.Capacity, "append", "", "builder storage is full"))
-    return
-  }
+  if source.len > state.storage.len - state.length { fail }
   _ = memory.move(state.storage[state.length..], source)
   state.length += source.len
 }

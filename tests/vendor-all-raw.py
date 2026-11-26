@@ -75,26 +75,19 @@ cases = {
   storage: [131072]u8
   arena := mem.arena_from_buffer(storage[..])
   scaled: [16]u8
-  status: fail.Status
-  image.resize(arena, &status, input[..], 2, 2, scaled[..], 4, 4, 1, false)
-  if status.failed || mem.arena_used(arena) != 0 { #panic("arena wrapper coexistence") }
+  image.resize(arena, input[..], 2, 2, scaled[..], 4, 4, 1, false) catch { #panic("arena wrapper coexistence") }
+  if mem.arena_used(arena) != 0 { #panic("arena wrapper coexistence") }
   if scaled[0] != 33 || scaled[15] != 33 { #panic("arena pixels") }''',
-    'vulkan': '''status: fail.Status
-  library := dynlib.open(&status, "libvulkan.so.1", dynlib.Now)
-  if status.failed { #panic("loader") }
-  symbol := dynlib.symbol(&status, library, "vkEnumerateInstanceVersion")
-  if status.failed { #panic("procedure") }
+    'vulkan': '''library := dynlib.open("libvulkan.so.1", dynlib.Now) catch { #panic("loader") }
+  symbol := dynlib.symbol(library, "vkEnumerateInstanceVersion") catch { #panic("procedure") }
   version: u32 = 0
   if raw.vkEnumerateInstanceVersion(#cast(raw.Procedure_vkEnumerateInstanceVersion, symbol), &version) != raw.VK_SUCCESS || version == 0 { #panic("dispatch") }
-  dynlib.close(&status, &library)''',
-    'opengl': '''status: fail.Status
-  library := dynlib.open(&status, "libGL.so.1", dynlib.Now)
-  if status.failed { #panic("loader") }
-  symbol := dynlib.symbol(&status, library, "glGetError")
-  if status.failed { #panic("procedure") }
+  dynlib.close(&library) catch { #panic("close") }''',
+    'opengl': '''library := dynlib.open("libGL.so.1", dynlib.Now) catch { #panic("loader") }
+  symbol := dynlib.symbol(library, "glGetError") catch { #panic("procedure") }
   raw.glClear(record_clear, #cast(u32, raw.GL_COLOR_BUFFER_BIT))
   if recorded_mask != #cast(u32, raw.GL_COLOR_BUFFER_BIT) { #panic("dispatch") }
-  dynlib.close(&status, &library)''',
+  dynlib.close(&library) catch { #panic("close") }''',
 }
 cases['lua'] = r'''state := raw.luaL_newstate()
   if state == nil { #panic("state") }
@@ -234,13 +227,13 @@ try:
             module = manifest[name]['module']
             imports = 'use raw "vendor/' + module + '"\nuse "std/c"\n'
             if name in ('vulkan', 'opengl'):
-                imports += 'use "std/dynlib"\nuse "std/fail"\n#link("c")\n'
+                imports += 'use "std/dynlib"\n#link("c")\n'
             if name == 'sdl3':
                 imports += 'fn event_filter(data: rawptr, event: *raw.SDL_Event) bool {\n_ = event\nreturn data != nil\n}\n'
             if name == 'opengl':
                 imports += 'recorded_mask: u32 = 0\nfn record_clear(mask: u32) {\nrecorded_mask = mask\n}\n'
             if name == 'stb_image_resize':
-                imports += 'use "std/mem"\nuse "std/fail"\nuse image "vendor/stb/image_resize"\n'
+                imports += 'use "std/mem"\nuse image "vendor/stb/image_resize"\n'
             (work / 'main.dyn').write_text(imports + 'fn main() {\nif !raw.verify_layout() { #panic("layout") }\n' + body + '\n}\n')
             for mode in ([], ['--release']):
                 result = subprocess.run([dyn, 'build', str(work), '--no-cache', '--max-work', '100000000', '--output', str(work / 'test'), *mode], env=env, text=True, capture_output=True, timeout=180)

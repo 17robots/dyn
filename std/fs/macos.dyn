@@ -1,4 +1,3 @@
-use "std/fail"
 #target(kernel: darwin)
 use io "std/io"
 use mem "std/mem"
@@ -7,8 +6,7 @@ use "std/os/macos/sys"
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
   if path.len == 0 { return nil }
-  status: fail.Status
-  return cstrings.string_into(&status, storage, path)
+  return cstrings.string_into(storage, path) catch nil
 }
 // A descriptor, or a negative code: -22 for a path that cannot be passed.
 fn native_open(path: []const u8, mode: u8) isize {

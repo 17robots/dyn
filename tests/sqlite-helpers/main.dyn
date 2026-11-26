@@ -1,6 +1,5 @@
 // vendor/sqlite helpers: the statement cache, run, first, query/next, the
 // column readers, constraint, open_schema and transaction.
-use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/process"
@@ -10,74 +9,86 @@ const Schema: [2][]const u8 = ["PRAGMA journal_mode=WAL", "CREATE TABLE IF NOT E
 
 struct Row { statement: *sqlite.Statement, name: []const u8, stored: bool }
 
-// Each row has its own status: one duplicate does not stop the others.
+// Each row catches its own failure: one duplicate does not stop the others.
 fn store(row: *Row) {
-  status: fail.Status
-  sqlite.run(&status, row.statement, row.name)
-  row.stored = !status.failed
+  row.stored = true
+  sqlite.run(row.statement, row.name) catch { row.stored = false }
 }
 
 fn close(database: sqlite.Database) {
-  closing: fail.Status
-  sqlite.close(&closing, database)
+  sqlite.close(database) catch {}
+}
+
+// The failure of running statement with name and score.
+fn run_err(statement: *sqlite.Statement, name: []const u8, score: i64) io.IoErr {
+  sqlite.run(statement, name, score) catch err { return err }
+  #panic("run should fail")
+}
+
+fn cached_fails(statements: *sqlite.Cache, sql: []const u8) bool {
+  _ = sqlite.cached(statements, sql) catch { return true }
+  return false
+}
+
+fn schema_fails(path: []const u8, schema: []const []const u8) bool {
+  _ = sqlite.open_schema(path, schema) catch { return true }
+  return false
 }
 
 fn main() {
   arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
   buffer: [256]u8
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  database := sqlite.open(&status, ":memory:", buffer[..])
+  database := sqlite.open(":memory:", buffer[..]) catch { #panic("open") }
   defer close(database)
-  sqlite.execute(&status, database, "CREATE TABLE user(id INTEGER PRIMARY KEY, name TEXT UNIQUE, score INTEGER)", buffer[..])
+  sqlite.execute(database, "CREATE TABLE user(id INTEGER PRIMARY KEY, name TEXT UNIQUE, score INTEGER)", buffer[..]) catch { #panic("create") }
   statements := sqlite.cache(database)
   defer sqlite.cache_close(&statements)
   insert := "INSERT INTO user(name, score) VALUES(?1, ?2)"
   for i in 0..5 {
     names: [5][]const u8 = ["ada", "bob", "cy", "di", "ed"]
-    sqlite.run(&status, sqlite.cached(&status, &statements, insert), names[i], i * 10)
+    statement := sqlite.cached(&statements, insert) catch { #panic("cached") }
+    sqlite.run(statement, names[i], i * 10) catch { #panic("insert") }
   }
-  again := sqlite.cached(&status, &statements, insert)
-  io.println("cached once {}", again == sqlite.cached(&status, &statements, "INSERT INTO user(name, score) VALUES(?1, ?2)"))
-  duplicate: fail.Status
-  sqlite.run(&duplicate, again, "bob", 1)
-  io.println("duplicate {} constraint {}", !duplicate.failed, sqlite.constraint(&duplicate.failure))
-  lookup := sqlite.cached(&status, &statements, "SELECT id, name, score FROM user WHERE name = ?1")
-  if sqlite.first(&status, lookup, "cy") {
+  again := sqlite.cached(&statements, insert) catch { #panic("cached") }
+  same := sqlite.cached(&statements, "INSERT INTO user(name, score) VALUES(?1, ?2)") catch { #panic("cached") }
+  io.println("cached once {}", again == same)
+  duplicate := run_err(again, "bob", 1)
+  io.println("duplicate {} constraint {}", false, sqlite.constraint(duplicate))
+  lookup := sqlite.cached(&statements, "SELECT id, name, score FROM user WHERE name = ?1") catch { #panic("cached") }
+  if (sqlite.first(lookup, "cy") catch false) {
     id := sqlite.integer(lookup, 0)
     // Copied text outlives the row.
     name := sqlite.text(arena, lookup, 1)
     sqlite.done(lookup)
     io.println("first {} {} {}", id, name, name.len)
   }
-  io.println("missing {}", sqlite.first(&status, lookup, "zed"))
+  missing := sqlite.first(lookup, "zed") catch { #panic("first") }
+  io.println("missing {}", missing)
   sqlite.done(lookup)
-  list := sqlite.cached(&status, &statements, "SELECT name, score FROM user WHERE score >= ?1 ORDER BY score")
+  list := sqlite.cached(&statements, "SELECT name, score FROM user WHERE score >= ?1 ORDER BY score") catch { #panic("cached") }
   total: i64 = 0
-  sqlite.query(&status, list, 20)
-  for sqlite.next(&status, list) {
+  sqlite.query(list, 20) catch { #panic("query") }
+  for (sqlite.next(list) catch false) {
     io.println("row {} {}", sqlite.bytes(list, 0), sqlite.integer(list, 1))
     total += sqlite.integer(list, 1)
   }
   sqlite.done(list)
-  bad: fail.Status
-  io.println("total {} bad sql {}", total, sqlite.cached(&bad, &statements, "SELEKT 1") == nil)
+  io.println("total {} bad sql {}", total, cached_fails(&statements, "SELEKT 1"))
   // open_schema: a ready connection; transaction: rows in one commit.
   path := process.environment_or(arena, "SQLITE_HELPERS_DB", "")
-  ready := sqlite.open_schema(&status, path, Schema[..])
+  ready := sqlite.open_schema(path, Schema[..]) catch { #panic("open_schema") }
   items := sqlite.cache(ready)
-  add := sqlite.cached(&status, &items, "INSERT INTO item(name) VALUES(?1)")
+  add := sqlite.cached(&items, "INSERT INTO item(name) VALUES(?1)") catch { #panic("cached") }
   rows: [3]Row = [Row{ statement: add, name: "a" }, Row{ statement: add, name: "b" }, Row{ statement: add, name: "a" }]
-  committing: fail.Status
-  sqlite.transaction(&committing, ready, rows[..], store)
-  count := sqlite.cached(&status, &items, "SELECT count(*) FROM item")
-  _ = sqlite.first(&status, count)
-  io.println("transaction {} stored {} {} {} rows {}", !committing.failed, rows[0].stored, rows[1].stored, rows[2].stored, sqlite.integer(count, 0))
+  committed := true
+  sqlite.transaction(ready, rows[..], store) catch { committed = false }
+  count := sqlite.cached(&items, "SELECT count(*) FROM item") catch { #panic("cached") }
+  _ = sqlite.first(count) catch { #panic("first") }
+  io.println("transaction {} stored {} {} {} rows {}", committed, rows[0].stored, rows[1].stored, rows[2].stored, sqlite.integer(count, 0))
   sqlite.done(count)
   sqlite.cache_close(&items)
-  sqlite.close(&status, ready)
+  sqlite.close(ready) catch { #panic("close") }
   broken: [1][]const u8 = ["CREATE TABL item(id)"]
-  schema: fail.Status
-  _ = sqlite.open_schema(&schema, path, broken[..])
-  io.println("bad schema {}", schema.failed)
+  io.println("bad schema {}", schema_fails(path, broken[..]))
 }

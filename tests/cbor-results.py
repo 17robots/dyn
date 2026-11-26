@@ -16,6 +16,7 @@ fn code_of(err: parse.ParseErr) u8 {
  case err {
   .Invalid(_) => { return 1 }
   .TooLarge(_) => { return 2 }
+  .Unsupported(_) => { return 2 }
  }
 }
 struct Got { value: cbor.Token, offset: usize, found: bool, code: u8 }

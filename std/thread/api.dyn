@@ -1,5 +1,5 @@
 use mem "std/mem"
-use "std/fail"
+use io "std/io"
 
 // A thread creator chosen by the caller, for code that starts threads on
 // someone else's behalf (servers, pools). spawn returns a handle or nil;
@@ -13,28 +13,17 @@ pub struct Spawner {
 
 // Starts entry(context) on a new thread with stack as its stack. context is any
 // *C the caller keeps alive and unmoved until join succeeds; the entry receives
-// it typed. Stack and context are borrowed until successful join. nil after
-// a failure.
-pub fn spawn<C>(arena: *mem.Arena, status: *fail.Status, stack: []u8, entry: fn(*C) isize, context: *C) *Thread {
-  if status == nil { return spawn(arena, &fail.Status{}, stack, entry, context) }
-  if status.failed { return nil }
-  return spawn_untyped(arena, status, stack, #cast(fn(rawptr) isize, entry), context)
+// it typed. Stack and context are borrowed until successful join. A stack
+// under 256 bytes or a nil entry fails with InvalidInput; a system failure
+// carries the system's code.
+pub fn spawn<C>(arena: *mem.Arena, stack: []u8, entry: fn(*C) isize, context: *C) *Thread!io.IoErr {
+  return try spawn_untyped(arena, stack, #cast(fn(rawptr) isize, entry), context)
 }
 
 // As spawn, with a stack of size bytes that the thread owns until join.
-pub fn spawn_with_size<C>(arena: *mem.Arena, status: *fail.Status, size: usize, entry: fn(*C) isize, context: *C) *Thread {
-  if status == nil { return spawn_with_size(arena, &fail.Status{}, size, entry, context) }
-  if status.failed { return nil }
-  return spawn_with_size_untyped(arena, status, size, #cast(fn(rawptr) isize, entry), context)
+pub fn spawn_with_size<C>(arena: *mem.Arena, size: usize, entry: fn(*C) isize, context: *C) *Thread!io.IoErr {
+  return try spawn_with_size_untyped(arena, size, #cast(fn(rawptr) isize, entry), context)
 }
-
-fn spawn_invalid(status: *fail.Status, message: []const u8) *Thread {
-  fail.invalid(status, "spawn thread", "", message)
-  return nil
-}
-
-// Why a scoped thread did not start. System carries the system's own code.
-pub enum SpawnErr { InvalidInput, System(isize) }
 
 // Threads started through a scope are all joined by scope_join, so their
 // contexts may live on the stack of the function that owns the scope:
@@ -61,14 +50,9 @@ pub fn scope(arena: *mem.Arena) Scope {
 
 // Starts entry(context) on a new thread with an owned stack of stack_size
 // bytes. context must stay alive and unmoved until scope_join.
-pub fn scope_spawn<C>(scope: *Scope, stack_size: usize, entry: fn(*C) isize, context: *C) !SpawnErr {
+pub fn scope_spawn<C>(scope: *Scope, stack_size: usize, entry: fn(*C) isize, context: *C) !io.IoErr {
   if scope.arena == nil { #panic("create a scope with thread.scope before scope_spawn") }
-  status: fail.Status
-  started := spawn_with_size(scope.arena, &status, stack_size, entry, context)
-  if status.failed {
-    if status.failure.kind == fail.Kind.InvalidInput { fail .InvalidInput }
-    fail SpawnErr.System(status.failure.native)
-  }
+  started := try spawn_with_size(scope.arena, stack_size, entry, context)
   node := mem.push<ScopeThread>(scope.arena)
   node.thread = started
   node.next = scope.first
@@ -81,9 +65,7 @@ pub fn scope_spawn<C>(scope: *Scope, stack_size: usize, entry: fn(*C) isize, con
 pub fn scope_join(scope: *Scope) {
   for scope.first != nil {
     node := scope.first
-    status: fail.Status
-    join(&status, node.thread)
-    if status.failed { #panic("thread.scope_join could not join a thread") }
+    join(node.thread) catch { #panic("thread.scope_join could not join a thread") }
     scope.first = node.next
   }
 }

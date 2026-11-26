@@ -1,35 +1,20 @@
-use "std/fail"
+use io "std/io"
 #target(kernel: wasi)
 
 // WASI Preview 1 has no terminal control. Descriptors are never terminals;
 // key_decode still works on bytes read from standard input.
-pub fn read_state(status: *fail.Status, _descriptor: isize) State {
-  if status == nil { return read_state(&fail.Status{}, _descriptor) }
-  unsupported(status)
-  return State{}
+pub fn read_state(_descriptor: isize) State!io.IoErr {
+  fail .Unsupported
 }
 
-pub fn restore(status: *fail.Status, _descriptor: isize, saved: *const State) {
-  if status == nil {
-    restore(&fail.Status{}, _descriptor, saved)
-    return
-  }
-  if saved == nil {
-    fail.invalid(status, "restore terminal", "", "no saved settings")
-    return
-  }
-  unsupported(status)
+pub fn restore(_descriptor: isize, saved: *const State) !io.IoErr {
+  if saved == nil { fail .InvalidInput }
+  fail .Unsupported
 }
 
 fn make_raw(_descriptor: isize, _state: *State) {
 }
 
-pub fn size(status: *fail.Status, _descriptor: isize) Size {
-  if status == nil { return size(&fail.Status{}, _descriptor) }
-  unsupported(status)
-  return Size{}
-}
-
-fn unsupported(status: *fail.Status) {
-  fail.set(status, fail.make(fail.Kind.Unsupported, "terminal", "", "WASI has no terminal control"))
+pub fn size(_descriptor: isize) Size!io.IoErr {
+  fail .Unsupported
 }

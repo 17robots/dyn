@@ -1,7 +1,6 @@
 #target(kernel: darwin)
 #link("System")
 use io "std/io"
-use "std/fail"
 use sync "std/sync"
 
 // Apple LP64 pthread_attr_t: eight-byte signature plus 56 opaque bytes.
@@ -37,19 +36,16 @@ fn trampoline(context: rawptr) rawptr {
 // ARM64 page with a 16 KiB minimum. Arena/thread/context must remain alive and
 // unmoved until successful join. Fixed arena exhaustion panics; native spawn
 // failure restores the arena mark. Do not copy active Threads.
-fn spawn_untyped(arena: *mem.Arena, status: *fail.Status, stack: []u8, entry: fn(rawptr) isize, context: rawptr) *Thread {
-  return spawn_with_size_untyped(arena, status, stack.len, entry, context)
+fn spawn_untyped(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: rawptr) *Thread!io.IoErr {
+  return try spawn_with_size_untyped(arena, stack.len, entry, context)
 }
-fn spawn_with_size_untyped(arena: *mem.Arena, status: *fail.Status, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) *Thread {
-  if stack_size < 256 || entry == nil || stack_size > #max(usize) - 16383 {
-    return spawn_invalid(status, "a thread needs an entry and a stack of 256 bytes to the address space")
-  }
+fn spawn_with_size_untyped(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) *Thread!io.IoErr {
+  if stack_size < 256 || entry == nil || stack_size > #max(usize) - 16383 { fail .InvalidInput }
   attributes := Attributes{}
   error := attr_init(&attributes)
   if error != 0 {
     code := 0 - #cast(isize, error)
-    fail.set(status, io.from_darwin("spawn thread", "", code))
-    return nil
+    fail io.darwin_err(code)
   }
   defer {
     _ = attr_destroy(&attributes)
@@ -58,8 +54,7 @@ fn spawn_with_size_untyped(arena: *mem.Arena, status: *fail.Status, stack_size: 
   error = attr_size(&attributes, size)
   if error != 0 {
     code := 0 - #cast(isize, error)
-    fail.set(status, io.from_darwin("spawn thread", "", code))
-    return nil
+    fail io.darwin_err(code)
   }
   mark := mem.arena_mark(arena)
   thread := mem.push<Thread>(arena)
@@ -71,8 +66,7 @@ fn spawn_with_size_untyped(arena: *mem.Arena, status: *fail.Status, stack_size: 
   if error != 0 {
     mem.arena_rewind(arena, mark)
     code := 0 - #cast(isize, error)
-    fail.set(status, io.from_darwin("spawn thread", "", code))
-    return nil
+    fail io.darwin_err(code)
   }
   thread.handle = handle
   thread.identifier = native_id(handle)
@@ -83,18 +77,13 @@ fn spawn_with_size_untyped(arena: *mem.Arena, status: *fail.Status, stack_size: 
 // Ownership: success ends worker access and clears the native owner.
 // Failure: retains the handle for retry; keep arena/thread/context alive until success.
 // Allocation: none. Thread safety: one caller controls this descriptor.
-pub fn join(status: *fail.Status, thread: *Thread) {
-  if status == nil {
-    join(&fail.Status{}, thread)
-    return
-  }
-  if status.failed || thread.handle == nil { return }
+pub fn join(thread: *Thread) !io.IoErr {
+  if thread.handle == nil { return }
   value: rawptr = nil
   error := wait(thread.handle, &value)
   if error != 0 {
     code := 0 - #cast(isize, error)
-    fail.set(status, io.from_darwin("join thread", "", code))
-    return
+    fail io.darwin_err(code)
   }
   thread.handle = nil
   thread.identifier = 0

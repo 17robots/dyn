@@ -9045,7 +9045,7 @@ static void ssa_zero_memory(SsaEmit *e, SsaValue *v) {
   }
   if (size <= 4096) {
     /* A loop of two 16-byte stores, then the tail: rep stosb costs a fixed
-       30 or so cycles to start, which dominated a 296-byte fail.Status
+       30 or so cycles to start, which dominated a 296-byte status struct
        zeroed per loop iteration, and unrolled stores would cost about ten
        bytes of code per 16 bytes. R11 walks the bytes; R10 counts. */
     SsaMemory m = ssa_address_of(e, v->a, -1, 1, 0, X_R10, X_R11);

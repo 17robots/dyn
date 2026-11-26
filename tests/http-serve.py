@@ -52,8 +52,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-http-serve-') as temporary:
 
 # Without load-balancing SO_REUSEPORT (macOS, Windows) serve shares one
 # listener across workers. Both targets build; the Windows one runs under wine.
-PORTABLE = '''use "std/fail"
-use "std/io"
+PORTABLE = '''use "std/io"
 use "std/mem"
 use "std/net"
 use "std/net/http"

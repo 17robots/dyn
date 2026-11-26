@@ -1,5 +1,4 @@
 use ui "std/ui"
-use "std/fail"
 use utf8 "std/unicode/utf8"
 use math "std/math"
 
@@ -158,22 +157,11 @@ fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font
   }
   return true
 }
-fn malformed(status: *fail.Status) {
-  fail.invalid(status, "render", "", "malformed glyph or surface")
-}
 // Render in order after ui.end. Changes pixels in place; malformed glyph or
-// surface data returns InvalidInput. A glyph failure may leave earlier draws
-// visible. This renderer clips text without wrapping, kerning or shaping.
-pub fn render(status: *fail.Status, surface: *Surface, commands: *const ui.Command, font: Font) {
-  if status == nil {
-    render(&fail.Status{}, surface, commands, font)
-    return
-  }
-  if status.failed { return }
-  if !valid_surface(surface) {
-    malformed(status)
-    return
-  }
+// surface data fails. A glyph failure may leave earlier draws visible. This
+// renderer clips text without wrapping, kerning or shaping.
+pub fn render(surface: *Surface, commands: *const ui.Command, font: Font) ! {
+  if !valid_surface(surface) { fail }
   if surface.width == 0 || surface.height == 0 { return }
   viewport := ui.Rect{ width: surface.width, height: surface.height }
   command := commands
@@ -188,15 +176,9 @@ pub fn render(status: *fail.Status, surface: *Surface, commands: *const ui.Comma
         }
       } else if command.kind == ui.Kind.Glyph {
         drawn := draw_glyph(surface, clip, command.color, font, command.codepoint, command.glyph_x, command.glyph_y)
-        if !drawn.ok {
-          malformed(status)
-          return
-        }
+        if !drawn.ok { fail }
       } else if command.kind == ui.Kind.Text {
-        if !text(surface, command, clip, font) {
-          malformed(status)
-          return
-        }
+        if !text(surface, command, clip, font) { fail }
       }
     }
     command = ui.next(command)

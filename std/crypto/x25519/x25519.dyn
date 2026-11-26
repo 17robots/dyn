@@ -1,20 +1,11 @@
-use "std/fail"
 use field "std/crypto/curve25519"
 // RFC 7748. Caller storage
 // destination must have at least 32 bytes. Inputs are
 // copied before writing, permitting in-place use. All-zero shared secrets fail.
 // The shared secret of private_key and peer. Bad sizes, or a peer key that
 // gives an all-zero secret (a low-order point), fail with InvalidInput.
-pub fn shared(status: *fail.Status, destination: []u8, private_key: []const u8, peer: []const u8) {
-  if status == nil {
-    shared(&fail.Status{}, destination, private_key, peer)
-    return
-  }
-  if status.failed { return }
-  if destination.len<32 || private_key.len!=32 || peer.len!=32 {
-    fail.invalid(status, "X25519", "", "keys and output must be 32 bytes")
-    return
-  }
+pub fn shared(destination: []u8, private_key: []const u8, peer: []const u8) ! {
+  if destination.len<32 || private_key.len!=32 || peer.len!=32 { fail }
   scalar: [32]u8
   for i in 0..32 {
     scalar[i]=private_key[i]
@@ -59,17 +50,10 @@ pub fn shared(status: *fail.Status, destination: []u8, private_key: []const u8, 
   for i in 0..32 {
     nonzero |= destination[i]
   }
-  if nonzero == 0 {
-    fail.invalid(status, "X25519", "", "the peer key is a low-order point")
-  }
+  if nonzero == 0 { fail }
 }
-pub fn public_key(status: *fail.Status, destination: []u8, private_key: []const u8) {
-  if status == nil {
-    public_key(&fail.Status{}, destination, private_key)
-    return
-  }
-  if status.failed { return }
+pub fn public_key(destination: []u8, private_key: []const u8) ! {
   base: [32]u8
   base[0]=9
-  shared(status, destination, private_key, base[..])
+  try shared(destination, private_key, base[..])
 }

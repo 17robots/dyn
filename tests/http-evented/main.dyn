@@ -5,7 +5,6 @@
 use "std/bytes"
 use "std/fmt"
 use "std/html"
-use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/net"
@@ -52,7 +51,7 @@ fn limited_close(session: rawptr) { _ = session }
 
 fn user_post(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
   storage: [128]u8
-  page := html.writer(nil, storage[..])
+  page := html.writer(storage[..])
   html.markup(&page, html.trusted("user="))
   html.text(&page, try http.param(request, "id"))
   html.markup(&page, html.trusted(" post="))
@@ -72,7 +71,7 @@ fn text(response: *http.Response, code: u16, body: []const u8) !io.IoErr {
 // Echoes q, escaped into HTML, with x-tag (or q) as the HX-Trigger header.
 fn answer_query(response: *http.Response, request: *const http.Request, q: []const u8) !io.IoErr {
   page_storage: [1024]u8
-  page := fmt.buffer(nil, page_storage[..])
+  page := fmt.buffer(page_storage[..])
   fmt.write(&page, "<p>")
   html.write_escaped(&page, q)
   fmt.write(&page, "</p>")
@@ -224,7 +223,6 @@ fn main() {
   }
   state.router = http.typed_routes(state.route_storage[..], state)
   state.router.fallback = handle
-  routes := fail.Status{ on_failure: fail.panic_on_failure }
   http.add(&state.router, "GET", "/users/:id/posts/:post", user_post) catch { #panic("add route") }
   http.add(&state.router, "POST", "/users", user_create) catch { #panic("add route") }
   binding := http.bind_routes(&state.router)
@@ -248,7 +246,6 @@ fn main() {
   }
   workers := mem.push_array<evented.Worker>(arena, worker_count)
   listener := net.Listener{}
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   if shared {
     evented.start_shared(arena, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, binding.handler, binding.context) catch { #panic("start server") }
   } else {
@@ -261,15 +258,11 @@ fn main() {
     time.sleep(10 * time.Millisecond)
   }
   evented.stop(workers)
-  joined: fail.Status
   evented.join(workers) catch { #panic("join server") }
   if listener.active {
     net.listener_close(&listener)
   }
   for worker in workers {
     if worker.send_pool.free_count != config.overflow_send_count { #panic("overflow block leaked") }
-  }
-  if joined.failed {
-    #panic("worker failed")
   }
 }

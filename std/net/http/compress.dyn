@@ -45,9 +45,12 @@ pub fn respond_compressed(response: *Response, request: *const Request, body: []
     try respond(response, body, varied)
     return
   }
-  compressing: fail.Status
-  encoded := gzip.write(&compressing, storage, body, level, encoder)
-  if compressing.failed || encoded.len >= body.len {
+  // A body that does not compress into the reservation goes out as it is.
+  encoded := gzip.write(storage, body, level, encoder) catch {
+    try respond(response, body, varied)
+    return
+  }
+  if encoded.len >= body.len {
     // The reservation lapses: respond queues its own copy.
     try respond(response, body, varied)
     return

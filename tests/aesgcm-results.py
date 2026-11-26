@@ -9,16 +9,13 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 import random
 SOURCE=r'''use aead "std/crypto/aesgcm"
-use "std/fail"
 fn seal_ok(output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool {
- status: fail.Status
- aead.seal(&status, output, tag, input, aad, key, nonce)
- return !status.failed
+ aead.seal(output, tag, input, aad, key, nonce) catch { return false }
+ return true
 }
 fn open_ok(output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool {
- status: fail.Status
- aead.open(&status, output, input, tag, aad, key, nonce)
- return !status.failed
+ aead.open(output, input, tag, aad, key, nonce) catch { return false }
+ return true
 }
 use bytes "std/bytes"
 use mem "std/mem"

@@ -21,17 +21,36 @@ int dyn_test_send_key(Display *d, Window w, unsigned long sym, unsigned int stat
  subprocess.run(['cc','-fno-stack-protector','-c',str(p/'send.c'),'-o',str(p/'send.o')],check=True)
  (p/'main.dyn').write_text('''use io "std/io"
 use window "vendor/window"
-use "std/fail"
-fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
-  status: fail.Status
-  window.open(&status, p0, p1, p2, p3)
-  return status.failure
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) Failure {
+  window.open(p0, p1, p2, p3) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_poll(p0: *window.Window) fail.Failure {
-  status: fail.Status
-  window.poll(&status, p0)
-  return status.failure
+fn window_poll(p0: *window.Window) Failure {
+  window.poll(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
 extern fn send "dyn_test_send_key"(display: rawptr, window: usize, symbol: usize, state: u32, pressed: i32) i32
@@ -42,7 +61,7 @@ fn key(host: *window.Window, symbol: usize, state: u32, pressed: i32) {
 }
 fn main() {
  host := window.Window{}
- check(window_open(&host, "modifier oracle", 64, 64).kind == fail.Kind.Ok)
+ check(window_open(&host, "modifier oracle", 64, 64).kind == Kind.Ok)
  defer { window.close(&host) }
  _ = window_poll(&host)
  key(&host, 0xff51, 4, 1)

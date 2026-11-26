@@ -42,7 +42,6 @@ core std/embedded/uart
 core std/encoding/binary
 core std/encoding/json/scan
 core std/enums
-core std/fail
 core std/hash
 core std/image
 core std/image/color

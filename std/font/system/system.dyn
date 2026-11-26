@@ -6,7 +6,6 @@
 
 use io "std/io"
 use mem "std/mem"
-use "std/fail"
 use fs "std/fs"
 use font "std/font"
 use process "std/process"
@@ -155,9 +154,7 @@ fn describe_data(arena: *mem.Arena, path: []const u8, data: []const u8) Entry {
     length := #cast(usize, u32be(data, at + 12))
     if offset > data.len || length > data.len - offset { return nil_entry }
   }
-  opening: fail.Status
-  _ = font.open(&opening, data)
-  if opening.failed { return nil_entry }
+  _ = font.open(data) catch { return nil_entry }
   names := table(data, 0x6e616d65)
   if !names.ok { return nil_entry }
   // Typographic family and subfamily (16, 17) group weights under one name.
@@ -356,9 +353,9 @@ pub fn covering(entries: []const Entry, codepoint: u32, regular_only: bool) *con
     if regular_only && (entry.italic || entry.weight != 400) { continue }
     // An unreadable file is skipped.
     mapped := map_file(entry.path) catch { continue }
-    status: fail.Status
-    face := font.open(&status, mapped)
-    found := !status.failed && font.glyph_index(&face, codepoint) != 0
+    none: font.Face
+    face := font.open(mapped) catch none
+    found := face.data.len != 0 && font.glyph_index(&face, codepoint) != 0
     fs.unmap(&mapped)
     if found { return entry }
   }

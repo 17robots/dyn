@@ -1,14 +1,8 @@
 use "std/bufio"
 use "std/bytes"
-use "std/fail"
 use "std/fs"
 use "std/io"
 use "std/strings"
-
-fn report(failure: fail.Failure) {
-  storage: [512]u8
-  io.eprintln("jobs: {}", fail.describe(storage[..], failure))
-}
 
 // Newline characters in path, read a buffer at a time.
 fn count(path: []const u8) usize!io.IoErr {
@@ -86,12 +80,10 @@ fn run(line: []const u8) bool {
 fn main() i32 {
   storage: [65536]u8
   input := bufio.reader(io.stdin(), storage[..])
-  reading: fail.Status
   all_good := true
   for {
-    line := bufio.read_line(&reading, &input)
-    if reading.failed {
-      report(reading.failure)
+    line := bufio.read_line(&input) catch err {
+      io.eprintln("jobs: {}", err)
       return 1
     }
     if input.ended { break }

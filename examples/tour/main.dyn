@@ -17,7 +17,6 @@ use "std/io"
 use "std/mem"
 use "std/container/array"
 use "std/container/map"
-use "std/fail"
 use files "std/fs"       // an import can be renamed
 use "std/panic"
 
@@ -308,11 +307,10 @@ fn memory() {
   io.println("memory {} {} {} {} {}", p.name, p.health, scores[0], scores[1], bytes[3])
 }
 
-// ------------------------------------------------- Failure is state ---
-// No exceptions and no error values to check after each call. A function
-// that can fail takes a *fail.Status, as one that allocates takes an arena.
-// The first failure stays in the status and later calls do nothing, so you
-// check status.failed once, before acting on the results.
+// ---------------------------------------------------- Failure is a value ---
+// No exceptions. A function that can fail returns T!E: a value or an error
+// enum. try passes the failure up, catch handles it there, and case picks
+// out the kinds that matter.
 fn read_config(arena: *mem.Arena) {
   text := files.read_all(arena, "does-not-exist.conf", 1 << 20) catch err {
     case err {
@@ -327,7 +325,7 @@ fn read_config(arena: *mem.Arena) {
 // ---------------------------------------------------------------- Defer ---
 // Defers run in reverse order when their block ends, on any exit: falling
 // off the end, return, break or continue. A panic does not run them: it is a
-// bug, there is no recovery, and expected failures go in a status.
+// bug, there is no recovery, and expected failures are returned errors.
 // panic.set_handler runs one function before the panic reports and exits,
 // for logs or crash reports.
 fn crash_report(message: []const u8) {

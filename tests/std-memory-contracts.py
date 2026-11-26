@@ -7,8 +7,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/fail"
-use "std/mem"
+SOURCE = r'''use "std/mem"
 use "std/strings"
 use "std/bytes"
 use "std/encoding/ini"

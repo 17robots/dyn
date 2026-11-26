@@ -31,10 +31,9 @@ dyn run examples/02-wordcount < examples/02-wordcount/poem.txt
 - **Bit tests.** UTF-8 continuation bytes look like `10xxxxxx`;
   `(byte & 0xC0) != 0x80` counts the others. Mixing `&` with `!=` needs
   parentheses.
-- **Building text in a buffer.** `fmt.buffer(&rendering, storage[..])` writes
-  into stack storage and records into a status like any other call: once a
-  write does not fit, the rest do nothing, and `rendering.failed` is checked
-  once at the end.
+- **Building text in a buffer.** `fmt.buffer(storage[..])` writes
+  into stack storage. Once a write does not fit, the rest do nothing, and
+  `fmt.overflowed(&row)` is checked once at the end.
 
 ## Exercises
 

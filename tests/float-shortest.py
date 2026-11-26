@@ -20,8 +20,7 @@ while len(values) < 6000:
 values += [rng.uniform(-1e6, 1e6) for _ in range(1000)] + [float(rng.randint(-10**17, 10**17)) for _ in range(500)]
 bits = [int.from_bytes(struct.pack('<d', value), 'little') for value in values]
 rows = ',\n'.join('  ' + ', '.join(str(b) for b in bits[i:i + 6]) for i in range(0, len(bits), 6))
-SOURCE = f'''use "std/fail"
-use fmt "std/fmt"
+SOURCE = f'''use fmt "std/fmt"
 use io "std/io"
 use mem "std/mem"
 
@@ -32,19 +31,17 @@ const values: [{len(bits)}]u64 = [
 fn main() {{
   storage: [64]u8
   for bits in values {{
-    state_status: fail.Status
-    state := fmt.buffer(&state_status, storage[..])
+    state := fmt.buffer(storage[..])
     fmt.write_f64_shortest(&state, #bitcast(f64, bits))
-    if state_status.failed {{
+    if fmt.overflowed(&state) {{
       #panic("shortest")
     }}
     io.println("{{}}", fmt.bytes(&state))
   }}
   tiny: [3]u8
-  small_status: fail.Status
-  small := fmt.buffer(&small_status, tiny[..])
+  small := fmt.buffer(tiny[..])
   fmt.write_f64_shortest(&small, 0.125)
-  if small.length != 0 || !small_status.failed {{
+  if small.length != 0 || !fmt.overflowed(&small) {{
     #panic("rollback")
   }}
   backing: [64 + mem.ArenaBufferOverhead]u8

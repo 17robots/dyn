@@ -259,7 +259,6 @@ assert "should have faulted" not in res.stderr, res.stderr
 thread_affinity_bad = """
 use "std/mem"
 use "std/thread"
-use "std/fail"
 
 struct Ctx { arena: *mem.Arena }
 
@@ -274,9 +273,8 @@ fn main() {
   ta := mem.arena_alloc(65536)
   defer mem.arena_release(ta)
   ctx := Ctx{ arena: a }
-  st := fail.Status{}
-  t := thread.spawn_with_size(ta, &st, 65536, worker, &ctx)
-  thread.join(&st, t)
+  t := thread.spawn_with_size(ta, 65536, worker, &ctx) catch { #panic("spawn") }
+  thread.join(t) catch { #panic("join") }
 }
 """
 res = run_dyn(thread_affinity_bad, extra_args=("--check-lifetimes",), expect_rc=101)
@@ -285,7 +283,6 @@ assert "other than its owner" in res.stderr, res.stderr
 thread_affinity_transfer = """
 use "std/mem"
 use "std/thread"
-use "std/fail"
 
 struct Ctx { arena: *mem.Arena }
 
@@ -302,9 +299,8 @@ fn main() {
   ta := mem.arena_alloc(65536)
   defer mem.arena_release(ta)
   ctx := Ctx{ arena: a }
-  st := fail.Status{}
-  t := thread.spawn_with_size(ta, &st, 65536, worker, &ctx)
-  thread.join(&st, t)
+  t := thread.spawn_with_size(ta, 65536, worker, &ctx) catch { #panic("spawn") }
+  thread.join(t) catch { #panic("join") }
   mem.arena_transfer(a)
   _ = mem.push<u64>(a)
 }
@@ -315,7 +311,6 @@ run_dyn(thread_affinity_transfer, extra_args=("--check-lifetimes",), expect_rc=0
 race_bad_src = """
 use "std/mem"
 use "std/thread"
-use "std/fail"
 
 shared_counter: u64 = 0
 
@@ -333,12 +328,11 @@ fn main() {
   ta := mem.arena_alloc(65536)
   defer mem.arena_release(ta)
   ctx := Ctx{ dummy: 0 }
-  st := fail.Status{}
-  t := thread.spawn_with_size(ta, &st, 65536, racer, &ctx)
+  t := thread.spawn_with_size(ta, 65536, racer, &ctx) catch { #panic("spawn") }
   for i in 0..20000 {
     shared_counter = shared_counter + 1
   }
-  thread.join(&st, t)
+  thread.join(t) catch { #panic("join") }
 }
 """
 res = run_dyn(race_bad_src, extra_args=("--race",), expect_rc=101)
@@ -348,7 +342,6 @@ race_good_src = """
 use "std/mem"
 use "std/thread"
 use "std/sync"
-use "std/fail"
 
 shared_counter: u64 = 0
 mu: sync.Mutex
@@ -370,14 +363,13 @@ fn main() {
   ta := mem.arena_alloc(65536)
   defer mem.arena_release(ta)
   ctx := Ctx{ dummy: 0 }
-  st := fail.Status{}
-  t := thread.spawn_with_size(ta, &st, 65536, safe_worker, &ctx)
+  t := thread.spawn_with_size(ta, 65536, safe_worker, &ctx) catch { #panic("spawn") }
   for i in 0..200 {
     sync.lock(&mu)
     shared_counter = shared_counter + 1
     sync.unlock(&mu)
   }
-  thread.join(&st, t)
+  thread.join(t) catch { #panic("join") }
   if shared_counter != 400 { #panic("wrong count") }
 }
 """

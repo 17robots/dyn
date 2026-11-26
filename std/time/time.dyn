@@ -1,6 +1,6 @@
 use mem "std/mem"
 use "std/enums"
-use "std/fail"
+use parse "std/parse"
 pub const Nanosecond: i64 = 1
 pub const Microsecond: i64 = 1000
 pub const Millisecond: i64 = 1000000
@@ -16,28 +16,18 @@ pub struct DateTime {
   nanosecond: u32,
 }
 
-// a + b, or Overflow in status when the sum is outside i64.
-pub fn checked_add(status: *fail.Status, a, b: i64) i64 {
-  if status == nil { return checked_add(&fail.Status{}, a, b) }
-  if status.failed { return 0 }
-  if (b > 0 && a > 9223372036854775807 - b) || (b < 0 && a < -9223372036854775807 - 1 - b) {
-    fail.set(status, fail.make(fail.Kind.Overflow, "add", "", "duration is outside i64"))
-    return 0
-  }
+// a + b; fails when the sum is outside i64.
+pub fn checked_add(a, b: i64) i64! {
+  if (b > 0 && a > 9223372036854775807 - b) || (b < 0 && a < -9223372036854775807 - 1 - b) { fail }
   return a + b
 }
-// a - b, or Overflow in status when the difference is outside i64.
-pub fn checked_sub(status: *fail.Status, a, b: i64) i64 {
-  if status == nil { return checked_sub(&fail.Status{}, a, b) }
-  if status.failed { return 0 }
+// a - b; fails when the difference is outside i64.
+pub fn checked_sub(a, b: i64) i64! {
   if b == -9223372036854775807 - 1 {
-    if a >= 0 {
-      fail.set(status, fail.make(fail.Kind.Overflow, "subtract", "", "duration is outside i64"))
-      return 0
-    }
+    if a >= 0 { fail }
     return a - b
   }
-  return checked_add(status, a, 0 - b)
+  return try checked_add(a, 0 - b)
 }
 
 // Adds without leaving the i64 range: past either end gives that end.
@@ -154,15 +144,10 @@ fn read_two(input: []const u8, at: usize) u8 {
   return (input[at] - '0') * 10 + input[at + 1] - '0'
 }
 // Parses YYYY-MM-DDTHH:MM:SSZ. Anything else, or a date that does not exist,
-// fails with InvalidInput.
-pub fn parse_iso8601(status: *fail.Status, input: []const u8) DateTime {
-  if status == nil { return parse_iso8601(&fail.Status{}, input) }
+// fails with Invalid(0).
+pub fn parse_iso8601(input: []const u8) DateTime!parse.ParseErr {
   value: DateTime
-  if status.failed { return value }
-  if !parse_iso8601_into(input, &value) {
-    fail.invalid(status, "parse date", input, "not a valid YYYY-MM-DDTHH:MM:SSZ date")
-    return DateTime{}
-  }
+  if !parse_iso8601_into(input, &value) { fail parse.ParseErr.Invalid(0) }
   return value
 }
 

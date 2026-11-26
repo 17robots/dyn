@@ -1,34 +1,19 @@
 use io "std/io"
-use "std/fail"
 use "std/os/linux/sys"
 #target(kernel: linux)
 
 // The terminal settings of descriptor; fails when it is not a terminal.
-pub fn read_state(status: *fail.Status, descriptor: isize) State {
-  if status == nil { return read_state(&fail.Status{}, descriptor) }
+pub fn read_state(descriptor: isize) State!io.IoErr {
   result: State
-  if status.failed { return result }
   code := #syscall(sys.Ioctl, descriptor, 21505, &result.bytes[0])
-  if code < 0 {
-    fail.set(status, io.from_linux("read terminal", "", code))
-  }
+  if code < 0 { fail io.linux_err(code) }
   return result
 }
 
-pub fn restore(status: *fail.Status, descriptor: isize, saved: *const State) {
-  if status == nil {
-    restore(&fail.Status{}, descriptor, saved)
-    return
-  }
-  if status.failed { return }
-  if saved == nil {
-    fail.invalid(status, "restore terminal", "", "no saved settings")
-    return
-  }
+pub fn restore(descriptor: isize, saved: *const State) !io.IoErr {
+  if saved == nil { fail .InvalidInput }
   code := #syscall(sys.Ioctl, descriptor, 21506, &saved.bytes[0])
-  if code < 0 {
-    fail.set(status, io.from_linux("restore terminal", "", code))
-  }
+  if code < 0 { fail io.linux_err(code) }
 }
 
 // Clears IGNBRK, BRKINT, ICRNL, IXON, OPOST-adjacent input bits, ISIG,
@@ -42,15 +27,10 @@ fn make_raw(_descriptor: isize, state: *State) {
   state.bytes[23] = 1
 }
 
-pub fn size(status: *fail.Status, descriptor: isize) Size {
-  if status == nil { return size(&fail.Status{}, descriptor) }
-  if status.failed { return Size{} }
+pub fn size(descriptor: isize) Size!io.IoErr {
   bytes: [8]u8
   code := #syscall(sys.Ioctl, descriptor, 21523, &bytes[0])
-  if code < 0 {
-    fail.set(status, io.from_linux("terminal size", "", code))
-    return Size{}
-  }
+  if code < 0 { fail io.linux_err(code) }
   rows := #cast(usize, bytes[0]) + #cast(usize, bytes[1]) * 256
   columns := #cast(usize, bytes[2]) + #cast(usize, bytes[3]) * 256
   return Size{ columns: columns, rows: rows }

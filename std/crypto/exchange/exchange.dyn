@@ -1,48 +1,33 @@
 use native "std/crypto/x25519"
 use "std/bytes"
-use "std/fail"
 // Fixed-size keys and signatures use caller storage by exception. Successful
-// values borrow destination; failures return an empty value. Validation leaves
-// storage untouched. Arithmetic failures clear only the intended output prefix.
-// A bad length, key or overlap fails with InvalidInput.
+// values borrow destination. Validation leaves storage untouched. Arithmetic
+// failures clear only the intended output prefix. A bad length, key or
+// overlap fails.
 
-// The output prefix, cleared and empty when the primitive failed.
-fn result(status: *fail.Status, destination: []u8) []u8 {
-  if status.failed {
-    for i in 0..destination.len {
-      destination[i] = 0
-    }
-    return destination[..0]
+// Clears output after the primitive failed.
+fn cleared(output: []u8) {
+  for i in 0..output.len {
+    output[i] = 0
   }
-  return destination
-}
-fn rejected(status: *fail.Status, destination: []u8, message: []const u8) []u8 {
-  fail.invalid(status, "exchange keys", "", message)
-  return destination[..0]
 }
 
 // Destination must not overlap either borrowed input, including in its tail.
-pub fn x25519_public(status: *fail.Status, destination: []u8, private_key: []const u8) []u8 {
-  if status == nil { return x25519_public(&fail.Status{}, destination, private_key) }
-  if status.failed { return destination[..0] }
-  if destination.len < 32 || private_key.len != 32 {
-    return rejected(status, destination, "bad key or destination length")
+pub fn x25519_public(destination: []u8, private_key: []const u8) []u8! {
+  if destination.len < 32 || private_key.len != 32 { fail }
+  if bytes.overlaps(destination, private_key) { fail }
+  native.public_key(destination[..32], private_key) catch {
+    cleared(destination[..32])
+    fail
   }
-  if bytes.overlaps(destination, private_key) {
-    return rejected(status, destination, "destination overlaps an input")
-  }
-  native.public_key(status, destination[..32], private_key)
-  return result(status, destination[..32])
+  return destination[..32]
 }
-pub fn x25519(status: *fail.Status, destination: []u8, private_key: []const u8, peer_public_key: []const u8) []u8 {
-  if status == nil { return x25519(&fail.Status{}, destination, private_key, peer_public_key) }
-  if status.failed { return destination[..0] }
-  if destination.len < 32 || private_key.len != 32 || peer_public_key.len != 32 {
-    return rejected(status, destination, "bad key or destination length")
+pub fn x25519(destination: []u8, private_key: []const u8, peer_public_key: []const u8) []u8! {
+  if destination.len < 32 || private_key.len != 32 || peer_public_key.len != 32 { fail }
+  if bytes.overlaps(destination, private_key) || bytes.overlaps(destination, peer_public_key) { fail }
+  native.shared(destination[..32], private_key, peer_public_key) catch {
+    cleared(destination[..32])
+    fail
   }
-  if bytes.overlaps(destination, private_key) || bytes.overlaps(destination, peer_public_key) {
-    return rejected(status, destination, "destination overlaps an input")
-  }
-  native.shared(status, destination[..32], private_key, peer_public_key)
-  return result(status, destination[..32])
+  return destination[..32]
 }

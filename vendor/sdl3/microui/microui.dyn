@@ -1,6 +1,6 @@
+use io "std/io"
 use "vendor/sdl3"
 use ui "vendor/microui"
-use "std/fail"
 #link("dyn_microui_sdl3")
 // Optional SDL renderer for microui's 8x16 byte-cell metrics. Built-in SDL debug
 // glyphs cover ASCII; this is a basic debug UI, not shaped Unicode text.
@@ -10,14 +10,9 @@ use "std/fail"
 pub fn event(context: ui.Context, renderer: sdl3.Renderer, value: *const sdl3.Event) bool {
   return native_event(context, renderer, #cast(rawptr, value))
 }
-pub fn render(status: *fail.Status, context: ui.Context, renderer: sdl3.Renderer) {
-  if status == nil {
-    render(&fail.Status{}, context, renderer)
-    return
-  }
-  if status.failed { return }
+pub fn render(context: ui.Context, renderer: sdl3.Renderer) !io.IoErr {
   if !native_render(context, renderer) {
-    sdl3.record_error(status, "render UI")
+    try sdl3.record_error("render UI")
   }
 }
 extern fn native_render "dyn_mu_sdl_render"(context: ui.Context, renderer: sdl3.Renderer) bool

@@ -1,5 +1,4 @@
 use io "std/io"
-use "std/fail"
 use surrounding_edit "std/text/edit"
 #target(kernel: linux)
 use x11 "vendor/window/x11"
@@ -7,36 +6,20 @@ use box "std/ui/box"
 // Linux default currently uses X11/GLX, including XWayland. Explicit native
 // Wayland is a separate backend; availability never silently selects SDL.
 pub type Window = x11.Window
-pub fn open(status: *fail.Status, window: *Window, title: []const u8, width, height: i32) {
-  if status == nil {
-    open(&fail.Status{}, window, title, width, height)
-    return
-  }
-  x11.open(status, window, title, width, height)
+pub fn open(window: *Window, title: []const u8, width, height: i32) !io.IoErr {
+  try x11.open(window, title, width, height)
 }
 pub fn close(window: *Window) {
   x11.close(window)
 }
-pub fn poll(status: *fail.Status, window: *Window) {
-  if status == nil {
-    poll(&fail.Status{}, window)
-    return
-  }
-  x11.poll(status, window)
+pub fn poll(window: *Window) !io.IoErr {
+  try x11.poll(window)
 }
-pub fn make_current(status: *fail.Status, window: *Window) {
-  if status == nil {
-    make_current(&fail.Status{}, window)
-    return
-  }
-  x11.make_current(status, window)
+pub fn make_current(window: *Window) !io.IoErr {
+  try x11.make_current(window)
 }
-pub fn swap(status: *fail.Status, window: *Window) {
-  if status == nil {
-    swap(&fail.Status{}, window)
-    return
-  }
-  x11.swap(status, window)
+pub fn swap(window: *Window) !io.IoErr {
+  try x11.swap(window)
 }
 pub fn gl_proc(name: *const u8) rawptr {
   return x11.gl_proc(name)
@@ -68,12 +51,8 @@ pub fn next_event(window: *Window, output: *Event) bool {
   return x11.next_event(window, output)
 }
 // The owner must outlive all worker wake calls; stop/join them before close.
-pub fn wake(status: *fail.Status, window: *const Window) {
-  if status == nil {
-    wake(&fail.Status{}, window)
-    return
-  }
-  x11.wake(status, window)
+pub fn wake(window: *const Window) !io.IoErr {
+  try x11.wake(window)
 }
 
 // Ordered listening is disabled initially. Enable before polling input;
@@ -93,75 +72,36 @@ pub fn clipboard(window: *const Window) []const u8 {
 }
 
 pub type Surrounding = surrounding_edit.Context
-pub fn set_surrounding_text(status: *fail.Status, window: *Window, context: Surrounding) {
-  if status == nil {
-    set_surrounding_text(&fail.Status{}, window, context)
-    return
-  }
-  if status.failed { return }
+pub fn set_surrounding_text(window: *Window, context: Surrounding) !io.IoErr {
   if context.cause != surrounding_edit.Cause.Other && context.cause != surrounding_edit.Cause.InputMethod {
-    window_failed(status, fail.Kind.InvalidInput, "set surrounding text")
-    return
+    fail .InvalidInput
   }
-  x11.set_surrounding_text(status, window, context.text, context.cursor, context.anchor, context.token)
+  try x11.set_surrounding_text(window, context.text, context.cursor, context.anchor, context.token)
 }
 
-pub fn set_title(status: *fail.Status, window:*Window, title:[]const u8) {
-  if status == nil {
-    set_title(&fail.Status{}, window, title)
-    return
-  }
-  x11.set_title(status, window, title)
+pub fn set_title(window:*Window, title:[]const u8) !io.IoErr {
+  try x11.set_title(window, title)
 }
-pub fn set_size(status: *fail.Status, window:*Window, width, height:i32) {
-  if status == nil {
-    set_size(&fail.Status{}, window, width, height)
-    return
-  }
-  x11.set_size(status, window, width, height)
+pub fn set_size(window:*Window, width, height:i32) !io.IoErr {
+  try x11.set_size(window, width, height)
 }
 
-pub fn try_set_clipboard(status: *fail.Status, window:*Window, text:[]const u8) {
-  if status == nil {
-    try_set_clipboard(&fail.Status{}, window, text)
-    return
-  }
-  x11.try_set_clipboard(status, window, text)
+pub fn try_set_clipboard(window:*Window, text:[]const u8) !io.IoErr {
+  try x11.try_set_clipboard(window, text)
 }
 pub fn paste_pending(window:*const Window) bool {
   return x11.paste_pending(window)
 }
-pub fn paste_status(status: *fail.Status, window:*const Window) {
-  if status == nil {
-    paste_status(&fail.Status{}, window)
-    return
-  }
-  x11.paste_status(status, window)
+pub fn paste_status(window:*const Window) !io.IoErr {
+  try x11.paste_status(window)
 }
 
 pub fn request_paste_snapshot(window:*Window) {
   x11.request_paste_snapshot(window)
 }
 
-pub fn set_swap_interval(status: *fail.Status, window:*Window, interval:i32) {
-  if status == nil {
-    set_swap_interval(&fail.Status{}, window, interval)
-    return
-  }
-  x11.set_swap_interval(status, window, interval)
+pub fn set_swap_interval(window:*Window, interval:i32) !io.IoErr {
+  try x11.set_swap_interval(window, interval)
 }
 
 // Records a window-system failure of kind for operation.
-fn window_failed(status: *fail.Status, kind: fail.Kind, operation: []const u8) {
-  message: []const u8 = "the window system failed"
-  if kind == fail.Kind.InvalidState {
-    message = "the window is not in a state to do this"
-  } else if kind == fail.Kind.InvalidInput {
-    message = "invalid argument"
-  } else if kind == fail.Kind.Capacity {
-    message = "too large"
-  } else if kind == fail.Kind.Unsupported {
-    message = "not supported by this window system"
-  }
-  fail.set(status, fail.make(kind, operation, "", message))
-}

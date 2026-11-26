@@ -1,5 +1,4 @@
 use stream "std/io"
-use "std/fail"
 pub struct Entry {
   name: []const u8,
   prefix: []const u8,
@@ -24,7 +23,7 @@ pub struct StreamReader {
   ended: bool,
   offset: usize,
   failed: bool,
-  failure: fail.Failure,
+  failure: stream.IoErr,
 }
 
 // typeflag is the TAR protocol byte. offset counts source bytes consumed.
@@ -41,7 +40,7 @@ pub struct StreamEntry {
 // next_stream fails with InvalidInput.
 pub fn stream_reader(input: stream.Reader, header_storage: []u8, metadata: []u8) StreamReader {
   if bytes.overlaps(header_storage, metadata) {
-    return StreamReader{ failed: true, failure: fail.make(fail.Kind.InvalidInput, "read TAR", "", "the storages overlap") }
+    return StreamReader{ failed: true, failure: stream.IoErr.InvalidInput }
   }
   half := metadata.len / 2
   return StreamReader{ source_reader: input, header_storage: header_storage, metadata: metadata[..half], spare: metadata[half..half * 2] }
@@ -74,45 +73,30 @@ fn parse_header(header: []const u8) Header {
     link_name: header[157..157 + string_end(header[157..257])], size: size, kind: header[156] }, ok: true }
 }
 
-fn located(kind: fail.Kind, offset: usize) fail.Failure {
-  message: []const u8 = "malformed TAR"
-  if kind == fail.Kind.Capacity {
-    message = "the metadata does not fit the storage"
-  } else if kind == fail.Kind.Overflow {
-    message = "the archive is too large"
-  }
-  failure := fail.make(kind, "read TAR", "", message)
-  failure.offset = offset
-  failure.has_offset = true
-  return failure
-}
 // Every read contributes to the absolute input cursor. The first failure stays
 // on the reader.
-fn mark_failed(state: *StreamReader, kind: fail.Kind) {
+fn mark_failed(state: *StreamReader, err: stream.IoErr) {
   if state.failed { return }
   state.failed = true
-  state.failure = located(kind, state.offset)
+  state.failure = err
 }
-fn stream_failed(status: *fail.Status, state: *StreamReader, kind: fail.Kind) StreamEntry {
-  mark_failed(state, kind)
-  fail.set(status, state.failure)
+// Ends the reader and returns its first failure for the caller to fail with.
+fn stream_failed(state: *StreamReader, err: stream.IoErr) stream.IoErr {
+  mark_failed(state, err)
   state.ended = true
-  return StreamEntry{ offset: state.offset }
+  return state.failure
 }
 // Fills destination; the count read, short only at the end of the stream.
 fn read_exact(state: *StreamReader, destination: []u8) usize {
   total: usize = 0
   for !state.failed && total < destination.len {
-    reading: fail.Status
-    count := stream.read_status(&reading, state.source_reader, destination[total..])
-    if reading.failed {
-      state.failed = true
-      state.failure = reading.failure
+    count := stream.read(state.source_reader, destination[total..]) catch err {
+      mark_failed(state, err)
       return total
     }
     if count == 0 { return total }
     if count > #max(usize) - state.offset {
-      mark_failed(state, fail.Kind.Overflow)
+      mark_failed(state, stream.IoErr.Capacity)
       return total
     }
     state.offset += count
@@ -124,7 +108,7 @@ fn read_exact(state: *StreamReader, destination: []u8) usize {
 fn read_all(state: *StreamReader, destination: []u8) bool {
   count := read_exact(state, destination)
   if !state.failed && count != destination.len {
-    mark_failed(state, fail.Kind.InvalidInput)
+    mark_failed(state, stream.IoErr.InvalidInput)
   }
   return !state.failed
 }
@@ -154,7 +138,7 @@ fn retain_name(destination: []u8, used: *usize, source: []const u8) []const u8 {
 fn compact_metadata(state: *StreamReader, local: *Overrides) bool {
   required := state.defaults.path.len + state.defaults.link.len + local.path.len + local.link.len
   if required > state.spare.len {
-    mark_failed(state, fail.Kind.Capacity)
+    mark_failed(state, stream.IoErr.Capacity)
     return false
   }
   used: usize = 0
@@ -173,39 +157,30 @@ fn compact_metadata(state: *StreamReader, local: *Overrides) bool {
 // names plus the next extension payload. Empty metadata accepts plain TAR only.
 // Malformed or truncated input fails with InvalidInput, metadata larger than
 // its storage with Capacity. A failed reader stays failed.
-pub fn next_stream(status: *fail.Status, state: *StreamReader) StreamEntry {
-  if status == nil { return next_stream(&fail.Status{}, state) }
-  if status.failed {
-    state.ended = true
-    return StreamEntry{ offset: state.offset }
-  }
-  if state.failed { return stream_failed(status, state, fail.Kind.InvalidInput) }
+pub fn next_stream(state: *StreamReader) StreamEntry!stream.IoErr {
+  if state.failed { fail stream_failed(state, stream.IoErr.InvalidInput) }
   if state.ended { return StreamEntry{ offset: state.offset } }
-  if state.header_storage.len < 512 { return stream_failed(status, state, fail.Kind.Capacity) }
+  if state.header_storage.len < 512 { fail stream_failed(state, stream.IoErr.Capacity) }
   if state.active {
     if !discard(state, state.remaining + state.padding) {
-      return stream_failed(status, state, fail.Kind.InvalidInput)
+      fail stream_failed(state, stream.IoErr.InvalidInput)
     }
     state.active = false
   }
   local := Overrides{}
   pending: bool = false
-  if !compact_metadata(state, &local) {
-    return stream_failed(status, state, fail.Kind.InvalidInput)
-  }
+  if !compact_metadata(state, &local) { fail stream_failed(state, stream.IoErr.InvalidInput) }
   for {
     header_count := read_exact(state, state.header_storage[..512])
     if !state.failed && header_count == 0 && !pending {
       state.ended = true
       return StreamEntry{ offset: state.offset }
     }
-    if state.failed || header_count != 512 {
-      return stream_failed(status, state, fail.Kind.InvalidInput)
-    }
+    if state.failed || header_count != 512 { fail stream_failed(state, stream.IoErr.InvalidInput) }
     parsed := parse_header(state.header_storage[..512])
-    if !parsed.ok { return stream_failed(status, state, fail.Kind.InvalidInput) }
+    if !parsed.ok { fail stream_failed(state, stream.IoErr.InvalidInput) }
     if parsed.ended {
-      if pending { return stream_failed(status, state, fail.Kind.InvalidInput) }
+      if pending { fail stream_failed(state, stream.IoErr.InvalidInput) }
       state.ended = true
       return StreamEntry{ offset: state.offset }
     }
@@ -214,9 +189,7 @@ pub fn next_stream(status: *fail.Status, state: *StreamReader) StreamEntry {
     if !extension {
       apply_overrides(&entry, combined_overrides(state.defaults, local))
     }
-    if entry.size > 18446744073709551104 {
-      return stream_failed(status, state, fail.Kind.InvalidInput)
-    }
+    if entry.size > 18446744073709551104 { fail stream_failed(state, stream.IoErr.InvalidInput) }
     state.remaining = #cast(usize, entry.size)
     state.padding = (512 - state.remaining % 512) % 512
     if !extension {
@@ -226,28 +199,24 @@ pub fn next_stream(status: *fail.Status, state: *StreamReader) StreamEntry {
     }
     pending = true
     if state.remaining > state.metadata.len - state.metadata_used {
-      return stream_failed(status, state, fail.Kind.Capacity)
+      fail stream_failed(state, stream.IoErr.Capacity)
     }
     payload := state.metadata[state.metadata_used..state.metadata_used + state.remaining]
-    if !read_all(state, payload) { return stream_failed(status, state, fail.Kind.InvalidInput) }
-    if !discard(state, state.padding) {
-      return stream_failed(status, state, fail.Kind.InvalidInput)
-    }
+    if !read_all(state, payload) { fail stream_failed(state, stream.IoErr.InvalidInput) }
+    if !discard(state, state.padding) { fail stream_failed(state, stream.IoErr.InvalidInput) }
     if entry.kind == 'x' {
-      if !pax(payload, &local, false) {
-        return stream_failed(status, state, fail.Kind.InvalidInput)
-      }
+      if !pax(payload, &local, false) { fail stream_failed(state, stream.IoErr.InvalidInput) }
     } else if entry.kind == 'g' {
       if !pax(payload, &state.defaults, true) {
-        return stream_failed(status, state, fail.Kind.InvalidInput)
+        fail stream_failed(state, stream.IoErr.InvalidInput)
       }
     } else {
       if payload.len == 0 || payload[payload.len - 1] != 0 {
-        return stream_failed(status, state, fail.Kind.InvalidInput)
+        fail stream_failed(state, stream.IoErr.InvalidInput)
       }
       value := payload[..payload.len - 1]
       for byte in value {
-        if byte == 0 { return stream_failed(status, state, fail.Kind.InvalidInput) }
+        if byte == 0 { fail stream_failed(state, stream.IoErr.InvalidInput) }
       }
       if entry.kind == 'L' {
         local.path = value
@@ -257,36 +226,23 @@ pub fn next_stream(status: *fail.Status, state: *StreamReader) StreamEntry {
         local.has_link = true
       }
     }
-    if !compact_metadata(state, &local) {
-      return stream_failed(status, state, fail.Kind.InvalidInput)
-    }
+    if !compact_metadata(state, &local) { fail stream_failed(state, stream.IoErr.InvalidInput) }
   }
-  return stream_failed(status, state, fail.Kind.InvalidInput)
+  fail stream_failed(state, stream.IoErr.InvalidInput)
 }
 
 // Reads the current entry's payload incrementally; zero once the entry is
 // complete (not the end of the archive). Without a current entry, fails with
-// InvalidState.
-pub fn read_stream(status: *fail.Status, state: *StreamReader, destination: []u8) usize {
-  if status == nil { return read_stream(&fail.Status{}, state, destination) }
-  if status.failed { return 0 }
-  if state.failed {
-    fail.set(status, state.failure)
-    return 0
-  }
-  if !state.active {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "read TAR", "", "no entry is open"))
-    return 0
-  }
+// InvalidInput.
+pub fn read_stream(state: *StreamReader, destination: []u8) usize!stream.IoErr {
+  if state.failed { fail state.failure }
+  if !state.active { fail .InvalidInput }
   take := state.remaining
   if take > destination.len {
     take = destination.len
   }
   if take == 0 { return 0 }
-  if !read_all(state, destination[..take]) {
-    fail.set(status, state.failure)
-    return 0
-  }
+  if !read_all(state, destination[..take]) { fail state.failure }
   state.remaining -= take
   return take
 }

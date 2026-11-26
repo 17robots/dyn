@@ -5,7 +5,7 @@
 use mem "std/mem"
 use sync "std/sync"
 use thread "std/thread"
-use "std/fail"
+use io "std/io"
 // One queued unit of work. Private to this module: build tasks with submit.
 struct Task { run: fn(rawptr), data: rawptr }
 
@@ -53,15 +53,10 @@ fn worker(pool: *Pool) isize {
 
 // Starts workers threads, each with an owned stack of stack_size bytes, and a
 // queue of capacity tasks. Storage comes from arena; on failure the arena is
-// rewound and any started workers are stopped.
-// nil after a failure.
-pub fn start(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: usize, stack_size: usize) *Pool {
-  if status == nil { return start(arena, &fail.Status{}, workers, capacity, stack_size) }
-  if status.failed { return nil }
-  if workers == 0 || capacity == 0 || stack_size < 256 {
-    fail.invalid(status, "start pool", "", "a pool needs workers, capacity and stacks of at least 256 bytes")
-    return nil
-  }
+// rewound and any started workers are stopped. No workers or capacity, or
+// stacks under 256 bytes, fail with InvalidInput.
+pub fn start(arena: *mem.Arena, workers: usize, capacity: usize, stack_size: usize) *Pool!io.IoErr {
+  if workers == 0 || capacity == 0 || stack_size < 256 { fail .InvalidInput }
   mark := mem.arena_mark(arena)
   pool := mem.push<Pool>(arena)
   pool.lock = sync.mutex()
@@ -70,12 +65,10 @@ pub fn start(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: 
   pool.tasks = mem.push_array<Task>(arena, capacity)
   pool.workers = mem.push_array<*thread.Thread>(arena, workers)
   for i in 0..workers {
-    spawned := thread.spawn_with_size(arena, status, stack_size, worker, pool)
-    if status.failed {
-      cleanup: fail.Status
-      stop(&cleanup, pool)
+    spawned := thread.spawn_with_size(arena, stack_size, worker, pool) catch err {
+      stop(pool) catch {}
       mem.arena_rewind(arena, mark)
-      return nil
+      fail err
     }
     pool.workers[i] = spawned
     pool.started += 1
@@ -118,14 +111,10 @@ pub fn wait(pool: *Pool) {
 }
 
 // Like start, with threads from spawner, such as std/thread/posix spawner()
-// for tasks that call C libraries. spawner must stay alive until stop.
-pub fn start_spawned(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: usize, stack_size: usize, spawner: *const thread.Spawner) *Pool {
-  if status == nil { return start_spawned(arena, &fail.Status{}, workers, capacity, stack_size, spawner) }
-  if status.failed { return nil }
-  if workers == 0 || capacity == 0 || stack_size < 256 || spawner == nil {
-    fail.invalid(status, "start pool", "", "a pool needs workers, capacity, a spawner and stacks of at least 256 bytes")
-    return nil
-  }
+// for tasks that call C libraries. spawner must stay alive until stop. A
+// spawner that cannot start a thread gives no reason: System(0).
+pub fn start_spawned(arena: *mem.Arena, workers: usize, capacity: usize, stack_size: usize, spawner: *const thread.Spawner) *Pool!io.IoErr {
+  if workers == 0 || capacity == 0 || stack_size < 256 || spawner == nil { fail .InvalidInput }
   mark := mem.arena_mark(arena)
   pool := mem.push<Pool>(arena)
   pool.lock = sync.mutex()
@@ -137,11 +126,9 @@ pub fn start_spawned(arena: *mem.Arena, status: *fail.Status, workers: usize, ca
   for i in 0..workers {
     native := spawner.spawn(spawner.data, arena, stack_size, #cast(fn(rawptr) isize, worker), pool)
     if native == nil {
-      cleanup: fail.Status
-      stop(&cleanup, pool)
+      stop(pool) catch {}
       mem.arena_rewind(arena, mark)
-      fail.set(status, fail.make(fail.Kind.System, "start pool", "", "the spawner could not start a thread"))
-      return nil
+      fail io.IoErr.System(0)
     }
     pool.natives[i] = native
     pool.started += 1
@@ -150,27 +137,20 @@ pub fn start_spawned(arena: *mem.Arena, status: *fail.Status, workers: usize, ca
 }
 
 // Finishes queued tasks, then joins every worker. The pool's arena storage
-// may be reclaimed after a successful stop.
-pub fn stop(status: *fail.Status, pool: *Pool) {
-  if status == nil {
-    stop(&fail.Status{}, pool)
-    return
-  }
-  if status.failed || pool == nil { return }
+// may be reclaimed after a successful stop. A spawner that cannot join a
+// thread gives no reason: System(0).
+pub fn stop(pool: *Pool) !io.IoErr {
+  if pool == nil { return }
   sync.lock(&pool.lock)
   pool.stopping = true
   sync.condition_broadcast(&pool.ready)
   sync.unlock(&pool.lock)
   for i in 0..pool.started {
     if pool.spawner != nil {
-      if !pool.spawner.join(pool.spawner.data, pool.natives[i]) {
-        fail.set(status, fail.make(fail.Kind.System, "stop pool", "", "the spawner could not join a thread"))
-        return
-      }
+      if !pool.spawner.join(pool.spawner.data, pool.natives[i]) { fail io.IoErr.System(0) }
       continue
     }
-    thread.join(status, pool.workers[i])
-    if status.failed { return }
+    try thread.join(pool.workers[i])
   }
   pool.started = 0
 }

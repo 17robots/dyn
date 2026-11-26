@@ -1,29 +1,39 @@
 use terminal "std/terminal"
-use "std/fail"
 fn check(ok: bool) {
   if !ok {
     #panic("terminal")
   }
 }
 
+fn raw_fails(descriptor: isize) bool {
+  _ = terminal.raw(descriptor) catch { return true }
+  return false
+}
+
+// Whether restoring with no saved state fails with InvalidInput.
+fn restore_invalid() bool {
+  terminal.restore(0, nil) catch err {
+    case err {
+      .InvalidInput => { return true }
+      _ => { return false }
+    }
+  }
+  return false
+}
+
 pub fn main() {
   zero: terminal.State
   check(zero.bytes[0] == 0)
   check(!terminal.is_attached(-1))
-  bad: fail.Status
-  _ = terminal.raw(&bad, -1)
-  check(bad.failed)
-  missing: fail.Status
-  terminal.restore(&missing, 0, nil)
-  check(missing.failure.kind == fail.Kind.InvalidInput)
+  check(raw_fails(-1))
+  check(restore_invalid())
   key := terminal.key_decode("\x1b[A")
   check(key.kind == terminal.KeyKind.Up && key.consumed == 3)
   if terminal.is_attached(0) {
-    status: fail.Status
-    saved := terminal.raw(&status, 0)
-    terminal.restore(&status, 0, &saved)
-    _ = terminal.read_state(&status, 0)
-    shown := terminal.size(&status, 1)
-    check(!status.failed && shown.columns == 91 && shown.rows == 37)
+    saved := terminal.raw(0) catch { #panic("raw") }
+    terminal.restore(0, &saved) catch { #panic("restore") }
+    _ = terminal.read_state(0) catch { #panic("read state") }
+    shown := terminal.size(1) catch { #panic("size") }
+    check(shown.columns == 91 && shown.rows == 37)
   }
 }

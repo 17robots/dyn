@@ -5,7 +5,6 @@ use ui "std/ui"
 use software "std/ui/software"
 use mem "std/mem"
 use png "std/image/png"
-use "std/fail"
 use fs "std/fs"
 use fmt "std/fmt"
 patterns: [38][7]u8 = [
@@ -97,21 +96,18 @@ fn main() {
   _ = ui.checkbox(&context, 3, ui.Rect{ x: 32, y: 152, width: 180, height: 24 }, "GRID", &grid, true)
   _ = ui.slider(&context, 4, ui.Rect{ x: 240, y: 160, width: 192, height: 16 }, &count, 0, 10, true)
   label_bytes: [32]u8
-  label_status: fail.Status
-  label := fmt.buffer(&label_status, label_bytes[..])
+  label := fmt.buffer(label_bytes[..])
   fmt.write(&label, "COUNT ")
   fmt.write_i64(&label, #cast(i64, count))
   ui.label(&context, ui.Rect{ x: 32, y: 64, width: 416, height: 24 }, fmt.bytes(&label), context.style.accent)
   ui.end(&context)
   pixels := mem.push_array<u8>(output, #cast(usize, 480 * 240 * 4))
   surface := software.Surface{ pixels: pixels, width: 480, height: 240, stride: 480 * 4 }
-  rendering: fail.Status
-  software.render(&rendering, &surface, ui.first(&context), software.Font{ glyph: glyph, line_height: 20 })
-  if rendering.failed || count != 3 {
+  software.render(&surface, ui.first(&context), software.Font{ glyph: glyph, line_height: 20 }) catch { #panic("UI demo render") }
+  if count != 3 {
     #panic("UI demo render")
   }
-  encoding := fail.Status{ on_failure: fail.panic_on_failure }
-  encoded := png.encode(output, &encoding, pixels, 480, 240, 4)
+  encoded := png.encode(output, pixels, 480, 240, 4) catch { #panic("unexpected failure") }
   if !fs_write_file("ui-demo.png", encoded) {
     #panic("UI demo output")
   }

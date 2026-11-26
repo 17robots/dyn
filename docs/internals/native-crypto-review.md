@@ -247,18 +247,17 @@ use x "std/crypto/x25519"
 use ed "std/crypto/ed25519"
 use p "std/crypto/p256"
 use sha "std/crypto/sha512"
-use "std/fail"
-pub fn aes_seal(s: *fail.Status,o: []u8,t: []u8,m: []const u8,a: []const u8,k: []const u8,n: []const u8) { aes.seal(s,o,t,m,a,k,n) }
-pub fn aes_open(s: *fail.Status,o: []u8,m: []const u8,t: []const u8,a: []const u8,k: []const u8,n: []const u8) { aes.open(s,o,m,t,a,k,n) }
-pub fn chacha_block(s: *fail.Status,o: []u8,k: []const u8,n: []const u8,c: u32) { chacha.block(s,o,k,n,c) }
-pub fn chacha_xor(s: *fail.Status,o: []u8,m: []const u8,k: []const u8,n: []const u8,c: u32) { chacha.xor(s,o,m,k,n,c) }
-pub fn poly_finish(s: *fail.Status,state: *poly.State) [16]u8 { return poly.finish(s,state) }
+pub fn aes_seal(o: []u8,t: []u8,m: []const u8,a: []const u8,k: []const u8,n: []const u8) ! { try aes.seal(o,t,m,a,k,n) }
+pub fn aes_open(o: []u8,m: []const u8,t: []const u8,a: []const u8,k: []const u8,n: []const u8) ! { try aes.open(o,m,t,a,k,n) }
+pub fn chacha_block(o: []u8,k: []const u8,n: []const u8,c: u32) ! { try chacha.block(o,k,n,c) }
+pub fn chacha_xor(o: []u8,m: []const u8,k: []const u8,n: []const u8,c: u32) ! { try chacha.xor(o,m,k,n,c) }
+pub fn poly_finish(state: *poly.State) [16]u8! { return try poly.finish(state) }
 pub fn poly_equal(a: []const u8,b: []const u8) bool { return poly.equal(a,b) }
 pub fn field_swap(a: *field.Field,b: *field.Field,bit: i64) { field.select(a,b,bit) }
 pub fn field_mul(a: field.Field,b: field.Field) field.Field { return field.multiply(a,b) }
-pub fn x_shared(s: *fail.Status,o: []u8,k: []const u8,pub: []const u8) { x.shared(s,o,k,pub) }
-pub fn ed_sign(s: *fail.Status,o: []u8,m: []const u8,k: []const u8) { ed.sign(s,o,m,k) }
-pub fn p_sign(s: *fail.Status,o: []u8,m: []const u8,k: []const u8) { p.sign(s,o,m,k) }
+pub fn x_shared(o: []u8,k: []const u8,pub: []const u8) ! { try x.shared(o,k,pub) }
+pub fn ed_sign(o: []u8,m: []const u8,k: []const u8) ! { try ed.sign(o,m,k) }
+pub fn p_sign(o: []u8,m: []const u8,k: []const u8) ! { try p.sign(o,m,k) }
 pub fn sha_update(state: *sha.State,m: []const u8) { sha.update(state,m) }
 fn main() {}
 ```
@@ -309,14 +308,13 @@ counter bound without allocating or reading the forged payload:
 
 ```dyn
 use chacha "std/crypto/chacha20"
-use "std/fail"
 fn main() {
   key: [32]u8
   nonce: [12]u8
   forged := #slice(&key[0], ~#cast(usize, 0))
-  status: fail.Status
-  chacha.xor(&status, forged, forged, key[..], nonce[..], 4294967295)
-  if !status.failed { #panic("counter") }
+  rejected := false
+  chacha.xor(forged, forged, key[..], nonce[..], 4294967295) catch { rejected = true }
+  if !rejected { #panic("counter") }
   for byte in key { if byte != 0 { #panic("storage") } }
 }
 ```

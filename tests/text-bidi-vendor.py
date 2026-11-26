@@ -12,50 +12,82 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 CASES=[('',64),('plain Latin 123',64),('سلام',64),('אבג',64),('abc سلام 123 (xyz)',64),('אבג 123, abc!',64),('  123 - (45)  ',64),('abc אבג   xyz',273),('אבג abc   ',273),('a\u2067אב 12\u2069 z',64),('a\u202e123\u202c b',64),('שָׁלוֹם café 😀',64),('A\tאבג\tB',272),('A\0אבג',64)]
 def lit(data): return '"'+''.join(f'\\x{x:02x}' for x in data)+'"'
-SOURCE=r'''use bidi "vendor/fribidi"
+SOURCE=r'''use io "std/io"
+use bidi "vendor/fribidi"
 use dynlib "std/dynlib"
 use mem "std/mem"
-use "std/fail"
 use fs "std/fs"
 use binary "std/encoding/binary"
 use errors "std/io"
-struct bidi_load_Outcome { api: bidi.Api, failure: fail.Failure, kind: fail.Kind }
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+struct bidi_load_Outcome { api: bidi.Api, failure: Failure, kind: Kind }
 fn bidi_load(p0: dynlib.Handle) bidi_load_Outcome {
-  status: fail.Status
-  value := bidi.load(&status, p0)
-  return bidi_load_Outcome{ api: value, failure: status.failure, kind: status.failure.kind }
+  value := bidi.load(p0) catch err {
+    failure := failure_of(err)
+    return bidi_load_Outcome{ failure: failure, kind: failure.kind }
+  }
+  return bidi_load_Outcome{ api: value }
 }
 
-struct bidi_resolve_Outcome { value: bidi.Paragraph, failure: fail.Failure, kind: fail.Kind }
+struct bidi_resolve_Outcome { value: bidi.Paragraph, failure: Failure, kind: Kind }
 fn bidi_resolve(a0: *mem.Arena, p0: *const bidi.Api, p1: []const u8, p2: u32) bidi_resolve_Outcome {
-  status: fail.Status
-  value := bidi.resolve(a0, &status, p0, p1, p2)
-  return bidi_resolve_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+  value := bidi.resolve(a0, p0, p1, p2) catch err {
+    failure := failure_of(err)
+    return bidi_resolve_Outcome{ failure: failure, kind: failure.kind }
+  }
+  return bidi_resolve_Outcome{ value: value }
 }
 
-struct bidi_reorder_Outcome { value: bidi.Line, failure: fail.Failure, kind: fail.Kind }
+struct bidi_reorder_Outcome { value: bidi.Line, failure: Failure, kind: Kind }
 fn bidi_reorder(a0: *mem.Arena, p0: *const bidi.Api, p1: *const bidi.Paragraph, p2, p3: usize) bidi_reorder_Outcome {
-  status: fail.Status
-  value := bidi.reorder(a0, &status, p0, p1, p2, p3)
-  return bidi_reorder_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+  value := bidi.reorder(a0, p0, p1, p2, p3) catch err {
+    failure := failure_of(err)
+    return bidi_reorder_Outcome{ failure: failure, kind: failure.kind }
+  }
+  return bidi_reorder_Outcome{ value: value }
 }
 
-struct dynlib_open_Outcome { value: dynlib.Handle, failure: fail.Failure, kind: fail.Kind }
+struct dynlib_open_Outcome { value: dynlib.Handle, failure: Failure, kind: Kind }
 fn dynlib_open(p0: []const u8, p1: i32) dynlib_open_Outcome {
-  status: fail.Status
-  value := dynlib.open(&status, p0, p1)
-  return dynlib_open_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+  value := dynlib.open(p0, p1) catch err {
+    failure := failure_of(err)
+    return dynlib_open_Outcome{ failure: failure, kind: failure.kind }
+  }
+  return dynlib_open_Outcome{ value: value }
 }
 
-struct dynlib_close_Outcome { failure: fail.Failure, kind: fail.Kind }
+struct dynlib_close_Outcome { failure: Failure, kind: Kind }
 fn dynlib_close(p0: *dynlib.Handle) dynlib_close_Outcome {
-  status: fail.Status
-  dynlib.close(&status, p0)
-  return dynlib_close_Outcome{ failure: status.failure, kind: status.failure.kind }
+  dynlib.close(p0) catch err {
+    failure := failure_of(err)
+    return dynlib_close_Outcome{ failure: failure, kind: failure.kind }
+  }
+  return dynlib_close_Outcome{}
 }
 
-fn failed(failure: fail.Failure) bool {
-  return failure.kind != fail.Kind.Ok
+fn failed(failure: Failure) bool {
+  return failure.kind != Kind.Ok
 }
 
 fn check(ok:bool) { if !ok { #panic("FriBidi binding contract") } }
@@ -134,10 +166,10 @@ fn main() {
  check(failed(bidi_load(nil).failure))
  nil_api:=bidi.Api{}
  check(!failed(bidi_resolve(arena,&nil_api,"",bidi.Auto).failure))
- check(bidi_resolve(arena,&nil_api,"a",bidi.Auto).kind==fail.Kind.InvalidState && mem.arena_mark(arena)==mark)
+ check(bidi_resolve(arena,&nil_api,"a",bidi.Auto).kind==Kind.InvalidInput && mem.arena_mark(arena)==mark)
  broken:=api
  broken.log2vis=fail_resolve
- check(bidi_resolve(arena,&broken,"abc",bidi.Auto).kind==fail.Kind.System && mem.arena_mark(arena)==mark)
+ check(bidi_resolve(arena,&broken,"abc",bidi.Auto).kind==Kind.System && mem.arena_mark(arena)==mark)
  source:[4]u8=[97,215,144,98]
  owned:=bidi_resolve(arena,&api,source[..],bidi.Auto)
  check(!failed(owned.failure) && owned.value.logical[1]==1488 && owned.value.starts[1]==1 && owned.value.ends[1]==3)
@@ -151,16 +183,15 @@ fn main() {
  check(failed(bidi_reorder(arena,&api,&paragraph,0,4).failure) && mem.arena_mark(arena)==mark)
  broken=api
  broken.reorder_line=fail_reorder
- check(bidi_reorder(arena,&broken,&paragraph,0,2).kind==fail.Kind.System && mem.arena_mark(arena)==mark)
+ check(bidi_reorder(arena,&broken,&paragraph,0,2).kind==Kind.System && mem.arena_mark(arena)==mark)
  check(!failed(dynlib_close(&library.value).failure))
  check(paragraph.logical[1]==1488 && paragraph.starts[1]==1 && paragraph.ends[1]==3 && paragraph.levels[1]==saved_level)
 }
 
 // Writes data to path; whether it worked.
 fn fs_write_file(path: []const u8, data: []const u8) bool {
-  status: fail.Status
-  fs.write_all(path, data) catch { #panic("cannot write a file") }
-  return !status.failed
+  fs.write_all(path, data) catch { return false }
+  return true
 }
 '''
 C=r'''#include <fribidi.h>

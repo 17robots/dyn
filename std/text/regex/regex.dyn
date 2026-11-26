@@ -1,5 +1,7 @@
 use mem "std/mem"
-use "std/fail"
+use parse "std/parse"
+// What stopped the compiler.
+enum Problem { None, Invalid, TooLarge }
 // Where a group matched, as a half-open interval. A group that took no part in
 // the match is Span{}.
 pub struct Span { start: usize, end: usize }
@@ -12,7 +14,7 @@ struct Instruction { op: u8, byte: u8, x: usize, y: usize, z: usize }
 // Copies share mutable workspace: serialize find/next calls on a program and its
 // copies. Compile separately for concurrent use. Reset/release invalidates all.
 // A program from a failed compile matches nothing.
-pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Span, error: fail.Kind, valid: bool }
+pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Span, error: Problem, valid: bool }
 
 const Char: u8 = 1
 const Any: u8 = 2
@@ -333,15 +335,15 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       in_class = false
     } else if !in_class && byte == '(' {
       nesting += 1
-      if nesting > 128 { return Program{ error: fail.Kind.Capacity } }
+      if nesting > 128 { return Program{ error: Problem.TooLarge } }
     } else if !in_class && byte == ')' && nesting > 0 {
       nesting -= 1
     }
   }
   state := CompileState{ pattern: pattern, tokens: workspace, ok: true }
   if pattern.len == 0 || !expression(&state, 0, pattern.len) || !state.ok {
-    if state.capacity { return Program{ error: fail.Kind.Capacity } }
-    return Program{ error: fail.Kind.InvalidInput }
+    if state.capacity { return Program{ error: Problem.TooLarge } }
+    return Program{ error: Problem.Invalid }
   }
   top: usize = 0
   used: usize = 0
@@ -350,7 +352,7 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
     item := workspace[i]
     if item.op < ConcatToken {
       if used >= storage.len || top * 2 + 1 >= scratch.len {
-        return Program{ error: fail.Kind.Capacity }
+        return Program{ error: Problem.TooLarge }
       }
       storage[used] = item
       part: usize = 0
@@ -364,7 +366,7 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       used += 1
       top += 1
     } else if item.op == ConcatToken {
-      if top < 2 { return Program{ error: fail.Kind.InvalidInput } }
+      if top < 2 { return Program{ error: Problem.Invalid } }
       right := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       left := Fragment{ start: scratch[(top - 2) * 2], out: scratch[(top - 2) * 2 + 1] }
       patch_list(storage, left.out, right.start)
@@ -372,8 +374,8 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       scratch[(top - 1) * 2] = left.start
       scratch[(top - 1) * 2 + 1] = right.out
     } else if item.op == AlternateToken {
-      if top < 2 { return Program{ error: fail.Kind.InvalidInput } }
-      if used >= storage.len { return Program{ error: fail.Kind.Capacity } }
+      if top < 2 { return Program{ error: Problem.Invalid } }
+      if used >= storage.len { return Program{ error: Problem.TooLarge } }
       right2 := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       left2 := Fragment{ start: scratch[(top - 2) * 2], out: scratch[(top - 2) * 2 + 1] }
       storage[used] = Instruction{ op: Split, x: left2.start, y: right2.start }
@@ -383,8 +385,8 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       scratch[(top - 1) * 2 + 1] = joined
       used += 1
     } else if item.op == StarToken || item.op == PlusToken || item.op == OptionalToken {
-      if top < 1 { return Program{ error: fail.Kind.InvalidInput } }
-      if used >= storage.len { return Program{ error: fail.Kind.Capacity } }
+      if top < 1 { return Program{ error: Problem.Invalid } }
+      if used >= storage.len { return Program{ error: Problem.TooLarge } }
       value := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       storage[used] = Instruction{ op: Split, x: value.start }
       if item.op == StarToken {
@@ -402,21 +404,19 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
     }
     i += 1
   }
-  if top != 1 { return Program{ error: fail.Kind.InvalidInput } }
-  if used >= storage.len { return Program{ error: fail.Kind.Capacity } }
+  if top != 1 { return Program{ error: Problem.Invalid } }
+  if used >= storage.len { return Program{ error: Problem.TooLarge } }
   start := scratch[0]
   storage[used] = Instruction{ op: Accept }
   patch_list(storage, scratch[1], used)
   used += 1
-  return Program{ pattern: pattern, code: storage[..used], start: start, groups: state.groups, error: fail.Kind.Ok, valid: true }
+  return Program{ pattern: pattern, code: storage[..used], start: start, groups: state.groups, error: Problem.None, valid: true }
 }
 
 // Arena exhaustion/size overflow panics, like other arena producers. A
-// malformed pattern fails with InvalidInput at the offending byte. Nesting is
+// malformed pattern fails with Invalid at the offending byte. Nesting is
 // limited to 128.
-pub fn compile(arena: *mem.Arena, status: *fail.Status, pattern: []const u8) Program {
-  if status == nil { return compile(arena, &fail.Status{}, pattern) }
-  if status.failed { return Program{} }
+pub fn compile(arena: *mem.Arena, pattern: []const u8) Program!parse.ParseErr {
   depth: usize = 0
   escaped := false
   in_class := false
@@ -432,10 +432,8 @@ pub fn compile(arena: *mem.Arena, status: *fail.Status, pattern: []const u8) Pro
       in_class = false
     } else if !in_class && b == '(' {
       depth += 1
-      if depth > 128 {
-        fail.at(status, fail.Kind.InvalidInput, "compile pattern", "nesting too deep", i)
-        return Program{}
-      }
+      // Nesting too deep.
+      if depth > 128 { fail parse.ParseErr.Invalid(i) }
     } else if !in_class && b == ')' && depth > 0 {
       depth -= 1
     }
@@ -445,8 +443,7 @@ pub fn compile(arena: *mem.Arena, status: *fail.Status, pattern: []const u8) Pro
     if count.capacity {
       #panic("regex compile size overflow")
     }
-    fail.at(status, fail.Kind.InvalidInput, "compile pattern", "malformed pattern", count.offset)
-    return Program{}
+    fail parse.ParseErr.Invalid(count.offset)
   }
   if count.used > (NoPatch - 1) / 2 {
     #panic("regex compile size overflow")
@@ -629,24 +626,16 @@ fn execute(program: Program, text: []const u8, captures: []Span, workspace: []us
   return false
 }
 
-// The first match in text. NotFound when there is none; InvalidState for a
-// program from a failed compile. Reuses arena-reserved workspace: matching
-// itself allocates nothing.
-pub fn find(status: *fail.Status, program: Program, text: []const u8) Match {
-  if status == nil { return find(&fail.Status{}, program, text) }
-  if status.failed { return Match{} }
-  return find_from(status, program, text, 0)
+// The first match in text; fails when there is none. A program that did not
+// come from compile panics. Reuses arena-reserved workspace: matching itself
+// allocates nothing.
+pub fn find(program: Program, text: []const u8) Match! {
+  return try find_from(program, text, 0)
 }
-fn find_from(status: *fail.Status, program: Program, text: []const u8, from: usize) Match {
-  if !program.valid {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "find match", program.pattern, "the pattern did not compile"))
-    return Match{}
-  }
+fn find_from(program: Program, text: []const u8, from: usize) Match! {
+  if !program.valid { #panic("regex.find: the program did not come from compile") }
   whole := Span{}
-  if !execute(program, text, program.captures, program.workspace, from, &whole) {
-    fail.set(status, fail.make(fail.Kind.NotFound, "find match", program.pattern, "no match"))
-    return Match{}
-  }
+  if !execute(program, text, program.captures, program.workspace, from, &whole) { fail }
   return Match{ start: whole.start, end: whole.end, captures: program.captures }
 }
 // Whether pattern matches anywhere in text.
@@ -759,9 +748,7 @@ pub fn next(state: *Iterator) Match {
     state.ended = true
     return Match{}
   }
-  missing: fail.Status
-  result := find_from(&missing, state.program, state.text, state.offset)
-  if missing.failed {
+  result := find_from(state.program, state.text, state.offset) catch {
     state.ended = true
     return Match{}
   }

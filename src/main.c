@@ -558,7 +558,7 @@ static bool harness_discover_and_append(const DynContext *context, DynSources *s
       ok = strbuf_append(&code, &len, &cap, line);
     }
     ok = ok && strbuf_append(&code, &len, &cap,
-                             "  __dyn_out := __dyn_fmt.buffer(nil, __dyn_buf[..])\n"
+                             "  __dyn_out := __dyn_fmt.buffer(__dyn_buf[..])\n"
                              "  if __dyn_failed == 0 {\n"
                              "    __dyn_fmt.write(&__dyn_out, \"test result: ok. \")\n"
                              "  } else {\n"
@@ -597,7 +597,7 @@ static bool harness_discover_and_append(const DynContext *context, DynSources *s
                "      }\n"
                "    }\n"
                "  }\n"
-               "  __dyn_bo_%zu := __dyn_fmt.buffer(nil, __dyn_buf[..])\n"
+               "  __dyn_bo_%zu := __dyn_fmt.buffer(__dyn_buf[..])\n"
                "  __dyn_fmt.write(&__dyn_bo_%zu, \"BENCH %s: iters=\")\n"
                "  __dyn_fmt.write_u64(&__dyn_bo_%zu, __dyn_iters)\n"
                "  __dyn_fmt.write(&__dyn_bo_%zu, \" median=\")\n"
@@ -648,7 +648,7 @@ static bool harness_discover_and_append(const DynContext *context, DynSources *s
                "    %s(__dyn_fbuf[..__dyn_flen])\n"
                "    __dyn_k_%zu += 1\n"
                "  }\n"
-               "  __dyn_fo_%zu := __dyn_fmt.buffer(nil, __dyn_buf[..])\n"
+               "  __dyn_fo_%zu := __dyn_fmt.buffer(__dyn_buf[..])\n"
                "  __dyn_fmt.write(&__dyn_fo_%zu, \"FUZZ %s: OK (\")\n"
                "  __dyn_fmt.write_u64(&__dyn_fo_%zu, __dyn_iters)\n"
                "  __dyn_fmt.write(&__dyn_fo_%zu, \" iterations)\")\n"

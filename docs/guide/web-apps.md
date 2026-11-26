@@ -367,7 +367,7 @@ their SQL, and runs them in one call each. Open one connection per worker
 and pick it with `evented.worker_index`; then no handler shares a statement.
 
 ```dyn
-use "std/fail"
+use "std/io"
 use "std/mem"
 use "std/net/http"
 use "std/net/http/evented"
@@ -375,18 +375,18 @@ use "vendor/sqlite"
 
 struct Database { handle: sqlite.Database, statements: sqlite.Cache }
 
-fn name_of(status: *fail.Status, databases: []Database, response: *http.Response, id: i64) []const u8 {
+fn name_of(databases: []Database, response: *http.Response, id: i64) []const u8!io.IoErr {
   statements := &databases[evented.worker_index(response)].statements
-  lookup := sqlite.cached(status, statements, "SELECT name FROM user WHERE id=?1")
-  if !sqlite.first(status, lookup, id) { return "" }
+  lookup := try sqlite.cached(statements, "SELECT name FROM user WHERE id=?1")
+  if !(try sqlite.first(lookup, id)) { return "" }
   defer sqlite.done(lookup)
   return sqlite.text(evented.arena(response), lookup, 0)
 }
 ```
 
-`sqlite.run(&status, statement, values...)` binds, steps to the end and
-resets; a failure lands on the status, so `sqlite.constraint(&status.failure)`
-tells a duplicate key from other errors. `first` stops at the first row,
+`sqlite.run(statement, values...)` binds, steps to the end and resets, and
+`sqlite.constraint(err)` on its failure tells a duplicate key from other
+errors. `first` stops at the first row,
 `query` and `next` walk rows, and `integer`, `bytes` (borrowed) and `text`
 (copied into an arena) read columns. Copy borrowed bytes before the next
 step. See [sqlite.md](sqlite.md).

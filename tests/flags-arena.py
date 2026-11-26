@@ -7,20 +7,26 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = '''use "std/fail"
-use mem "std/mem"
+SOURCE = '''use mem "std/mem"
 use flags "std/flags"
 use strings "std/strings"
 use "std/bytes"
 fn check(ok: bool, message: []const u8) { if !ok { #panic(message) } }
-struct Outcome { value: flags.Parsed, failure: fail.Failure }
+// A parse's value, or failed and its error.
+struct Outcome { value: flags.Parsed, failed: bool, failure: flags.ArgsErr }
 fn parse(arena: *mem.Arena, options: []const flags.Option, arguments: [][]const u8) Outcome {
-  status: fail.Status
-  value := flags.parse(arena, &status, options, arguments)
-  return Outcome{ value: value, failure: status.failure }
+  value := flags.parse(arena, options, arguments) catch err { return Outcome{ failed: true, failure: err } }
+  return Outcome{ value: value }
 }
 fn message(outcome: *const Outcome, text: []const u8) bool {
-  return outcome.failure.kind == fail.Kind.InvalidInput && bytes.equal(fail.message_text(&outcome.failure), text)
+  return outcome.failed && bytes.equal(flags.message(outcome.failure), text)
+}
+fn unknown_at(outcome: *const Outcome, index: usize) bool {
+  if !outcome.failed { return false }
+  case outcome.failure {
+    .UnknownOption(at) => { return at == index }
+    _ => { return false }
+  }
 }
 fn main() {
   zero_result := flags.Parsed{}
@@ -36,7 +42,7 @@ fn main() {
   positional: [3]u8 = ['s', 'r', 'c']
   args: [10][]const u8 = ["first", "-vvn-42", "--ratio=1.25e2", "-o", output[..], positional[..], "--count", "7", "--", "-v"]
   parsed := parse(arena, options[..], args[..])
-  check(parsed.failure.kind == fail.Kind.Ok, "success")
+  check(!parsed.failed, "success")
   values := parsed.value.values
   check(values.len == 5 && values[0].occurrences == 2 && values[1].occurrences == 2, "occurrences")
   check(bytes.equal(values[1].text, "7") && bytes.equal(values[2].text, "1.25e2"), "typed/last wins")
@@ -51,11 +57,11 @@ fn main() {
   mark := mem.arena_mark(arena)
   bad: [1][]const u8 = ["--unknown"]
   failure := parse(arena, options[..], bad[..])
-  check(message(&failure, "unknown option") && failure.failure.offset == 0 && bytes.equal(fail.path_text(&failure.failure), bad[0]), "unknown diagnostic")
+  check(message(&failure, "unknown option") && unknown_at(&failure, 0), "unknown diagnostic")
   check(failure.value.values.len == 0 && failure.value.positionals.len == 0 && mem.arena_mark(arena) == mark && prefix[0] == 91, "failure rollback")
   choice_args: [2][]const u8 = ["-m", "fast"]
   choice_result := parse(arena, options[..], choice_args[..])
-  check(choice_result.failure.kind == fail.Kind.Ok && choice_result.value.values[3].occurrences == 1 && bytes.equal(choice_result.value.values[3].text, "fast"), "explicit choice")
+  check(!choice_result.failed && choice_result.value.values[3].occurrences == 1 && bytes.equal(choice_result.value.values[3].text, "fast"), "explicit choice")
   mem.arena_rewind(arena, mark)
   bad[0] = "-n"
   missing := parse(arena, options[..], bad[..])
@@ -66,7 +72,7 @@ fn main() {
   for invalid in ["-nnope", "--ratio=bad", "--mode=other"] {
     bad[0] = invalid
     result := parse(arena, options[..], bad[..])
-    check(message(&result, "invalid value") && result.failure.offset == 1, "invalid typed")
+    check(message(&result, "invalid value"), "invalid typed")
   }
   empty: [0][]const u8
   options[3].default_value = "invalid"
@@ -82,20 +88,18 @@ fn main() {
   tiny_pad := (16-(#cast(usize,&tiny[0])&15))&15
   zero := mem.arena_from_buffer(tiny[tiny_pad..tiny_pad+mem.ArenaHeader])
   result := parse(zero, none[..], empty[..])
-  check(result.failure.kind == fail.Kind.Ok && result.value.values.len == 0 && result.value.positionals.len == 0 && mem.arena_used(zero) == 0, "empty")
+  check(!result.failed && result.value.values.len == 0 && result.value.positionals.len == 0 && mem.arena_used(zero) == 0, "empty")
 }
 '''
 PANIC = '''use mem "std/mem"
-use "std/fail"
 use flags "std/flags"
 fn main() {
-  status: fail.Status
   storage: [1+mem.ArenaBufferOverhead]u8
   pad := (16-(#cast(usize,&storage[0])&15))&15
   arena := mem.arena_from_buffer(storage[pad..pad+mem.ArenaHeader+1])
   options: [1]flags.Option = [flags.bool_option("verbose", 'v')]
   arguments: [0][]const u8
-  _ = flags.parse(arena, &status, options[..], arguments[..])
+  _ = flags.parse(arena, options[..], arguments[..]) catch { #panic("parse failed") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-flags-arena-') as temporary:

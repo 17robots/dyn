@@ -1,6 +1,5 @@
 use bytes "std/bytes"
 use gzip "std/compress/gzip"
-use "std/fail"
 use files "std/fs"
 use hash "std/hash"
 use io "std/io"

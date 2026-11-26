@@ -10,7 +10,6 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 ENV = dict(os.environ, DYN_SDK=str(ROOT))
 SOURCE = r'''use mem "std/mem"
 use builder "std/bytes/builder"
-use "std/fail"
 use bytes "std/bytes"
 fn require(ok: bool) { if !ok { #panic("builder chain contract") } }
 fn moving(block: usize, bounded: bool) {
@@ -22,9 +21,7 @@ fn moving(block: usize, bounded: bool) {
   defer mem.arena_release(arena)
   state: builder.Builder
   builder.reserve(arena, &state, 8)
-  appended: fail.Status
-  builder.append(&appended, &state, "abcdefgh")
-  require(!appended.failed)
+  builder.append(&state, "abcdefgh") catch { #panic("append") }
   old := state.storage
   first := arena.current
   for i in mem.ArenaHeader + 8..first.data.len { first.data[i] = 85 }
@@ -56,9 +53,7 @@ fn current_block() {
   state: builder.Builder
   builder.reserve(arena, &state, 64)
   require(arena.current.previous == arena)
-  seeded: fail.Status
-  builder.append(&seeded, &state, "seed")
-  require(!seeded.failed)
+  builder.append(&state, "seed") catch { #panic("append") }
   previous := &state.storage[0]
   mark := mem.arena_mark(arena)
   builder.reserve(arena, &state, 80)
@@ -75,20 +70,11 @@ fn current_block() {
 fn failures() {
   backing: [4]u8 = [1, 2, 3, 4]
   state := builder.from_buffer(backing[..])
-  status: fail.Status
-  builder.append(&status, &state, "abc")
-  require(!status.failed)
-  builder.append(&status, &state, "XY")
-  require(status.failure.kind == fail.Kind.Capacity)
+  builder.append(&state, "abc") catch { #panic("append") }
+  full := false
+  builder.append(&state, "XY") catch { full = true }
+  require(full)
   require(state.length == 3 && bytes.equal(builder.bytes(&state), "abc") && backing[3] == 4)
-  // A failed status turns later appends into no-ops.
-  builder.append(&status, &state, "z")
-  require(state.length == 3)
-  builder.clear(&state)
-  state.length = 5
-  corrupt: fail.Status
-  builder.append(&corrupt, &state, "a")
-  require(corrupt.failure.kind == fail.Kind.InvalidState && bytes.equal(backing[..], "abc\x04"))
 }
 fn main() {
   for size in [160, 176, 192] {

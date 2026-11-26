@@ -11,7 +11,7 @@ macos = (ROOT / 'std/process/macos.dyn').read_text()
 process = (ROOT / 'std/process/process.dyn').read_text()
 # Compile the production conversion/setup bodies, replacing only OS entry points.
 adapter = ('use mem "std/mem"\nuse c "std/c"\nuse bytes "std/bytes"\n'
-           'use io "std/io"\nuse "std/fail"\n'
+           'use io "std/io"\n'
            + process[process.index('pub struct Redirect'):process.index('// Starts path with arguments')]
            + macos[macos.index('struct CString'):macos.index('fn wait_native')])
 MOCKS = '''
@@ -46,9 +46,8 @@ fn main() {
     #panic("empty CString allocation")
   }
   text := c_string(arena, "café-😀")
-  reading: fail.Status
-  parsed := c.bytes_from_string(&reading, text, 16)
-  if reading.failed || !bytes.equal(parsed, "café-😀") { #panic("CString bytes") }
+  parsed := c.bytes_from_string(text, 16) catch { #panic("CString bytes") }
+  if !bytes.equal(parsed, "café-😀") { #panic("CString bytes") }
   before_invalid := mem.arena_mark(arena)
   invalid: [3]u8 = ['a', 0, 'b']
   if c_string(arena, invalid[..]) != nil || mem.arena_mark(arena) != before_invalid {
@@ -58,8 +57,8 @@ fn main() {
   vector := c_vector(arena, arguments[..])
   if vector == nil || #slice(vector, 4)[3].value != nil { #panic("vector sentinel") }
   for at in 0..3 {
-    item := c.bytes_from_string(&reading, #slice(vector, 4)[at].value, 32)
-    if reading.failed || !bytes.equal(item, arguments[at]) { #panic("vector bytes") }
+    item := c.bytes_from_string(#slice(vector, 4)[at].value, 32) catch { #panic("vector bytes") }
+    if !bytes.equal(item, arguments[at]) { #panic("vector bytes") }
   }
   before_spawn := mem.arena_mark(arena)
   environment: [1][]const u8 = ["KEY=value"]
@@ -68,7 +67,8 @@ fn main() {
     #panic("spawn setup and rewind")
   }
   if !rejects(arena, invalid[..], arguments[..], before_spawn) { #panic("failed setup rewind") }
-  if !bytes.equal(c.bytes_from_string(&reading, text, 16), "café-😀") { #panic("live allocation") }
+  live := c.bytes_from_string(text, 16) catch { #panic("live allocation") }
+  if !bytes.equal(live, "café-😀") { #panic("live allocation") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-process-cstring-') as temporary:
@@ -83,7 +83,6 @@ with tempfile.TemporaryDirectory(prefix='dyn-process-cstring-') as temporary:
     native = root / 'native'
     native.mkdir()
     (native / 'main.dyn').write_text('''use "std/process"
-use "std/fail"
 use "std/mem"
 fn main() {
   storage: [4096]u8

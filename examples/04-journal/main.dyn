@@ -16,7 +16,6 @@
 // Run: dyn run examples/04-journal < examples/04-journal/commands.txt
 
 use "std/bufio"
-use "std/fail"
 use "std/bytes"
 use "std/io"
 use "std/mem"
@@ -159,18 +158,19 @@ fn main() {
   input_storage: [512]u8
   reader := bufio.reader(io.stdin(), input_storage[..])
   for {
-    // Each read has its own status: a line too long for the storage is
-    // skipped, but input that cannot be read stops the journal.
-    input: fail.Status
-    line := bufio.read_line(&input, &reader)
-    if input.failed && input.failure.kind == fail.Kind.Capacity {
-      io.println("line too long")
-      continue
-    }
-    if input.failed {
-      storage: [512]u8
-      io.eprintln("journal: {}", fail.describe(storage[..], input.failure))
-      return
+    // A line too long for the storage is skipped, but input that cannot be
+    // read stops the journal.
+    line := bufio.read_line(&reader) catch err {
+      case err {
+        .Capacity => {
+          io.println("line too long")
+          continue
+        }
+        _ => {
+          io.eprintln("journal: {}", err)
+          return
+        }
+      }
     }
     if reader.ended { return }
     run(&journal, frame, line)

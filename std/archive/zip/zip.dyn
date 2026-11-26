@@ -2,7 +2,6 @@ use mem "std/mem"
 use deflate "std/compress/deflate"
 use hashing "std/hash"
 use stream "std/io"
-use "std/fail"
 pub struct Entry {
   name: []const u8,
   payload: []const u8,
@@ -16,7 +15,7 @@ pub struct Entry {
 // After a failure a reader stays failed: next fails the same way again. A
 // reader's ended turns true when next returns no entry, at the end of the
 // archive or after a failure; offset is the position after the last entry.
-pub struct ArchiveReader { source: []const u8, offset: usize, indexed: bool, directory_start: usize, directory_end: usize, remaining: usize, failed: bool, failure: fail.Failure, ended: bool }
+pub struct ArchiveReader { source: []const u8, offset: usize, indexed: bool, directory_start: usize, directory_end: usize, remaining: usize, failed: bool, failure: stream.IoErr, ended: bool }
 pub struct StreamReader {
   source_reader: stream.Reader,
   header_storage: []u8,
@@ -25,7 +24,7 @@ pub struct StreamReader {
   ended: bool,
   offset: usize,
   failed: bool,
-  failure: fail.Failure,
+  failure: stream.IoErr,
 }
 
 // The three storages must not overlap; if they do, the first next fails with
@@ -33,24 +32,12 @@ pub struct StreamReader {
 pub fn stream_reader(input: stream.Reader, header_storage: []u8, name_storage: []u8,
   payload_storage: []u8) StreamReader {
   if bytes.overlaps(header_storage, name_storage) || bytes.overlaps(header_storage, payload_storage) || bytes.overlaps(name_storage, payload_storage) {
-    return StreamReader{ failed: true, failure: fail.make(fail.Kind.InvalidInput, "read ZIP", "", "the storages overlap") }
+    return StreamReader{ failed: true, failure: stream.IoErr.InvalidInput }
   }
   return StreamReader{ source_reader: input, header_storage: header_storage,
     name_storage: name_storage, payload_storage: payload_storage }
 }
 
-fn message_of(kind: fail.Kind) []const u8 {
-  if kind == fail.Kind.Capacity { return "an entry does not fit the storage" }
-  if kind == fail.Kind.Unsupported { return "unsupported ZIP feature" }
-  if kind == fail.Kind.Overflow { return "the archive is too large" }
-  return "malformed ZIP"
-}
-fn located(kind: fail.Kind, offset: usize) fail.Failure {
-  failure := fail.make(kind, "read ZIP", "", message_of(kind))
-  failure.offset = offset
-  failure.has_offset = true
-  return failure
-}
 // Records the first failure on the reader and reports it.
 fn stream_ended(state: *StreamReader) Entry {
   state.ended = true
@@ -60,40 +47,36 @@ fn archive_ended(state: *ArchiveReader) Entry {
   state.ended = true
   return Entry{}
 }
-fn stream_failed(status: *fail.Status, state: *StreamReader, kind: fail.Kind) Entry {
+fn stream_failed(state: *StreamReader, err: stream.IoErr) stream.IoErr {
   if !state.failed {
     state.failed = true
-    state.failure = located(kind, state.offset)
+    state.failure = err
   }
-  fail.set(status, state.failure)
   state.ended = true
-  return Entry{}
+  return state.failure
 }
-fn archive_failed(status: *fail.Status, state: *ArchiveReader, kind: fail.Kind) Entry {
+fn archive_failed(state: *ArchiveReader, err: stream.IoErr) stream.IoErr {
   if !state.failed {
     state.failed = true
-    state.failure = located(kind, state.offset)
+    state.failure = err
   }
-  fail.set(status, state.failure)
   state.ended = true
-  return Entry{}
+  return state.failure
 }
 // Fills destination; the count read, short only at the end of the stream. A
 // stream failure is kept on the reader.
 fn stream_read(state: *StreamReader, destination: []u8) usize {
   total: usize = 0
   for total < destination.len {
-    reading: fail.Status
-    count := stream.read_status(&reading, state.source_reader, destination[total..])
-    if reading.failed {
+    count := stream.read(state.source_reader, destination[total..]) catch err {
       state.failed = true
-      state.failure = reading.failure
+      state.failure = err
       return total
     }
     if count == 0 { return total }
     if count > #max(usize) - state.offset {
       state.failed = true
-      state.failure = located(fail.Kind.Overflow, state.offset)
+      state.failure = stream.IoErr.Capacity
       return total
     }
     state.offset += count
@@ -106,7 +89,7 @@ fn stream_exact(state: *StreamReader, destination: []u8) bool {
   if state.failed { return false }
   if count != destination.len {
     state.failed = true
-    state.failure = located(fail.Kind.InvalidInput, state.offset)
+    state.failure = stream.IoErr.InvalidInput
     return false
   }
   return true
@@ -128,19 +111,17 @@ fn stream_discard(state: *StreamReader, amount: usize) bool {
 // Reads one local-file entry from a stream. Name and payload borrow caller
 // storage. Malformed input fails with InvalidInput, an entry larger than the
 // storage with Capacity, encryption or data descriptors with Unsupported.
-pub fn next_stream(status: *fail.Status, state: *StreamReader) Entry {
-  if status == nil { return next_stream(&fail.Status{}, state) }
-  if status.failed { return stream_ended(state) }
-  if state.failed { return stream_failed(status, state, fail.Kind.InvalidInput) }
+pub fn next_stream(state: *StreamReader) Entry!stream.IoErr {
+  if state.failed { fail stream_failed(state, stream.IoErr.InvalidInput) }
   if state.ended { return stream_ended(state) }
-  if state.header_storage.len < 30 { return stream_failed(status, state, fail.Kind.Capacity) }
+  if state.header_storage.len < 30 { fail stream_failed(state, stream.IoErr.Capacity) }
   first := stream_read(state, state.header_storage[..4])
-  if state.failed { return stream_failed(status, state, fail.Kind.InvalidInput) }
+  if state.failed { fail stream_failed(state, stream.IoErr.InvalidInput) }
   if first == 0 {
     state.ended = true
     return Entry{}
   }
-  if first != 4 { return stream_failed(status, state, fail.Kind.InvalidInput) }
+  if first != 4 { fail stream_failed(state, stream.IoErr.InvalidInput) }
   signature := u32le(state.header_storage, 0)
   if signature == 33639248 {
     state.ended = true
@@ -148,34 +129,33 @@ pub fn next_stream(status: *fail.Status, state: *StreamReader) Entry {
   }
   if signature == 101010256 {
     if !stream_exact(state, state.header_storage[4..22]) {
-      return stream_failed(status, state, fail.Kind.InvalidInput)
+      fail stream_failed(state, stream.IoErr.InvalidInput)
     }
-    error := end_record(state.header_storage[..22])
-    if error != fail.Kind.Ok { return stream_failed(status, state, error) }
+    end_record(state.header_storage[..22]) catch err { fail stream_failed(state, err) }
     if !stream_discard(state, u16le(state.header_storage, 20)) {
-      return stream_failed(status, state, fail.Kind.InvalidInput)
+      fail stream_failed(state, stream.IoErr.InvalidInput)
     }
     state.ended = true
     return Entry{}
   }
   if signature != 67324752 || !stream_exact(state, state.header_storage[4..30]) {
-    return stream_failed(status, state, fail.Kind.InvalidInput)
+    fail stream_failed(state, stream.IoErr.InvalidInput)
   }
   header := state.header_storage[..30]
   flags := u16le(header, 6)
   method := u16le(header, 8)
   checksum := u32le(header, 14)
-  if (flags & 1) != 0 || (flags & 8) != 0 { return stream_failed(status, state, fail.Kind.Unsupported) }
+  if (flags & 1) != 0 || (flags & 8) != 0 { fail stream_failed(state, stream.IoErr.Unsupported) }
   compressed_size := #cast(usize, u32le(header, 18))
   uncompressed_size := #cast(usize, u32le(header, 22))
   name_length := #cast(usize, u16le(header, 26))
   extra_length := #cast(usize, u16le(header, 28))
   if name_length > state.name_storage.len || compressed_size > state.payload_storage.len {
-    return stream_failed(status, state, fail.Kind.Capacity)
+    fail stream_failed(state, stream.IoErr.Capacity)
   }
   if !stream_exact(state, state.name_storage[..name_length]) || !stream_discard(state, extra_length) ||
     !stream_exact(state, state.payload_storage[..compressed_size]) {
-    return stream_failed(status, state, fail.Kind.InvalidInput)
+    fail stream_failed(state, stream.IoErr.InvalidInput)
   }
   name := state.name_storage[..name_length]
   return Entry{ name: name, payload: state.payload_storage[..compressed_size], method: method,
@@ -190,12 +170,13 @@ fn u32le(source: []const u8, at: usize) u32 {
   return #cast(u32, source[at]) | (#cast(u32, source[at + 1]) << 8) |
     (#cast(u32, source[at + 2]) << 16) | (#cast(u32, source[at + 3]) << 24)
 }
-fn end_record(source: []const u8) fail.Kind {
-  if source.len < 22 { return fail.Kind.InvalidInput }
+// An end-of-directory record that is short is InvalidInput; one for a
+// multi-disk or ZIP64 archive Unsupported.
+fn end_record(source: []const u8) !stream.IoErr {
+  if source.len < 22 { fail .InvalidInput }
   if u16le(source, 4) != 0 || u16le(source, 6) != 0 || u16le(source, 8) != u16le(source, 10) || u16le(source, 10) == 65535 {
-    return fail.Kind.Unsupported
+    fail .Unsupported
   }
-  return fail.Kind.Ok
 }
 pub fn open(source: []const u8) ArchiveReader {
   return ArchiveReader{ source: source }
@@ -203,12 +184,10 @@ pub fn open(source: []const u8) ArchiveReader {
 
 // Reads the next entry of an archive in memory, with the same failures as
 // next_stream.
-pub fn next(status: *fail.Status, state: *ArchiveReader) Entry {
-  if status == nil { return next(&fail.Status{}, state) }
-  if status.failed { return archive_ended(state) }
-  if state.failed { return archive_failed(status, state, fail.Kind.InvalidInput) }
-  if state.source.len > (#max(usize) >> 1) { return archive_failed(status, state, fail.Kind.Overflow) }
-  if state.indexed { return next_indexed(status, state) }
+pub fn next(state: *ArchiveReader) Entry!stream.IoErr {
+  if state.failed { fail archive_failed(state, stream.IoErr.InvalidInput) }
+  if state.source.len > (#max(usize) >> 1) { fail archive_failed(state, stream.IoErr.Capacity) }
+  if state.indexed { return try next_indexed(state) }
   if state.offset == state.source.len { return archive_ended(state) }
   if state.offset <= state.source.len && state.source.len - state.offset >= 4 && u32le(state.source, state.offset) == 33639248 {
     return archive_ended(state)
@@ -216,35 +195,34 @@ pub fn next(status: *fail.Status, state: *ArchiveReader) Entry {
   start := state.offset
   if start <= state.source.len && state.source.len - start >= 4 && u32le(state.source, start) == 101010256 {
     remaining := state.source[start..]
-    error := end_record(remaining)
-    if error != fail.Kind.Ok { return archive_failed(status, state, error) }
+    end_record(remaining) catch err { fail archive_failed(state, err) }
     if #cast(usize, u16le(remaining, 20)) > remaining.len - 22 {
-      return archive_failed(status, state, fail.Kind.InvalidInput)
+      fail archive_failed(state, stream.IoErr.InvalidInput)
     }
     state.offset = start + 22 + u16le(remaining, 20)
     return archive_ended(state)
   }
   if start > state.source.len || state.source.len - start < 30 || u32le(state.source, start) != 67324752 {
-    return archive_failed(status, state, fail.Kind.InvalidInput)
+    fail archive_failed(state, stream.IoErr.InvalidInput)
   }
   flags := u16le(state.source, start + 6)
   method := u16le(state.source, start + 8)
-  if (flags & 1) != 0 || (flags & 8) != 0 { return archive_failed(status, state, fail.Kind.Unsupported) }
+  if (flags & 1) != 0 || (flags & 8) != 0 { fail archive_failed(state, stream.IoErr.Unsupported) }
   compressed_size := #cast(usize, u32le(state.source, start + 18))
   uncompressed_size := #cast(usize, u32le(state.source, start + 22))
   name_length := #cast(usize, u16le(state.source, start + 26))
   extra_length := #cast(usize, u16le(state.source, start + 28))
   data_start := start + 30
   if name_length > state.source.len - data_start {
-    return archive_failed(status, state, fail.Kind.InvalidInput)
+    fail archive_failed(state, stream.IoErr.InvalidInput)
   }
   payload_start := data_start + name_length
   if extra_length > state.source.len - payload_start {
-    return archive_failed(status, state, fail.Kind.InvalidInput)
+    fail archive_failed(state, stream.IoErr.InvalidInput)
   }
   payload_start += extra_length
   if compressed_size > state.source.len - payload_start {
-    return archive_failed(status, state, fail.Kind.InvalidInput)
+    fail archive_failed(state, stream.IoErr.InvalidInput)
   }
   payload_end := payload_start + compressed_size
   name := state.source[data_start..data_start + name_length]
@@ -259,40 +237,26 @@ pub fn next(status: *fail.Status, state: *ArchiveReader) Entry {
 
 // The entry's bytes, decompressed and checksum-verified, in arena. Malformed
 // data or a checksum mismatch fails with InvalidInput, a method other than
-// stored or deflate with Unsupported. Failure pushes nothing. Source must
-// remain immutable.
-pub fn extract(arena: *mem.Arena, status: *fail.Status, archive_entry: Entry) []u8 {
-  if status == nil { return extract(arena, &fail.Status{}, archive_entry) }
-  empty: []u8
-  if status.failed { return empty }
-  if archive_entry.payload.len > (#max(usize) >> 1) || archive_entry.uncompressed_size > (#max(usize) >> 1) {
-    fail.set(status, fail.make(fail.Kind.Overflow, "extract ZIP entry", archive_entry.name, "the entry is too large"))
-    return empty
-  }
-  if archive_entry.payload.len != archive_entry.compressed_size {
-    fail.invalid(status, "extract ZIP entry", archive_entry.name, "the payload does not match its size")
-    return empty
-  }
+// stored or deflate with Unsupported, an entry too large to hold with
+// Capacity. Failure pushes nothing. Source must remain immutable.
+pub fn extract(arena: *mem.Arena, archive_entry: Entry) []u8!stream.IoErr {
+  if archive_entry.payload.len > (#max(usize) >> 1) || archive_entry.uncompressed_size > (#max(usize) >> 1) { fail .Capacity }
+  if archive_entry.payload.len != archive_entry.compressed_size { fail .InvalidInput }
   mark := mem.arena_mark(arena)
-  output := extract_into(status, mem.push_bytes(arena, archive_entry.uncompressed_size), archive_entry)
-  if status.failed {
+  output := extract_into(mem.push_bytes(arena, archive_entry.uncompressed_size), archive_entry) catch err {
     mem.arena_rewind(arena, mark)
+    fail err
   }
   return output
 }
 
-fn extract_into(status: *fail.Status, destination: []u8, archive_entry: Entry) []u8 {
-  empty: []u8
-  if bytes.overlaps(destination, archive_entry.payload) {
-    fail.invalid(status, "extract ZIP entry", archive_entry.name, "the payload lies in the arena's free space")
-    return empty
-  }
+fn extract_into(destination: []u8, archive_entry: Entry) []u8!stream.IoErr {
+  // The payload lies in the arena's free space.
+  if bytes.overlaps(destination, archive_entry.payload) { fail .InvalidInput }
   written: usize = 0
   if archive_entry.method == 0 {
-    if archive_entry.compressed_size != archive_entry.uncompressed_size {
-      fail.invalid(status, "extract ZIP entry", archive_entry.name, "a stored entry changes size")
-      return empty
-    }
+    // A stored entry cannot change size.
+    if archive_entry.compressed_size != archive_entry.uncompressed_size { fail .InvalidInput }
     i: usize = 0
     for i < archive_entry.uncompressed_size {
       destination[i] = archive_entry.payload[i]
@@ -303,21 +267,13 @@ fn extract_into(status: *fail.Status, destination: []u8, archive_entry: Entry) [
     inflater := deflate.InflateState{}
     result := deflate.resume(&inflater, destination[..archive_entry.uncompressed_size], archive_entry.payload)
     if !result.done || result.written != archive_entry.uncompressed_size || result.consumed != archive_entry.compressed_size {
-      failure := fail.make(fail.Kind.InvalidInput, "extract ZIP entry", archive_entry.name, "malformed deflate data")
-      failure.offset = result.consumed
-      failure.has_offset = true
-      fail.set(status, failure)
-      return empty
+      fail .InvalidInput
     }
     written = result.written
   } else {
-    fail.set(status, fail.make(fail.Kind.Unsupported, "extract ZIP entry", archive_entry.name, "unsupported compression method"))
-    return empty
+    fail .Unsupported
   }
   output := destination[..written]
-  if hashing.crc32(output) != archive_entry.checksum {
-    fail.invalid(status, "extract ZIP entry", archive_entry.name, "checksum mismatch")
-    return empty
-  }
+  if hashing.crc32(output) != archive_entry.checksum { fail .InvalidInput }
   return output
 }

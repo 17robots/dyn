@@ -1,4 +1,3 @@
-use "std/fail"
 // Argon2id (RFC 9106), the memory-hard password hash RFC 9106 and OWASP
 // recommend. Lanes are computed one after another on the calling thread, which
 // gives the same result as parallel lanes. The memory is the caller's: a
@@ -488,25 +487,18 @@ fn next_addresses(addresses: *Addresses, scratch: []u64) {
 }
 
 // Argon2id of password with salt (at least 8 bytes), and optional secret
-// and associated data, into all of destination (4 bytes or more). False
+// and associated data, into all of destination (4 bytes or more). Fails
 // when parameters, salt, destination or workspace are invalid or too small.
-pub fn argon2id_keyed(status: *fail.Status, destination: []u8, password: []const u8, salt: []const u8, secret: []const u8, associated: []const u8,
-  parameters: Argon2Parameters, workspace: []u64) {
-  if status == nil {
-    argon2id_keyed(&fail.Status{}, destination, password, salt, secret, associated, parameters, workspace)
-    return
-  }
-  if status.failed { return }
+pub fn argon2id_keyed(destination: []u8, password: []const u8, salt: []const u8, secret: []const u8, associated: []const u8,
+  parameters: Argon2Parameters, workspace: []u64) ! {
   if !parameters_valid(parameters) || salt.len < 8 || destination.len < 4 ||
     workspace.len < argon2id_workspace_words(parameters) {
-    fail.invalid(status, "Argon2id", "", "bad parameters, a salt under 8 bytes, output under 4 bytes, or too small a workspace")
-    return
+    fail
   }
   derive(destination, password, salt, secret, associated, parameters, workspace)
 }
 
-// argon2id_keyed after validation. Kept apart so the status is not live
-// across the memory-filling loops.
+// argon2id_keyed after validation, kept apart from it.
 fn derive(destination: []u8, password: []const u8, salt: []const u8, secret: []const u8, associated: []const u8,
   parameters: Argon2Parameters, workspace: []u64) {
   lanes := #cast(usize, parameters.parallelism)
@@ -633,12 +625,8 @@ fn derive(destination: []u8, password: []const u8, salt: []const u8, secret: []c
   long_hash(destination, block_bytes[..], "")
 }
 
-pub fn argon2id(status: *fail.Status, destination: []u8, password: []const u8, salt: []const u8, parameters: Argon2Parameters, workspace: []u64) {
-  if status == nil {
-    argon2id(&fail.Status{}, destination, password, salt, parameters, workspace)
-    return
-  }
-  argon2id_keyed(status, destination, password, salt, "", "", parameters, workspace)
+pub fn argon2id(destination: []u8, password: []const u8, salt: []const u8, parameters: Argon2Parameters, workspace: []u64) ! {
+  try argon2id_keyed(destination, password, salt, "", "", parameters, workspace)
 }
 
 const Base64Alphabet: []const u8 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -764,67 +752,51 @@ fn field(text: []const u8, start: usize) usize {
 }
 
 // Parses a PHC string from argon2id_encode; salt and hash land in storage
-// (128 bytes is plenty). Any other form fails with InvalidInput.
-pub fn argon2id_decode(status: *fail.Status, encoded: []const u8, storage: []u8) Argon2Hash {
-  if status == nil { return argon2id_decode(&fail.Status{}, encoded, storage) }
-  if status.failed { return malformed_hash(status) }
+// (128 bytes is plenty). Any other form fails.
+pub fn argon2id_decode(encoded: []const u8, storage: []u8) Argon2Hash! {
   prefix := "$argon2id$v=19$"
-  if encoded.len < prefix.len { return malformed_hash(status) }
+  if encoded.len < prefix.len { fail }
   for i in 0..prefix.len {
-    if encoded[i] != prefix[i] { return malformed_hash(status) }
+    if encoded[i] != prefix[i] { fail }
   }
   at := prefix.len
   end := field(encoded, at)
   memory := read_number(encoded[at..end], "m=")
-  if end >= encoded.len || encoded[end] != ',' { return malformed_hash(status) }
+  if end >= encoded.len || encoded[end] != ',' { fail }
   at = end + 1
   end = field(encoded, at)
   iterations := read_number(encoded[at..end], "t=")
-  if end >= encoded.len || encoded[end] != ',' { return malformed_hash(status) }
+  if end >= encoded.len || encoded[end] != ',' { fail }
   at = end + 1
   end = field(encoded, at)
   lanes := read_number(encoded[at..end], "p=")
-  if end >= encoded.len || encoded[end] != '$' { return malformed_hash(status) }
+  if end >= encoded.len || encoded[end] != '$' { fail }
   at = end + 1
   end = field(encoded, at)
-  if end >= encoded.len || encoded[end] != '$' { return malformed_hash(status) }
+  if end >= encoded.len || encoded[end] != '$' { fail }
   half := storage.len / 2
   salt := read_base64(storage[..half], encoded[at..end])
   hash := read_base64(storage[half..], encoded[end + 1..])
   parameters := Argon2Parameters{ memory: memory, iterations: iterations, parallelism: lanes }
-  if !parameters_valid(parameters) || salt.len < 8 || hash.len < 4 { return malformed_hash(status) }
+  if !parameters_valid(parameters) || salt.len < 8 || hash.len < 4 { fail }
   return Argon2Hash{ parameters: parameters, salt: salt, hash: hash }
 }
 
-fn malformed_hash(status: *fail.Status) Argon2Hash {
-  fail.invalid(status, "decode Argon2id hash", "", "not an argon2id v19 PHC string")
-  return Argon2Hash{}
-}
-
 // u64 words verify needs for encoded.
-pub fn argon2id_verify_words(status: *fail.Status, encoded: []const u8) usize {
-  if status == nil { return argon2id_verify_words(&fail.Status{}, encoded) }
+pub fn argon2id_verify_words(encoded: []const u8) usize! {
   storage: [256]u8
-  decoded := argon2id_decode(status, encoded, storage[..])
-  if status.failed { return 0 }
+  decoded := try argon2id_decode(encoded, storage[..])
   return argon2id_workspace_words(decoded.parameters)
 }
 
 // Whether password matches encoded, comparing in constant time. A malformed
-// encoding, or a workspace shorter than argon2id_verify_words, fails with
-// InvalidInput.
-pub fn argon2id_verify(status: *fail.Status, encoded: []const u8, password: []const u8, workspace: []u64) bool {
-  if status == nil { return argon2id_verify(&fail.Status{}, encoded, password, workspace) }
+// encoding, or a workspace shorter than argon2id_verify_words, fails.
+pub fn argon2id_verify(encoded: []const u8, password: []const u8, workspace: []u64) bool! {
   storage: [256]u8
-  decoded := argon2id_decode(status, encoded, storage[..])
-  if status.failed { return false }
-  if decoded.hash.len > 128 {
-    fail.invalid(status, "verify Argon2id hash", "", "the hash is over 128 bytes")
-    return false
-  }
+  decoded := try argon2id_decode(encoded, storage[..])
+  if decoded.hash.len > 128 { fail }
   computed: [128]u8
-  argon2id(status, computed[..decoded.hash.len], password, decoded.salt, decoded.parameters, workspace)
-  if status.failed { return false }
+  try argon2id(computed[..decoded.hash.len], password, decoded.salt, decoded.parameters, workspace)
   difference: u8 = 0
   for i in 0..decoded.hash.len {
     difference |= computed[i] ^ decoded.hash[i]

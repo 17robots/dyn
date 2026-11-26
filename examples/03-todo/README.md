@@ -23,16 +23,16 @@ Tasks are saved in `./todo.txt`, or the file named by `TODO_FILE`. See
   A text case always needs `_`.
 - **A growing array.** `array.Array(Task)` keeps its items in an arena;
   `array.push` adds, `array.pop` removes the last one and says whether it found one.
-- **A parser that fails.** `parse_task` takes a `*fail.Status` like anything
-  else that can fail; `parse.malformed` records what went wrong and the byte
-  offset. `load` gives each line its own status, so its message can name the
-  line. `parse.u64_decimal` reports bad numbers the same way.
-- **Loading and saving.** `load` takes a `*fail.Status`, because a bad
-  line is a parse failure with a message. `save` returns `!io.IoErr`: `try`
-  stops it at a failed write, before the rename.
+- **A parser that fails.** `parse_task` returns `Task!parse.ParseErr`, like
+  the std parsers: `fail .Invalid(offset)` gives the byte where the line went
+  wrong. `parse.u64_decimal` reports bad numbers the same way.
+- **An error enum of your own.** `load` returns `!(io.IoErr | StoreErr)`:
+  either the read failed, or `StoreErr.BadLine` names the line that is not a
+  task. `report` uses `case` to print each kind. `save` returns `!io.IoErr`:
+  `try` stops it at a failed write, before the rename.
 - **Reacting to one kind of failure.** `load` catches the read's failure and
-  treats `.NotFound` as an empty list; any other failure goes on to the
-  caller's status.
+  treats `.NotFound` as an empty list; `fail err` passes any other failure on
+  to the caller.
 - **Borrowing the file's text.** `fs.read_all` loads the whole file into the
   arena, and every `Task.text` is a slice of that text. Nothing is copied
   and nothing is freed one task at a time.

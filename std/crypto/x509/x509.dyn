@@ -1,4 +1,3 @@
-use "std/fail"
 use certificate "std/crypto/certificate"
 use der "std/crypto/der"
 use ed "std/crypto/ed25519"
@@ -41,8 +40,7 @@ fn validation(reason: Reason, index: usize) Validation {
 // element it read.
 struct Item { value: der.Element, found: bool }
 fn next(cursor: *der.Cursor) Item {
-  status: fail.Status
-  element := der.next(&status, cursor)
+  element := der.next(cursor) catch { return Item{} }
   return Item{ value: element, found: !cursor.ended }
 }
 fn one(source: []const u8, tag: u8) Item {
@@ -397,27 +395,16 @@ fn reason_text(reason: Reason) []const u8 {
   if reason == Reason.UnsupportedExtension { return "unsupported critical extension" }
   return "malformed certificate"
 }
-// All returned slices borrow the original DER, including the envelope. An
-// unsupported algorithm or critical extension fails with Unsupported, any
-// other defect with InvalidInput.
-pub fn inspect(status: *fail.Status, encoded: []const u8) View {
-  if status == nil { return inspect(&fail.Status{}, encoded) }
-  if status.failed { return View{} }
+// All returned slices borrow the original DER, including the envelope. A
+// certificate it cannot read fails with its Reason: UnsupportedAlgorithm,
+// UnsupportedExtension (a critical one), or Malformed for any other defect.
+pub fn inspect(encoded: []const u8) View!Reason {
   inspected := examine(encoded)
-  if inspected.reason != Reason.None {
-    kind := fail.Kind.InvalidInput
-    if inspected.reason == Reason.UnsupportedAlgorithm || inspected.reason == Reason.UnsupportedExtension {
-      kind = fail.Kind.Unsupported
-    }
-    fail.set(status, fail.make(kind, "inspect certificate", "", reason_text(inspected.reason)))
-    return View{}
-  }
+  if inspected.reason != Reason.None { fail inspected.reason }
   return inspected.value
 }
 fn examine(encoded: []const u8) Inspected {
-  checking: fail.Status
-  envelope := certificate.parse(&checking, encoded)
-  if checking.failed { return failed(Reason.Malformed) }
+  envelope := certificate.parse(encoded) catch { return failed(Reason.Malformed) }
   view := View{envelope:envelope}
   outer := one(view.envelope.tbs, 48)
   if !outer.found { return failed(Reason.Malformed) }

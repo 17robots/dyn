@@ -12,7 +12,6 @@
 
 use "./stack"
 use "std/bufio"
-use "std/fail"
 use "std/bytes"
 use "std/container/array"
 use "std/io"
@@ -159,12 +158,9 @@ fn main() {
 
   input_storage: [4096]u8
   reader := bufio.reader(io.stdin(), input_storage[..])
-  input: fail.Status
   for {
-    line := bufio.read_line(&input, &reader)
-    if input.failed {
-      storage: [512]u8
-      io.eprintln("editor: {}", fail.describe(storage[..], input.failure))
+    line := bufio.read_line(&reader) catch err {
+      io.eprintln("editor: {}", err)
       return
     }
     if reader.ended { return }

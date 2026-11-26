@@ -11,7 +11,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = '''use "std/fail"
+SOURCE = '''// A status-shaped type of the fixture's own is defined at the end.
 use "std/fs"
 use "std/io"
 use "std/mem"
@@ -31,25 +31,25 @@ fn record(note: *Note) {
 fn main() {
   program := process.start()
   arena := program.arena
-  lost: fail.Status
+  lost: Status
   save(&lost, "out.txt")
-  status: fail.Status
+  status: Status
   text := load(arena, &status, "in.txt", 1024)
   if status.failed { return }
   io.println("{}", text.len)
-  other: fail.Status
+  other: Status
   data := load(arena, &other, "in.txt", 1024)
   if data.len == 0 {
     io.println("missing")
   }
   _ = other
-  third: fail.Status
+  third: Status
   more := load(arena, &third, "in.txt", 1024)
   if third.failed { return }
   if more.len == 0 {
     io.println("empty file")
   }
-  cleanup: fail.Status
+  cleanup: Status
   save(&cleanup, "out.txt")
   _ = cleanup
   file := fs.open("in.txt") catch { return }
@@ -59,33 +59,60 @@ fn main() {
   io.println("{}", counts.lines)
   mine: Note
   record(&mine)
-  reused: fail.Status
+  reused: Status
   save(&reused, "a.txt")
-  reused = fail.Status{}
+  reused = Status{}
   save(&reused, "b.txt")
   if reused.failed { return }
-  looked: fail.Status
+  looked: Status
   save(&looked, "c.txt")
   if looked.failed { io.println("c") }
-  looked = fail.Status{}
+  looked = Status{}
   save(&looked, "d.txt")
   _ = looked
 }
 
 // Status-shaped helpers: the lint knows no function by name.
-fn save(status: *fail.Status, path: []const u8) {
+fn save(status: *Status, path: []const u8) {
   if status.failed { return }
-  fs.remove(path) catch err { fail.set(status, io.failure_of(err, "remove", path)) }
+  fs.remove(path) catch err { record_err(status, err) }
 }
 
-fn load(arena: *mem.Arena, status: *fail.Status, path: []const u8, maximum: usize) []u8 {
+fn load(arena: *mem.Arena, status: *Status, path: []const u8, maximum: usize) []u8 {
   empty: []u8
   if status.failed { return empty }
   data := fs.read_all(arena, path, maximum) catch err {
-    fail.set(status, io.failure_of(err, "read", path))
+    record_err(status, err)
     return empty
   }
   return data
+}
+
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+struct Status { failed: bool, failure: Failure }
+fn record_err(status: *Status, err: io.IoErr) {
+ if status.failed { return }
+ status.failed = true
+ status.failure = Failure{ kind: kind_of(err) }
+ case err {
+  .System(code) => { status.failure.native = code }
+  _ => {}
+ }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-vet-unread-') as temporary:

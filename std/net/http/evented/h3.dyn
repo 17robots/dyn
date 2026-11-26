@@ -577,10 +577,8 @@ fn h3_decode(worker: *Worker, block: []const u8) usize {
   if !prefix.valid { return 0xffffffffffffffff }
   used: usize = 0
   at := prefix.consumed
-  decoding: fail.Status
   for at < block.len {
-    field := qpack.decode_field(&decoding, block[at..], pool.head)
-    if decoding.failed { return 0xffffffffffffffff }
+    field := qpack.decode_field(block[at..], pool.head) catch { return 0xffffffffffffffff }
     at += field.consumed
     need := 4 + field.name.len + field.value.len
     if need > pool.fields.len - used { return 0xfffffffffffffffe }

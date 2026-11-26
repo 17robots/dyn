@@ -2,20 +2,19 @@ use font "std/font"
 use software "std/ui/software"
 use mem "std/mem"
 use math "std/math"
-use "std/fail"
+use parse "std/parse"
 // Keep this state at a stable address while rendering. Face and its bytes outlive
 // the adapter; arena stores bitmaps until reset. A failure is sticky until reset
 // by the caller. The software renderer receives an invalid glyph on failure.
-pub struct Adapter { face: *const font.Face, arena: *mem.Arena, pixels_per_em: u16, failed: bool, failure: fail.Failure }
+// failure is the first failure, kept until the caller resets the adapter.
+pub struct Adapter { face: *const font.Face, arena: *mem.Arena, pixels_per_em: u16, failed: bool, failure: parse.ParseErr }
 fn glyph(raw: rawptr, codepoint: u32) software.Glyph {
   state := #cast(*Adapter, raw)
   if state.failed { return software.Glyph{ width: -1 } }
   index := font.glyph_index(state.face, codepoint)
-  status: fail.Status
-  value := font.raster(state.arena, &status, state.face, index, state.pixels_per_em)
-  if status.failed {
+  value := font.raster(state.arena, state.face, index, state.pixels_per_em) catch err {
     state.failed = true
-    state.failure = status.failure
+    state.failure = err
     return software.Glyph{ width: -1 }
   }
   scale := #cast(f64, state.pixels_per_em) / #cast(f64, state.face.units_per_em)
@@ -27,13 +26,13 @@ fn glyph(raw: rawptr, codepoint: u32) software.Glyph {
 pub fn renderer(state: *Adapter) software.Font {
   if state.face == nil || state.arena == nil || state.face.units_per_em == 0 || state.pixels_per_em == 0 || state.pixels_per_em > 256 {
     state.failed = true
-    state.failure = fail.make(fail.Kind.InvalidInput, "make font renderer", "", "invalid face or size")
+    state.failure = parse.ParseErr.Invalid(0)
     return software.Font{}
   }
   height := #cast(i32, state.face.ascent) - #cast(i32, state.face.descent) + #cast(i32, state.face.line_gap)
   if height <= 0 {
     state.failed = true
-    state.failure = fail.make(fail.Kind.InvalidInput, "make font renderer", "", "invalid face or size")
+    state.failure = parse.ParseErr.Invalid(0)
     return software.Font{}
   }
   scale := #cast(f64, state.pixels_per_em) / #cast(f64, state.face.units_per_em)

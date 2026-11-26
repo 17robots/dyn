@@ -1,79 +1,75 @@
 #!/usr/bin/env python3
-"""Buffered I/O and INI stop after the first failure, including empty calls."""
+"""Buffered I/O passes a stream's failure back and keeps unflushed bytes; an INI
+scanner stays failed after its first failure."""
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE = r'''use "std/fail"
-use "std/io"
+SOURCE = r'''use "std/io"
 use "std/bufio"
 use "std/encoding/ini"
 struct Sink { calls: usize }
-// A destination that takes one byte, then fails.
+// A destination that fails every write.
 fn fail_write(data: rawptr, source: []const u8) usize!io.IoErr {
-  status: fail.Status
-  count := fail_write_status(data, &status, source)
-  try io.check_status(&status)
-  return count
-}
-fn fail_write_status(data: rawptr, status: *fail.Status, source: []const u8) usize {
   state := #cast(*Sink, data)
   state.calls += 1
-  failure := fail.make(fail.Kind.PermissionDenied, "write", "sink", "")
-  failure.native = -13
-  fail.set(status, failure)
-  return 1
+  fail .PermissionDenied
 }
+// A source that fails every read.
 fn fail_read(data: rawptr, destination: []u8) usize!io.IoErr {
-  status: fail.Status
-  count := fail_read_status(data, &status, destination)
-  try io.check_status(&status)
-  return count
-}
-fn fail_read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
   state := #cast(*Sink, data)
   state.calls += 1
-  destination[0] = 'x'
-  failure := fail.make(fail.Kind.PermissionDenied, "read", "source", "")
-  failure.native = -13
-  fail.set(status, failure)
-  return 1
+  fail .PermissionDenied
+}
+fn denied(err: io.IoErr) bool {
+  case err {
+    .PermissionDenied => { return true }
+    _ => { return false }
+  }
+}
+fn write_err(writer: *bufio.Writer, text: []const u8) io.IoErr {
+  io.write(bufio.writer_adapter(writer), text) catch err { return err }
+  #panic("write should fail")
+}
+fn flush_err(writer: *bufio.Writer) io.IoErr {
+  bufio.writer_flush(writer) catch err { return err }
+  #panic("flush should fail")
+}
+fn read_err(reader: *bufio.Reader, output: []u8) io.IoErr {
+  _ = io.read(bufio.reader_adapter(reader), output) catch err { return err }
+  #panic("read should fail")
+}
+fn line_err(reader: *bufio.Reader) io.IoErr {
+  _ = bufio.read_line(reader) catch err { return err }
+  #panic("read_line should fail")
 }
 fn ini_failed(scan: *ini.Scanner) bool {
   _ = ini.next(scan) catch { return true }
   return false
 }
 fn main() {
-  // A failed status makes every later buffered call do nothing.
+  // Unbuffered, a write passes the destination's failure straight back.
   sink: Sink
   storage: [8]u8
-  status: fail.Status
   writer := bufio.writer(io.Writer{ data: &sink, write: fail_write }, storage[..0])
-  io.write_status(&status, bufio.writer_adapter(&writer), "abc")
-  io.write_status(&status, bufio.writer_adapter(&writer), "abc")
-  bufio.writer_flush(&status, &writer)
-  if !status.failed || status.failure.kind != fail.Kind.PermissionDenied || sink.calls != 1 { #panic("writer failure") }
-  // Buffered bytes stay buffered after a failed flush, for a fresh status to retry.
+  if !denied(write_err(&writer, "abc")) || sink.calls != 1 { #panic("writer failure") }
+  // Buffered bytes stay buffered after a failed flush, for a retry.
   writes: Sink
   staged := bufio.writer(io.Writer{ data: &writes, write: fail_write }, storage[..])
-  staging: fail.Status
-  io.write_status(&staging, bufio.writer_adapter(&staged), "abcdef")
-  if staging.failed || staged.used != 6 || writes.calls != 0 { #panic("staged write") }
-  bufio.writer_flush(&staging, &staged)
-  if !staging.failed || staged.used != 6 || writes.calls != 1 { #panic("failed flush keeps bytes") }
+  io.write(bufio.writer_adapter(&staged), "abcdef") catch { #panic("staged write") }
+  if staged.used != 6 || writes.calls != 0 { #panic("staged write") }
+  if !denied(flush_err(&staged)) || staged.used != 6 || writes.calls != 1 { #panic("failed flush keeps bytes") }
   for capacity in [0, 8] {
     reads: Sink
-    reading: fail.Status
     reader := bufio.reader(io.Reader{ data: &reads, read: fail_read }, storage[..#cast(usize, capacity)])
     output: [4]u8
-    _ = io.read_status(&reading, bufio.reader_adapter(&reader), output[..])
-    _ = bufio.read_line(&reading, &reader)
-    until := bufio.read_until(&reading, &reader, output[..], 10)
-    if !reading.failed || reading.failure.kind != fail.Kind.PermissionDenied || reads.calls != 1 { #panic("reader failure") }
-    if !reader.ended || until.status != bufio.ReadStatus.End { #panic("records end after a failure") }
+    if !denied(read_err(&reader, output[..])) || reads.calls != 1 { #panic("reader failure") }
   }
+  lines: Sink
+  line_reader := bufio.reader(io.Reader{ data: &lines, read: fail_read }, storage[..])
+  if !denied(line_err(&line_reader)) || lines.calls != 1 { #panic("read_line failure") }
   scan := ini.scanner("bad\nx=1")
   first := ini_failed(&scan)
   first_ended := scan.ended
@@ -90,4 +86,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-std-sticky-') as directory:
         subprocess.run([DYN,'build',str(work),'--'+mode,'--quiet','--no-cache','--output',str(work/'test')],check=True,timeout=120)
         result=subprocess.run([str(work/'test')],capture_output=True,timeout=10)
         assert result.returncode==0,(result.stdout,result.stderr)
-        print('PASS buffered I/O and INI sticky errors '+mode,flush=True)
+        print('PASS buffered I/O failures and INI sticky errors '+mode,flush=True)

@@ -1,25 +1,17 @@
-use "std/fail"
+use io "std/io"
 #link("lz4")
 // Raw LZ4 blocks, not the framed format. Caller supplies the decompressed bound.
 // Buffers must not overlap. Failure may modify destination; discard its contents.
-// Failures keep the library's return code in native.
+// The library gives no reason beyond its return code, which is dropped.
 pub const MaxInput: usize = 2113929216
 pub fn compress_bound(size: usize) usize {
   if size > MaxInput { return 0 }
   return #cast(usize, native_bound(#cast(i32, size)))
 }
-fn failed(status: *fail.Status, kind: fail.Kind, operation: []const u8, message: []const u8, code: i32) usize {
-  failure := fail.make(kind, operation, "", message)
-  failure.native = code
-  fail.set(status, failure)
-  return 0
-}
 // The compressed size; a destination too small fails with Capacity.
-pub fn compress(status: *fail.Status, destination: []u8, source: []const u8) usize {
-  if status == nil { return compress(&fail.Status{}, destination, source) }
-  if status.failed { return 0 }
+pub fn compress(destination: []u8, source: []const u8) usize!io.IoErr {
   if source.len > MaxInput || destination.len == 0 || destination.len > 2147483647 {
-    return failed(status, fail.Kind.InvalidInput, "compress", "bad buffer sizes", 0)
+    fail .InvalidInput
   }
   empty: [1]u8
   input: *const u8 = &empty[0]
@@ -27,16 +19,14 @@ pub fn compress(status: *fail.Status, destination: []u8, source: []const u8) usi
     input = &source[0]
   }
   code := native_compress(input, &destination[0], #cast(i32, source.len), #cast(i32, destination.len))
-  if code <= 0 { return failed(status, fail.Kind.Capacity, "compress", "the destination is too small", code) }
+  if code <= 0 { fail .Capacity }
   return #cast(usize, code)
 }
 // The decompressed size; malformed input, or output past destination, fails
 // with InvalidInput.
-pub fn decompress(status: *fail.Status, destination: []u8, source: []const u8) usize {
-  if status == nil { return decompress(&fail.Status{}, destination, source) }
-  if status.failed { return 0 }
+pub fn decompress(destination: []u8, source: []const u8) usize!io.IoErr {
   if source.len == 0 || source.len > 2147483647 || destination.len > 2147483647 {
-    return failed(status, fail.Kind.InvalidInput, "decompress", "bad buffer sizes", -1)
+    fail .InvalidInput
   }
   empty: [1]u8
   output := &empty[0]
@@ -44,7 +34,7 @@ pub fn decompress(status: *fail.Status, destination: []u8, source: []const u8) u
     output = &destination[0]
   }
   code := native_decompress(&source[0], output, #cast(i32, source.len), #cast(i32, destination.len))
-  if code < 0 { return failed(status, fail.Kind.InvalidInput, "decompress", "malformed LZ4 block", code) }
+  if code < 0 { fail .InvalidInput }
   return #cast(usize, code)
 }
 extern fn native_bound "LZ4_compressBound"(size: i32) i32

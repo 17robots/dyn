@@ -9,32 +9,33 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
 SOURCE = r'''use regex "std/text/regex"
 use io "std/io"
-use "std/fail"
 use memory "std/mem"
 fn require(ok:bool,message:[]const u8){ if !ok { #panic(message) } }
 fn compile(arena:*memory.Arena,pattern:[]const u8) regex.Program {
-  status:fail.Status
-  program:=regex.compile(arena,&status,pattern)
-  require(!status.failed,pattern)
-  return program
+  return regex.compile(arena,pattern) catch { #panic("compile") }
 }
-fn compile_kind(arena:*memory.Arena,pattern:[]const u8) fail.Kind {
-  status:fail.Status
-  _=regex.compile(arena,&status,pattern)
-  return status.failure.kind
+// Whether pattern fails to compile as invalid.
+fn compile_invalid(arena:*memory.Arena,pattern:[]const u8) bool {
+  _=regex.compile(arena,pattern) catch err {
+    case err {
+      .Invalid(_) => { return true }
+      _ => { return false }
+    }
+  }
+  return false
 }
 fn find(program:regex.Program,text:[]const u8) regex.Match {
-  status:fail.Status
-  result:=regex.find(&status,program,text)
-  require(!status.failed,"no match")
-  return result
+  return regex.find(program,text) catch { #panic("no match") }
 }
 fn check(pattern:[]const u8,text:[]const u8,expected:usize,matched:bool){
   arena := memory.arena_alloc(0)
   program:=compile(arena,pattern)
-  status:fail.Status
-  result:=regex.find(&status,program,text)
-  require(!status.failed==matched && (!matched || result.end==expected),pattern)
+  if !matched {
+    _ = regex.find(program,text) catch { return }
+    #panic(pattern)
+  }
+  result:=find(program,text)
+  require(result.end==expected,pattern)
 }
 fn main(){
   check("^a{1,}$","aaaaaaaaaaaaaaaa",16,true)
@@ -51,8 +52,8 @@ fn main(){
   check("a*ab","aaaab",5,true)
   check("^a|b","xb",2,true)
   arena := memory.arena_alloc(0)
-  require(compile_kind(arena,"a{18446744073709551616}") == fail.Kind.InvalidInput,"count overflow")
-  require(compile_kind(arena,"a{1,18446744073709551616}") == fail.Kind.InvalidInput,"maximum overflow")
+  require(compile_invalid(arena,"a{18446744073709551616}"),"count overflow")
+  require(compile_invalid(arena,"a{1,18446744073709551616}"),"maximum overflow")
   program:=compile(arena,"(a)*")
   input:=memory.push_array<u8>(arena, 100000)
   for i in 0..input.len{input[i]='a'}

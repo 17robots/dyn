@@ -1,4 +1,3 @@
-use "std/fail"
 use "std/mem"
 use io "std/io"
 use csv "std/encoding/csv"

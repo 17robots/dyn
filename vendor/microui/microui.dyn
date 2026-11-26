@@ -1,4 +1,4 @@
-use "std/fail"
+use io "std/io"
 use "std/mem"
 use "std/c"
 #link("dyn_microui")
@@ -15,13 +15,8 @@ pub struct Rectangle { x: i32, y: i32, width: i32, height: i32 }
 // Calls out of order (begin twice, a widget outside a window, end inside a
 // window) fail with InvalidState; text over 4096 bytes or a full command list
 // with InvalidInput.
-pub fn create(arena: *mem.Arena, status: *fail.Status) Context {
-  if status == nil { return create(arena, &fail.Status{}) }
-  if status.failed { return nil }
-  if arena == nil {
-    fail.invalid(status, "create UI", "", "no arena")
-    return nil
-  }
+pub fn create(arena: *mem.Arena) Context!io.IoErr {
+  if arena == nil { fail .InvalidInput }
   state := native_storage(arena, native_size(), native_align())
   native_init(state)
   return state
@@ -38,72 +33,38 @@ fn native_storage(arena: *mem.Arena, size: usize, alignment: usize) rawptr {
   skip := (alignment - (#cast(usize, &storage[0]) & (alignment - 1))) & (alignment - 1)
   return &storage[skip]
 }
-pub fn begin(status: *fail.Status, context: Context) {
-  if status == nil {
-    begin(&fail.Status{}, context)
-    return
-  }
-  ui_checked(status, "begin frame", native_begin(context))
+pub fn begin(context: Context) !io.IoErr {
+  try ui_checked("begin frame", native_begin(context))
 }
-pub fn end(status: *fail.Status, context: Context) {
-  if status == nil {
-    end(&fail.Status{}, context)
-    return
-  }
-  ui_checked(status, "end frame", native_end(context))
+pub fn end(context: Context) !io.IoErr {
+  try ui_checked("end frame", native_end(context))
 }
 // Whether the window is open; widgets go inside an open window.
-pub fn window(status: *fail.Status, context: Context, title: []const u8, buffer: []u8, bounds: Rectangle) bool {
-  if status == nil { return window(&fail.Status{}, context, title, buffer, bounds) }
-  encoded := ui_text(status, "window", title, buffer)
-  if status.failed { return false }
-  if bounds.width <= 0 || bounds.height <= 0 {
-    fail.invalid(status, "window", "", "the size must be positive")
-    return false
-  }
+pub fn window(context: Context, title: []const u8, buffer: []u8, bounds: Rectangle) bool!io.IoErr {
+  encoded := try ui_text("window", title, buffer)
+  if bounds.width <= 0 || bounds.height <= 0 { fail .InvalidInput }
   return native_window(context, encoded, bounds.x, bounds.y, bounds.width, bounds.height)
 }
-pub fn window_end(status: *fail.Status, context: Context) {
-  if status == nil {
-    window_end(&fail.Status{}, context)
-    return
-  }
-  ui_checked(status, "end window", native_window_end(context))
+pub fn window_end(context: Context) !io.IoErr {
+  try ui_checked("end window", native_window_end(context))
 }
-pub fn label(status: *fail.Status, context: Context, text: []const u8, buffer: []u8) {
-  if status == nil {
-    label(&fail.Status{}, context, text, buffer)
-    return
-  }
-  encoded := ui_text(status, "label", text, buffer)
-  if status.failed { return }
-  ui_checked(status, "label", native_label(context, encoded))
+pub fn label(context: Context, text: []const u8, buffer: []u8) !io.IoErr {
+  encoded := try ui_text("label", text, buffer)
+  try ui_checked("label", native_label(context, encoded))
 }
 // Whether the button was clicked this frame. Inputs must arrive before begin().
-pub fn button(status: *fail.Status, context: Context, text: []const u8, buffer: []u8) bool {
-  if status == nil { return button(&fail.Status{}, context, text, buffer) }
-  encoded := ui_text(status, "button", text, buffer)
-  if status.failed { return false }
+pub fn button(context: Context, text: []const u8, buffer: []u8) bool!io.IoErr {
+  encoded := try ui_text("button", text, buffer)
   clicked := native_button(context, encoded)
-  if clicked < 0 {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "button", "", "outside a window, or the command list is full"))
-    return false
-  }
+  if clicked < 0 { fail .InvalidInput }
   return clicked == 1
 }
-fn ui_text(status: *fail.Status, operation: []const u8, text: []const u8, buffer: []u8) c.string {
-  if status.failed { return nil }
-  if text.len > 4096 {
-    fail.invalid(status, operation, "", "text over 4096 bytes")
-    return nil
-  }
-  return c.string_into(status, buffer, text)
+fn ui_text(operation: []const u8, text: []const u8, buffer: []u8) c.string!io.IoErr {
+  if text.len > 4096 { fail .InvalidInput }
+  return try c.string_into(buffer, text)
 }
-fn ui_checked(status: *fail.Status, operation: []const u8, ok: bool) {
-  if status.failed { return }
-  if !ok {
-    fail.set(status, fail.make(fail.Kind.InvalidState, operation, "", "called out of order, or the command list is full"))
-  }
+fn ui_checked(operation: []const u8, ok: bool) !io.IoErr {
+  if !ok { fail .InvalidInput }
 }
 extern fn native_begin "dyn_mu_begin"(context: Context) bool
 extern fn native_end "dyn_mu_end"(context: Context) bool
@@ -115,8 +76,7 @@ pub extern fn mouse "dyn_mu_mouse"(context: Context, x: i32, y: i32, action: i32
 pub extern fn next "dyn_mu_next"(context: Context) Command
 pub extern fn kind "dyn_mu_kind"(command: Command) i32
 pub fn text(command: Command) []const u8 {
-  reading: fail.Status
-  return c.bytes_from_string(&reading, native_text(command), 4097)
+  return c.bytes_from_string(native_text(command), 4097) catch ""
 }
 pub fn rectangle(command: Command) Rectangle {
   result := Rectangle{}

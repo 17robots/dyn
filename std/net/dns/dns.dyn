@@ -1,7 +1,6 @@
 use mem "std/mem"
 use network "std/net"
 use io "std/io"
-use "std/fail"
 use random "std/crypto/random"
 use time "std/time"
 use bytes "std/bytes"
@@ -379,9 +378,8 @@ fn exchange(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
     deadline = time.deadline_after(timeout_milliseconds * time.Millisecond)
   }
   entropy: [2]u8
-  drawing: fail.Status
-  random.fill(&drawing, entropy[..])
-  try io.check_status(&drawing)
+  // No system randomness: System(0).
+  random.fill(entropy[..]) catch { fail io.IoErr.System(0) }
   identifier := load_u16(entropy[..], 0)
   request := query(packet, name, identifier, kind)
   if request.len == 0 { fail .InvalidInput }

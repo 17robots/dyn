@@ -66,7 +66,7 @@ fn main() i32 {
 
 - A directory is a module. Its `.dyn` files share one namespace; `main.dyn`
   holds `fn main()` or `fn main() i32`. Imports are `use "std/io"` and
-  every imported name is qualified: `io.println`, `fail.Status`.
+  every imported name is qualified: `io.println`, `io.IoErr`.
 - One statement per line, no semicolons. `x := value` declares, `x: T`
   declares a zero (or field-default) value. No shadowing: pick a new name.
 - Struct literals name their type: `Tally{ lines: 1 }`. An enum variant may
@@ -110,10 +110,9 @@ Iterators return their value and set `ended` on their state at the end:
 `if directory.ended { break }`. Cleanup cannot fail (`fs.close(&file)`,
 `mem.arena_release(arena)`).
 
-The rest of std still reports through `fail.Status` while it moves to `T!E`:
-such a call takes `&status`, returns a usable zero on failure, and you check
-`status.failed` once at the end of a unit of work.
-`fail.describe(storage, status.failure)` gives its text.
+Decoders fail with `parse.ParseErr` and the byte offset where the input went
+wrong. A builder into fixed storage, such as `fmt.Buffer`, keeps its first
+overflow: check `fmt.overflowed(&buffer)` once, or let `finish` fail.
 
 ## Memory: arenas only
 
@@ -139,13 +138,12 @@ Qualify with the module's last path element: `use "std/encoding/json"` gives
 | `std/bufio` | `reader(io.stdin(), storage)`, `read_line`, buffered `writer` |
 | `std/fs` | `open`, `create`, `read`, `write`, `close`, `read_all`, `write_all`, `list`, `remove`, `rename`, `metadata`, `make_directory`, `atomic_begin`/`atomic_commit` |
 | `std/process` | `start().args`, `environment`, `spawn`, `wait` |
-| `std/encoding/json` | `parse`, `get<T>(&status, value, key)`, `is_string`, `is_number`, `writer` |
+| `std/encoding/json` | `parse`, `get<T>(value, key)`, `is_string`, `is_number`, `writer` |
 | `std/strings` | `format`, `split`, `join`, `trim`, `clone`, `parse` |
 | `std/bytes` | `equal`, `find`, `contains`, `starts_with`, `ends_with`, `count_occurrences` |
 | `std/path` | `join`, `basename`, `extension` |
 | `std/collections` | `array<T>(arena)`, `map<K, V>(arena)`, `ring<T>(arena, n)` |
 | `std/thread`, `std/sync` | `scope`/`scope_spawn`/`scope_join`, `channel<T>`, mutexes |
-| `std/fail` | `Status`, `describe`, `invalid`, `Kind` (modules not yet on `T!E`) |
 
 ## Not X, write Y
 

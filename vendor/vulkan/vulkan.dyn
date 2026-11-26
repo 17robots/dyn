@@ -1,5 +1,5 @@
+use io "std/io"
 use "std/c"
-use "std/fail"
 #link("vulkan")
 
 // Vulkan deliberately exposes one stable loader seam. Applications generate typed
@@ -25,18 +25,12 @@ pub fn version_patch(version: u32) u32 {
 
 // name_buffer receives a temporary NUL-terminated copy. Returned function is
 // loader-owned. A name the loader does not know fails with NotFound.
-pub fn procedure(status: *fail.Status, instance: Instance, name: []const u8, name_buffer: []u8) Procedure {
-  if status == nil { return procedure(&fail.Status{}, instance, name, name_buffer) }
-  if status.failed { return nil }
-  encoded := c.string_into(status, name_buffer, name)
-  if status.failed { return nil }
+pub fn procedure(instance: Instance, name: []const u8, name_buffer: []u8) Procedure!io.IoErr {
+  encoded := try c.string_into(name_buffer, name)
   value := vulkan_get_instance_proc_address(instance, encoded)
-  if value == nil {
-    fail.set(status, fail.make(fail.Kind.NotFound, "load Vulkan procedure", name, "the loader has no such procedure"))
-  }
+  if value == nil { fail .NotFound }
   return value
 }
-pub fn global_procedure(status: *fail.Status, name: []const u8, buffer: []u8) Procedure {
-  if status == nil { return global_procedure(&fail.Status{}, name, buffer) }
-  return procedure(status, nil, name, buffer)
+pub fn global_procedure(name: []const u8, buffer: []u8) Procedure!io.IoErr {
+  return try procedure(nil, name, buffer)
 }

@@ -1,6 +1,5 @@
 // A job type larger than Config.job_size: evented.job panics and names the
 // type, the sizes and the fix. Prints "port N" once listening.
-use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/net"
@@ -31,7 +30,6 @@ fn main() {
   config.connections_per_worker = 4
   storage := mem.arena_from_source(mem.within(arena, evented.storage_size(config, 1) + mem.MiB))
   address := net.ipv4(127, 0, 0, 1, 0)
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   listener := net.tcp_listen_ipv4(&address, 16) catch { #panic("listen") }
   evented.start(storage, workers[..], &listener, config, binding.handler, binding.context) catch { #panic("start server") }
   io.println("port {}", evented.local_port(workers[..]))

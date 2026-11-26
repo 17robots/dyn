@@ -1,7 +1,6 @@
 // Revision-tagged UTF-8 replacement. Publish one tracker per native window;
 // keep it alive across widget focus changes so tokens are never reused.
 use mem "std/mem"
-use "std/fail"
 use utf8 "std/unicode/utf8"
 
 pub const context_limit: usize = 4096
@@ -28,40 +27,30 @@ pub fn boundary(text: []const u8, offset: usize) bool {
 
 // Validates the shared bounded context. Native window protocols additionally
 // require text without embedded NUL; generic UTF-8 buffers may contain it.
-pub fn validate(status: *fail.Status, context: *const Context) {
-  if status == nil {
-    validate(&fail.Status{}, context)
-    return
-  }
-  if status.failed { return }
-  if context.text.len > context_limit {
-    edit_failed(status, fail.Kind.Capacity, "validate", "context is longer than context_limit")
-    return
-  }
+// Why an edit call failed: InvalidInput for text that is not valid UTF-8 at
+// its boundaries or a bad range, Capacity for text past context_limit or a
+// buffer it does not fit, Stale for a replacement whose token no longer
+// matches the buffer (or an exhausted token counter).
+pub enum EditErr { InvalidInput, Capacity, Stale }
+
+pub fn validate(context: *const Context) !EditErr {
+  if context.text.len > context_limit { fail .Capacity }
   if context.token == 0 || !utf8.valid(context.text) || !boundary(context.text, context.cursor) || !boundary(context.text, context.anchor) ||
     (context.cause != Cause.Other && context.cause != Cause.InputMethod) {
-    edit_failed(status, fail.Kind.InvalidInput, "validate", "context is not valid UTF-8 at its boundaries")
+    fail .InvalidInput
   }
-}
-
-fn edit_failed(status: *fail.Status, kind: fail.Kind, operation: []const u8, message: []const u8) {
-  fail.set(status, fail.make(kind, operation, "", message))
 }
 
 // The returned view borrows tracker until its next changed snapshot. Equal
 // text/selection/owner reuses the token; changing focus or bytes advances it.
-pub fn snapshot(status: *fail.Status, tracker: *Tracker, owner: u64, text: []const u8, cursor, anchor: usize, cause: Cause) Context {
-  if status == nil { return snapshot(&fail.Status{}, tracker, owner, text, cursor, anchor, cause) }
-  if status.failed { return Context{} }
+pub fn snapshot(tracker: *Tracker, owner: u64, text: []const u8, cursor, anchor: usize, cause: Cause) Context!EditErr {
   if text.len > context_limit {
     invalidate(tracker)
-    edit_failed(status, fail.Kind.Capacity, "snapshot", "text is longer than context_limit")
-    return Context{}
+    fail .Capacity
   }
   if !utf8.valid(text) || !boundary(text, cursor) || !boundary(text, anchor) || (cause != Cause.Other && cause != Cause.InputMethod) {
     invalidate(tracker)
-    edit_failed(status, fail.Kind.InvalidInput, "snapshot", "text is not valid UTF-8 at its boundaries")
-    return Context{}
+    fail .InvalidInput
   }
   equal := tracker.token != 0 && tracker.owner == owner && tracker.length == text.len && tracker.cursor == cursor && tracker.anchor == anchor
   if equal {
@@ -75,8 +64,7 @@ pub fn snapshot(status: *fail.Status, tracker: *Tracker, owner: u64, text: []con
   if !equal {
     if tracker.serial == 18446744073709551615 {
       invalidate(tracker)
-      edit_failed(status, fail.Kind.Overflow, "snapshot", "the token counter is exhausted")
-      return Context{}
+      fail .Stale
     }
     tracker.serial += 1
     tracker.token = tracker.serial
@@ -105,44 +93,27 @@ fn overlaps(left, right: []const u8) bool {
 
 // All validation precedes writes. Scratch is rewound on success and failure;
 // the replacement may alias storage. Buffer metadata is unchanged on error.
-pub fn apply(scratch: *mem.Arena, status: *fail.Status, buffer: *Buffer, replacement: *const Replacement) {
-  if status == nil {
-    apply(scratch, &fail.Status{}, buffer, replacement)
-    return
-  }
-  if status.failed { return }
-  if buffer.token == 0 || replacement.token != buffer.token {
-    edit_failed(status, fail.Kind.InvalidState, "apply", "replacement token does not match the buffer")
-    return
-  }
+pub fn apply(scratch: *mem.Arena, buffer: *Buffer, replacement: *const Replacement) !EditErr {
+  if buffer.token == 0 || replacement.token != buffer.token { fail .Stale }
   if buffer.length > buffer.storage.len || replacement.start > replacement.end || replacement.end > buffer.length {
-    edit_failed(status, fail.Kind.InvalidInput, "apply", "replacement range or text is invalid")
-    return
+    fail .InvalidInput
   }
   original := buffer.storage[..buffer.length]
   if !utf8.valid(original) || !utf8.valid(replacement.text) || !boundary(original, replacement.start) || !boundary(original, replacement.end) ||
     !boundary(original, buffer.cursor) || !boundary(original, buffer.anchor) {
-    edit_failed(status, fail.Kind.InvalidInput, "apply", "replacement range or text is invalid")
-    return
+    fail .InvalidInput
   }
   retained := buffer.length - (replacement.end - replacement.start)
-  if replacement.text.len > buffer.storage.len - retained {
-    edit_failed(status, fail.Kind.Capacity, "apply", "replacement does not fit the buffer")
-    return
-  }
+  if replacement.text.len > buffer.storage.len - retained { fail .Capacity }
   // Reject output borrowed from the pending scratch region before allocating:
   // even a later rewind can scribble it when diagnostic poisoning is enabled.
-  if scratch.offset > scratch.data.len {
-    edit_failed(status, fail.Kind.InvalidState, "apply", "replacement token does not match the buffer")
-    return
-  }
+  if scratch.offset > scratch.data.len { #panic("text/edit: scratch offset past its block") }
   pending := scratch.data.len - scratch.offset
   if pending > replacement.text.len {
     pending = replacement.text.len
   }
   if overlaps(scratch.data[scratch.offset..scratch.offset + pending], buffer.storage) {
-    edit_failed(status, fail.Kind.InvalidInput, "apply", "buffer storage overlaps pending scratch")
-    return
+    fail .InvalidInput
   }
   mark := mem.arena_mark(scratch)
   defer {

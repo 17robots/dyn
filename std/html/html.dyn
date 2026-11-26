@@ -6,7 +6,6 @@
 // does not make text safe inside <script>, <style>, URLs or unquoted
 // attributes; those need context-specific encoding.
 use "std/encoding/binary"
-use "std/fail"
 use fmt "std/fmt"
 
 // Each byte's escaped form as a little-endian word, and its length: the
@@ -88,12 +87,12 @@ pub fn trusted(markup: []const u8) Trusted {
   return Trusted{ bytes: markup }
 }
 
-// Writes markup into storage, recording into status like fmt.Buffer: a write
-// that does not fit fails status with Capacity, and later writes do nothing.
+// Writes markup into storage like fmt.Buffer: a write that does not fit stops
+// the writer, later writes do nothing, and finish fails.
 pub struct Writer { buffer: fmt.Buffer }
 
-pub fn writer(status: *fail.Status, storage: []u8) Writer {
-  return Writer{ buffer: fmt.buffer(status, storage) }
+pub fn writer(storage: []u8) Writer {
+  return Writer{ buffer: fmt.buffer(storage) }
 }
 
 pub fn markup(destination: *Writer, value: Trusted) {
@@ -147,8 +146,10 @@ pub fn print(destination: *Writer, template: []const u8, values: ...any) {
         bool(value) => { fmt.write_bool(&destination.buffer, value) }
         _ => {
           storage: [256]u8
-          rendered := fmt.buffer(destination.buffer.status, storage[..])
+          rendered := fmt.buffer(storage[..])
           fmt.print_arguments(&rendered, "{}", values[next..next + 1])
+          // A value too long to render stops this writer too.
+          if fmt.overflowed(&rendered) { destination.buffer.broken = true }
           text(destination, fmt.bytes(&rendered))
         }
       }
@@ -178,8 +179,19 @@ pub fn output(source: *const Writer) Trusted {
   return Trusted{ bytes: fmt.bytes(&source.buffer) }
 }
 
+// Whether a write did not fit.
+pub fn overflowed(source: *const Writer) bool {
+  return fmt.overflowed(&source.buffer)
+}
+
+// The whole page; fails when a write did not fit.
+pub fn finish(source: *const Writer) Trusted! {
+  if fmt.overflowed(&source.buffer) { fail }
+  return Trusted{ bytes: fmt.bytes(&source.buffer) }
+}
+
 // Appends text with & < > " ' replaced by entities. Sticky like fmt.write:
-// when it does not fit, the buffer's status fails with Capacity.
+// when it does not fit, the buffer stops.
 // Nonzero when a byte of word is zero (the high bit of the first such byte is
 // set; bits above it may be wrong).
 fn zero_byte(word: u64) u64 {
@@ -219,7 +231,7 @@ pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) {
   }
   // Reserve the worst case once. Near-capacity and aliased inputs keep the
   // span writer below, including its exact partial-write failure behavior.
-  if !buffer.broken && (buffer.status == nil || !buffer.status.failed) && buffer.length <= buffer.data.len && text.len > 0 &&
+  if !buffer.broken && buffer.length <= buffer.data.len && text.len > 0 &&
     text.len <= (buffer.data.len - buffer.length) / 6 {
     maximum := text.len * 6
     destination := buffer.data[buffer.length..buffer.length + maximum]

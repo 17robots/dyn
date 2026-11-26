@@ -22,6 +22,7 @@ fn parse(arena: *mem.Arena, source: []const u8) Tree {
     case err {
       .Invalid(at) => { return Tree{ root: &xml.nil_node, offset: at, code: 1 } }
       .TooLarge(at) => { return Tree{ root: &xml.nil_node, offset: at, code: 2 } }
+      .Unsupported(at) => { return Tree{ root: &xml.nil_node, offset: at, code: 2 } }
     }
   }
   return Tree{ root: root, offset: 0 }

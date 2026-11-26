@@ -401,7 +401,6 @@ def build_program(rng, per_function):
     dispatch_source = '\n'.join(dispatchers)
     arms = '\n'.join(dispatch_arms)
     program = f'''use "std/io"
-use "std/fail"
 use "std/mem"
 use "std/process"
 use "std/strings"
@@ -410,9 +409,8 @@ use "std/strings"
 fn main() {{
   backing: [65536]u8
   arena := mem.arena_from_buffer(backing[..])
-  arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
-  if arguments_status.failed || #len(arguments) < 2 {{ #panic("case index required") }}
+  arguments := process.arguments(arena) catch {{ #panic("case index required") }}
+  if arguments.len < 2 {{ #panic("case index required") }}
   if !strings.valid(u64, arguments[1]) {{ #panic("bad case index") }}
   index := strings.parse(u64, arguments[1])
   case index / 128 {{

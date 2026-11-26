@@ -7,24 +7,34 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "std/fail"
-use layout "std/text/layout"
+SOURCE=r'''use layout "std/text/layout"
 use ui "std/ui"
 use ui_text "std/ui/text"
 use software "std/ui/software"
 use mem "std/mem"
 use bytes "std/bytes"
+use parse "std/parse"
 fn check(ok: bool) { if !ok { #panic("layout contract") } }
-struct Built { value: layout.Layout, offset: usize, failure: fail.Failure }
+enum Kind { Ok, InvalidInput, Capacity, Unsupported }
+struct Failure { kind: Kind, offset: usize }
+fn failure_of(err: parse.ParseErr) Failure {
+ case err {
+  .Invalid(at) => { return Failure{ kind: Kind.InvalidInput, offset: at } }
+  .TooLarge(at) => { return Failure{ kind: Kind.Capacity, offset: at } }
+  .Unsupported(at) => { return Failure{ kind: Kind.Unsupported, offset: at } }
+ }
+}
+struct Built { value: layout.Layout, offset: usize, failure: Failure }
 fn build(arena: *mem.Arena, source: []const u8, font: layout.Font, options: layout.Options) Built {
-  status: fail.Status
-  value := layout.build(arena, &status, source, font, options)
-  return Built{ value: value, offset: status.failure.offset, failure: status.failure }
+  value := layout.build(arena, source, font, options) catch err {
+    failure := failure_of(err)
+    return Built{ offset: failure.offset, failure: failure }
+  }
+  return Built{ value: value }
 }
 fn renders(surface: *software.Surface, commands: *const ui.Command, font: software.Font) bool {
-  status: fail.Status
-  software.render(&status, surface, commands, font)
-  return !status.failed
+  software.render(surface, commands, font) catch { return false }
+  return true
 }
 fn advance(raw: rawptr, cp: u32) f64 {
   _ = raw
@@ -54,7 +64,7 @@ fn main() {
   defer { mem.arena_release(arena) }
   font := layout.Font{ advance: advance, kerning: kern, line_height: 12 }
   result := build(arena, "AV AV", font, layout.Options{ width: 30 })
-  check(result.failure.kind == fail.Kind.Ok && result.value.lines.len == 2 && result.value.glyphs.len == 4)
+  check(result.failure.kind == Kind.Ok && result.value.lines.len == 2 && result.value.glyphs.len == 4)
   check(result.value.lines[0].width == 18.0 && result.value.lines[1].width == 18.0 && result.value.height == 24.0)
   check(result.value.glyphs[1].x == 8.0 && result.value.glyphs[2].x == 0.0 && result.value.glyphs[2].y == 12.0)
   context := ui.Context{ style: ui.default_style }
@@ -66,38 +76,38 @@ fn main() {
   check(renders(&surface, ui.first(&context), software.Font{ glyph: glyph, line_height: 12 }))
   check(pixels[(3 * 32 + 2) * 4] == 255 && pixels[(3 * 32 + 10) * 4] == 255 && pixels[(15 * 32 + 2) * 4] == 255)
   result = build(arena, "AV", font, layout.Options{ width: 30, alignment: layout.Align.Center })
-  check(result.failure.kind == fail.Kind.Ok && result.value.glyphs[0].x == 6.0 && result.value.glyphs[1].x == 14.0)
+  check(result.failure.kind == Kind.Ok && result.value.glyphs[0].x == 6.0 && result.value.glyphs[1].x == 14.0)
   result = build(arena, "AV", font, layout.Options{ width: 30, alignment: layout.Align.Right })
-  check(result.failure.kind == fail.Kind.Ok && result.value.glyphs[0].x == 12.0)
+  check(result.failure.kind == Kind.Ok && result.value.glyphs[0].x == 12.0)
   result = build(arena, "A\tV", font, layout.Options{})
-  check(result.failure.kind == fail.Kind.Ok && result.value.width == 30.0 && result.value.glyphs[1].x == 20.0)
+  check(result.failure.kind == Kind.Ok && result.value.width == 30.0 && result.value.glyphs[1].x == 20.0)
   result = build(arena, "A\r\n\nB\n", font, layout.Options{})
-  check(result.failure.kind == fail.Kind.Ok && result.value.lines.len == 4 && result.value.height == 48.0 && result.value.glyphs.len == 2)
+  check(result.failure.kind == Kind.Ok && result.value.lines.len == 4 && result.value.height == 48.0 && result.value.glyphs.len == 2)
   result = build(arena, "A\xcc\x8a", font, layout.Options{})
-  check(result.failure.kind == fail.Kind.Ok && bytes.equal(result.value.text, "\xc3\x85") && result.value.glyphs.len == 1 && result.value.glyphs[0].end == 2)
+  check(result.failure.kind == Kind.Ok && bytes.equal(result.value.text, "\xc3\x85") && result.value.glyphs.len == 1 && result.value.glyphs[0].end == 2)
   result = build(arena, "A\xcc\x8aV", font, layout.Options{ width: 12, no_normalize: true })
-  check(result.failure.kind == fail.Kind.Ok && result.value.lines.len == 2 && result.value.glyphs.len == 3)
+  check(result.failure.kind == Kind.Ok && result.value.lines.len == 2 && result.value.glyphs.len == 3)
   check(result.value.glyphs[0].start == 0 && result.value.glyphs[0].end == 3 && result.value.glyphs[1].start == 0 && result.value.glyphs[1].end == 3)
   check(result.value.glyphs[1].y == 0.0 && result.value.glyphs[2].y == 12.0)
   result = build(arena, "abcde", font, layout.Options{ width: 21 })
-  check(result.failure.kind == fail.Kind.Ok && result.value.lines.len == 3 && result.value.lines[2].width == 10.0)
+  check(result.failure.kind == Kind.Ok && result.value.lines.len == 3 && result.value.lines[2].width == 10.0)
   result = build(arena, "", font, layout.Options{})
-  check(result.failure.kind == fail.Kind.Ok && result.value.lines.len == 1 && result.value.glyphs.len == 0)
+  check(result.failure.kind == Kind.Ok && result.value.lines.len == 1 && result.value.glyphs.len == 0)
   result = build(arena, "ab\xc2\xadc", font, layout.Options{})
-  check(result.failure.kind == fail.Kind.Ok && result.value.glyphs.len == 3 && result.value.width == 30.0)
+  check(result.failure.kind == Kind.Ok && result.value.glyphs.len == 3 && result.value.width == 30.0)
   result = build(arena, "a\xc2\xadbcd", font, layout.Options{ width: 25 })
-  check(result.failure.kind == fail.Kind.Ok && result.value.glyphs[1].codepoint == 45 && result.value.glyphs[1].y == 0.0 && result.value.glyphs[2].y == 12.0)
+  check(result.failure.kind == Kind.Ok && result.value.glyphs[1].codepoint == 45 && result.value.glyphs[1].y == 0.0 && result.value.glyphs[2].y == 12.0)
   result = build(arena, "a\xc2\xadbc", font, layout.Options{ width: 15 })
-  check(result.failure.kind == fail.Kind.Ok && result.value.lines[0].width == 10.0 && result.value.glyphs[1].codepoint != 45)
+  check(result.failure.kind == Kind.Ok && result.value.lines[0].width == 10.0 && result.value.glyphs[1].codepoint != 45)
   state: i32 = 0
   font.data = &state
   result = build(arena, "a\xc2\xadbc", font, layout.Options{ width: 20 })
-  check(result.failure.kind == fail.Kind.Ok && result.value.lines[0].width == 20.0 && result.value.glyphs[1].codepoint == 98)
+  check(result.failure.kind == Kind.Ok && result.value.lines[0].width == 20.0 && result.value.glyphs[1].codepoint == 98)
   font.data = nil
   result = build(arena, "a\xc2\xad bc", font, layout.Options{ width: 25 })
-  check(result.failure.kind == fail.Kind.Ok && result.value.lines[0].glyph_count == 1 && result.value.glyphs[0].codepoint == 97)
+  check(result.failure.kind == Kind.Ok && result.value.lines[0].glyph_count == 1 && result.value.glyphs[0].codepoint == 97)
   result = build(arena, "AAA", layout.Font{ advance: big_advance, line_height: 1 }, layout.Options{})
-  check(result.failure.kind == fail.Kind.Ok && result.value.glyphs[2].x == 4000000000.0)
+  check(result.failure.kind == Kind.Ok && result.value.glyphs[2].x == 4000000000.0)
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 32, height: 32 })
   ui_text.label(&context, ui.Rect{ width: 32, height: 32 }, &result.value, ui.Color{ r: 255, a: 255 })
   ui.end(&context)
@@ -109,9 +119,9 @@ fn main() {
   check(renders(&surface, ui.first(&context), software.Font{ glyph: big_glyph, line_height: 1 }) && pixels[4] == 255)
   before := mem.arena_mark(arena)
   bad := build(arena, "ok\xff", font, layout.Options{})
-  check(bad.failure.kind != fail.Kind.Ok && bad.failure.kind == fail.Kind.InvalidInput && bad.offset == 2 && mem.arena_mark(arena) == before)
+  check(bad.failure.kind != Kind.Ok && bad.failure.kind == Kind.InvalidInput && bad.offset == 2 && mem.arena_mark(arena) == before)
   bad = build(arena, "x", layout.Font{}, layout.Options{})
-  check(bad.failure.kind != fail.Kind.Ok && mem.arena_mark(arena) == before)
+  check(bad.failure.kind != Kind.Ok && mem.arena_mark(arena) == before)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-layout-') as directory:

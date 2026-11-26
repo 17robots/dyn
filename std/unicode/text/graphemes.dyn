@@ -1,14 +1,15 @@
+use parse "std/parse"
 // source and returned values borrow caller storage; keep it alive and unchanged.
 // offset advances only on success. After invalid UTF-8 the iterator stays
 // failed: next_grapheme fails the same way again. ended turns true when
 // next_grapheme returns no cluster, at the end of the text or after a failure.
 pub struct Graphemes { source: []const u8, offset: usize, failed: bool, error_offset: usize, ended: bool }
-fn invalid(status: *fail.Status, state: *Graphemes, offset: usize) []const u8 {
+// Stops the iterator for good and returns the failure at offset.
+fn invalid(state: *Graphemes, offset: usize) parse.ParseErr {
   state.failed = true
   state.error_offset = offset
   state.ended = true
-  fail.at(status, fail.Kind.InvalidInput, "split graphemes", "invalid UTF-8", offset)
-  return ""
+  return parse.ParseErr.Invalid(offset)
 }
 pub fn graphemes(source: []const u8) Graphemes {
   return Graphemes{ source: source }
@@ -17,17 +18,16 @@ fn control(property: u32) bool {
   return property == 1 || property == 2 || property == 3
 }
 // Extended grapheme clusters, UAX #29 Unicode 17 default rules. Invalid UTF-8 is
-// InvalidInput at its offset. Failure leaves offset unchanged.
-pub fn next_grapheme(status: *fail.Status, state: *Graphemes) []const u8 {
-  if status == nil { return next_grapheme(&fail.Status{}, state) }
-  if status.failed || state.offset == state.source.len {
+// Invalid at its offset. Failure leaves offset unchanged.
+pub fn next_grapheme(state: *Graphemes) []const u8!parse.ParseErr {
+  if state.offset == state.source.len {
     state.ended = true
     return ""
   }
-  if state.failed { return invalid(status, state, state.error_offset) }
+  if state.failed { fail invalid(state, state.error_offset) }
   start := state.offset
   first := utf8.decode(state.source, start)
-  if !first.valid { return invalid(status, state, start) }
+  if !first.valid { fail invalid(state, start) }
   bits := properties(first.codepoint)
   previous := (bits >> 13) & 15
   regional: usize = 0
@@ -42,7 +42,7 @@ pub fn next_grapheme(status: *fail.Status, state: *Graphemes) []const u8 {
   at := start + first.width
   for at < state.source.len {
     decoded := utf8.decode(state.source, at)
-    if !decoded.valid { return invalid(status, state, at) }
+    if !decoded.valid { fail invalid(state, at) }
     next_bits := properties(decoded.codepoint)
     current := (next_bits >> 13) & 15
     next_indic := (next_bits >> 18) & 3

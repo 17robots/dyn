@@ -7,7 +7,6 @@
 #link("c")
 
 use io "std/io"
-use "std/fail"
 use mem "std/mem"
 use "std/os/linux/sys"
 use threading "std/thread"
@@ -46,30 +45,26 @@ fn trampoline(context: rawptr) rawptr {
 // context must stay alive and unmoved until join succeeds. Arena exhaustion
 // panics; a native failure restores the arena mark.
 // Starts entry(context) on a POSIX thread; context stays alive until join.
-pub fn spawn<C>(arena: *mem.Arena, status: *fail.Status, stack_size: usize, entry: fn(*C) isize, context: *C) *Thread {
-  if status == nil { return spawn(arena, &fail.Status{}, stack_size, entry, context) }
-  if status.failed { return nil }
-  return spawn_untyped(arena, status, stack_size, #cast(fn(rawptr) isize, entry), context)
+// A stack under 16 KiB or a nil entry fails with InvalidInput.
+pub fn spawn<C>(arena: *mem.Arena, stack_size: usize, entry: fn(*C) isize, context: *C) *Thread!io.IoErr {
+  return try spawn_untyped(arena, stack_size, #cast(fn(rawptr) isize, entry), context)
 }
 
-fn spawn_failed(status: *fail.Status, error: i32) *Thread {
-  fail.set(status, io.from_linux("spawn thread", "", 0 - #cast(isize, error)))
-  return nil
+// pthread calls return a positive errno.
+fn spawn_failed(error: i32) io.IoErr {
+  return io.linux_err(0 - #cast(isize, error))
 }
 
-fn spawn_untyped(arena: *mem.Arena, status: *fail.Status, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) *Thread {
-  if stack_size < 16384 || entry == nil {
-    fail.invalid(status, "spawn thread", "", "a thread needs an entry and a stack of at least 16 KiB")
-    return nil
-  }
+fn spawn_untyped(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) *Thread!io.IoErr {
+  if stack_size < 16384 || entry == nil { fail .InvalidInput }
   attributes := Attributes{}
   error := attr_init(&attributes)
-  if error != 0 { return spawn_failed(status, error) }
+  if error != 0 { fail spawn_failed(error) }
   defer {
     _ = attr_destroy(&attributes)
   }
   error = attr_stack_size(&attributes, (stack_size + 4095) & ~#cast(usize, 4095))
-  if error != 0 { return spawn_failed(status, error) }
+  if error != 0 { fail spawn_failed(error) }
   mark := mem.arena_mark(arena)
   thread := mem.push<Thread>(arena)
   thread.entry = entry
@@ -79,36 +74,27 @@ fn spawn_untyped(arena: *mem.Arena, status: *fail.Status, stack_size: usize, ent
   restore_signals(signals)
   if error != 0 {
     mem.arena_rewind(arena, mark)
-    return spawn_failed(status, error)
+    fail spawn_failed(error)
   }
   return thread
 }
 
 // Waits for the thread. A joined Thread joins again as a no-op.
-pub fn join(status: *fail.Status, thread: *Thread) {
-  if status == nil {
-    join(&fail.Status{}, thread)
-    return
-  }
-  if status.failed || thread.joined { return }
+pub fn join(thread: *Thread) !io.IoErr {
+  if thread.joined { return }
   value: rawptr = nil
   error := wait(thread.handle, &value)
-  if error != 0 {
-    fail.set(status, io.from_linux("join thread", "", 0 - #cast(isize, error)))
-    return
-  }
+  if error != 0 { fail spawn_failed(error) }
   thread.joined = true
 }
 
 fn spawner_spawn(data: rawptr, arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) rawptr {
-  status: fail.Status
-  return spawn_untyped(arena, &status, stack_size, entry, context)
+  return spawn_untyped(arena, stack_size, entry, context) catch nil
 }
 
 fn spawner_join(data: rawptr, handle: rawptr) bool {
-  status: fail.Status
-  join(&status, #cast(*Thread, handle))
-  return !status.failed
+  join(#cast(*Thread, handle)) catch { return false }
+  return true
 }
 
 pub fn spawner() threading.Spawner {

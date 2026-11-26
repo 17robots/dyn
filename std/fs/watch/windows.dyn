@@ -1,6 +1,5 @@
 #target(kernel: windows)
 use io "std/io"
-use "std/fail"
 use mem "std/mem"
 use utf8 "std/unicode/utf8"
 use utf16 "std/unicode/utf16"

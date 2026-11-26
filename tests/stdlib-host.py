@@ -7,8 +7,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT/'build'/('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
-SOURCE = r'''use "std/fail"
-use "std/fs"
+SOURCE = r'''use "std/fs"
 use "std/io"
 use "std/bufio"
 use "std/process"
@@ -24,10 +23,8 @@ fn lines(text: []const u8, expected: []const u8, buffering: usize) {
   input := bufio.reader(io.cursor_reader(&cursor), scratch[..buffering])
   result: [256]u8
   used: usize = 0
-  status: fail.Status
   for {
-    line := bufio.read_line(&status, &input)
-    require(!status.failed, "stdlib assertion 30")
+    line := bufio.read_line(&input) catch { #panic("stdlib assertion 30") }
     if input.ended { break }
     for byte in line {
       result[used] = byte
@@ -116,55 +113,39 @@ fn main() {
     lines("", "", buffering)
     buffering += 1
   }
-  // A line longer than the storage fails with Capacity; the next read, with
-  // a fresh status, continues after it.
+  // A line longer than the storage fails with Capacity; the next read
+  // continues after it.
   long_cursor := io.cursor("ab\nlonger\ncd")
   long_storage: [4]u8
   long_input := bufio.reader(io.cursor_reader(&long_cursor), long_storage[..])
-  first_status: fail.Status
-  first_line := bufio.read_line(&first_status, &long_input)
-  require(!first_status.failed && bytes.equal(first_line, "ab"), "stdlib assertion 111")
-  long_status: fail.Status
-  _ = bufio.read_line(&long_status, &long_input)
-  require(long_status.failure.kind == fail.Kind.Capacity && long_input.ended, "stdlib assertion 112")
-  after_status: fail.Status
-  after_line := bufio.read_line(&after_status, &long_input)
-  require(!after_status.failed && !long_input.ended && bytes.equal(after_line, "cd"), "stdlib assertion 113")
-  _ = bufio.read_line(&after_status, &long_input)
-  require(!after_status.failed && long_input.ended, "stdlib assertion 113b")
+  first_line := bufio.read_line(&long_input) catch { #panic("stdlib assertion 111") }
+  require(bytes.equal(first_line, "ab"), "stdlib assertion 111")
+  require(line_kind(&long_input) == 5, "stdlib assertion 112")
+  after_line := bufio.read_line(&long_input) catch { #panic("stdlib assertion 113") }
+  require(!long_input.ended && bytes.equal(after_line, "cd"), "stdlib assertion 113")
+  _ = bufio.read_line(&long_input) catch { #panic("stdlib assertion 113b") }
+  require(long_input.ended, "stdlib assertion 113b")
   error_storage: [8]u8
   failing := bufio.reader(io.Reader{ read: error_read }, error_storage[..])
-  failing_status: fail.Status
-  _ = bufio.read_line(&failing_status, &failing)
-  require(failing_status.failed && failing.ended, "stdlib assertion 114")
-  require(failing_status.failure.kind == fail.Kind.PermissionDenied, "stdlib assertion 115")
+  require(line_kind(&failing) == 2, "stdlib assertion 115")
   no_storage := bufio.reader(io.Reader{ read: error_read }, error_storage[..0])
-  no_storage_status: fail.Status
-  _ = bufio.read_line(&no_storage_status, &no_storage)
-  require(no_storage_status.failure.kind == fail.Kind.InvalidInput && no_storage.ended, "stdlib assertion 116")
+  require(line_kind(&no_storage) == 4, "stdlib assertion 116")
   failed_output := bufio.writer(io.Writer{ write: error_write }, error_storage[..])
-  pending: fail.Status
-  io.write_status(&pending, bufio.writer_adapter(&failed_output), "pending")
-  require(!pending.failed, "stdlib assertion 118")
-  flush_status: fail.Status
-  bufio.writer_flush(&flush_status, &failed_output)
-  require(flush_status.failure.kind == fail.Kind.PermissionDenied && failed_output.used == 7, "stdlib assertion 119")
-  retry: fail.Status
-  bufio.writer_flush(&retry, &failed_output)
-  require(retry.failure.kind == fail.Kind.PermissionDenied && failed_output.used == 7, "stdlib assertion 120")
+  io.write(bufio.writer_adapter(&failed_output), "pending") catch { #panic("stdlib assertion 118") }
+  require(flush_kind(&failed_output) == 2 && failed_output.used == 7, "stdlib assertion 119")
+  require(flush_kind(&failed_output) == 2 && failed_output.used == 7, "stdlib assertion 120")
   raw_cursor := io.cursor("a\r\nx")
   raw_input := bufio.reader(io.cursor_reader(&raw_cursor), error_storage[..1])
-  raw_status: fail.Status
-  raw_line := bufio.read_until(&raw_status, &raw_input, contents[..], 10)
-  require(raw_line.status == bufio.ReadStatus.Complete && !raw_status.failed && bytes.equal(contents[..raw_line.transferred], "a\r"), "stdlib assertion 125")
+  raw_line := bufio.read_until(&raw_input, contents[..], 10) catch { #panic("stdlib assertion 125") }
+  require(raw_line.status == bufio.ReadStatus.Complete && bytes.equal(contents[..raw_line.transferred], "a\r"), "stdlib assertion 125")
   require(fails_with(environment_kind(arena, ""), 4), "stdlib assertion 126")
   invalid_child := process.Child{}
   require(fails_with(wait_kind(&invalid_child), 4), "stdlib assertion 128")
   minimum: isize = 0 - #cast(isize, (#max(usize) >> 1)) - 1
-  require(io.linux(minimum) == fail.Kind.System, "stdlib assertion 130")
-  require(io.darwin(minimum) == fail.Kind.System, "stdlib assertion 131")
-  require(io.windows(minimum) == fail.Kind.System, "stdlib assertion 132")
-  require(io.wasi(minimum) == fail.Kind.System, "stdlib assertion 133")
+  require(kind_of(io.linux_err(minimum)) == 9, "stdlib assertion 130")
+  require(kind_of(io.darwin_err(minimum)) == 9, "stdlib assertion 131")
+  require(kind_of(io.windows_err(minimum)) == 9, "stdlib assertion 132")
+  require(kind_of(io.wasi_err(minimum)) == 9, "stdlib assertion 133")
   started := time.monotonic_now()
   wall := time.realtime_now()
   require(wall.seconds > 1700000000, "stdlib assertion 136")
@@ -186,11 +167,21 @@ fn fs_write_file(path: []const u8, data: []const u8) bool {
 fn kind_of(err: io.IoErr) u8 {
   case err {
     .NotFound => { return 1 }
+    .PermissionDenied => { return 2 }
     .AlreadyExists => { return 3 }
     .InvalidInput => { return 4 }
     .Capacity => { return 5 }
+    .System(_) => { return 9 }
     _ => { return 6 }
   }
+}
+fn line_kind(reader: *bufio.Reader) u8 {
+  _ = bufio.read_line(reader) catch err { return kind_of(err) }
+  return 0
+}
+fn flush_kind(writer: *bufio.Writer) u8 {
+  bufio.writer_flush(writer) catch err { return kind_of(err) }
+  return 0
 }
 fn fails_with(kind: u8, expected: u8) bool {
   return kind == expected

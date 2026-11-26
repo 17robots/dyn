@@ -15,7 +15,6 @@ TYPES = [(f'{s}{w}', w, s == 'i') for w in (8, 16, 32, 64) for s in ('i', 'u')]
 TYPES += [('isize', struct.calcsize('P') * 8, True), ('usize', struct.calcsize('P') * 8, False)]
 HEADER = '''use io "std/io"
 use "std/math"
-use "std/fail"
 use "std/fs"
 use "std/mem"
 fn require(ok: bool, label: []const u8) { if !ok { #panic(label) } }

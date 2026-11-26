@@ -611,13 +611,9 @@ fn add_match(encoder: *Encoder, length: usize, distance: usize) {
 }
 
 // Raw DEFLATE stream of source into destination at level (1-9; others
-// clamp). Fails with Capacity when destination is too small; deflate_bound
-// always suffices.
-// Compresses source into destination; the bytes written. Too small a
-// destination fails with Capacity (deflate_bound always suffices).
-pub fn deflate(status: *fail.Status, destination: []u8, source: []const u8, level: u8, encoder: *Encoder) []u8 {
-  if status == nil { return deflate(&fail.Status{}, destination, source, level, encoder) }
-  if status.failed { return destination[..0] }
+// clamp); the bytes written. Fails when destination is too small;
+// deflate_bound always suffices.
+pub fn deflate(destination: []u8, source: []const u8, level: u8, encoder: *Encoder) []u8! {
   clamped := level
   if clamped < MinLevel {
     clamped = MinLevel
@@ -720,9 +716,6 @@ pub fn deflate(status: *fail.Status, destination: []u8, source: []const u8, leve
   }
   flush_block(encoder, &bits, source[block_start..], true)
   align_bits(&bits)
-  if !bits.ok {
-    fail.set(status, fail.make(fail.Kind.Capacity, "compress", "", "the output does not fit destination"))
-    return destination[..0]
-  }
+  if !bits.ok { fail }
   return destination[..bits.written]
 }

@@ -10,39 +10,33 @@ import threading
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
 SOURCE = r'''use watch "std/fs/watch"
-use "std/fail"
 use io "std/io"
 use bytes "std/bytes"
 use time "std/time"
 fn require(value: bool) { if !value { #panic("Windows watch contract") } }
 fn added(state: *watch.Watcher, path: []const u8, mask: u32) i32 {
-  status: fail.Status
-  id := watch.add(&status, state, path, mask)
-  require(!status.failed)
-  return id
+  return watch.add(state, path, mask) catch { #panic("Windows watch contract") }
 }
 fn rejected(state: *watch.Watcher, path: []const u8, mask: u32) bool {
-  status: fail.Status
-  _ = watch.add(&status, state, path, mask)
-  return status.failed
+  _ = watch.add(state, path, mask) catch { return true }
+  return false
 }
 fn removed(state: *watch.Watcher, id: i32) bool {
-  status: fail.Status
-  watch.remove(&status, state, id)
-  return !status.failed
+  watch.remove(state, id) catch { return false }
+  return true
+}
+fn open_fails(storage: []u8) bool {
+  failed := watch.open(storage) catch { return true }
+  watch.close(&failed)
+  return false
 }
 fn main() {
   empty := watch.Watcher{}
   watch.close(&empty)
   tiny: [1]u8
-  short: fail.Status
-  failed := watch.open(&short, tiny[..])
-  watch.close(&failed)
-  require(short.failed)
+  require(open_fails(tiny[..]))
   scratch: [1024]u8
-  status: fail.Status
-  opened := watch.open(&status, scratch[..])
-  require(!status.failed)
+  opened := watch.open(scratch[..]) catch { #panic("Windows watch contract") }
   require(rejected(&opened,"missing-directory",watch.Changes))
   require(rejected(&opened,".",watch.CloseWrite))
   first := added(&opened,"one",watch.Changes)
@@ -50,8 +44,7 @@ fn main() {
   require(first != second)
   require(!watch.HasCloseWrite && !watch.HasMoveCookies && !watch.HasDirectoryFlag)
   capacity_scratch: [272]u8
-  capacity := watch.open(&status, capacity_scratch[..])
-  require(!status.failed)
+  capacity := watch.open(capacity_scratch[..]) catch { #panic("Windows watch contract") }
   ids: [16]i32
   for i in 0..16 {
     ids[i] = added(&capacity,".",watch.Changes)
@@ -68,8 +61,7 @@ fn main() {
   seen_first: u32 = 0
   seen_second: u32 = 0
   for attempt in 0..1000 {
-    event := watch.next(&status, &opened)
-    require(!status.failed)
+    event := watch.next(&opened) catch { #panic("Windows watch contract") }
     if !opened.ended {
       require(!event.rescan && event.cookie == 0)
       if event.watch == first {
@@ -92,8 +84,7 @@ fn main() {
   require(removed(&opened,first))
   require(removed(&opened,second))
   watch.close(&opened)
-  reopened := watch.open(&status, scratch[..])
-  require(!status.failed)
+  reopened := watch.open(scratch[..]) catch { #panic("Windows watch contract") }
   _ = added(&reopened,"one",watch.Changes)
   watch.close(&reopened)
   io.println("DONE")

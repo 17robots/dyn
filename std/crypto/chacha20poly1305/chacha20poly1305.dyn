@@ -1,7 +1,6 @@
 use chacha "std/crypto/chacha20"
 use poly "std/crypto/poly1305"
 use binary "std/encoding/binary"
-use "std/fail"
 // RFC 8439 AEAD. Key:32, nonce:12, tag:16 bytes. Never reuse a nonce/key pair.
 // Caller owns all storage. Input/output may be exactly the same slice, but no
 // partial overlap is allowed. Other output/input overlaps are rejected before
@@ -29,10 +28,10 @@ fn valid(output: []u8, input: []const u8, aad: []const u8, key: []const u8, nonc
   return true
 }
 // Sizes are checked by the callers, so the primitives below cannot fail.
-fn mac(status: *fail.Status, ciphertext: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) [16]u8 {
+fn mac(ciphertext: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) [16]u8! {
   first: [64]u8
-  chacha.block(status, first[..], key, nonce, 0)
-  state := poly.init(status, first[..32])
+  try chacha.block(first[..], key, nonce, 0)
+  state := try poly.init(first[..32])
   zero: [16]u8
   poly.update(&state, aad)
   if aad.len % 16 != 0 {
@@ -46,40 +45,21 @@ fn mac(status: *fail.Status, ciphertext: []const u8, aad: []const u8, key: []con
   binary.store_u64_le(lengths[..8], aad.len)
   binary.store_u64_le(lengths[8..], ciphertext.len)
   poly.update(&state, lengths[..])
-  return poly.finish(status, &state)
+  return try poly.finish(&state)
 }
-pub fn seal(status: *fail.Status, output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) {
-  if status == nil {
-    seal(&fail.Status{}, output, tag, input, aad, key, nonce)
-    return
-  }
-  if status.failed { return }
+pub fn seal(output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) ! {
   if !valid(output, input, aad, key, nonce) || tag.len != 16 || overlaps(tag, output) || overlaps(tag, input) || overlaps(tag, aad) || overlaps(tag, key) || overlaps(tag, nonce) {
-    fail.invalid(status, "ChaCha20-Poly1305 seal", "", "bad key, nonce, tag or output size, or overlapping buffers")
-    return
+    fail
   }
-  chacha.xor(status, output, input, key, nonce, 1)
-  result := mac(status, output, aad, key, nonce)
-  if status.failed { return }
+  try chacha.xor(output, input, key, nonce, 1)
+  result := try mac(output, aad, key, nonce)
   for i in 0..16 {
     tag[i] = result[i]
   }
 }
-pub fn open(status: *fail.Status, output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) {
-  if status == nil {
-    open(&fail.Status{}, output, input, tag, aad, key, nonce)
-    return
-  }
-  if status.failed { return }
-  if !valid(output, input, aad, key, nonce) || tag.len != 16 || overlaps(output, tag) {
-    fail.invalid(status, "ChaCha20-Poly1305 open", "", "bad key, nonce, tag or output size, or overlapping buffers")
-    return
-  }
-  expected := mac(status, input, aad, key, nonce)
-  if status.failed { return }
-  if !poly.equal(expected[..], tag) {
-    fail.invalid(status, "ChaCha20-Poly1305 open", "", "authentication failed")
-    return
-  }
-  chacha.xor(status, output, input, key, nonce, 1)
+pub fn open(output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) ! {
+  if !valid(output, input, aad, key, nonce) || tag.len != 16 || overlaps(output, tag) { fail }
+  expected := try mac(input, aad, key, nonce)
+  if !poly.equal(expected[..], tag) { fail }
+  try chacha.xor(output, input, key, nonce, 1)
 }

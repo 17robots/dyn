@@ -18,7 +18,6 @@
 // tls.config_release only after evented.join returns.
 #target(kernel: linux)
 
-use "std/fail"
 use io "std/io"
 use mem "std/mem"
 use evented "std/net/http/evented"
@@ -102,12 +101,10 @@ alpn_h3: []const u8 = "\x02h3"
 // A QUIC server context offering "h3" through ALPN, from PEM files. Release
 // it with tls.config_release after evented.join returns.
 pub fn quic_context(arena: *mem.Arena, certificate: []const u8, key: []const u8) provider.Context!io.IoErr {
-  status: fail.Status
-  context := openssl.quic_server_context_create(arena, &status, certificate, key)
-  openssl.set_server_alpn(&status, context, &alpn_h3)
-  if status.failed {
+  context := try openssl.quic_server_context_create(arena, certificate, key)
+  openssl.set_server_alpn(context, &alpn_h3) catch err {
     openssl.context_free_owned(context)
-    fail io.err_of(status.failure)
+    fail err
   }
   return context
 }
@@ -142,20 +139,19 @@ fn quic_accept_stream(connection: rawptr) evented.QuicStream {
   return evented.QuicStream{ handle: accepted.handle, id: accepted.id, unidirectional: accepted.unidirectional }
 }
 
-// A failure from the provider, including a peer reset, ends the stream.
-fn quic_io(status: *fail.Status, attempt: openssl.QuicAttempt) evented.QuicIo {
-  if status.failed { return evented.QuicIo{ count: attempt.count, status: evented.QuicStatus.Failed } }
+fn quic_io(attempt: openssl.QuicAttempt) evented.QuicIo {
   if attempt.blocked { return evented.QuicIo{ count: attempt.count, status: evented.QuicStatus.WouldBlock } }
   if attempt.ended { return evented.QuicIo{ status: evented.QuicStatus.End } }
   return evented.QuicIo{ count: attempt.count }
 }
 
+// A failure from the provider, including a peer reset, ends the stream.
 fn quic_read(stream: rawptr, destination: []u8) evented.QuicIo {
-  status: fail.Status
-  return quic_io(&status, openssl.quic_read(&status, stream, destination))
+  attempt := openssl.quic_read(stream, destination) catch { return evented.QuicIo{ status: evented.QuicStatus.Failed } }
+  return quic_io(attempt)
 }
 
 fn quic_write(stream: rawptr, source: []const u8, conclude: bool) evented.QuicIo {
-  status: fail.Status
-  return quic_io(&status, openssl.quic_write(&status, stream, source, conclude))
+  attempt := openssl.quic_write(stream, source, conclude) catch { return evented.QuicIo{ status: evented.QuicStatus.Failed } }
+  return quic_io(attempt)
 }

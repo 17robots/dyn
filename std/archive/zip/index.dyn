@@ -2,12 +2,11 @@
 // Stored and DEFLATE payloads, with signed or unsigned ZIP32 data descriptors.
 // ZIP64, encryption, multi-disk and self-extracting offset correction are unsupported.
 use bytes "std/bytes"
-use "std/fail"
 
-struct Central { entry: Entry, next: usize, error: fail.Kind, ok: bool }
+struct Central { entry: Entry, next: usize, error: stream.IoErr, ok: bool }
 fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize) Central {
   if data_limit > limit || at < data_limit || at > limit || limit > source.len || limit - at < 46 || u32le(source, at) != 33639248 {
-    return Central{ error: fail.Kind.InvalidInput }
+    return Central{ error: stream.IoErr.InvalidInput }
   }
   flags := u16le(source, at + 8)
   method := u16le(source, at + 10)
@@ -15,36 +14,36 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
   size := #cast(usize, u32le(source, at + 24))
   local := #cast(usize, u32le(source, at + 42))
   if (flags & 8257) != 0 || compressed == 4294967295 || size == 4294967295 || local == 4294967295 || u16le(source, at + 34) != 0 {
-    return Central{ error: fail.Kind.Unsupported }
+    return Central{ error: stream.IoErr.Unsupported }
   }
   name_length := #cast(usize, u16le(source, at + 28))
   tail := name_length + u16le(source, at + 30) + u16le(source, at + 32)
-  if tail > limit - at - 46 { return Central{ error: fail.Kind.InvalidInput } }
+  if tail > limit - at - 46 { return Central{ error: stream.IoErr.InvalidInput } }
   name := source[at + 46..at + 46 + name_length]
   if local > data_limit || data_limit - local < 30 || u32le(source, local) != 67324752 {
-    return Central{ error: fail.Kind.InvalidInput }
+    return Central{ error: stream.IoErr.InvalidInput }
   }
   local_name := #cast(usize, u16le(source, local + 26))
   extra := #cast(usize, u16le(source, local + 28))
-  if local_name + extra > data_limit - local - 30 { return Central{ error: fail.Kind.InvalidInput } }
+  if local_name + extra > data_limit - local - 30 { return Central{ error: stream.IoErr.InvalidInput } }
   if flags != u16le(source, local + 6) || method != u16le(source, local + 8) || !bytes.equal(name, source[local + 30..local + 30 + local_name]) {
-    return Central{ error: fail.Kind.InvalidInput }
+    return Central{ error: stream.IoErr.InvalidInput }
   }
   payload := local + 30 + local_name + extra
-  if compressed > data_limit - payload { return Central{ error: fail.Kind.InvalidInput } }
+  if compressed > data_limit - payload { return Central{ error: stream.IoErr.InvalidInput } }
   checksum := u32le(source, at + 16)
   if (flags & 8) == 0 {
     if checksum != u32le(source, local + 14) || compressed != u32le(source, local + 18) || size != u32le(source, local + 22) {
-      return Central{ error: fail.Kind.InvalidInput }
+      return Central{ error: stream.IoErr.InvalidInput }
     }
   } else {
     descriptor := payload + compressed
-    if data_limit - descriptor < 12 { return Central{ error: fail.Kind.InvalidInput } }
+    if data_limit - descriptor < 12 { return Central{ error: stream.IoErr.InvalidInput } }
     // A CRC may itself equal the optional signature: try the unsigned form first.
     unsigned := u32le(source, descriptor) == checksum && u32le(source, descriptor + 4) == compressed && u32le(source, descriptor + 8) == size
     if !unsigned {
       if data_limit - descriptor < 16 || u32le(source, descriptor) != 134695760 || u32le(source, descriptor + 4) != checksum || u32le(source, descriptor + 8) != compressed || u32le(source, descriptor + 12) != size {
-        return Central{ error: fail.Kind.InvalidInput }
+        return Central{ error: stream.IoErr.InvalidInput }
       }
     }
   }
@@ -56,17 +55,9 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
 // Checks directory framing and every local-header/descriptor relationship up front.
 // Payload CRCs are verified by extract, without allocating or decompressing here.
 // Failures are as for next, at the offending record.
-pub fn open_checked(status: *fail.Status, source: []const u8) ArchiveReader {
-  if status == nil { return open_checked(&fail.Status{}, source) }
-  if status.failed { return ArchiveReader{} }
-  if source.len > (#max(usize) >> 1) {
-    fail.set(status, fail.make(fail.Kind.Overflow, "read ZIP", "", "the archive is too large"))
-    return ArchiveReader{}
-  }
-  if source.len < 22 {
-    fail.set(status, located(fail.Kind.InvalidInput, source.len))
-    return ArchiveReader{}
-  }
+pub fn open_checked(source: []const u8) ArchiveReader!stream.IoErr {
+  if source.len > (#max(usize) >> 1) { fail .Capacity }
+  if source.len < 22 { fail .InvalidInput }
   end := source.len - 22
   floor: usize = 0
   if end > 65535 {
@@ -81,34 +72,27 @@ pub fn open_checked(status: *fail.Status, source: []const u8) ArchiveReader {
     if end == floor { break }
     end -= 1
   }
-  if !found { return open_failed(status, fail.Kind.InvalidInput, end) }
-  error := end_record(source[end..])
-  if error != fail.Kind.Ok { return open_failed(status, error, end) }
+  if !found { fail .InvalidInput }
+  try end_record(source[end..])
   start := #cast(usize, u32le(source, end + 16))
   size := #cast(usize, u32le(source, end + 12))
-  if start == 4294967295 || size == 4294967295 {
-    return open_failed(status, fail.Kind.Unsupported, end)
-  }
-  if start > end || size != end - start { return open_failed(status, fail.Kind.InvalidInput, end) }
+  if start == 4294967295 || size == 4294967295 { fail .Unsupported }
+  if start > end || size != end - start { fail .InvalidInput }
   count := #cast(usize, u16le(source, end + 10))
   cursor := start
   for i in 0..count {
     entry := central_entry(source, cursor, end, start)
-    if !entry.ok { return open_failed(status, entry.error, cursor) }
+    if !entry.ok { fail entry.error }
     cursor = entry.next
   }
-  if cursor != end { return open_failed(status, fail.Kind.InvalidInput, end) }
+  if cursor != end { fail .InvalidInput }
   return ArchiveReader{ source: source, offset: start, indexed: true,
     directory_start: start, directory_end: end, remaining: count }
 }
-fn open_failed(status: *fail.Status, kind: fail.Kind, offset: usize) ArchiveReader {
-  fail.set(status, located(kind, offset))
-  return ArchiveReader{}
-}
-fn next_indexed(status: *fail.Status, state: *ArchiveReader) Entry {
+fn next_indexed(state: *ArchiveReader) Entry!stream.IoErr {
   if state.remaining == 0 { return archive_ended(state) }
   item := central_entry(state.source, state.offset, state.directory_end, state.directory_start)
-  if !item.ok { return archive_failed(status, state, item.error) }
+  if !item.ok { fail archive_failed(state, item.error) }
   state.offset = item.next
   state.remaining -= 1
   return item.entry

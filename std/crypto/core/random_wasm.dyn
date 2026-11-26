@@ -1,11 +1,7 @@
 #target(arch: wasm32)
 // No native entropy import is wired for these targets. Never silently substitute
 // a deterministic generator for an API promising cryptographic randomness.
-pub fn secure_random(status: *fail.Status, destination: []u8) {
-  if status == nil {
-    secure_random(&fail.Status{}, destination)
-    return
-  }
-  if status.failed || destination.len == 0 { return }
-  fail.set(status, fail.make(fail.Kind.Unsupported, "read random bytes", "", "this target has no random source"))
+pub fn secure_random(destination: []u8) ! {
+  if destination.len == 0 { return }
+  fail
 }

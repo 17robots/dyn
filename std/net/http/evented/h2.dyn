@@ -21,7 +21,6 @@
 // - Frames are processed in order; a header block must fit receive_size.
 use bytes "std/bytes"
 use event "std/event"
-use "std/fail"
 use io "std/io"
 use mem "std/mem"
 use network "std/net"
@@ -813,10 +812,8 @@ fn decode_block(worker: *Worker, connection: *Connection, block: []const u8) usi
   at: usize = 0
   // No response is being written while a request is read.
   scratch := pool.head
-  decoding: fail.Status
   for at < block.len {
-    field := hpack.decode_field(&decoding, &h2.decoder, block[at..], scratch)
-    if decoding.failed { return 0xffffffffffffffff }
+    field := hpack.decode_field(&h2.decoder, block[at..], scratch) catch { return 0xffffffffffffffff }
     at += field.consumed
     if field.update { continue }
     need := 4 + field.name.len + field.value.len

@@ -2,7 +2,7 @@ use mem "std/mem"
 use deflate "std/compress/deflate"
 use stream "std/io"
 use hash "std/hash"
-use "std/fail"
+use parse "std/parse"
 
 pub type Result = deflate.Result
 pub type Decoder = deflate.Decoder
@@ -10,9 +10,8 @@ pub type Decoder = deflate.Decoder
 pub type Inflated = deflate.Inflated
 
 // One member, into arena; consumed identifies the next member or trailing data.
-pub fn decompress(arena: *mem.Arena, status: *fail.Status, source: []const u8) Inflated {
-  if status == nil { return decompress(arena, &fail.Status{}, source) }
-  return deflate.gunzip(arena, status, source)
+pub fn decompress(arena: *mem.Arena, source: []const u8) Inflated!parse.ParseErr {
+  return try deflate.gunzip(arena, source)
 }
 // Reads concatenated members through EOF, verifying every header/trailer.
 // Buffers borrow caller storage. 1024 input + 33026 history bytes suffice.
@@ -34,16 +33,10 @@ pub fn compress_bound(size: usize) usize {
 }
 
 // One gzip member (RFC 1952) holding source, compressed at level (1-9, see
-// std/compress/deflate) into destination; the bytes written. Fails with
-// Capacity when destination is shorter than needed; compress_bound always
-// suffices.
-pub fn write(status: *fail.Status, destination: []u8, source: []const u8, level: u8, encoder: *Encoder) []u8 {
-  if status == nil { return write(&fail.Status{}, destination, source, level, encoder) }
-  if status.failed { return destination[..0] }
-  if destination.len < 18 {
-    fail.set(status, fail.make(fail.Kind.Capacity, "compress", "", "the output does not fit destination"))
-    return destination[..0]
-  }
+// std/compress/deflate) into destination; the bytes written. Fails when
+// destination is shorter than needed; compress_bound always suffices.
+pub fn write(destination: []u8, source: []const u8, level: u8, encoder: *Encoder) []u8! {
+  if destination.len < 18 { fail }
   header: [10]u8 = [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255]
   if level >= 9 {
     header[8] = 2
@@ -53,8 +46,7 @@ pub fn write(status: *fail.Status, destination: []u8, source: []const u8, level:
   for i in 0..10 {
     destination[i] = header[i]
   }
-  body := deflate.deflate(status, destination[10..destination.len - 8], source, level, encoder)
-  if status.failed { return destination[..0] }
+  body := try deflate.deflate(destination[10..destination.len - 8], source, level, encoder)
   at := 10 + body.len
   crc := hash.crc32(source)
   size := #cast(u32, source.len)
@@ -72,8 +64,7 @@ pub fn compress(arena: *mem.Arena, source: []const u8, level: u8) []u8 {
   output := mem.push_bytes(arena, compress_bound(source.len))
   mark := mem.arena_mark(arena)
   encoder := mem.push<Encoder>(arena)
-  status: fail.Status
-  encoded := write(&status, output, source, level, encoder)
+  encoded := write(output, source, level, encoder) catch { #panic("gzip.compress: output sized by compress_bound") }
   mem.arena_rewind(arena, mark)
   return encoded
 }

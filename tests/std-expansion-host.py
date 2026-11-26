@@ -57,33 +57,30 @@ use tga "std/image/tga"
 use gif "std/image/gif"
 use jpeg "std/image/jpeg"
 use toml "std/encoding/toml"
-use "std/fail"
 use mem "std/mem"
 use bytes "std/bytes"
 fn check(ok: bool) { if !ok { #panic("host formats") } }
 fn rejected(arena: *mem.Arena, kind: u8, source: []const u8) bool {
- status: fail.Status
- if kind == 0 { _ = bmp.decode(arena, &status, source) }
- if kind == 1 { _ = tga.decode(arena, &status, source) }
- if kind == 2 { _ = gif.decode(arena, &status, source) }
- if kind == 3 { _ = jpeg.decode(arena, &status, source) }
+ if kind == 0 { _ = bmp.decode(arena, source) catch { return true } }
+ if kind == 1 { _ = tga.decode(arena, source) catch { return true } }
+ if kind == 2 { _ = gif.decode(arena, source) catch { return true } }
+ if kind == 3 { _ = jpeg.decode(arena, source) catch { return true } }
  if kind == 4 { _ = toml.parse(arena, source) catch { return true } }
- return status.failed
+ return false
 }
 fn main() {
  arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
- status := fail.Status{ on_failure: fail.panic_on_failure }
  pixels: [8]u8 = [255,0,0,255,0,128,255,64]
- bitmap := bmp.encode(arena,&status,pixels[..],2,1,4)
- decoded := bmp.decode(arena,&status,bitmap)
+ bitmap := bmp.encode(arena,pixels[..],2,1,4) catch { #panic("unexpected failure") }
+ decoded := bmp.decode(arena,bitmap) catch { #panic("unexpected failure") }
  check(bytes.equal(decoded.pixels,pixels[..]))
- targa := tga.encode(arena,&status,pixels[..],2,1,4)
- uncompressed := tga.decode(arena,&status,targa)
+ targa := tga.encode(arena,pixels[..],2,1,4) catch { #panic("unexpected failure") }
+ uncompressed := tga.decode(arena,targa) catch { #panic("unexpected failure") }
  check(bytes.equal(uncompressed.pixels,pixels[..]))
- animation := gif.decode(arena,&status,GIF_BYTES)
+ animation := gif.decode(arena,GIF_BYTES) catch { #panic("unexpected failure") }
  check(bytes.equal(animation.image.pixels,"\xff\0\0\xff"))
- photo := jpeg.decode(arena,&status,JPEG_BYTES)
+ photo := jpeg.decode(arena,JPEG_BYTES) catch { #panic("unexpected failure") }
  check(bytes.equal(photo.pixels,"\x80\x80\x80\xff"))
  mark := mem.arena_mark(arena)
  check(rejected(arena,0,"BM") && mem.arena_mark(arena)==mark)

@@ -6,7 +6,7 @@
 // field the simple way: a static-table index when one matches, otherwise a
 // literal the peer does not index, Huffman-coded when that is shorter. The
 // encoder never uses a dynamic table, so it needs no state.
-use "std/fail"
+use parse "std/parse"
 
 // The table size both sides start with (SETTINGS_HEADER_TABLE_SIZE).
 pub const DefaultTableSize: usize = 4096
@@ -77,15 +77,11 @@ pub fn decode_begin(decoder: *Decoder) {
   decoder.fields = false
 }
 
-// Malformed or truncated input fails with InvalidInput, a field larger than
-// scratch with Capacity, at the offending offset in the block.
-fn failed(status: *fail.Status, kind: fail.Kind, offset: usize) Field {
-  message: []const u8 = "malformed HPACK field"
-  if kind == fail.Kind.Capacity {
-    message = "the field does not fit scratch"
-  }
-  fail.at(status, kind, "decode HPACK", message, offset)
-  return Field{}
+// Malformed or truncated input fails with Invalid, a field larger than
+// scratch with TooLarge, at the offending offset in the block.
+fn failed(too_large: bool, offset: usize) parse.ParseErr {
+  if too_large { return parse.ParseErr.TooLarge(offset) }
+  return parse.ParseErr.Invalid(offset)
 }
 
 struct Integer { value: usize, consumed: usize, valid: bool }
@@ -284,20 +280,18 @@ fn copy_into(destination: []u8, source: []const u8) bool {
 
 // Decodes the representation at the start of block. Name and value are
 // copied or decoded into scratch, so a table change cannot move them. Fails
-// with Syntax for malformed input (a COMPRESSION_ERROR) and Capacity when
+// with Invalid for malformed input (a COMPRESSION_ERROR) and TooLarge when
 // scratch is too small.
-pub fn decode_field(status: *fail.Status, decoder: *Decoder, block: []const u8, scratch: []u8) Field {
-  if status == nil { return decode_field(&fail.Status{}, decoder, block, scratch) }
-  if status.failed { return Field{} }
-  if block.len == 0 { return failed(status, fail.Kind.InvalidInput, 0) }
+pub fn decode_field(decoder: *Decoder, block: []const u8, scratch: []u8) Field!parse.ParseErr {
+  if block.len == 0 { fail failed(false, 0) }
   first := block[0]
   table := &decoder.table
   if (first & 0x80) != 0 {
     index := read_integer(block, 7)
     named := lookup(table, index.value)
-    if !index.valid || !named.found { return failed(status, fail.Kind.InvalidInput, 0) }
+    if !index.valid || !named.found { fail failed(false, 0) }
     if !copy_into(scratch, named.name) || !copy_into(scratch[named.name.len..], named.value) {
-      return failed(status, fail.Kind.Capacity, 0)
+      fail failed(true, 0)
     }
     decoder.fields = true
     name_length := named.name.len
@@ -305,9 +299,7 @@ pub fn decode_field(status: *fail.Status, decoder: *Decoder, block: []const u8, 
   }
   if (first & 0xe0) == 0x20 {
     size := read_integer(block, 5)
-    if !size.valid || size.value > table.limit || decoder.fields {
-      return failed(status, fail.Kind.InvalidInput, 0)
-    }
+    if !size.valid || size.value > table.limit || decoder.fields { fail failed(false, 0) }
     table.max_size = size.value
     shrink(table, size.value)
     return Field{ consumed: size.consumed, update: true }
@@ -318,22 +310,22 @@ pub fn decode_field(status: *fail.Status, decoder: *Decoder, block: []const u8, 
     prefix = 6
   }
   index := read_integer(block, prefix)
-  if !index.valid { return failed(status, fail.Kind.InvalidInput, 0) }
+  if !index.valid { fail failed(false, 0) }
   at := index.consumed
   name_length: usize = 0
   if index.value == 0 {
     name := read_string(block[at..], scratch)
-    if !name.valid { return failed(status, fail.Kind.InvalidInput, at) }
+    if !name.valid { fail failed(false, at) }
     at += name.consumed
     name_length = name.length
   } else {
     named := lookup(table, index.value)
-    if !named.found { return failed(status, fail.Kind.InvalidInput, 0) }
-    if !copy_into(scratch, named.name) { return failed(status, fail.Kind.Capacity, 0) }
+    if !named.found { fail failed(false, 0) }
+    if !copy_into(scratch, named.name) { fail failed(true, 0) }
     name_length = named.name.len
   }
   value := read_string(block[at..], scratch[name_length..])
-  if !value.valid { return failed(status, fail.Kind.InvalidInput, at) }
+  if !value.valid { fail failed(false, at) }
   at += value.consumed
   name := scratch[..name_length]
   text := scratch[name_length..name_length + value.length]

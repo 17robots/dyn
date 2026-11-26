@@ -5,7 +5,6 @@ use "std/bytes"
 use "std/crypto/password"
 use "std/encoding/json"
 use "std/fmt"
-use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/net"
@@ -40,6 +39,15 @@ struct App {
 
 struct Hash { input: [64]u8, length: usize, digest: [32]u8, ok: bool }
 
+// The JSON a writer finished, or "" when it failed.
+fn finished(w: *const json.Writer) []const u8 {
+  return json.finish(w) catch ""
+}
+// Whether finishing the writer fails.
+fn finish_failed(w: *const json.Writer) bool {
+  _ = json.finish(w) catch { return true }
+  return false
+}
 fn text(response: *http.Response, code: u16, body: []const u8) !io.IoErr {
   try http.respond(response, body, http.ResponseOptions{ status: code, content_type: "text/plain" })
 }
@@ -57,13 +65,13 @@ fn scratch(response: *http.Response, request: *const http.Request, app: *App) !i
     return
   }
   block := mem.push_bytes(arena, 4096)
-  out := json.writer(nil, block)
+  out := json.writer(block)
   json.object_begin(&out)
   json.field(&out, "worker", evented.worker_index(response))
   json.field(&out, "path", request.path)
   json.field(&out, "ok", true)
   json.object_end(&out)
-  try http.json(response, 200, json.output(&out))
+  try http.json(response, 200, finished(&out))
 }
 
 // Larger than a 64 KiB HTTP/2 window: the handler waits for WINDOW_UPDATE.
@@ -74,7 +82,7 @@ fn big(response: *http.Response, request: *const http.Request, app: *App) !io.Io
 // A dynamic JSON body, gzipped when the client accepts it; ?n= sets its rows.
 fn report(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
   storage: [64 * mem.KiB]u8
-  page := fmt.buffer(nil, storage[..])
+  page := fmt.buffer(storage[..])
   count_storage: [8]u8
   count := http.query_value(request, "n", count_storage[..]) catch count_storage[..0]
   rows := 400
@@ -96,9 +104,8 @@ fn report(response: *http.Response, request: *const http.Request, app: *App) !io
 fn hash_work(job: *Hash) {
   scratch: [20]u8
   salt: [16]u8
-  hashing: fail.Status
-  password.pbkdf2_sha256(&hashing, job.digest[..], job.input[..job.length], salt[..], 20000, scratch[..])
-  job.ok = !hashing.failed
+  job.ok = true
+  password.pbkdf2_sha256(job.digest[..], job.input[..job.length], salt[..], 20000, scratch[..]) catch { job.ok = false }
 }
 
 fn hash_finish(response: *http.Response, request: *const http.Request, job: *Hash) !io.IoErr {
@@ -107,7 +114,7 @@ fn hash_finish(response: *http.Response, request: *const http.Request, job: *Has
     return
   }
   storage: [80]u8
-  out := fmt.buffer(nil, storage[..])
+  out := fmt.buffer(storage[..])
   digits := "0123456789abcdef"
   for byte in job.digest {
     fmt.write_byte(&out, digits[byte >> 4])
@@ -127,7 +134,7 @@ fn later_finish(response: *http.Response, request: *const http.Request, job: *Ta
     app.pending[job.worker] = 0
   }
   storage: [64]u8
-  out := fmt.buffer(nil, storage[..])
+  out := fmt.buffer(storage[..])
   fmt.print(&out, "later {} of {}\n", job.number, app.batch[job.worker])
   try text(response, 200, fmt.bytes(&out))
 }
@@ -209,7 +216,7 @@ fn upload(response: *http.Response, request: *const http.Request, app: *App) !io
     sum += byte
   }
   storage: [64]u8
-  out := fmt.buffer(nil, storage[..])
+  out := fmt.buffer(storage[..])
   fmt.write_u64(&out, request.body.len)
   fmt.write_byte(&out, ' ')
   fmt.write_u64(&out, sum)
@@ -236,8 +243,7 @@ fn on_message(message: *const evented.Message) {
     return
   }
   storage: [8 * 1024]u8
-  out_status: fail.Status
-  out := fmt.buffer(&out_status, storage[..])
+  out := fmt.buffer(storage[..])
   fmt.write(&out, "echo:")
   fmt.write(&out, message.payload)
   evented.send(app.workers, message.peer, fmt.bytes(&out), message.kind == evented.MessageKind.Binary) catch {}
@@ -258,7 +264,7 @@ fn large_chunk(job: *Upload, piece: []const u8) bool {
 
 fn large_finish(response: *http.Response, request: *const http.Request, job: *Upload, end: evented.BodyEnd) !io.IoErr {
   storage: [64]u8
-  line := fmt.buffer(nil, storage[..])
+  line := fmt.buffer(storage[..])
   case end {
     evented.BodyEnd.Complete => {
       fmt.print(&line, "{} {}", job.count, job.sum)
@@ -305,7 +311,7 @@ fn large_body(response: *http.Response, request: *const http.Request) !io.IoErr 
 
 fn abandoned(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
   storage: [16]u8
-  line := fmt.buffer(nil, storage[..])
+  line := fmt.buffer(storage[..])
   fmt.print(&line, "{}", sync.load_u32(&app.abandoned))
   try text(response, 200, fmt.bytes(&line))
 }
@@ -345,8 +351,7 @@ fn main() {
   arena := mem.arena_alloc(64 * mem.MiB)
   defer mem.arena_release(arena)
   spawner := posix.spawner()
-  setup := fail.Status{ on_failure: fail.panic_on_failure }
-  jobs := pool.start_spawned(arena, &setup, 2, 64, 256 * mem.KiB, &spawner)
+  jobs := pool.start_spawned(arena, 2, 64, 256 * mem.KiB, &spawner) catch { #panic("unexpected failure") }
   workers: [WorkerCount]evented.Worker
   app := App{ workers: workers[..] }
   asset_storage: [2]http.Asset
@@ -430,7 +435,7 @@ fn main() {
   evented.stop(workers[..])
   evented.join(workers[..]) catch { #panic("join server") }
   net.listener_close(&listener)
-  pool.stop(&setup, jobs)
+  pool.stop(jobs) catch { #panic("unexpected failure") }
   evicted: u64 = 0
   refused: u64 = 0
   for *worker in workers {

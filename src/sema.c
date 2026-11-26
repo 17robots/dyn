@@ -6279,9 +6279,9 @@ static void vet_copied_handles(const DynAstProgram *a, const DynSource *s) {
   free(passed);
 }
 /* dyn vet, by shape: a struct local declared without a value that is only
-   ever passed by pointer, as in `status: fail.Status` given to calls as
-   &status, collects what those calls record and nobody reads it. And a local
-   initialized by such a call, `text := f(&status, ...)`, tested for being
+   ever passed by pointer, as in a `state: State` with a `failed` field given
+   to calls as &state, collects what those calls record and nobody reads it. And a local
+   initialized by such a call, `text := f(&state, ...)`, tested for being
    empty (`#len(text) == 0`) before the struct is read: an empty result can be
    a success, so the emptiness says nothing about a failure. No function or
    type is known by name. `_ = status` reads it, to drop it on purpose. */
@@ -6386,7 +6386,7 @@ static void vet_unread_state(const DynAstProgram *a, const DynSource *s) {
              (int)(state_name.end_byte - state_name.start_byte), s->text + state_name.start_byte);
     sema_vet_note(s, e->span, false, message);
   }
-  /* Reset before read: `status = fail.Status{}` (or any new value) while what
+  /* Reset before read: `state = State{}` (or any new value) while what
      calls recorded in it since it was last read was never looked at. */
   for (size_t i = 0; i < a->statement_count; ++i) {
     const DynAstStmt *st = &a->statements[i];

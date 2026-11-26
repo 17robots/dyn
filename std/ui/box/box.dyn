@@ -187,7 +187,9 @@ pub struct State {
   // Publish this bounded context to a native input method before enabling the
   // focused field. Tracker lifetime must match one window, not one widget.
   text_context: text_edits.Context,
-  text_context_error: fail.Kind,
+  // Why this frame's context could not be published, when it could not.
+  text_context_failed: bool,
+  text_context_error: text_edits.EditErr,
   text_tracker: text_edits.Tracker,
 }
 
@@ -441,7 +443,7 @@ pub fn begin(state: *State, frame: *mem.Arena, input: Input, width: f32, height:
   state.text_input = false
   state.text_input_anchor = nil
   state.text_context = text_edits.Context{}
-  state.text_context_error = fail.Kind.Ok
+  state.text_context_failed = false
   if input.down && !state.previous_down {
     // A press anywhere clears focus unless a focusable box claims it.
     state.focus_claimed = false

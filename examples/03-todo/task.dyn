@@ -2,7 +2,6 @@
 // belongs to the same module, so main.dyn and store.dyn see these names
 // without importing anything.
 
-use "std/fail"
 use "std/parse"
 
 // The first variant is the zero value, so a zero Task is an open task.
@@ -24,14 +23,10 @@ fn marker(state: State) []const u8 {
   }
 }
 
-// Parses one saved line. A bad line fails like anything else that can fail:
-// parse.malformed records InvalidInput, a message and the byte offset where
-// the line went wrong, and the task is zero.
-fn parse_task(status: *fail.Status, line: []const u8) Task {
-  if line.len < 4 {
-    fail.at(status, fail.Kind.InvalidInput, "read task", "a task needs a marker and text", line.len)
-    return Task{}
-  }
+// Parses one saved line. A bad line fails like any other parser: with
+// parse.ParseErr.Invalid and the byte offset where the line went wrong.
+fn parse_task(line: []const u8) Task!parse.ParseErr {
+  if line.len < 4 { fail .Invalid(line.len) }
   task := Task{ text: line[4..] }
   case line[..4] {
     "[ ] " => {}
@@ -39,8 +34,7 @@ fn parse_task(status: *fail.Status, line: []const u8) Task {
       task.state = State.Done
     }
     _ => {
-      fail.at(status, fail.Kind.InvalidInput, "read task", "a task starts with [ ] or [x]", 0)
-      return Task{}
+      fail .Invalid(0)
     }
   }
   return task

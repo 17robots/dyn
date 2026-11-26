@@ -11,7 +11,6 @@ MOCK=r'''use errors "std/io"
 use io "std/io"
 use c "std/c"
 use bytes "std/bytes"
-use "std/fail"
 pub struct Window {display:rawptr,context:rawptr,handle:usize}
 context_error_display:rawptr
 context_error_seen:bool
@@ -48,15 +47,35 @@ fn sync(display:rawptr,discard:i32)i32 {_=display
  return 0}
 fn screen(display:rawptr)i32 {_=display
  return 7}
-fn make_current(status:*fail.Status,window:*Window) {_=window
+fn make_current(window:*Window) !io.IoErr {_=window
  make_calls+=1
- if !make_ok {fail.set(status,fail.make(fail.Kind.System,"make current","","mock"))}}
-fn window_failed(status:*fail.Status,kind:fail.Kind,operation:[]const u8) {
- fail.set(status,fail.make(kind,operation,"","mock"))}
-fn interval(window:*Window,value:i32) fail.Failure {
- status:fail.Status
- set_swap_interval(&status,window,value)
- return status.failure}
+ if !make_ok {fail io.IoErr.System(0)}}
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+fn interval(window:*Window,value:i32) Failure {
+ set_swap_interval(window,value) catch err { return failure_of(err) }
+ return Failure{}
+}
 fn swap_extensions(display:rawptr,screen_id:i32)*const u8 {
  check(display==#cast(rawptr,1) && screen_id==7)
  if query_error {_=handler(display,nil)}
@@ -103,109 +122,127 @@ fn restored(){check(handler==outer && context_error_display==#cast(rawptr,8) && 
 fn main(){
  reset()
  closed:=Window{}
- check(interval(&closed,0).kind==fail.Kind.InvalidState)
- check(interval(nil,0).kind==fail.Kind.InvalidState && make_calls==0 && lookups==0)
+ check(interval(&closed,0).kind==Kind.InvalidInput)
+ check(interval(nil,0).kind==Kind.InvalidInput && make_calls==0 && lookups==0)
  host:=Window{display:#cast(rawptr,1),context:#cast(rawptr,2),handle:42}
- check(interval(&host,-1).kind==fail.Kind.InvalidInput && interval(&host,2).kind==fail.Kind.InvalidInput && make_calls==0)
+ check(interval(&host,-1).kind==Kind.InvalidInput && interval(&host,2).kind==Kind.InvalidInput && make_calls==0)
  mock_extensions="GLX_EXT_swap_control_tear GLX_MESA_swap_control_suffix XGLX_SGI_swap_control\x00"
- check(interval(&host,0).kind==fail.Kind.Unsupported && lookups==0 && calls==0)
+ check(interval(&host,0).kind==Kind.Unsupported && lookups==0 && calls==0)
  restored()
  reset()
  mock_extensions="GLX_SGI_swap_control GLX_MESA_swap_control GLX_EXT_swap_control\x00"
- check(interval(&host,0).kind==fail.Kind.Ok && calls==1 && lookups==1 && last==0 && make_calls==1)
+ check(interval(&host,0).kind==Kind.Ok && calls==1 && lookups==1 && last==0 && make_calls==1)
  restored()
- check(interval(&host,1).kind==fail.Kind.Ok && last==1)
+ check(interval(&host,1).kind==Kind.Ok && last==1)
  reset()
  ext_present=false
- check(interval(&host,0).kind==fail.Kind.Ok && lookups==2 && calls==1 && last==0)
+ check(interval(&host,0).kind==Kind.Ok && lookups==2 && calls==1 && last==0)
  restored()
  reset()
  mock_extensions="  GLX_MESA_swap_control  \x00"
- check(interval(&host,1).kind==fail.Kind.Ok && calls==1 && lookups==1 && last==1)
+ check(interval(&host,1).kind==Kind.Ok && calls==1 && lookups==1 && last==1)
  mock_status=5
- check(interval(&host,0).kind==fail.Kind.System)
+ check(interval(&host,0).kind==Kind.System)
  restored()
  reset()
  mock_extensions="GLX_SGI_swap_control\x00"
- check(interval(&host,0).kind==fail.Kind.Unsupported && lookups==0 && calls==0)
- check(interval(&host,1).kind==fail.Kind.Ok && calls==1 && last==1)
+ check(interval(&host,0).kind==Kind.Unsupported && lookups==0 && calls==0)
+ check(interval(&host,1).kind==Kind.Ok && calls==1 && last==1)
  mock_status=2
- check(interval(&host,1).kind==fail.Kind.System)
+ check(interval(&host,1).kind==Kind.System)
  restored()
  reset()
  mock_extensions="GLX_EXT_swap_control\x00"
  error_event=true
- check(interval(&host,0).kind==fail.Kind.System && calls==1)
+ check(interval(&host,0).kind==Kind.System && calls==1)
  restored()
  reset()
  ext_present=false
- check(interval(&host,0).kind==fail.Kind.Unsupported && lookups==1 && calls==0)
+ check(interval(&host,0).kind==Kind.Unsupported && lookups==1 && calls==0)
  restored()
  reset()
  make_ok=false
- check(interval(&host,0).kind==fail.Kind.System && calls==0 && lookups==0)
+ check(interval(&host,0).kind==Kind.System && calls==0 && lookups==0)
  restored()
  reset()
  nil_mock_extensions=true
- check(interval(&host,0).kind==fail.Kind.Unsupported && calls==0)
+ check(interval(&host,0).kind==Kind.Unsupported && calls==0)
  restored()
  reset()
  query_error=true
  nil_mock_extensions=true
- check(interval(&host,0).kind==fail.Kind.System && calls==0)
+ check(interval(&host,0).kind==Kind.System && calls==0)
  restored()
  reset()
  query_error=true
  mock_extensions="GLX_not_swap_control\x00"
- check(interval(&host,0).kind==fail.Kind.System && calls==0)
+ check(interval(&host,0).kind==Kind.System && calls==0)
  restored()
 }
 '''
 NATIVE=r'''use window "vendor/window/x11"
 use errors "std/io"
 use io "std/io"
-use "std/fail"
-fn window_set_swap_interval(p0:*window.Window, p1:i32) fail.Failure {
-  status: fail.Status
-  window.set_swap_interval(&status, p0, p1)
-  return status.failure
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+fn window_set_swap_interval(p0:*window.Window, p1:i32) Failure {
+  window.set_swap_interval(p0, p1) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
-  status: fail.Status
-  window.open(&status, p0, p1, p2, p3)
-  return status.failure
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) Failure {
+  window.open(p0, p1, p2, p3) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_swap(p0: *window.Window) fail.Failure {
-  status: fail.Status
-  window.swap(&status, p0)
-  return status.failure
+fn window_swap(p0: *window.Window) Failure {
+  window.swap(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
 fn check(ok:bool){if !ok {#panic("native swap interval")}}
 fn main(){
  host:=window.Window{}
- check(window_open(&host,"swap interval oracle",96,72).kind == fail.Kind.Ok)
+ check(window_open(&host,"swap interval oracle",96,72).kind == Kind.Ok)
  defer window.close(&host)
  other:=window.Window{}
- check(window_open(&other,"swap interval other context",64,64).kind == fail.Kind.Ok)
+ check(window_open(&other,"swap interval other context",64,64).kind == Kind.Ok)
  defer window.close(&other)
  context_name:="glXGetCurrentContext\x00"
  native_context:=#cast(fn()rawptr,window.gl_proc(&context_name[0]))
  check(native_context!=nil)
  check(native_context()==other.context)
  immediate:=window_set_swap_interval(&host,0)
- check(immediate.kind==fail.Kind.Ok || immediate.kind==fail.Kind.Unsupported)
+ check(immediate.kind==Kind.Ok || immediate.kind==Kind.Unsupported)
  check(native_context()==host.context)
  synced:=window_set_swap_interval(&host,1)
- check(synced.kind==fail.Kind.Ok || synced.kind==fail.Kind.Unsupported)
+ check(synced.kind==Kind.Ok || synced.kind==Kind.Unsupported)
  restored:=window_set_swap_interval(&host,0)
- check(restored.kind==fail.Kind.Ok || restored.kind==fail.Kind.Unsupported)
- for frame in 0..8 {check(window_swap(&host).kind == fail.Kind.Ok)}
- if immediate.kind==fail.Kind.Ok {io.print("PASS native GLX immediate interval available\n")}
+ check(restored.kind==Kind.Ok || restored.kind==Kind.Unsupported)
+ for frame in 0..8 {check(window_swap(&host).kind == Kind.Ok)}
+ if immediate.kind==Kind.Ok {io.print("PASS native GLX immediate interval available\n")}
  else {io.print("PASS native GLX reports immediate interval unsupported\n")}
- if synced.kind==fail.Kind.Ok {io.print("PASS native GLX one-refresh interval available\n")}
+ if synced.kind==Kind.Ok {io.print("PASS native GLX one-refresh interval available\n")}
  else {io.print("PASS native GLX reports one-refresh interval unsupported\n")}
 }
 '''

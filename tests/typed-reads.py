@@ -12,7 +12,6 @@ use strings "std/strings"
 use bytes "std/bytes"
 use json "std/encoding/json"
 use ini "std/encoding/ini"
-use "std/fail"
 use io "std/io"
 use hex "std/encoding/hex"
 use utf8 "std/unicode/utf8"
@@ -25,6 +24,10 @@ fn check(ok: bool, message: []const u8) {
   }
 }
 struct Parsed { root: *const json.Value, failed: bool }
+fn date_fails(input: []const u8) bool {
+  _ = time.parse_iso8601(input) catch { return true }
+  return false
+}
 fn parse(arena: *mem.Arena, source: []const u8) Parsed {
   root := json.parse(arena, source) catch { return Parsed{ root: &json.nil_value, failed: true } }
   return Parsed{ root: root }
@@ -119,16 +122,13 @@ fn main() {
   check(find_err("[server\nport = 80\n", "server", "port") == 2, "ini malformed")
   decoded := hex.decode(arena, "abcd") catch { #panic("hex decode") }
   check(decoded.len == 2 && decoded[0] == 171 && hex_fails(arena, "abc"), "hex decode")
-  status: fail.Status
   check(utf8.codepoint_count("h\xc3\xa9") == 2 && utf8.codepoint_count("a\xff") == 2, "codepoints")
   walker := utf8.iterator("\xc3\xa9\xff")
   check(utf8.next(&walker) == 233 && utf8.next(&walker) == 0xfffd && !walker.ended, "utf8 next")
   _ = utf8.next(&walker)
   check(walker.ended, "utf8 end")
-  date := time.parse_iso8601(&status, "2024-02-29T12:34:56Z")
-  impossible: fail.Status
-  _ = time.parse_iso8601(&impossible, "2024-02-30")
-  check(!status.failed && date.day == 29 && impossible.failed, "iso8601")
+  date := time.parse_iso8601("2024-02-29T12:34:56Z") catch { #panic("iso8601") }
+  check(date.day == 29 && date_fails("2024-02-30"), "iso8601")
   state := rand.State{ value: 1 }
   check(rand.below(&state, 10) < 10, "rand below")
 }

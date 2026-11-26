@@ -71,52 +71,51 @@ for dyn, (native, fields) in LAYOUTS.items():
         C += f'printf("{dyn}.{field} %zu\\n", offsetof({native}, {field}));\n'
 C += '}\n'
 SOURCE = r'''use ts "vendor/tree_sitter"
-use "std/fail"
 use "std/bytes"
 use "std/io"
 extern fn grammar "tree_sitter_dyn"() ts.Language
 fn require(ok: bool) { if !ok { #panic("Tree-sitter provider contract") } }
+fn language_fails(parser: ts.Parser) bool {
+  ts.parser_language(parser, nil) catch { return true }
+  return false
+}
+fn parse_fails() bool {
+  _ = ts.parse(nil, nil, "") catch { return true }
+  return false
+}
 fn main() {
 LAYOUT
   // Repetition exercises ordinary create/copy/free and failed-parse cleanup.
   for iteration in 0..32 {
     _ = iteration
-    status: fail.Status
-    parser := ts.parser_create_owned(&status)
-    no_language: fail.Status
-    ts.parser_language(&no_language, parser, nil)
-    require(no_language.failed)
-    ts.parser_language(&status, parser, grammar())
-    parsed := ts.parse(&status, parser, nil, "fn main() {}")
-    require(!status.failed)
+    parser := ts.parser_create_owned() catch { #panic("parser") }
+    require(language_fails(parser))
+    ts.parser_language(parser, grammar()) catch { #panic("language") }
+    parsed := ts.parse(parser, nil, "fn main() {}") catch { #panic("parse") }
     node := ts.root(parsed)
     require(ts.node_valid(node) && !ts.node_has_error(node))
     require(ts.node_start(node) == 0 && ts.node_end(node) == 12)
     require(ts.child_count(node) == 1)
     require(bytes.equal(ts.node_type(node, 64), "source_file"))
-    copy := ts.tree_copy_owned(&status, parsed)
-    require(!status.failed)
+    copy := ts.tree_copy_owned(parsed) catch { #panic("copy") }
     ts.tree_destroy_owned(parsed)
     // The copied tree remains live after the original is destroyed.
     require(ts.node_end(ts.root(copy)) == 12)
     edit := ts.Edit{ start_byte: 11, old_end_byte: 11, new_end_byte: 12,
       start_point: ts.Point{ column: 11 }, old_end_point: ts.Point{ column: 11 }, new_end_point: ts.Point{ column: 12 } }
-    ts.tree_edit(&status, copy, &edit)
-    require(!status.failed)
-    reparsed := ts.parse(&status, parser, copy, "fn main() { }")
-    require(!status.failed && ts.node_end(ts.root(reparsed)) == 13)
+    ts.tree_edit(copy, &edit) catch { #panic("edit") }
+    reparsed := ts.parse(parser, copy, "fn main() { }") catch { #panic("reparse") }
+    require(ts.node_end(ts.root(reparsed)) == 13)
     ts.tree_destroy_owned(copy)
     ts.tree_destroy_owned(reparsed)
-    broken := ts.parse(&status, parser, nil, "fn main( {")
-    require(!status.failed && ts.node_has_error(ts.root(broken)))
+    broken := ts.parse(parser, nil, "fn main( {") catch { #panic("broken parse") }
+    require(ts.node_has_error(ts.root(broken)))
     ts.tree_destroy_owned(broken)
     ts.parser_destroy_owned(parser)
   }
   ts.tree_destroy_owned(nil)
   ts.parser_destroy_owned(nil)
-  unset: fail.Status
-  _ = ts.parse(&unset, nil, nil, "")
-  require(unset.failed)
+  require(parse_fails())
   io.println("tree-sitter provider ok")
 }
 '''

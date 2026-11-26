@@ -8,44 +8,60 @@ import sys
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use window "vendor/window/native"
+SOURCE=r'''use io "std/io"
+use window "vendor/window/native"
 use edit "std/text/edit"
 use errors "std/io"
-use "std/fail"
-fn window_set_surrounding_text(p0: *window.Window, p1: window.Surrounding) fail.Failure {
-  status: fail.Status
-  window.set_surrounding_text(&status, p0, p1)
-  return status.failure
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+fn window_set_surrounding_text(p0: *window.Window, p1: window.Surrounding) Failure {
+  window.set_surrounding_text(p0, p1) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_set_title(p0: *window.Window, p1: []const u8) fail.Failure {
-  status: fail.Status
-  window.set_title(&status, p0, p1)
-  return status.failure
+fn window_set_title(p0: *window.Window, p1: []const u8) Failure {
+  window.set_title(p0, p1) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_set_size(p0: *window.Window, p1, p2: i32) fail.Failure {
-  status: fail.Status
-  window.set_size(&status, p0, p1, p2)
-  return status.failure
+fn window_set_size(p0: *window.Window, p1, p2: i32) Failure {
+  window.set_size(p0, p1, p2) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_set_swap_interval(p0: *window.Window, p1: i32) fail.Failure {
-  status: fail.Status
-  window.set_swap_interval(&status, p0, p1)
-  return status.failure
+fn window_set_swap_interval(p0: *window.Window, p1: i32) Failure {
+  window.set_swap_interval(p0, p1) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_try_set_clipboard(p0: *window.Window, p1: []const u8) fail.Failure {
-  status: fail.Status
-  window.try_set_clipboard(&status, p0, p1)
-  return status.failure
+fn window_try_set_clipboard(p0: *window.Window, p1: []const u8) Failure {
+  window.try_set_clipboard(p0, p1) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_paste_status(p0: *const window.Window) fail.Failure {
-  status: fail.Status
-  window.paste_status(&status, p0)
-  return status.failure
+fn window_paste_status(p0: *const window.Window) Failure {
+  window.paste_status(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
 extern fn calls "probe_calls"() i32
@@ -54,47 +70,47 @@ fn check(ok: bool) { if !ok { #panic("surrounding native ABI") } }
 fn main() {
   host := window.Window{handle:#cast(rawptr,1)}
   context := edit.Context{text:"hé😀",cursor:3,anchor:7,token:1234605616436508552,cause:edit.Cause.InputMethod}
-  check(window_set_surrounding_text(&host,context).kind == fail.Kind.Ok && calls()==1)
+  check(window_set_surrounding_text(&host,context).kind == Kind.Ok && calls()==1)
   context.cursor = 2
-  check(window_set_surrounding_text(&host,context).kind==fail.Kind.InvalidInput && calls()==1)
+  check(window_set_surrounding_text(&host,context).kind==Kind.InvalidInput && calls()==1)
   context.cursor = 3
   context.token = 2
-  check(window_set_surrounding_text(&host,context).kind==fail.Kind.Unsupported && calls()==2)
+  check(window_set_surrounding_text(&host,context).kind==Kind.Unsupported && calls()==2)
   context.token = 3
-  check(window_set_surrounding_text(&host,context).kind==fail.Kind.Capacity && calls()==3)
+  check(window_set_surrounding_text(&host,context).kind==Kind.Capacity && calls()==3)
   context = edit.Context{text:"",token:9}
-  check(window_set_surrounding_text(&host,context).kind == fail.Kind.Ok && calls()==4)
+  check(window_set_surrounding_text(&host,context).kind == Kind.Ok && calls()==4)
   context = edit.Context{text:"a\0b",cursor:0,anchor:0,token:10}
-  check(window_set_surrounding_text(&host,context).kind==fail.Kind.InvalidInput && calls()==4)
-  check(window_set_title(&host,"hé").kind == fail.Kind.Ok)
-  check(window_set_size(&host,20,30).kind == fail.Kind.Ok && host.width==20 && host.height==30)
-  check(window_set_swap_interval(&host,1).kind == fail.Kind.Ok)
-  check(window_try_set_clipboard(&host,"hé").kind == fail.Kind.Ok)
+  check(window_set_surrounding_text(&host,context).kind==Kind.InvalidInput && calls()==4)
+  check(window_set_title(&host,"hé").kind == Kind.Ok)
+  check(window_set_size(&host,20,30).kind == Kind.Ok && host.width==20 && host.height==30)
+  check(window_set_swap_interval(&host,1).kind == Kind.Ok)
+  check(window_try_set_clipboard(&host,"hé").kind == Kind.Ok)
   check(!window.paste_pending(&host))
   window.request_paste_snapshot(&host)
-  check(window_paste_status(&host).kind == fail.Kind.Ok)
+  check(window_paste_status(&host).kind == Kind.Ok)
   set_status(-1)
-  check(window_set_title(&host,"title").kind==fail.Kind.Unsupported)
+  check(window_set_title(&host,"title").kind==Kind.Unsupported)
   set_status(-2)
-  check(window_try_set_clipboard(&host,"").kind==fail.Kind.Capacity)
+  check(window_try_set_clipboard(&host,"").kind==Kind.Capacity)
   set_status(-3)
-  check(window_try_set_clipboard(&host,"").kind==fail.Kind.InvalidInput)
+  check(window_try_set_clipboard(&host,"").kind==Kind.InvalidInput)
   set_status(-4)
-  check(window_paste_status(&host).kind==fail.Kind.InvalidState)
+  check(window_paste_status(&host).kind==Kind.InvalidInput)
   set_status(0)
-  check(window_set_swap_interval(&host,1).kind==fail.Kind.System)
-  check(window_set_title(&host,"a\0b").kind==fail.Kind.InvalidInput)
-  check(window_set_size(&host,0,1).kind==fail.Kind.InvalidInput)
-  check(window_set_swap_interval(&host,-1).kind==fail.Kind.InvalidInput)
+  check(window_set_swap_interval(&host,1).kind==Kind.System)
+  check(window_set_title(&host,"a\0b").kind==Kind.InvalidInput)
+  check(window_set_size(&host,0,1).kind==Kind.InvalidInput)
+  check(window_set_swap_interval(&host,-1).kind==Kind.InvalidInput)
   host.handle = nil
-  check(window_set_title(&host,"").kind==fail.Kind.InvalidState)
-  check(window_set_size(&host,1,1).kind==fail.Kind.InvalidState)
-  check(window_set_swap_interval(&host,1).kind==fail.Kind.InvalidState)
-  check(window_try_set_clipboard(&host,"").kind==fail.Kind.InvalidState)
-  check(window_paste_status(&host).kind==fail.Kind.InvalidState)
+  check(window_set_title(&host,"").kind==Kind.InvalidInput)
+  check(window_set_size(&host,1,1).kind==Kind.InvalidInput)
+  check(window_set_swap_interval(&host,1).kind==Kind.InvalidInput)
+  check(window_try_set_clipboard(&host,"").kind==Kind.InvalidInput)
+  check(window_paste_status(&host).kind==Kind.InvalidInput)
   check(!window.paste_pending(&host))
   window.request_paste_snapshot(&host)
-  check(window_set_surrounding_text(&host,context).kind==fail.Kind.InvalidState && calls()==4)
+  check(window_set_surrounding_text(&host,context).kind==Kind.InvalidInput && calls()==4)
 }
 '''
 C=r'''#include "window.h"

@@ -8,7 +8,6 @@
 //   atom    = number | name | name "(" sum ")" | "(" sum ")"
 
 use "std/bytes"
-use "std/fail"
 use "std/mem"
 use "std/strings"
 
@@ -55,23 +54,59 @@ enum Expr {
   Call(FunctionCall),
 }
 
-// The parser records failures in its status, which keeps the first one.
-// After one, every step returns an Invalid node and changes nothing, so the
-// grammar functions read straight through and the caller checks once.
+// Why a line does not parse; each carries the byte offset of the trouble.
+enum SyntaxErr {
+  NotANumber(usize),
+  ExpectedValue(usize),
+  ExpectedClose(usize),
+  ExpectedName(usize),
+  ExpectedEquals(usize),
+  UnexpectedText(usize),
+}
+
+fn syntax_offset(err: SyntaxErr) usize {
+  case err {
+    .NotANumber(at) => { return at }
+    .ExpectedValue(at) => { return at }
+    .ExpectedClose(at) => { return at }
+    .ExpectedName(at) => { return at }
+    .ExpectedEquals(at) => { return at }
+    .UnexpectedText(at) => { return at }
+  }
+}
+
+fn syntax_text(err: SyntaxErr) []const u8 {
+  case err {
+    .NotANumber => { return "not a number" }
+    .ExpectedValue => { return "expected a value" }
+    .ExpectedClose => { return "expected )" }
+    .ExpectedName => { return "expected a name after let" }
+    .ExpectedEquals => { return "expected =" }
+    .UnexpectedText => { return "unexpected text" }
+  }
+}
+
+// The parser keeps the first failure. After one, every step returns an
+// Invalid node and changes nothing, so the grammar functions read straight
+// through and parse_line checks once.
 struct Parser {
   text: []const u8,
   offset: usize,
   current: Lexeme,
   arena: *mem.Arena,
-  status: *fail.Status,
+  failed: bool,
+  failure: SyntaxErr,
 }
 
 fn is_name_byte(byte: u8) bool {
   return strings.ascii_is_alpha(byte) || strings.ascii_is_digit(byte) || byte == '_'
 }
 
-fn reject(p: *Parser, offset: usize, message: []const u8) *Expr {
-  fail.at(p.status, fail.Kind.InvalidInput, "parse", message, offset)
+fn reject(p: *Parser, err: SyntaxErr) *Expr {
+  if !p.failed {
+    p.failed = true
+    p.failure = err
+  }
   return node(p, Expr.Invalid)
 }
 
@@ -98,7 +133,7 @@ fn advance(p: *Parser) {
     }
     digits := p.text[start..p.offset]
     if !strings.valid<f64>(digits) {
-      _ = reject(p, start, "not a number")
+      _ = reject(p, SyntaxErr.NotANumber(start))
     }
     p.current = Lexeme{ token: Token.Number(strings.parse<f64>(digits)), offset: start }
     return
@@ -122,20 +157,20 @@ fn at_symbol(p: *const Parser, wanted: u8) bool {
   }
 }
 
-fn expect_symbol(p: *Parser, wanted: u8, message: []const u8) {
+fn expect_symbol(p: *Parser, wanted: u8, err: SyntaxErr) {
   if at_symbol(p, wanted) {
     advance(p)
     return
   }
-  _ = reject(p, p.current.offset, message)
+  _ = reject(p, err)
 }
 
 fn atom(p: *Parser) *Expr {
-  if p.status.failed { return node(p, Expr.Invalid) }
+  if p.failed { return node(p, Expr.Invalid) }
   at := p.current
   case at.token {
     Token.End => {
-      return reject(p, at.offset, "expected a value")
+      return reject(p, SyntaxErr.ExpectedValue(at.offset))
     }
     Token.Number(value) => {
       advance(p)
@@ -148,14 +183,14 @@ fn atom(p: *Parser) *Expr {
       }
       advance(p)
       argument := sum(p)
-      expect_symbol(p, ')', "expected )")
+      expect_symbol(p, ')', SyntaxErr.ExpectedClose(p.current.offset))
       return node(p, Expr.Call(FunctionCall{ name: name, argument: argument, offset: at.offset }))
     }
     Token.Symbol(symbol) => {
-      if symbol != '(' { return reject(p, at.offset, "expected a value") }
+      if symbol != '(' { return reject(p, SyntaxErr.ExpectedValue(at.offset)) }
       advance(p)
       inside := sum(p)
-      expect_symbol(p, ')', "expected )")
+      expect_symbol(p, ')', SyntaxErr.ExpectedClose(p.current.offset))
       return inside
     }
   }
@@ -210,9 +245,9 @@ struct Statement {
   value: *Expr,
 }
 
-// A malformed line fails with InvalidInput at the offending byte.
-fn parse_line(arena: *mem.Arena, status: *fail.Status, text: []const u8) Statement {
-  p := Parser{ text: text, arena: arena, status: status }
+// A malformed line fails with the first SyntaxErr.
+fn parse_line(arena: *mem.Arena, text: []const u8) Statement!SyntaxErr {
+  p := Parser{ text: text, arena: arena }
   advance(&p)
   statement: Statement
   case p.current.token {
@@ -225,10 +260,10 @@ fn parse_line(arena: *mem.Arena, status: *fail.Status, text: []const u8) Stateme
             advance(&p)
           }
           _ => {
-            _ = reject(&p, p.current.offset, "expected a name after let")
+            _ = reject(&p, SyntaxErr.ExpectedName(p.current.offset))
           }
         }
-        expect_symbol(&p, '=', "expected =")
+        expect_symbol(&p, '=', SyntaxErr.ExpectedEquals(p.current.offset))
       }
     }
     _ => {}
@@ -237,8 +272,9 @@ fn parse_line(arena: *mem.Arena, status: *fail.Status, text: []const u8) Stateme
   case p.current.token {
     Token.End => {}
     _ => {
-      _ = reject(&p, p.current.offset, "unexpected text")
+      _ = reject(&p, SyntaxErr.UnexpectedText(p.current.offset))
     }
   }
+  if p.failed { fail p.failure }
   return statement
 }

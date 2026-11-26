@@ -1,28 +1,36 @@
 // sqlite.bind_values over every supported type, then sqlite.done; prints what a query reads back.
-use "std/fail"
 use "std/io"
 use "vendor/sqlite"
 
+// The failure of binding values sqlite cannot take.
+fn bind_err(statement: *sqlite.Statement) io.IoErr {
+  sqlite.bind_values(statement, true, sqlite.OpenOptions{}) catch err { return err }
+  #panic("bind should fail")
+}
+
+fn column(statement: *sqlite.Statement, index: usize) sqlite.Column {
+  return sqlite.column(statement, index) catch { #panic("column") }
+}
+
 fn main() {
   scratch: [512]u8
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  database := sqlite.open(&status, ":memory:", scratch[..])
-  sqlite.execute(&status, database, "CREATE TABLE t(a INTEGER, b TEXT, c BLOB, d REAL, e)", scratch[..])
-  statement := sqlite.prepare(&status, database, "INSERT INTO t VALUES(?1, ?2, ?3, ?4, ?5)").statement
+  database := sqlite.open(":memory:", scratch[..]) catch { #panic("unexpected failure") }
+  sqlite.execute(database, "CREATE TABLE t(a INTEGER, b TEXT, c BLOB, d REAL, e)", scratch[..]) catch { #panic("unexpected failure") }
+  prepared := sqlite.prepare(database, "INSERT INTO t VALUES(?1, ?2, ?3, ?4, ?5)") catch { #panic("prepare") }
+  statement := prepared.statement
   id: usize = 42
-  binding: fail.Status
-  sqlite.bind_values(&binding, &statement, id, "text", sqlite.Blob{ bytes: "\x00\x01" }, 1.5, sqlite.Null{})
-  io.println("bind {}", binding.failure.kind)
-  io.println("step {}", sqlite.step(&status, &statement))
+  sqlite.bind_values(&statement, id, "text", sqlite.Blob{ bytes: "\x00\x01" }, 1.5, sqlite.Null{}) catch { #panic("bind") }
+  io.println("bind ok")
+  stepped := sqlite.step(&statement) catch { #panic("step") }
+  io.println("step {}", stepped)
   sqlite.done(&statement)
-  bad: fail.Status
-  sqlite.bind_values(&bad, &statement, true, sqlite.OpenOptions{})
-  io.println("bad {}", bad.failure.kind)
+  io.println("bad {}", bind_err(&statement))
   sqlite.done(&statement)
   sqlite.finalize(&statement)
-  select := sqlite.prepare(&status, database, "SELECT a, b, length(c), d, e IS NULL FROM t").statement
-  _ = sqlite.step(&status, &select)
-  io.println("{} {} {} {} {}", sqlite.column(&status, &select, 0).integer, sqlite.column(&status, &select, 1).bytes, sqlite.column(&status, &select, 2).integer, sqlite.column(&status, &select, 3).real, sqlite.column(&status, &select, 4).integer)
+  selecting := sqlite.prepare(database, "SELECT a, b, length(c), d, e IS NULL FROM t") catch { #panic("prepare") }
+  select := selecting.statement
+  _ = sqlite.step(&select) catch { #panic("step") }
+  io.println("{} {} {} {} {}", column(&select, 0).integer, column(&select, 1).bytes, column(&select, 2).integer, column(&select, 3).real, column(&select, 4).integer)
   sqlite.finalize(&select)
-  sqlite.close(&status, database)
+  sqlite.close(database) catch { #panic("unexpected failure") }
 }

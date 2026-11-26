@@ -18,62 +18,97 @@ use hb "vendor/harfbuzz"
 use bidi "vendor/fribidi"
 use mem "std/mem"
 use "std/io"
-use "std/fail"
 use fs "std/fs"
 use dynlib "std/dynlib"
 use errors "std/io"
 use binary "std/encoding/binary"
-struct layout_build_Outcome { value: layout.Layout, failure: fail.Failure, kind: fail.Kind }
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+struct layout_build_Outcome { value: layout.Layout, failure: Failure, kind: Kind }
 fn layout_build(a0: *mem.Arena, p0:[]const u8, p1:layout.Font, p2:*const hb.Api, p3:*const bidi.Api, p4:layout.Options) layout_build_Outcome {
-  status: fail.Status
-  value := layout.build(a0, &status, p0, p1, p2, p3, p4)
-  return layout_build_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+  value := layout.build(a0, p0, p1, p2, p3, p4) catch err {
+    failure := failure_of(err)
+    return layout_build_Outcome{ failure: failure, kind: failure.kind }
+  }
+  return layout_build_Outcome{ value: value }
 }
 
-struct layout_selection_Outcome { value: []layout.SelectionRect, failure: fail.Failure, kind: fail.Kind }
+struct layout_selection_Outcome { value: []layout.SelectionRect, failure: Failure, kind: Kind }
 fn layout_selection(a0: *mem.Arena, p0: *const layout.Layout, p1, p2: usize) layout_selection_Outcome {
-  status: fail.Status
-  value := layout.selection(a0, &status, p0, p1, p2)
-  return layout_selection_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+  value := layout.selection(a0, p0, p1, p2) catch err {
+    failure := failure_of(err)
+    return layout_selection_Outcome{ failure: failure, kind: failure.kind }
+  }
+  return layout_selection_Outcome{ value: value }
 }
 
-struct hb_font_owned_Outcome { value: rawptr, failure: fail.Failure, kind: fail.Kind }
+struct hb_font_owned_Outcome { value: rawptr, failure: Failure, kind: Kind }
 fn hb_font_owned(p0: *const hb.Api, p1: []const u8, p2: u32) hb_font_owned_Outcome {
-  status: fail.Status
-  value := hb.font_owned(&status, p0, p1, p2)
-  return hb_font_owned_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+  value := hb.font_owned(p0, p1, p2) catch err {
+    failure := failure_of(err)
+    return hb_font_owned_Outcome{ failure: failure, kind: failure.kind }
+  }
+  return hb_font_owned_Outcome{ value: value }
 }
 
-struct hb_load_Outcome { api: hb.Api, failure: fail.Failure, kind: fail.Kind }
+struct hb_load_Outcome { api: hb.Api, failure: Failure, kind: Kind }
 fn hb_load(p0: dynlib.Handle) hb_load_Outcome {
-  status: fail.Status
-  value := hb.load(&status, p0)
-  return hb_load_Outcome{ api: value, failure: status.failure, kind: status.failure.kind }
+  value := hb.load(p0) catch err {
+    failure := failure_of(err)
+    return hb_load_Outcome{ failure: failure, kind: failure.kind }
+  }
+  return hb_load_Outcome{ api: value }
 }
 
-struct bidi_load_Outcome { api: bidi.Api, failure: fail.Failure, kind: fail.Kind }
+struct bidi_load_Outcome { api: bidi.Api, failure: Failure, kind: Kind }
 fn bidi_load(p0: dynlib.Handle) bidi_load_Outcome {
-  status: fail.Status
-  value := bidi.load(&status, p0)
-  return bidi_load_Outcome{ api: value, failure: status.failure, kind: status.failure.kind }
+  value := bidi.load(p0) catch err {
+    failure := failure_of(err)
+    return bidi_load_Outcome{ failure: failure, kind: failure.kind }
+  }
+  return bidi_load_Outcome{ api: value }
 }
 
-struct dynlib_open_Outcome { value: dynlib.Handle, failure: fail.Failure, kind: fail.Kind }
+struct dynlib_open_Outcome { value: dynlib.Handle, failure: Failure, kind: Kind }
 fn dynlib_open(p0: []const u8, p1: i32) dynlib_open_Outcome {
-  status: fail.Status
-  value := dynlib.open(&status, p0, p1)
-  return dynlib_open_Outcome{ value: value, failure: status.failure, kind: status.failure.kind }
+  value := dynlib.open(p0, p1) catch err {
+    failure := failure_of(err)
+    return dynlib_open_Outcome{ failure: failure, kind: failure.kind }
+  }
+  return dynlib_open_Outcome{ value: value }
 }
 
-struct dynlib_close_Outcome { failure: fail.Failure, kind: fail.Kind }
+struct dynlib_close_Outcome { failure: Failure, kind: Kind }
 fn dynlib_close(p0: *dynlib.Handle) dynlib_close_Outcome {
-  status: fail.Status
-  dynlib.close(&status, p0)
-  return dynlib_close_Outcome{ failure: status.failure, kind: status.failure.kind }
+  dynlib.close(p0) catch err {
+    failure := failure_of(err)
+    return dynlib_close_Outcome{ failure: failure, kind: failure.kind }
+  }
+  return dynlib_close_Outcome{}
 }
 
-fn failed(failure: fail.Failure) bool {
-  return failure.kind != fail.Kind.Ok
+fn failed(failure: Failure) bool {
+  return failure.kind != Kind.Ok
 }
 
 fn check(ok:bool) {if !ok {#panic("shaped selection")}}
@@ -102,9 +137,7 @@ fn main() {
  h:=hb_load(library.value)
  b:=bidi_load(bidi_library.value)
  check(!failed(h.failure) && !failed(b.failure))
- bytes_file: fail.Status
  bytes := fs.read_all(owner, "font.ttf", 10000000) catch { #panic("cannot read a fixture") }
- check(!bytes_file.failed)
  font:=hb_font_owned(&h.api,bytes,0)
  check(!failed(font.failure))
  defer h.api.font_destroy(font.value)
@@ -123,10 +156,10 @@ fn main() {
  source:=layout_build(owner,"aéz",descriptor,&h.api,&b.api,layout.Options{})
  check(!failed(source.failure))
  mark:=mem.arena_mark(scratch)
- check(layout_selection(scratch,&source.value,2,3).kind==fail.Kind.InvalidInput)
- check(layout_selection(scratch,&source.value,0,2).kind==fail.Kind.InvalidInput)
- check(layout_selection(scratch,&source.value,4,3).kind==fail.Kind.InvalidInput)
- check(layout_selection(scratch,&source.value,0,5).kind==fail.Kind.InvalidInput)
+ check(layout_selection(scratch,&source.value,2,3).kind==Kind.InvalidInput)
+ check(layout_selection(scratch,&source.value,0,2).kind==Kind.InvalidInput)
+ check(layout_selection(scratch,&source.value,4,3).kind==Kind.InvalidInput)
+ check(layout_selection(scratch,&source.value,0,5).kind==Kind.InvalidInput)
  check(failed(layout_selection(scratch,nil,0,0).failure))
  check(failed(layout_selection(nil,&source.value,0,1).failure))
  check(mem.arena_mark(scratch)==mark)
@@ -134,7 +167,7 @@ fn main() {
  check(!failed(empty.failure) && empty.value.len==0 && mem.arena_mark(scratch)==mark)
  broken:=source.value
  broken.lines[0].glyph_count+=1
- check(layout_selection(scratch,&broken,0,1).kind==fail.Kind.InvalidInput && mem.arena_mark(scratch)==mark)
+ check(layout_selection(scratch,&broken,0,1).kind==Kind.InvalidInput && mem.arena_mark(scratch)==mark)
  broken.lines[0].glyph_count-=1
  // Newline bytes have no glyph cells; extension belongs to the editor.
  multiline:=layout_build(owner,"ab\n\nאב",descriptor,&h.api,&b.api,layout.Options{})
@@ -169,8 +202,9 @@ fn main() {
  check(!failed(parity_selection.failure) && parity_selection.value.len==2)
  check(parity_selection.value[0].x+parity_selection.value[0].width<parity_selection.value[1].x)
  check(parity_selection.value[0].start==10 && parity_selection.value[0].end==13 && parity_selection.value[1].start==13 && parity_selection.value[1].end==16)
- clusters: fail.Status
- check(!layout.cluster_at(&clusters,&parity.value,10).rtl && !layout.cluster_at(&clusters,&parity.value,13).rtl && !clusters.failed)
+ first_cluster:=layout.cluster_at(&parity.value,10) catch { #panic("cluster_at") }
+ second_cluster:=layout.cluster_at(&parity.value,13) catch { #panic("cluster_at") }
+ check(!first_cluster.rtl && !second_cluster.rtl)
  mem.arena_reset(scratch)
  // Long lines must remain linear in glyph count, including selection queries.
  long_bytes:=mem.push_bytes(owner,20000)
@@ -183,9 +217,8 @@ fn main() {
 
 // Writes data to path; whether it worked.
 fn fs_write_file(path: []const u8, data: []const u8) bool {
-  status: fail.Status
-  fs.write_all(path, data) catch { #panic("cannot write a file") }
-  return !status.failed
+  fs.write_all(path, data) catch { return false }
+  return true
 }
 '''
 # Reuse only the independent C shaping oracle, never its Dyn implementation.

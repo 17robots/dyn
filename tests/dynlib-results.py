@@ -24,84 +24,100 @@ libc = Path(libc_query).resolve()
 if libc_query == 'libc.so.6' or not libc.is_file():
     raise RuntimeError('C compiler did not resolve libc.so.6: ' + libc_query)
 
-HELPERS = r'''use "std/fail"
-use dl "std/dynlib"
+HELPERS = r'''use dl "std/dynlib"
+use io "std/io"
 #link("c")
-struct Opened { value: dl.Handle, failure: fail.Failure }
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+struct Opened { value: dl.Handle, failure: Failure }
 fn open(path: []const u8, flags: i32) Opened {
-  status: fail.Status
-  value := dl.open(&status, path, flags)
-  return Opened{ value: value, failure: status.failure }
+  value := dl.open(path, flags) catch err { return Opened{ failure: failure_of(err) } }
+  return Opened{ value: value }
 }
-struct Found { value: rawptr, failure: fail.Failure }
+struct Found { value: rawptr, failure: Failure }
 fn symbol(handle: dl.Handle, name: []const u8) Found {
-  status: fail.Status
-  value := dl.symbol(&status, handle, name)
-  return Found{ value: value, failure: status.failure }
+  value := dl.symbol(handle, name) catch err { return Found{ failure: failure_of(err) } }
+  return Found{ value: value }
 }
-fn close(handle: *dl.Handle) fail.Failure {
-  status: fail.Status
-  dl.close(&status, handle)
-  return status.failure
-}
-fn described(failure: *const fail.Failure) bool {
-  return fail.message_text(failure).len > 0
+fn close(handle: *dl.Handle) Failure {
+  dl.close(handle) catch err { return failure_of(err) }
+  return Failure{}
 }
 '''
 SOURCE = HELPERS + r'''fn check(ok: bool) { if !ok { #panic("dynlib results") } }
 fn invalid_open(result: Opened) {
-  check(result.value == nil && result.failure.kind == fail.Kind.InvalidInput && result.failure.native == 0)
+  check(result.value == nil && result.failure.kind == Kind.InvalidInput && result.failure.native == 0)
 }
-fn invalid_symbol(result: Found, kind: fail.Kind) {
+fn invalid_symbol(result: Found, kind: Kind) {
   check(result.value == nil && result.failure.kind == kind && result.failure.native == 0)
 }
 fn main() {
   invalid_open(open("bad\x00path", dl.Now))
   long_name: [4096]u8
   invalid_open(open(long_name[..], dl.Now))
-  invalid_symbol(symbol(nil, "malloc"), fail.Kind.InvalidState)
+  invalid_symbol(symbol(nil, "malloc"), Kind.InvalidInput)
   nothing: dl.Handle
   badclose := close(&nothing)
-  check(badclose.kind == fail.Kind.InvalidState && badclose.native == 0)
+  check(badclose.kind == Kind.InvalidInput && badclose.native == 0)
   missing := open(MISSING_PATH, dl.Now)
-  check(missing.value == nil && missing.failure.kind == fail.Kind.System && missing.failure.native == 0 && described(&missing.failure))
+  check(missing.value == nil && missing.failure.kind == Kind.NotFound)
   library := open(LIBC_PATH, dl.Now | dl.Local)
-  check(library.failure.kind == fail.Kind.Ok && library.value != nil)
-  invalid_symbol(symbol(library.value, "bad\x00symbol"), fail.Kind.InvalidInput)
-  invalid_symbol(symbol(library.value, long_name[..]), fail.Kind.InvalidInput)
+  check(library.failure.kind == Kind.Ok && library.value != nil)
+  invalid_symbol(symbol(library.value, "bad\x00symbol"), Kind.InvalidInput)
+  invalid_symbol(symbol(library.value, long_name[..]), Kind.InvalidInput)
   absent := symbol(library.value, "dyn_regression_nonexistent_symbol_17robots")
-  check(absent.value == nil && absent.failure.kind == fail.Kind.System && absent.failure.native == 0 && described(&absent.failure))
+  check(absent.value == nil && absent.failure.kind == Kind.NotFound)
   found := symbol(library.value, "malloc")
-  check(found.failure.kind == fail.Kind.Ok && found.value != nil)
+  check(found.failure.kind == Kind.Ok && found.value != nil)
   closed := close(&library.value)
-  check(closed.kind == fail.Kind.Ok && library.value == nil)
+  check(closed.kind == Kind.Ok && library.value == nil)
   twice := close(&library.value)
-  check(twice.kind == fail.Kind.InvalidState && twice.native == 0 && library.value == nil)
+  check(twice.kind == Kind.InvalidInput && twice.native == 0 && library.value == nil)
   ORACLE
 }
 '''
 ORACLE = r'''
   oracle := open(ORACLE_PATH, dl.Now)
-  check(oracle.failure.kind == fail.Kind.Ok && oracle.value != nil)
+  check(oracle.failure.kind == Kind.Ok && oracle.value != nil)
   stale := symbol(oracle.value, "missing_before_null")
-  check(stale.failure.kind == fail.Kind.System && described(&stale.failure) && stale.failure.native == 0)
+  check(stale.failure.kind == Kind.NotFound)
   null_symbol := symbol(oracle.value, "dyn_valid_null")
-  check(null_symbol.failure.kind == fail.Kind.Ok && null_symbol.value == nil)
-  check(close(&oracle.value).kind == fail.Kind.Ok && oracle.value == nil)
+  check(null_symbol.failure.kind == Kind.Ok && null_symbol.value == nil)
+  check(close(&oracle.value).kind == Kind.Ok && oracle.value == nil)
 '''
 
 # Only this child process preloads the shim; production std sources are untouched.
 CLOSE_SOURCE = HELPERS + r'''fn check(ok: bool) { if !ok { #panic("dynlib close failure") } }
 fn main() {
   library := open(LIBC_PATH, dl.Now)
-  check(library.failure.kind == fail.Kind.Ok && library.value != nil)
+  check(library.failure.kind == Kind.Ok && library.value != nil)
   owner := library.value
   failed := close(&library.value)
-  check(failed.kind == fail.Kind.System && failed.native == 0 && described(&failed) && library.value == owner)
+  check(failed.kind == Kind.InvalidInput && library.value == owner)
   closed := close(&library.value)
-  check(closed.kind == fail.Kind.Ok && library.value == nil)
+  check(closed.kind == Kind.Ok && library.value == nil)
   twice := close(&library.value)
-  check(twice.kind == fail.Kind.InvalidState && twice.native == 0)
+  check(twice.kind == Kind.InvalidInput && twice.native == 0)
 }
 '''
 
