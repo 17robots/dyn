@@ -1364,7 +1364,7 @@ pub fn receive(status: *fail.Status, state: *Server) Received {
       return receive_failed(status, state, fail.Kind.InvalidInput, "the stream ended inside a request", state.used)
     }
     if state.used == state.storage.len { return receive_failed(status, state, fail.Kind.Capacity, "the request does not fit the storage", 0) }
-    count := io.read(status, state.input, state.storage[state.used..])
+    count := io.read_status(status, state.input, state.storage[state.used..])
     if status.failed {
       state.failed = true
       return Received{}
@@ -1565,7 +1565,7 @@ fn response_state(status: *fail.Status, message: []const u8) {
 
 // Writes source to the client. A failure finishes the response.
 fn response_output(status: *fail.Status, response: *Response, source: []const u8) {
-  io.write(status, response.output, source)
+  io.write_status(status, response.output, source)
   if status.failed {
     response.started = true
     response.finished = true
@@ -2141,7 +2141,7 @@ fn hex_size(destination: []u8, value: usize) []const u8 {
 // Writes source to the client. A failure finishes the body.
 fn body_output(status: *fail.Status, body: *Body, source: []const u8) {
   if body.discard { return }
-  io.write(status, body.output, source)
+  io.write_status(status, body.output, source)
   if status.failed {
     body.finished = true
   }
@@ -2151,7 +2151,13 @@ fn body_finished(status: *fail.Status) {
   fail.set(status, fail.make(fail.Kind.InvalidState, "write body", "", "the body is finished"))
 }
 
-fn body_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+fn body_write(data: rawptr, source: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := body_write_status(data, &status, source)
+  try io.check_status(&status)
+  return count
+}
+fn body_write_status(data: rawptr, status: *fail.Status, source: []const u8) usize {
   body := #cast(*Body, data)
   if body.finished || body.output.write == nil {
     body_finished(status)
@@ -2273,7 +2279,7 @@ pub fn client_do(arena: *memory.Arena, status: *fail.Status, input: io.Reader, o
   validate_borrow(arena, body)
   mark := memory.arena_mark(arena)
   request_bytes := write_request(arena, method, target, host, body)
-  io.write(status, output, request_bytes)
+  io.write_status(status, output, request_bytes)
   memory.arena_rewind(arena, mark)
   result := client_receive(arena, status, input, method)
   if status.failed {
@@ -2361,7 +2367,7 @@ fn client_receive(arena: *memory.Arena, status: *fail.Status, input: io.Reader, 
       _ = memory.copy(grown, response_storage[..used])
       response_storage = grown
     }
-    count := io.read(status, input, response_storage[used..])
+    count := io.read_status(status, input, response_storage[used..])
     if status.failed { return ClientResponse{} }
     used += count
     ended = count == 0

@@ -82,9 +82,8 @@ fn handle(status: *fail.Status, response: *http.Response, request: *const http.R
 fn main() i32 {
   arena := mem.arena_alloc(64 * mem.MiB)
   defer mem.arena_release(arena)
-  arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
-  if arguments_status.failed || arguments.len < 3 || arguments.len > 4 {
+  arguments := process.arguments(arena) catch { #panic("cannot read arguments") }
+  if arguments.len < 3 || arguments.len > 4 {
     io.eprintln("usage: main CERT.pem KEY.pem [h2]")
     return 2
   }

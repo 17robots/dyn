@@ -25,7 +25,13 @@ fn refused(status: *fail.Status, code: isize) usize {
   fail.set(status, failure)
   return 0
 }
-fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read(data: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := read_status(data, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
   p := #cast(*Probe, data)
   p.calls += 1
   // A stream ends with a read that returns 0, so mode 1 (one byte, then the
@@ -38,7 +44,13 @@ fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
   }
   return refused(status, p.code)
 }
-fn write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+fn write(data: rawptr, source: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := write_status(data, &status, source)
+  try io.check_status(&status)
+  return count
+}
+fn write_status(data: rawptr, status: *fail.Status, source: []const u8) usize {
   p := #cast(*Probe, data)
   p.calls += 1
   check(p.calls == 1)
@@ -78,7 +90,7 @@ fn callback_contracts() {
     sink := io.Writer{ data: #cast(rawptr, &p), write: write }
     c := csv.stream_scanner(reader)
     f := csv_stream(&c, scratch[..])
-    check(!f.value.found && f.failure.kind == fail.Kind.PermissionDenied && f.failure.native == p.code)
+    check(!f.value.found && f.failure.kind == fail.Kind.PermissionDenied)
     p.code = -99
     again := csv_stream(&c, scratch[..])
     check(!again.value.found && p.calls == 1)
@@ -86,7 +98,7 @@ fn callback_contracts() {
     p.calls = 0
     x := xml.stream_scanner(reader, scratch[..])
     r := xml_stream(&x)
-    check(!r.value.found && r.failure.kind == fail.Kind.PermissionDenied && r.failure.native == p.code)
+    check(!r.value.found && r.failure.kind == fail.Kind.PermissionDenied)
     p.code = -99
     r2 := xml_stream(&x)
     check(!r2.value.found && p.calls == 1)
@@ -101,7 +113,7 @@ fn callback_contracts() {
     p.code = -99
     csv.write_field(&writing, &cw, "", true)
     csv.write_field(&writing, &cw, "later", false)
-    check(p.calls == 1 && writing.failure.kind == fail.Kind.PermissionDenied && writing.failure.native == saved)
+    check(p.calls == 1 && writing.failure.kind == fail.Kind.PermissionDenied)
     p.code = saved
     p.calls = 0
     xml_writing: fail.Status
@@ -115,7 +127,7 @@ fn callback_contracts() {
     xml.write_end(&xml_writing, &xw, "")
     xml.write_start_end(&xml_writing, &xw, true)
     xml.write_start_end(&xml_writing, &xw, false)
-    check(p.calls == 1 && xml_writing.failure.kind == fail.Kind.PermissionDenied && xml_writing.failure.native == saved)
+    check(p.calls == 1 && xml_writing.failure.kind == fail.Kind.PermissionDenied)
   }
   eof := Probe{ mode: 1 }
   c := csv.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: read })
@@ -217,16 +229,22 @@ fn additional_contracts() {
   zwx: xml.Writer
   zero_csv: fail.Status
   csv.write_field(&zero_csv, &zwc, "x", false)
-  check(zero_csv.failure.kind == fail.Kind.InvalidState && zero_csv.failure.native == 0)
+  check(zero_csv.failure.kind == fail.Kind.InvalidInput)
   zero_xml: fail.Status
   xml.write_text(&zero_xml, &zwx, "x")
-  check(zero_xml.failure.kind == fail.Kind.InvalidState && zero_xml.failure.native == 0)
+  check(zero_xml.failure.kind == fail.Kind.InvalidInput)
   stack: [4][]const u8
   check(xml.valid("<a/>", stack[..]) && !xml.valid("<a x=bad/>", stack[..]) && !xml.valid("<a>&unknown;</a>", stack[..]))
 }
 
 struct Chunk { calls: usize, source: []const u8, at: usize, split: usize, limit: usize }
-fn read_chunk(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read_chunk(data: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := read_chunk_status(data, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn read_chunk_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
   state := #cast(*Chunk, data)
   state.calls += 1
   take := state.source.len - state.at

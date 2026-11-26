@@ -14,11 +14,11 @@ dyn run examples/02-wordcount < examples/02-wordcount/poem.txt
   gives `program.args` (the program's own path first) and `program.arena`,
   an arena that lives as long as the program.
 - **Exit codes.** `fn main() i32` returns the process exit status.
-- **A status per file.** `count_file` takes a `*fail.Status`, and so does
-  every call in it. After a failure `io.read` returns 0, so the read loop
-  ends by itself; nothing inside checks. Each file gets its own status in
-  `main`, so one that cannot be read is reported with `fail.describe`
-  (`open missing.txt: no such file or directory`) and the rest still count.
+- **Failures with `try` and `catch`.** `count_file` returns `!io.IoErr`:
+  nothing, or why it failed. `try` passes a failure from `fs.open` or
+  `io.read` up to the caller. `main` catches each file's failure on its own,
+  so one that cannot be read is reported (`missing.txt: not found`) and the
+  rest still count.
 - **Closing a handle once.** A `fs.File` is a plain value naming an OS
   resource. `defer fs.close(&file)` closes it when `count_file` returns,
   however it returns; closing a file that never opened does nothing.
@@ -40,5 +40,5 @@ dyn run examples/02-wordcount < examples/02-wordcount/poem.txt
 
 1. Add `-l`, `-w` and `-c` options that print only one column.
 2. Count the longest line, as `wc -L` does.
-3. `count_reader` never checks the status. Explain why its loop still ends
-   when a read fails, and where the failure gets reported.
+3. `count_reader` has no `if` for failures. Explain how its loop ends when
+   a read fails, and where the failure gets reported.

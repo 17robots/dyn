@@ -31,7 +31,7 @@ fn main() {{
   arena := mem.arena_alloc(4096)
   defer mem.arena_release(arena)
   status: fail.Status
-  arguments := process.arguments(arena, &status)
+  arguments := process.arguments(arena) catch {{ #panic("cannot read arguments") }}
   value := #cast(u64, arguments.len) + 999
 {calls}  storage: [256]u8
   if status.failed {{

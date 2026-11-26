@@ -8,7 +8,7 @@ use json "std/encoding/json"
 use mem "std/mem"
 use utf8 "std/unicode/utf8"
 struct Chunk { source: []const u8, at: usize, split: usize, limit: usize }
-fn read_chunk(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read_chunk(data: rawptr, destination: []u8) usize!io.IoErr {
   state := #cast(*Chunk, data)
   take := state.source.len - state.at
   if state.at < state.split && take > state.split - state.at {

@@ -4,55 +4,54 @@ use os "std/os/linux"
 use fs "std/fs"
 use time "std/time"
 use "std/os/linux/sys"
-fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, configuration: Options) Child {
-  process := os.spawn_environment(arena, status, path, arguments, configuration.environment,
+fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) Child!io.IoErr {
+  status: fail.Status
+  process := os.spawn_environment(arena, &status, path, arguments, configuration.environment,
     os.SpawnOptions{ input: native_stream(configuration.input), output: native_stream(configuration.output), error: native_stream(configuration.error), directory: configuration.directory })
-  if status.failed { return Child{} }
+  try io.check_status(&status)
   return Child{ handle: process, active: true }
 }
-fn wait_native(status: *fail.Status, child: *Child, nonblocking: bool) Exit {
-  value := os.wait(status, child.handle, nonblocking)
-  if status.failed || value.process == 0 { return Exit{} }
+fn wait_native(child: *Child, nonblocking: bool) Exit!io.IoErr {
+  status: fail.Status
+  value := os.wait(&status, child.handle, nonblocking)
+  try io.check_status(&status)
+  if value.process == 0 { return Exit{} }
   child.active = false
   if os.exited(value.wait_status) {
     return Exit{ code: os.exit_status(value.wait_status), finished: true }
   }
   return Exit{ signal: os.termination_signal(value.wait_status), finished: true }
 }
-fn terminate_native(status: *fail.Status, child: *Child) {
-  os.send_signal(status, child.handle, 9)
+fn terminate_native(child: *Child) !io.IoErr {
+  status: fail.Status
+  os.send_signal(&status, child.handle, 9)
+  try io.check_status(&status)
 }
 fn close_native(handle: isize) {
   ignored: fail.Status
   os.close_descriptor(&ignored, handle)
 }
-fn pipe_native(status: *fail.Status) Pipe {
+fn pipe_native() Pipe!io.IoErr {
   descriptors: [2]i32
   result := #syscall(sys.Pipe2, &descriptors[0], 524288)
-  if result < 0 {
-    fail.set(status, io.from_linux("pipe", "", result))
-    return Pipe{ input: -1, output: -1 }
-  }
+  if result < 0 { fail io.linux_err(result) }
   flags := #syscall(sys.Fcntl, descriptors[0], 3, 0)
   changed := #syscall(sys.Fcntl, descriptors[0], 4, flags | 2048)
   if changed < 0 {
     close_native(descriptors[0])
     close_native(descriptors[1])
-    fail.set(status, io.from_linux("pipe", "", changed))
-    return Pipe{ input: -1, output: -1 }
+    fail io.linux_err(changed)
   }
   return Pipe{ input: descriptors[0], output: descriptors[1] }
 }
 // A pipe with nothing to read yet is no failure: count 0, not ended.
-fn read_native(status: *fail.Status, handle: isize, destination: []u8) Read {
+fn read_native(handle: isize, destination: []u8) Read!io.IoErr {
   file := fs.adopt_handle(handle)
-  attempt: fail.Status
-  count := fs.read(&attempt, &file, destination)
-  if attempt.failed {
-    if attempt.failure.native != -11 {
-      fail.set(status, attempt.failure)
+  count := fs.read(&file, destination) catch err {
+    case err {
+      .WouldBlock => { return Read{} }
+      _ => { fail err }
     }
-    return Read{}
   }
   return Read{ count: count, ended: file.ended }
 }
@@ -63,33 +62,29 @@ fn milliseconds_native() u64 {
 fn sleep_native() {
   time.sleep(time.Millisecond)
 }
-fn environment_native(status: *fail.Status, name: []const u8, destination: []u8) []u8 {
-  return os.environment_get(status, name, destination)
+fn environment_native(name: []const u8, destination: []u8) []u8!io.IoErr {
+  status: fail.Status
+  value := os.environment_get(&status, name, destination)
+  try io.check_status(&status)
+  return value
 }
 
-fn duplicate_native(status: *fail.Status, value: isize) isize {
+fn duplicate_native(value: isize) isize!io.IoErr {
   copied := #syscall(sys.Fcntl, value, 1030, 3)
-  if copied < 0 {
-    fail.set(status, io.from_linux("duplicate", "", copied))
-    return -1
-  }
+  if copied < 0 { fail io.linux_err(copied) }
   return copied
 }
 
-fn arguments_native(arena: *mem.Arena, status: *fail.Status) [][]const u8 {
-  raw := fs.read_all(arena, status, "/proc/self/cmdline", #max(usize))
-  empty: [][]const u8
-  if status.failed { return empty }
+fn arguments_native(arena: *mem.Arena) [][]const u8!io.IoErr {
+  raw := try fs.read_all(arena, "/proc/self/cmdline", #max(usize))
   count: usize = 0
   for byte in raw {
     if byte == 0 {
       count += 1
     }
   }
-  if raw.len > 0 && raw[raw.len - 1] != 0 {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "read arguments", "/proc/self/cmdline", "the last argument has no end"))
-    return empty
-  }
+  // The last argument has no end.
+  if raw.len > 0 && raw[raw.len - 1] != 0 { fail .InvalidInput }
   result := argument_slots(arena, count)
   at: usize = 0
   start: usize = 0

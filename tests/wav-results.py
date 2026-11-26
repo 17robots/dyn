@@ -57,7 +57,7 @@ fn main() {
   check(invalid.failure.kind == fail.Kind.InvalidInput)
   check(mem.arena_mark(arena) == before)
   reference_file: fail.Status
-  reference := fs.read_all(arena, &reference_file, "reference.wav", 10000)
+  reference := fs.read_all(arena, "reference.wav", 10000) catch { #panic("cannot read a fixture") }
   check(!reference_file.failed)
   decoded = wav.decode(arena, &status, reference)
   check(decoded.samples.len == 5)
@@ -81,7 +81,7 @@ fn main() {
 // Writes data to path; whether it worked.
 fn fs_write_file(path: []const u8, data: []const u8) bool {
   status: fail.Status
-  fs.write_all(&status, path, data)
+  fs.write_all(path, data) catch { #panic("cannot write a file") }
   return !status.failed
 }
 '''

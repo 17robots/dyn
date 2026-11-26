@@ -377,7 +377,7 @@ fn main() {
   }
   args := linux.process_arguments(backing)
   if args.len == 2 {
-    file := fs.read_all(backing, &status, args[1], 1024 * 1024)
+    file := fs.read_all(backing, args[1], 1024 * 1024) catch { #panic("cannot read a fixture") }
     binary := cgltf.parse_owned(&status, file)
     defer cgltf.destroy_owned(binary)
     cgltf.load_embedded(&status, binary)
@@ -646,7 +646,7 @@ fn main() {
     #panic("WAV path required")
   }
   status := fail.Status{ on_failure: fail.panic_on_failure }
-  bytes := fs.read_all(storage, &status, args[1], 1024 * 1024)
+  bytes := fs.read_all(storage, args[1], 1024 * 1024) catch { #panic("cannot read a fixture") }
   mark := mem.arena_mark(storage)
   invalid: fail.Status
   _ = audio.decoder_create(storage, &invalid, "invalid")
@@ -719,7 +719,7 @@ fn main() {
     #panic("WAV path required")
   }
   status := fail.Status{ on_failure: fail.panic_on_failure }
-  bytes := fs.read_all(storage, &status, args[1], 1024 * 1024)
+  bytes := fs.read_all(storage, args[1], 1024 * 1024) catch { #panic("cannot read a fixture") }
   mixer.init(&status)
   defer mixer.quit()
   engine := mixer.create_owned(&status)

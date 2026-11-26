@@ -697,7 +697,13 @@ fn flush_blocking(connection: *Connection) bool {
 
 // Queues source for the connection; the count queued. A failure, a full
 // output that cannot be flushed, is recorded and marks the connection failed.
-fn output_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+fn output_write(data: rawptr, source: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := output_write_status(data, &status, source)
+  try io.check_status(&status)
+  return count
+}
+fn output_write_status(data: rawptr, status: *fail.Status, source: []const u8) usize {
   connection := #cast(*Connection, data)
   if connection.failed {
     fail.set(status, fail.make(fail.Kind.InvalidState, "write", "", "connection failed"))
@@ -1994,8 +2000,11 @@ pub fn serve(arena: *mem.Arena, status: *fail.Status, workers: []Worker, address
     serve(arena, &fail.Status{}, workers, address, config, handler, context)
     return
   }
-  signals := signal.watch(status, signal.Set{ interrupt: true, terminate: true })
   if status.failed { return }
+  signals := signal.watch(signal.Set{ interrupt: true, terminate: true }) catch err {
+    fail.set(status, io.failure_of(err, "watch signals", ""))
+    return
+  }
   defer signal.close(&signals)
   listener := network.Listener{}
   defer network.listener_close(&listener)
@@ -2008,7 +2017,12 @@ pub fn serve(arena: *mem.Arena, status: *fail.Status, workers: []Worker, address
     fail.set(status, shared.failure)
   }
   if status.failed { return }
-  _ = signal.wait(status, &signals)
+  _ = signal.wait(&signals) catch err {
+    stop(workers)
+    join(status, workers)
+    fail.set(status, io.failure_of(err, "read signal", ""))
+    return
+  }
   stop(workers)
   join(status, workers)
 }

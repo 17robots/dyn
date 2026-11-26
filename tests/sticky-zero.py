@@ -60,11 +60,9 @@ fn main() {
   builder.append_grow(arena, &text, "grown")
   check(mem.equal(builder.bytes(&text), "grown"), "builder clear")
   arguments: [1][]const u8 = ["true"]
-  status: fail.Status
-  spawned := process.spawn(arena, &status, "/bin/true", arguments[..], process.Options{})
-  check(!status.failed, "zero options spawn")
-  exited := process.wait(&status, spawned, false)
-  check(!status.failed && exited.code == 0, "zero options inherit")
+  spawned := process.spawn(arena, "/bin/true", arguments[..], process.Options{}) catch { #panic("zero options spawn") }
+  exited := process.wait(spawned, false) catch { #panic("zero options wait") }
+  check(exited.code == 0, "zero options inherit")
   idle: watch.Watcher
   watch.close(&idle)
   check(!idle.active, "zero watcher closes nothing")

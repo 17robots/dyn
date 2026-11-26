@@ -122,7 +122,7 @@ fn handle(status: *fail.Status, response: *http.Response, request: *const http.R
     body := http.respond_stream(status, response, http.ResponseOptions{ content_type: "text/plain" })
     writer := http.body_writer(&body)
     for i in 0..3 {
-      io.write(status, writer, "chunk\n")
+      io.write_status(status, writer, "chunk\n")
     }
     http.body_finish(status, &body)
     return
@@ -235,10 +235,9 @@ fn main() {
   config.send_size = 4 * mem.KiB
   config.idle_timeout_milliseconds = 500
   config.on_too_large = too_large
-  arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
-  shared := !arguments_status.failed && arguments.len > 1 && bytes.equal(arguments[1], "shared")
-  pooled := !arguments_status.failed && arguments.len > 1 && bytes.equal(arguments[1], "pooled")
+  arguments := process.arguments(arena) catch { #panic("cannot read arguments") }
+  shared := arguments.len > 1 && bytes.equal(arguments[1], "shared")
+  pooled := arguments.len > 1 && bytes.equal(arguments[1], "pooled")
   transport := evented.Transport{ open: limited_open, handshake: limited_handshake, read: limited_read, write: limited_write, close: limited_close }
   worker_count := WorkerCount
   if pooled {

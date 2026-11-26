@@ -33,7 +33,7 @@ pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan:
 // CloseWrite is unavailable. Rescan must rebuild/reconcile the watched snapshot.
 // ended is set by a next call that returns no event: none is pending now,
 // and a later call may return one.
-pub struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }
+pub struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, error: io.IoErr, ended: bool }
 struct Context { version: isize, info: rawptr, retain: rawptr, release: rawptr, describe: rawptr }
 type Callback = fn(rawptr, rawptr, usize, rawptr, *const u32, *const u64)
 struct API {
@@ -128,29 +128,21 @@ fn discard_slot(state: *State, slot: *Slot) {
   }
   slot.* = Slot{}
 }
-pub fn open(status: *fail.Status, storage: []u8) Watcher {
-  if status == nil { return open(&fail.Status{}, storage) }
-  if status.failed { return Watcher{} }
-  if storage.len < 272 {
-    _ = failure(status, "watch", "", -28)
-    return Watcher{}
-  }
+pub fn open(storage: []u8) Watcher!io.IoErr {
+  if storage.len < 272 { fail io.darwin_err(-28) }
   arena := mem.arena_alloc(#sizeof(State))
   state := mem.push<State>(arena)
   if !load(&state.api) {
     unload(&state.api)
     mem.arena_release(arena)
-    unavailable := fail.make(fail.Kind.Unsupported, "watch", "", "FSEvents is unavailable")
-    unavailable.native = -95
-    fail.set(status, unavailable)
-    return Watcher{}
+    // FSEvents is unavailable.
+    fail .Unsupported
   }
   state.queue = queue_create(nil, nil)
   if state.queue == nil {
     unload(&state.api)
     mem.arena_release(arena)
-    _ = failure(status, "watch", "", -12)
-    return Watcher{}
+    fail io.darwin_err(-12)
   }
   return Watcher{ state: state, storage: storage, arena: arena }
 }
@@ -244,32 +236,28 @@ fn callback(_stream: rawptr, info: rawptr, count: usize, paths: rawptr, flags: *
     publish(slot, name, mask, rescan)
   }
 }
-// Watches path; the watch identifier, -1 after a failure.
-pub fn add(status: *fail.Status, watcher: *Watcher, path: []const u8, mask: u32) i32 {
-  if status == nil { return add(&fail.Status{}, watcher, path, mask) }
-  if status.failed { return -1 }
+// Watches path; the watch identifier.
+pub fn add(watcher: *Watcher, path: []const u8, mask: u32) i32!io.IoErr {
   state := watcher.state
-  if state == nil || path.len == 0 || !utf8.valid(path) { return failure(status, "watch", path, -22) }
+  if state == nil || path.len == 0 || !utf8.valid(path) { fail io.darwin_err(-22) }
   if (mask & SupportedEvents) == 0 {
-    unsupported := fail.make(fail.Kind.Unsupported, "watch", path, "none of the events can be watched here")
-    unsupported.native = -95
-    fail.set(status, unsupported)
-    return -1
+    // None of the events can be watched here.
+    fail .Unsupported
   }
   input: [1024 + mem.ArenaBufferOverhead]u8
-  terminated := c.string_into(status, input[..], path)
-  if status.failed { return -1 }
+  terminated := c.string_into(nil, input[..], path)
+  if terminated == nil { fail io.darwin_err(-22) }
   canonical: [1024]u8
   if state.api.canonical(terminated, &canonical[0]) == nil {
     code := 0 - #cast(isize, native_errno().*)
-    return failure(status, "watch", path, code)
+    fail io.darwin_err(code)
   }
   canonical_status: fail.Status
   rooted_path := c.bytes_from_string(&canonical_status, &canonical[0], 1024)
-  if canonical_status.failed || !utf8.valid(rooted_path) { return failure(status, "watch", path, -22) }
+  if canonical_status.failed || !utf8.valid(rooted_path) { fail io.darwin_err(-22) }
   // FSEvents watches trees; this adapter promises only direct directory children.
   directory := #syscall(sys.Open, &canonical[0], 17858560, 0) // O_CLOEXEC|O_DIRECTORY|O_EVTONLY
-  if directory < 0 { return failure(status, "watch", path, directory) }
+  if directory < 0 { fail io.darwin_err(directory) }
   _ = #syscall(sys.Close, directory)
   index: usize = 16
   for i in 0..16 {
@@ -284,7 +272,7 @@ pub fn add(status: *fail.Status, watcher: *Watcher, path: []const u8, mask: u32)
       return state.slots[i].id
     }
   }
-  if index == 16 || state.serial == 2147483647 { return failure(status, "watch", path, -28) }
+  if index == 16 || state.serial == 2147483647 { fail io.darwin_err(-28) }
   state.serial += 1
   slot := &state.slots[index]
   slot.owner = state
@@ -297,45 +285,37 @@ pub fn add(status: *fail.Status, watcher: *Watcher, path: []const u8, mask: u32)
   slot.path = state.api.string(nil, &slot.root[0], #cast(isize, slot.length), 134217984, 0)
   if slot.path == nil {
     discard_slot(state, slot)
-    return failure(status, "watch", path, -12)
+    fail io.darwin_err(-12)
   }
   slot.paths = state.api.array(nil, &slot.path, 1, nil)
   if slot.paths == nil {
     discard_slot(state, slot)
-    return failure(status, "watch", path, -12)
+    fail io.darwin_err(-12)
   }
   context := Context{ info: slot }
   slot.stream = state.api.create(nil, callback, &context, slot.paths, 18446744073709551615, 0.01, 22)
   if slot.stream == nil {
     discard_slot(state, slot)
-    return failure(status, "watch", path, -5)
+    fail io.darwin_err(-5)
   }
   state.api.schedule(slot.stream, state.queue)
   if state.api.start(slot.stream) == 0 {
     discard_slot(state, slot)
-    return failure(status, "watch", path, -5)
+    fail io.darwin_err(-5)
   }
   slot.started = true
   return slot.id
 }
-pub fn remove(status: *fail.Status, watcher: *Watcher, id: i32) {
-  if status == nil {
-    remove(&fail.Status{}, watcher, id)
-    return
-  }
-  if status.failed { return }
+pub fn remove(watcher: *Watcher, id: i32) !io.IoErr {
   state := watcher.state
-  if state == nil {
-    _ = failure(status, "unwatch", "", -9)
-    return
-  }
+  if state == nil { fail io.darwin_err(-9) }
   for i in 0..16 {
     if state.slots[i].stream != nil && state.slots[i].id == id {
       discard_slot(state, &state.slots[i])
       return
     }
   }
-  _ = failure(status, "unwatch", "", -22)
+  fail io.darwin_err(-22)
 }
 pub fn close(watcher: *Watcher) {
   state := watcher.state
@@ -359,20 +339,18 @@ fn idle(state: *Watcher) Event {
   state.ended = true
   return Event{}
 }
-pub fn next(status: *fail.Status, watcher: *Watcher) Event {
-  if status == nil { return next(&fail.Status{}, watcher) }
+pub fn next(watcher: *Watcher) Event!io.IoErr {
   watcher.ended = false
-  if status.failed { return idle(watcher) }
   if watcher.failed {
-    fail.set(status, watcher.failure)
-    return idle(watcher)
+    watcher.ended = true
+    fail watcher.error
   }
   state := watcher.state
   if state == nil {
     watcher.failed = true
-    _ = failure(status, "read events", "", -9)
-    watcher.failure = status.failure
-    return idle(watcher)
+    watcher.error = io.darwin_err(-9)
+    watcher.ended = true
+    fail watcher.error
   }
   if sync.exchange_u32(&state.lost, 0) != 0 {
     watcher.rescan_required = true
@@ -406,9 +384,4 @@ pub fn next(status: *fail.Status, watcher: *Watcher) Event {
 }
 pub fn acknowledge_rescan(watcher: *Watcher) {
   watcher.rescan_required = false
-}
-
-fn failure(status: *fail.Status, operation: []const u8, path: []const u8, code: isize) i32 {
-  fail.set(status, io.from_darwin(operation, path, code))
-  return -1
 }

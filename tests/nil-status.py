@@ -29,14 +29,13 @@ fn main() {
   arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
   // Failures are dropped; the value is the usual zero.
-  check(fs.read_all(arena, nil, "/no/such/file", 1024).len == 0, "read_all")
-  check(process.environment(arena, nil, "DYN_NIL_STATUS_UNSET").len == 0, "environment")
+  check(process.environment_or(arena, "DYN_NIL_STATUS_UNSET", "").len == 0, "environment")
   fail.invalid(nil, "check", "", "dropped")
   root := json.parse(arena, nil, "{\"port\": 8080}")
   check(json.get<i64>(nil, root, "port") == 8080, "json present")
   check(json.get<i64>(nil, root, "missing") == 0, "json missing")
-  // A reader on a file that is not there ends at once.
-  file := fs.open(nil, "/no/such/file")
+  // A reader on a file that is not open ends at once.
+  file: fs.File
   storage: [64]u8
   reader := bufio.reader(fs.reader(&file), storage[..])
   lines: usize = 0

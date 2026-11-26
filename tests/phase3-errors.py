@@ -588,9 +588,10 @@ STDLIB_PROGRAM = r'''
 use mem "std/mem"
 use parse "std/parse"
 use fs "std/fs"
+use io "std/io"
 
-fn read_and_parse(arena: *mem.Arena, path: str) i64!(fs.FsErr | parse.ParseErr) {
-  raw := try fs.read_file(arena, path, 4096)
+fn read_and_parse(arena: *mem.Arena, path: str) i64!(io.IoErr | parse.ParseErr) {
+  raw := try fs.read_all(arena, path, 4096)
   return try parse.parse_i64(raw)
 }
 
@@ -601,8 +602,8 @@ fn main() {
   if (parse.parse_i64("-123") catch 0) != -123 { #panic("parse_i64") }
   _ = read_and_parse(arena, "/nonexistent-dyn-phase3-file") catch err {
     case err {
-      fs.FsErr.NotFound => { return }
-      parse.ParseErr(_) => { #panic("expected FsErr") }
+      io.IoErr.NotFound => { return }
+      parse.ParseErr(_) => { #panic("expected IoErr") }
       _ => { #panic("expected NotFound") }
     }
   }
@@ -732,7 +733,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-phase3-') as tmp:
     subprocess.run([DYN, 'fmt', '--check', str(fmt_dir)], check=True, timeout=30)
     assert first_fmt == (fmt_dir / 'main.dyn').read_text()
 
-    # Stdlib T!E integration (std/fs + std/parse composed into FsErr | ParseErr)
+    # Stdlib T!E integration (std/fs + std/parse composed into IoErr | ParseErr)
     std_proj = root / 'std_app'
     std_proj.mkdir()
     (std_proj / 'main.dyn').write_text(STDLIB_PROGRAM)

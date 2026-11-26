@@ -19,7 +19,13 @@ use builder "std/bytes/builder"
 struct Sink { calls: usize, used: usize, fail_after: usize, fail: bool, bytes: [64]u8 }
 struct Entry { key: []const u8, hash: u64, hash_next: *Entry, bytes: [1]u8, value: usize }
 const nil_entry: Entry = Entry{}
-fn sink_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+fn sink_write(data: rawptr, source: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := sink_write_status(data, &status, source)
+  try io.check_status(&status)
+  return count
+}
+fn sink_write_status(data: rawptr, status: *fail.Status, source: []const u8) usize {
   state := #cast(*Sink, data)
   state.calls += 1
   if state.fail || (state.fail_after > 0 && state.calls > state.fail_after) {
@@ -52,22 +58,22 @@ fn main() {''']
   staging: [4]u8
   buffered := bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, staging[..])
   status: fail.Status
-  io.write(&status, bufio.writer_adapter(&buffered), "abcdefghijklmnopqrst")
+  io.write_status(&status, bufio.writer_adapter(&buffered), "abcdefghijklmnopqrst")
   t.expect(!status.failed && sink.used == 16 && buffered.used == 4, "direct path keeps tail")
   bufio.writer_flush(&status, &buffered)
   t.expect(!status.failed, "flush tail")
   t.expect(bytes.equal(sink.bytes[..sink.used], "abcdefghijklmnopqrst"), "short writes preserve order")
   sink.fail = true
   failing: fail.Status
-  io.write(&failing, bufio.writer_adapter(&buffered), "abcdefghijkl")
+  io.write_status(&failing, bufio.writer_adapter(&buffered), "abcdefghijkl")
   t.expect(failing.failed, "direct failure")
   calls := sink.calls
-  io.write(&failing, bufio.writer_adapter(&buffered), "z")
+  io.write_status(&failing, bufio.writer_adapter(&buffered), "z")
   t.expect(sink.calls == calls, "a failed status writes nothing more")
   sink = Sink{fail_after: 1}
   buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, staging[..])
   partial: fail.Status
-  io.write(&partial, bufio.writer_adapter(&buffered), "abcdefghijkl")
+  io.write_status(&partial, bufio.writer_adapter(&buffered), "abcdefghijkl")
   t.expect(partial.failed && sink.used == 3 && buffered.used == 0, "partial direct failure")
   chunk_storage: [8]u8
   text := "abcdefghijklmnopqrst"
@@ -76,7 +82,7 @@ fn main() {''']
       sink = Sink{}
       buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, chunk_storage[..capacity])
       chunked: fail.Status
-      io.write(&chunked, bufio.writer_adapter(&buffered), text[..size])
+      io.write_status(&chunked, bufio.writer_adapter(&buffered), text[..size])
       expected: usize = 0
       if size > 0 { expected = (size - 1) % capacity + 1 }
       t.expect(!chunked.failed && buffered.used == expected, "buffered tail unchanged")

@@ -209,10 +209,16 @@ fn load_tree(arena: *memory.Arena, status: *fail.Status, root: []const u8, relat
     directory_path = join_path(arena, root, relative)
   }
   listing: [4096]u8
-  directory := files.open_directory(status, directory_path, listing[..])
+  directory := files.open_directory(directory_path, listing[..]) catch err {
+    fail.set(status, io.failure_of(err, "load", directory_path))
+    return
+  }
   defer files.close_directory(&directory)
   for {
-    entry := files.directory_next(status, &directory)
+    entry := files.directory_next(&directory) catch err {
+      fail.set(status, io.failure_of(err, "load", directory_path))
+      return
+    }
     if directory.ended { return }
     if entry.name.len == 0 || entry.name[0] == '.' { continue }
     child := join_path(arena, relative, entry.name)
@@ -225,9 +231,12 @@ fn load_tree(arena: *memory.Arena, status: *fail.Status, root: []const u8, relat
       fail.set(status, fail.make(fail.Kind.Capacity, "load", root, "more files than asset storage"))
       return
     }
-    contents := files.read_all(arena, status, join_path(arena, root, child), maximum)
+    path := join_path(arena, root, child)
     // A failed read must not become an empty asset.
-    if status.failed { return }
+    contents := files.read_all(arena, path, maximum) catch err {
+      fail.set(status, io.failure_of(err, "load", path))
+      return
+    }
     assets.items[assets.count] = make_asset(arena, child, contents)
     assets.count += 1
   }

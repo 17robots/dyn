@@ -414,8 +414,7 @@ fn main() {
   config.idle_timeout_milliseconds = 60000
   config.overflow = evented.Overflow.Reject
   config.on_busy = busy
-  arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
+  arguments := process.arguments(arena) catch { #panic("cannot read arguments") }
   if arguments.len > 1 && bytes.equal(arguments[1], "wait") {
     config.overflow = evented.Overflow.Wait
   }

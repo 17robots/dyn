@@ -4,5 +4,5 @@ errors.html  Failure is state
 welcome.html  Welcome to <Dyn>
 3 pages, 0 scratch bytes left
 $ site missing out
-site: list missing: no such file or directory
+site: missing: not found
 [exit 1]

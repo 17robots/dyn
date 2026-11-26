@@ -13,7 +13,13 @@ use io "std/io"
 use http "std/net/http"
 // A writer that fails its fail-th call with code, counting calls.
 struct Sink { calls: usize, fail: usize, code: isize, partial: bool }
-fn write(raw: rawptr, status: *fail.Status, source: []const u8) usize {
+fn write(raw: rawptr, source: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := write_status(raw, &status, source)
+  try io.check_status(&status)
+  return count
+}
+fn write_status(raw: rawptr, status: *fail.Status, source: []const u8) usize {
   s := #cast(*Sink, raw)
   s.calls += 1
   if s.calls == s.fail {
@@ -28,7 +34,13 @@ fn write(raw: rawptr, status: *fail.Status, source: []const u8) usize {
 }
 struct Feed { calls: usize, wire: []const u8, code: isize, fail: bool, delivered: bool }
 // The wire once, then the end: a stream ends with a read that returns 0.
-fn read(raw: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read(raw: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := read_status(raw, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn read_status(raw: rawptr, status: *fail.Status, destination: []u8) usize {
   f := #cast(*Feed, raw)
   f.calls += 1
   if f.fail {
@@ -44,11 +56,15 @@ fn read(raw: rawptr, status: *fail.Status, destination: []u8) usize {
   for i in 0..count { destination[i] = f.wire[i] }
   return count
 }
+// A failure through io.Writer keeps its kind but not the native code.
 fn sink_failure(status: *const fail.Status, code: isize) {
-  if !status.failed || status.failure.kind != fail.Kind.InvalidInput || status.failure.native != code { #panic("first HTTP failure") }
+  _ = code
+  if !status.failed || status.failure.kind != fail.Kind.InvalidInput { #panic("first HTTP failure") }
 }
+// InvalidState from http directly, InvalidInput through io.Writer.
 fn finished(status: *const fail.Status) {
-  if !status.failed || status.failure.kind != fail.Kind.InvalidState { #panic("finished after a failure") }
+  kind := status.failure.kind
+  if !status.failed || (kind != fail.Kind.InvalidState && kind != fail.Kind.InvalidInput) { #panic("finished after a failure") }
 }
 fn main() {
   for native in [0, -73] {
@@ -81,19 +97,19 @@ fn main() {
       sink.code = code
       writer := http.body_writer(&body)
       first: fail.Status
-      io.write(&first, writer, "abc")
+      io.write_status(&first, writer, "abc")
       if segment == 2 {
         if first.failed { #panic("early failure") }
         http.body_finish(&first, &body)
       } else if segment == 3 {
         // Partial writes in a later body chunk.
         sink.partial = true
-        io.write(&first, writer, "later")
+        io.write_status(&first, writer, "later")
       }
       sink_failure(&first, code)
       calls := sink.calls
       replay: fail.Status
-      io.write(&replay, writer, "x")
+      io.write_status(&replay, writer, "x")
       finished(&replay)
       ended: fail.Status
       http.body_finish(&ended, &body)
@@ -161,7 +177,7 @@ fn main() {
   body := http.Body{}
   writer := http.body_writer(&body)
   zero_write: fail.Status
-  io.write(&zero_write, writer, "x")
+  io.write_status(&zero_write, writer, "x")
   zero_finish: fail.Status
   http.body_finish(&zero_finish, &body)
   if !zero_write.failed || !zero_finish.failed { #panic("zero body") }
@@ -171,7 +187,7 @@ fn main() {
   status: fail.Status
   opened := http.respond_stream(&status, &response, http.ResponseOptions{})
   writer = http.body_writer(&opened)
-  io.write(&status, writer, "abc")
+  io.write_status(&status, writer, "abc")
   http.body_finish(&status, &opened)
   if status.failed { #panic("partial success") }
 }

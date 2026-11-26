@@ -1,4 +1,3 @@
-use "std/fail"
 use "std/os/linux/sys"
 #target(kernel: linux)
 // Scratch frame storage for iterative, descriptor-relative tree removal.
@@ -26,27 +25,18 @@ fn open_removal(parent: isize, name: []const u8, storage: []u8, directory: *Dire
 }
 // Removes path and everything under it, without following symbolic links.
 // Requires at least 280 scratch bytes per frame; the depth is at most
-// #len(frames). Depth or capacity failures may leave a partly removed tree,
+// frames.len. Depth or capacity failures may leave a partly removed tree,
 // and concurrent changes may make it fail.
-pub fn remove_tree(status: *fail.Status, path: []const u8, frames: []RemovalFrame, scratch: []u8) {
-  if status == nil {
-    remove_tree(&fail.Status{}, path, frames, scratch)
-    return
-  }
-  if status.failed { return }
-  if frames.len == 0 || scratch.len / frames.len < 280 {
-    fail.invalid(status, "remove", path, "too little scratch space")
-    return
-  }
+// Too little scratch fails with InvalidInput, a tree deeper than frames
+// with Capacity.
+pub fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) !io.IoErr {
+  if frames.len == 0 || scratch.len / frames.len < 280 { fail .InvalidInput }
   stride := scratch.len / frames.len
   root: Directory
   opened := open_removal(-100, path, scratch[..stride], &root)
   if opened != 0 {
-    if opened != -20 && opened != -40 {
-      check(status, "remove", path, opened)
-      return
-    }
-    check(status, "remove", path, unlink_at(-100, path, false))
+    if opened != -20 && opened != -40 { fail native_err(opened) }
+    try check(unlink_at(-100, path, false))
     return
   }
   frames[0] = RemovalFrame{ directory: root, name: path, parent: -100 }
@@ -60,17 +50,11 @@ pub fn remove_tree(status: *fail.Status, path: []const u8, frames: []RemovalFram
   for depth > 0 {
     item: DirectoryEntry
     listed := native_directory_next(&frames[depth - 1].directory, &item)
-    if listed != 0 {
-      check(status, "remove", frames[depth - 1].name, listed)
-      return
-    }
+    try check(listed)
     if item.name.len == 0 {
       frame := &frames[depth - 1]
       removed_directory := unlink_at(frame.parent, frame.name, true)
-      if removed_directory != 0 {
-        check(status, "remove", frame.name, removed_directory)
-        return
-      }
+      try check(removed_directory)
       close_directory(&frame.directory)
       depth -= 1
       continue
@@ -79,20 +63,11 @@ pub fn remove_tree(status: *fail.Status, path: []const u8, frames: []RemovalFram
     // Try unlink first; type bytes may be DT_UNKNOWN. EISDIR means descend.
     removed_file := unlink_at(parent, item.name, false)
     if removed_file == 0 || removed_file == -2 { continue }
-    if removed_file != -21 {
-      check(status, "remove", item.name, removed_file)
-      return
-    }
-    if depth == frames.len {
-      fail.set(status, fail.make(fail.Kind.Capacity, "remove", path, "tree is deeper than the frames"))
-      return
-    }
+    if removed_file != -21 { fail native_err(removed_file) }
+    if depth == frames.len { fail .Capacity }
     child: Directory
     descended := open_removal(parent, item.name, scratch[depth * stride..(depth + 1) * stride], &child)
-    if descended != 0 {
-      check(status, "remove", item.name, descended)
-      return
-    }
+    try check(descended)
     frames[depth] = RemovalFrame{ directory: child, name: item.name, parent: parent }
     depth += 1
   }

@@ -205,7 +205,7 @@ fn main() {
     return
   }
   status := fail.Status{ on_failure: fail.panic_on_failure }
-  loaded := fs.read_all(storage, &status, args[1], 8 * 1024 * 1024)
+  loaded := fs.read_all(storage, args[1], 8 * 1024 * 1024) catch { #panic("cannot read a fixture") }
   reader := archive.open_memory_owned(&status, loaded)
   defer {
     archive.destroy_owned(&reader)
@@ -271,7 +271,7 @@ fn main() {
   status := fail.Status{ on_failure: fail.panic_on_failure }
   surface := image.load_owned(&status, args[1], path[..])
   defer sdl3.surface_destroy_owned(surface)
-  bytes := fs.read_all(storage, &status, args[1], 8 * 1024 * 1024)
+  bytes := fs.read_all(storage, args[1], 8 * 1024 * 1024) catch { #panic("cannot read a fixture") }
   decoded := image.decode_owned(&status, bytes)
   defer sdl3.surface_destroy_owned(decoded)
   malformed: fail.Status

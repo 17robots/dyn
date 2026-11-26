@@ -627,7 +627,13 @@ pub fn glob_match(pattern: []const u8, text: []const u8) bool {
   return p == pattern.len
 }
 
-fn count_write(data: rawptr, _status: *fail.Status, source: []const u8) usize {
+fn count_write(data: rawptr, source: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := count_write_status(data, &status, source)
+  try io.check_status(&status)
+  return count
+}
+fn count_write_status(data: rawptr, _status: *fail.Status, source: []const u8) usize {
   total := #cast(*usize, data)
   total.* += source.len
   return source.len
@@ -641,11 +647,11 @@ pub fn format_arguments(arena: *memory.Arena, template: []const u8, arguments: [
   // A template that does not match its arguments formats with markers; see
   // io.print_arguments.
   counting: fail.Status
-  io.print_arguments(&counting, io.Writer{ data: &size, write: count_write }, template, arguments)
+  io.print_status(&counting, io.Writer{ data: &size, write: count_write }, template, arguments)
   output := memory.push_bytes(arena, size)
   buffer := io.buffer_writer(output)
   writing: fail.Status
-  io.print_arguments(&writing, io.buffer_writer_adapter(&buffer), template, arguments)
+  io.print_status(&writing, io.buffer_writer_adapter(&buffer), template, arguments)
   return output
 }
 

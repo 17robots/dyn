@@ -71,7 +71,7 @@ fn main() {
 }
 '''
 def main():
-    source=SOURCE.replace('PROCESS_CASE', 'arguments:[3][]const u8=["/bin/sh","-c","printf chain"]\n captured:=process.capture(f.arena,&status,"/bin/sh",arguments[..],process.Options{},process.CaptureOptions{timeout_milliseconds:2000})\n check(!status.failed && captured.exit.code==0 && bytes.equal(captured.output,"chain"))' if sys.platform=='linux' else '_=process.Options{}')
+    source=SOURCE.replace('PROCESS_CASE', 'arguments:[3][]const u8=["/bin/sh","-c","printf chain"]\n captured:=process.capture(f.arena,"/bin/sh",arguments[..],process.Options{},process.CaptureOptions{timeout_milliseconds:2000}) catch { #panic("capture") }\n check(captured.exit.code==0 && bytes.equal(captured.output,"chain"))' if sys.platform=='linux' else '_=process.Options{}')
     with tempfile.TemporaryDirectory(prefix='dyn-chain-producers-') as temporary:
         project=Path(temporary)
         (project/'main.dyn').write_text(source)

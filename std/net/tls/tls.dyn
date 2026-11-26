@@ -149,7 +149,13 @@ pub fn connection_release(connection: *Connection) {
 fn blocked(status: *fail.Status, operation: []const u8) {
   fail.set(status, fail.make(fail.Kind.WouldBlock, operation, "", "the socket is nonblocking"))
 }
-fn reader_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn reader_read(data: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := reader_read_status(data, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn reader_read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
   result := read(status, #cast(*Connection, data).*, destination)
   if result.want != Want.Nothing {
     blocked(status, "read")
@@ -157,7 +163,13 @@ fn reader_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
   return result.count
 }
 
-fn writer_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+fn writer_write(data: rawptr, source: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := writer_write_status(data, &status, source)
+  try io.check_status(&status)
+  return count
+}
+fn writer_write_status(data: rawptr, status: *fail.Status, source: []const u8) usize {
   connection := #cast(*Connection, data)
   total: usize = 0
   for total < source.len && !status.failed {

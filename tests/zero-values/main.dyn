@@ -7,7 +7,7 @@ use text "std/text/scanner"
 use "std/net"
 
 
-fn read_nothing(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read_nothing(data: rawptr, destination: []u8) usize!io.IoErr {
   return 0
 }
 

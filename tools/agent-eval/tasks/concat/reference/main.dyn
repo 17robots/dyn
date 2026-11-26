@@ -1,22 +1,16 @@
-use "std/fail"
 use "std/fs"
 use "std/io"
 use "std/process"
 
-fn report(failure: fail.Failure) {
-  storage: [512]u8
-  io.eprintln("concat: {}", fail.describe(storage[..], failure))
-}
-
 // Appends every byte of path to output, a buffer at a time.
-fn append(status: *fail.Status, output: *fs.File, path: []const u8) {
-  input := fs.open(status, path)
+fn append(output: *fs.File, path: []const u8) !io.IoErr {
+  input := try fs.open(path)
   defer fs.close(&input)
   buffer: [65536]u8
-  for !status.failed {
-    count := fs.read(status, &input, buffer[..])
+  for {
+    count := try fs.read(&input, buffer[..])
     if count == 0 { break }
-    fs.write(status, output, buffer[..count])
+    try fs.write(output, buffer[..count])
   }
 }
 
@@ -26,15 +20,17 @@ fn main() i32 {
     io.eprintln("concat: usage: concat OUTPUT INPUT...")
     return 1
   }
-  status: fail.Status
-  output := fs.create(&status, program.args[1])
-  for path in program.args[2..] {
-    append(&status, &output, path)
-  }
-  fs.close(&output)
-  if status.failed {
-    report(status.failure)
+  target := program.args[1]
+  output := fs.create(target) catch err {
+    io.eprintln("concat: {}: {}", target, err)
     return 1
+  }
+  defer fs.close(&output)
+  for path in program.args[2..] {
+    append(&output, path) catch err {
+      io.eprintln("concat: {}: {}", path, err)
+      return 1
+    }
   }
   return 0
 }

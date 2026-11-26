@@ -194,8 +194,9 @@ fn type_body(p: *Parser) u32 {
     p.bracket_depth -= 1
     end = p.token.end
     expect(p, ")")
-    if optional_type_start(p) {
-      chain(p, &first, &last, parse_type(p))
+    // A function type's result may be fallible: fn(A) R!E.
+    if !p.token.newline && (token_is(p, "!") || optional_type_start(p)) {
+      chain(p, &first, &last, parse_return_type(p, false))
       if last != None {
         end = node_end(p, last)
       }
@@ -209,7 +210,7 @@ fn type_body(p: *Parser) u32 {
     inner := type_body(p)
     if inner != None {
       first = add_node(p, ExpType, p.tree.nodes[inner].start, node_end(p, inner), inner)
-      end = node_end(p, first)
+      if first != None { end = node_end(p, first) }
     }
   } else if take(p, "[") {
     kind = ExpArrayType

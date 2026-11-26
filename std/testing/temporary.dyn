@@ -20,13 +20,17 @@ pub fn temporary_directory(arena: *mem.Arena, status: *fail.Status, prefix: []co
   for attempt in 0..128 {
     path := temporary_path(arena, prefix, "")
     // create_exclusive semantics: an existing name is tried again.
-    attempted: fail.Status
-    fs.make_directory_exclusive(&attempted, path, 448)
-    if !attempted.failed { return TemporaryDirectory{ path: path, active: true } }
-    if attempted.failure.kind != fail.Kind.AlreadyExists {
-      fail.set(status, attempted.failure)
-      return TemporaryDirectory{}
+    exists := false
+    fs.make_directory_exclusive(path, 448) catch err {
+      case err {
+        .AlreadyExists => { exists = true }
+        _ => {
+          fail.set(status, io.failure_of(err, "make temporary directory", path))
+          return TemporaryDirectory{}
+        }
+      }
     }
+    if !exists { return TemporaryDirectory{ path: path, active: true } }
   }
   fail.set(status, io.from_linux("make temporary directory", prefix, -17))
   return TemporaryDirectory{}
@@ -37,10 +41,12 @@ pub fn remove_temporary(status: *fail.Status, directory: *TemporaryDirectory, fr
     return
   }
   if !directory.active { return }
-  fs.remove_tree(status, directory.path, frames, scratch)
-  if !status.failed {
-    directory.active = false
+  if status.failed { return }
+  fs.remove_tree(directory.path, frames, scratch) catch err {
+    fail.set(status, io.failure_of(err, "remove", directory.path))
+    return
   }
+  directory.active = false
 }
 
 // Generates a process-local unique candidate name; it does not reserve a file.

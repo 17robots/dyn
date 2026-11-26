@@ -4,7 +4,7 @@ $ wordcount poem.txt words.txt
        9      25     133     137 total
 $ wordcount poem.txt missing.txt
        7      21     110     110 poem.txt
-wordcount: open missing.txt: no such file or directory
+wordcount: missing.txt: not found
        7      21     110     110 total
 [exit 1]
 $ wordcount < poem.txt

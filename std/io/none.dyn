@@ -1,5 +1,4 @@
 #target(kernel: none)
-use "std/fail"
 // Bare metal: standard output and error both go to the board console. There is
 // no input, so stdin reports end of input.
 extern fn console_write "dyn_console_write"(data: *const u8, size: u64)
@@ -14,13 +13,16 @@ pub fn stderr() Writer {
   return Writer{ data: nil, write: console_stream }
 }
 
-fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn stdin_stream(_data: rawptr, destination: []u8) usize!IoErr {
   return 0
 }
-fn console_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
-  if status.failed { return 0 }
+fn console_stream(_data: rawptr, source: []const u8) usize!IoErr {
   if source.len != 0 {
     console_write(&source[0], source.len)
   }
   return source.len
+}
+
+fn system_text(code: isize) []const u8 {
+  return linux_text(code)
 }

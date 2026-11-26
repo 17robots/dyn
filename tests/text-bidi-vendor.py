@@ -159,7 +159,7 @@ fn main() {
 // Writes data to path; whether it worked.
 fn fs_write_file(path: []const u8, data: []const u8) bool {
   status: fail.Status
-  fs.write_all(&status, path, data)
+  fs.write_all(path, data) catch { #panic("cannot write a file") }
   return !status.failed
 }
 '''

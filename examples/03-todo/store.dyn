@@ -4,6 +4,7 @@
 use "std/container/array"
 use "std/fail"
 use "std/fs"
+use "std/io"
 use "std/mem"
 use "std/strings"
 
@@ -12,13 +13,12 @@ const MaxFileBytes: usize = 1 << 20
 // Loads the list at path into tasks. A missing file is not a failure: it is
 // an empty list. A line that is not a task fails with its line number.
 fn load(tasks: *array.Array<Task>, arena: *mem.Arena, status: *fail.Status, path: []const u8) {
-  // Reading gets its own status, so that "not found" can mean an empty list
-  // while any other failure goes on to the caller.
-  reading: fail.Status
-  read := fs.read_all(arena, &reading, path, MaxFileBytes)
-  if reading.failed {
-    if reading.failure.kind != fail.Kind.NotFound {
-      fail.set(status, reading.failure)
+  // "Not found" means an empty list; any other failure goes on to the
+  // caller.
+  read := fs.read_all(arena, path, MaxFileBytes) catch err {
+    case err {
+      .NotFound => {}
+      _ => { fail.set(status, io.failure_of(err, "read", path)) }
     }
     return
   }
@@ -43,9 +43,9 @@ fn load(tasks: *array.Array<Task>, arena: *mem.Arena, status: *fail.Status, path
 
 // Writes the whole list to a temporary file, then renames it over the old
 // one, so a crash halfway never leaves a half-written list behind. If the
-// write fails, the rename does nothing: it takes the same status. (On Linux,
-// fs.write_atomic does both steps and can also make them durable.)
-fn save(tasks: []const Task, arena: *mem.Arena, status: *fail.Status, path: []const u8) {
+// write fails, try returns before the rename. (On Linux, fs.write_atomic
+// does both steps and can also make them durable.)
+fn save(tasks: []const Task, arena: *mem.Arena, path: []const u8) !io.IoErr {
   text: array.Array<u8>
   array.init(&text, arena)
   for task in tasks {
@@ -54,6 +54,6 @@ fn save(tasks: []const Task, arena: *mem.Arena, status: *fail.Status, path: []co
     array.push(&text, '\n')
   }
   temporary := strings.format(arena, "{}.tmp", path)
-  fs.write_all(status, temporary, text.items)
-  fs.rename(status, temporary, path)
+  try fs.write_all(temporary, text.items)
+  try fs.rename(temporary, path)
 }

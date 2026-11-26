@@ -19,7 +19,11 @@ fn report(name: []const u8, failure: fail.Failure) {
 
 // The whole-number "port" of the JSON file at path.
 fn port(arena: *mem.Arena, status: *fail.Status, file: []const u8) i64 {
-  text := fs.read_all(arena, status, file, mem.MiB)
+  if status.failed { return 0 }
+  text := fs.read_all(arena, file, mem.MiB) catch err {
+    fail.set(status, io.failure_of(err, "read", file))
+    return 0
+  }
   root := json.parse(arena, status, text)
   return json.get<i64>(status, root, "port")
 }
@@ -33,10 +37,8 @@ fn main() i32 {
   directory := program.args[1]
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  listing: fail.Status
-  entries := fs.list(arena, &listing, directory)
-  if listing.failed {
-    report(directory, listing.failure)
+  entries := fs.list(arena, directory) catch err {
+    io.eprintln("scan: {}: {}", directory, err)
     return 1
   }
   good: usize = 0

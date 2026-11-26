@@ -139,7 +139,7 @@ fn main(){
  ft_loaded := ft_load(library.value)
  check(!failed(ft_loaded.failure) && failed(ft_load(nil).failure))
  font_bytes_file: fail.Status
- font_bytes := fs.read_all(arena, &font_bytes_file, "font.ttf", 10000000)
+ font_bytes := fs.read_all(arena, "font.ttf", 10000000) catch { #panic("cannot read a fixture") }
  check(!font_bytes_file.failed)
  font := ft.Font{}
  check(!failed(ft_open(&font,ft_loaded.api,font_bytes,0,32).failure))
@@ -238,7 +238,7 @@ fn main(){
 // Writes data to path; whether it worked.
 fn fs_write_file(path: []const u8, data: []const u8) bool {
   status: fail.Status
-  fs.write_all(&status, path, data)
+  fs.write_all(path, data) catch { #panic("cannot write a file") }
   return !status.failed
 }
 '''

@@ -29,6 +29,58 @@ pub fn from_wasi(operation: []const u8, path: []const u8, code: isize) fail.Fail
   return failure
 }
 
+// The IoErr for a native code. The code must be a failure (nonzero).
+pub fn linux_err(code: isize) IoErr {
+  return err_of_kind(linux(code), code)
+}
+pub fn darwin_err(code: isize) IoErr {
+  return err_of_kind(darwin(code), code)
+}
+pub fn windows_err(code: isize) IoErr {
+  return err_of_kind(windows(code), code)
+}
+pub fn wasi_err(code: isize) IoErr {
+  return err_of_kind(wasi(code), code)
+}
+
+fn err_of_kind(kind: fail.Kind, code: isize) IoErr {
+  case kind {
+    .NotFound => { return IoErr.NotFound }
+    .PermissionDenied => { return IoErr.PermissionDenied }
+    .AlreadyExists => { return IoErr.AlreadyExists }
+    .InvalidInput, .InvalidState => { return IoErr.InvalidInput }
+    .Capacity, .Overflow => { return IoErr.Capacity }
+    .Interrupted => { return IoErr.Interrupted }
+    .WouldBlock => { return IoErr.WouldBlock }
+    .Unsupported => { return IoErr.Unsupported }
+    .Ok, .System => { return IoErr.System(code) }
+  }
+}
+
+// Bridges for std modules that still report through fail.Status. They go
+// away with std/fail.
+pub fn err_of(failure: fail.Failure) IoErr {
+  return err_of_kind(failure.kind, failure.native)
+}
+pub fn failure_of(err: IoErr, operation: []const u8, path: []const u8) fail.Failure {
+  kind := fail.Kind.System
+  native: isize = 0
+  case err {
+    .NotFound => { kind = fail.Kind.NotFound }
+    .PermissionDenied => { kind = fail.Kind.PermissionDenied }
+    .AlreadyExists => { kind = fail.Kind.AlreadyExists }
+    .InvalidInput => { kind = fail.Kind.InvalidInput }
+    .WouldBlock => { kind = fail.Kind.WouldBlock }
+    .Interrupted => { kind = fail.Kind.Interrupted }
+    .Unsupported => { kind = fail.Kind.Unsupported }
+    .Capacity => { kind = fail.Kind.Capacity }
+    .System(code) => { native = code }
+  }
+  failure := fail.make(kind, operation, path, "")
+  failure.native = native
+  return failure
+}
+
 pub fn linux(code: isize) fail.Kind {
   if code == 0 { return fail.Kind.Ok }
   value := code

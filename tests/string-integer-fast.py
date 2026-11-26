@@ -61,7 +61,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-string-integers-') as tmp:
  }}
 }}
 ''')
-  calls.append(f'if true {{ arena := mem.arena_alloc(16*mem.MiB)\n input_file: fail.Status\n input := fs.read_all(arena, &input_file, "{fixture}", 16*mem.MiB)\n  require(!input_file.failed)\n {fn}(input)\n mem.arena_release(arena) }}');count+=len(rows)
+  calls.append(f'if true {{ arena := mem.arena_alloc(16*mem.MiB)\n input := fs.read_all(arena, "{fixture}", 16*mem.MiB) catch {{ #panic("fixture") }}\n {fn}(input)\n mem.arena_release(arena) }}');count+=len(rows)
  (p/'main.dyn').write_text(header+'\n'.join(functions)+'\nfn main() {\n'+'\n'.join(calls)+'\n}\n')
  for mode in ('debug','release'):
   binary=p/mode;subprocess.run([DYN,'build',str(p),'--'+mode,'--no-cache','--quiet','--output',str(binary)],check=True,timeout=120)

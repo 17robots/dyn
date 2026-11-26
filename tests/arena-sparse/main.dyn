@@ -38,7 +38,12 @@ fn main() {
 }
 
 // The whole file at path; empty when it cannot be read.
+fn arena_empty() []u8 {
+  empty: []u8
+  return empty
+}
+
 fn fs_read_file(arena: *mem.Arena, path: []const u8, maximum: usize) []u8 {
-  status: fail.Status
-  return fs.read_all(arena, &status, path, maximum)
+  data := fs.read_all(arena, path, maximum) catch { return arena_empty() }
+  return data
 }

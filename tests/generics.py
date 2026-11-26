@@ -74,18 +74,18 @@ fn main() {
   printed: fail.Status
   cells: [3]Cell = [Cell{ch: 1}, Cell{ch: 2}, Cell{ch: 3}]
   util.fill(cells[..], Cell{ch: 9, fg: 1})
-  io.println_to(&printed, out, "{} {}", cells[2].ch, cells[0].fg)
-  io.println_to(&printed, out, "{} {} {}", util.double_size<Cell>(), util.double_size<util.Pair>(), util.double_size<*Cell>())
+  io.println_to(out, "{} {}", cells[2].ch, cells[0].fg) catch {}
+  io.println_to(out, "{} {} {}", util.double_size<Cell>(), util.double_size<util.Pair>(), util.double_size<*Cell>()) catch {}
   nums: [3]i32 = [4, -2, 11]
-  io.println_to(&printed, out, "{} {}", util.largest(nums[..]), util.total(nums[..]))
+  io.println_to(out, "{} {}", util.largest(nums[..]), util.total(nums[..])) catch {}
   x: u32 = 7
-  io.println_to(&printed, out, "{} {}", util.min(x, 3), util.min(2.5, 1.5))
+  io.println_to(out, "{} {}", util.min(x, 3), util.min(2.5, 1.5)) catch {}
   a: i64 = 1
   b: i64 = 2
   util.swap(&a, &b)
-  io.println_to(&printed, out, "{} {}", a, b)
+  io.println_to(out, "{} {}", a, b) catch {}
   util.zero(&cells[1])
-  io.println_to(&printed, out, "{} {}", cells[1].ch, util.count_down(5))
+  io.println_to(out, "{} {}", cells[1].ch, util.count_down(5)) catch {}
 }
 '''
 EXPECTED = '9 1\n16 32 16\n11 13\n3 1.5\n2 1\n0 5'
@@ -112,21 +112,21 @@ fn main() {
   many := mem.push_array<u16>(arena, 3)
   bytes := mem.push_bytes(arena, 8)
   mem.fill(bytes, 5)
-  io.println_to(&printed, out, "{} {} {} {} {}", node.value, nodes[3].value, one.*, many[2], bytes[7])
+  io.println_to(out, "{} {} {} {} {}", node.value, nodes[3].value, one.*, many[2], bytes[7]) catch {}
   xs: [4]i32 = [1, 2, 3, 4]
   _ = mem.move(xs[1..], xs[..3])
   mem.swap(&xs[0], &xs[3])
   mem.zero(nodes)
-  io.println_to(&printed, out, "{} {} {} {}", xs[0], xs[3], mem.equal(xs[1..3], xs[2..4]), nodes[3].value)
+  io.println_to(out, "{} {} {} {}", xs[0], xs[3], mem.equal(xs[1..3], xs[2..4]), nodes[3].value) catch {}
   x: u32 = 7
-  io.println_to(&printed, out, "{} {} {} {} {}", math.min(x, 3), math.max(2.5, 4.0), math.clamp(15, 0, 10), math.abs(-4), math.narrow<u8>(200))
+  io.println_to(out, "{} {} {} {} {}", math.min(x, 3), math.max(2.5, 4.0), math.clamp(15, 0, 10), math.abs(-4), math.narrow<u8>(200)) catch {}
   big: [40]i64
   for i in 0..40 { big[i] = #cast(i64, ((i * 37) % 40)) - 20 }
   sort.sort(big[..])
   small: [5]f32 = [3.0, 1.0, 2.0, 5.0, 4.0]
   sort.sort(small[..])
-  io.println_to(&printed, out, "{} {} {} {} {}", big[0], big[39], small[4], sort.search(big[..], 7),
-    sort.search(big[..], 7) < big.len)
+  io.println_to(out, "{} {} {} {} {}", big[0], big[39], small[4], sort.search(big[..], 7),
+    sort.search(big[..], 7) < big.len) catch {}
 }
 '''
 STD_EXPECTED = '0 7 0 0 5\n3 1 false 0\n3 4 10 4 200\n-20 19 5 27 true'

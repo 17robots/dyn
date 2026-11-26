@@ -1,16 +1,12 @@
 use memory "std/mem"
 use io "std/io"
-use "std/fail"
-// Files and directories. Every function that can fail takes a *fail.Status:
-// the first failure is recorded there with the operation, the path and the
-// reason, and every later call given that status does nothing and returns
-// zero or empty. Check status.failed once, before acting on the results.
+// Files and directories. Every call that can fail returns T!io.IoErr.
 //
 // A file handle is a plain value: copy it freely, and close it once. Closing
 // marks the value it was called on as closed; other copies still hold the
 // number, which the system may reuse for the next file opened. File{} is not
-// open. path borrows the text the file was opened with, for messages. ended
-// is set when a read finds the end of the file.
+// open. path borrows the text the file was opened with. ended is set when a
+// read finds the end of the file.
 pub struct File { descriptor: isize, active: bool, ended: bool, path: []const u8 }
 
 // Size, inode, device and the POSIX mode (type and permission bits).
@@ -19,64 +15,6 @@ pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16 }
 // One directory entry. name borrows the directory's storage until the next
 // call; kind uses dirent values: 4 directory, 8 regular file, 10 link.
 pub struct DirectoryEntry { name: []const u8, kind: u8 }
-
-// Structured filesystem error enum for T!FsErr APIs.
-pub enum FsErr {
-  NotFound,
-  PermissionDenied,
-  AlreadyExists,
-  IsDirectory,
-  NotDirectory,
-  InvalidInput,
-  Closed,
-  TooLarge,
-  Io(isize),
-}
-
-fn fs_err_from_status(status: *const fail.Status) FsErr {
-  case status.failure.kind {
-    .NotFound => { return FsErr.NotFound }
-    .PermissionDenied => { return FsErr.PermissionDenied }
-    .AlreadyExists => { return FsErr.AlreadyExists }
-    .InvalidInput => { return FsErr.InvalidInput }
-    .InvalidState => { return FsErr.Closed }
-    .Overflow => { return FsErr.TooLarge }
-    _ => { return FsErr.Io(status.failure.native) }
-  }
-}
-
-// Opens path for reading, returning File!FsErr.
-pub fn open_file(path: str) File!FsErr {
-  status: fail.Status
-  file := open(&status, path)
-  if status.failed { fail fs_err_from_status(&status) }
-  return file
-}
-
-// Creates path for writing (or truncates if existing), returning File!FsErr.
-pub fn create_file(path: str) File!FsErr {
-  status: fail.Status
-  file := create(&status, path)
-  if status.failed { fail fs_err_from_status(&status) }
-  return file
-}
-
-// Reads up to maximum bytes from path into arena storage, returning []u8!FsErr.
-pub fn read_file(arena: *memory.Arena, path: str, maximum: usize) []u8!FsErr {
-  status: fail.Status
-  bytes := read_all(arena, &status, path, maximum)
-  if status.failed { fail fs_err_from_status(&status) }
-  return bytes
-}
-
-// Writes source to a newly created or truncated file at path, returning !FsErr.
-pub fn write_file(path: str, source: str) !FsErr {
-  file := try create_file(path)
-  defer close(&file)
-  status: fail.Status
-  write(&status, &file, source)
-  if status.failed { fail fs_err_from_status(&status) }
-}
 
 fn owned_file(handle: isize) File {
   return File{ descriptor: handle, active: true }
@@ -91,67 +29,49 @@ pub fn adopt_handle(handle: isize) File {
   return owned_file(handle)
 }
 
-// Records a native failure: its portable kind and the system's own reason.
-fn fail_native(status: *fail.Status, operation: []const u8, path: []const u8, code: isize) {
-  if status.failed { return }
-  failure := fail.make(native_kind(code), operation, path, native_text(code))
-  failure.native = code
-  fail.set(status, failure)
-}
-fn fail_kind(status: *fail.Status, operation: []const u8, path: []const u8, kind: fail.Kind, message: []const u8) {
-  if status.failed { return }
-  fail.set(status, fail.make(kind, operation, path, message))
-}
-// Records code when it is a failure (negative).
-fn check(status: *fail.Status, operation: []const u8, path: []const u8, code: isize) {
-  if code < 0 { fail_native(status, operation, path, code) }
+// Fails with code's IoErr when code is a failure (negative).
+fn check(code: isize) !io.IoErr {
+  if code < 0 { fail native_err(code) }
 }
 
-fn opened(status: *fail.Status, path: []const u8, mode: u8, operation: []const u8) File {
-  if status.failed { return File{ path: path } }
-  handle := native_open(path, mode)
-  if handle < 0 {
-    fail_native(status, operation, path, handle)
-    return File{ path: path }
+fn already_exists(code: isize) bool {
+  case native_err(code) {
+    .AlreadyExists => { return true }
+    _ => { return false }
   }
+}
+
+fn opened(path: []const u8, mode: u8) File!io.IoErr {
+  handle := native_open(path, mode)
+  if handle < 0 { fail native_err(handle) }
   file := owned_file(handle)
   file.path = path
   return file
 }
 // Opens path for reading.
-pub fn open(status: *fail.Status, path: []const u8) File {
-  if status == nil { return open(&fail.Status{}, path) }
-  return opened(status, path, 0, "open")
+pub fn open(path: []const u8) File!io.IoErr {
+  return try opened(path, 0)
 }
 // Creates path for writing, or empties it when it exists.
-pub fn create(status: *fail.Status, path: []const u8) File {
-  if status == nil { return create(&fail.Status{}, path) }
-  return opened(status, path, 1, "create")
+pub fn create(path: []const u8) File!io.IoErr {
+  return try opened(path, 1)
 }
 // Opens path for writing at its end, creating it when missing.
-pub fn append(status: *fail.Status, path: []const u8) File {
-  if status == nil { return append(&fail.Status{}, path) }
-  return opened(status, path, 2, "append")
+pub fn append(path: []const u8) File!io.IoErr {
+  return try opened(path, 2)
 }
 // Creates path for writing; fails with AlreadyExists when it exists.
-pub fn create_exclusive(status: *fail.Status, path: []const u8) File {
-  if status == nil { return create_exclusive(&fail.Status{}, path) }
-  return opened(status, path, 3, "create")
+pub fn create_exclusive(path: []const u8) File!io.IoErr {
+  return try opened(path, 3)
 }
 
-// Whether an operation may run: status not failed and file open.
-fn usable(status: *fail.Status, file: *const File, operation: []const u8) bool {
-  if status.failed { return false }
-  if !is_open(file) {
-    fail_kind(status, operation, file.path, fail.Kind.InvalidState, "file is not open")
-    return false
-  }
-  return true
+// A file that is not open fails with InvalidInput.
+fn usable(file: *const File) !io.IoErr {
+  if !is_open(file) { fail .InvalidInput }
 }
 
-// Closes the file. Safe on a file that never opened, and it closes whatever
-// any status says, so cleanup needs none. A failed close is not reported: use
-// sync when written data must be durable.
+// Closes the file. Safe on a file that never opened. A failed close is not
+// reported: use sync when written data must be durable.
 pub fn close(file: *File) {
   if !is_open(file) { return }
   handle := file.descriptor
@@ -162,18 +82,15 @@ pub fn close(file: *File) {
 }
 
 // Reads into destination and returns the byte count: 0 at the end of the
-// file (file.ended) and after a failure.
-pub fn read(status: *fail.Status, file: *File, destination: []u8) usize {
-  if status == nil { return read(&fail.Status{}, file, destination) }
-  if destination.len == 0 || !usable(status, file, "read") { return 0 }
+// file, which also sets file.ended.
+pub fn read(file: *File, destination: []u8) usize!io.IoErr {
+  try usable(file)
+  if destination.len == 0 { return 0 }
   value := native_read(file.descriptor, destination)
   for native_interrupted(value) {
     value = native_read(file.descriptor, destination)
   }
-  if value < 0 {
-    fail_native(status, "read", file.path, value)
-    return 0
-  }
+  if value < 0 { fail native_err(value) }
   if value == 0 {
     file.ended = true
   }
@@ -181,40 +98,28 @@ pub fn read(status: *fail.Status, file: *File, destination: []u8) usize {
 }
 
 // Writes all of source.
-pub fn write(status: *fail.Status, file: *File, source: []const u8) {
-  if status == nil {
-    write(&fail.Status{}, file, source)
-    return
-  }
-  _ = write_count(status, file, source)
-}
-fn write_count(status: *fail.Status, file: *File, source: []const u8) usize {
-  if !usable(status, file, "write") { return 0 }
+pub fn write(file: *File, source: []const u8) !io.IoErr {
+  try usable(file)
   written: usize = 0
   for written < source.len {
     value := native_write(file.descriptor, source[written..])
     if native_interrupted(value) { continue }
-    if value < 0 {
-      fail_native(status, "write", file.path, value)
-      return written
-    }
-    if value == 0 {
-      fail_kind(status, "write", file.path, fail.Kind.System, "no progress")
-      return written
-    }
+    if value < 0 { fail native_err(value) }
+    // No progress: EIO.
+    if value == 0 { fail io.IoErr.System(-5) }
     written += #cast(usize, value)
   }
-  return written
 }
 
 // Streams over a File, for code that takes io.Reader or io.Writer. The
 // adapter borrows the File itself: keep it alive and unmoved until I/O
 // completes.
-fn stream_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
-  return read(status, #cast(*File, data), destination)
+fn stream_read(data: rawptr, destination: []u8) usize!io.IoErr {
+  return try read(#cast(*File, data), destination)
 }
-fn stream_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return write_count(status, #cast(*File, data), source)
+fn stream_write(data: rawptr, source: []const u8) usize!io.IoErr {
+  try write(#cast(*File, data), source)
+  return source.len
 }
 pub fn reader(file: *File) io.Reader {
   return io.Reader{ data: file, read: stream_read }
@@ -224,29 +129,18 @@ pub fn writer(file: *File) io.Writer {
 }
 
 // Moves the file position and returns it; origin: 0 start, 1 current,
-// 2 end. Zero after a failure.
-pub fn seek(status: *fail.Status, file: *File, offset: isize, origin: usize) usize {
-  if status == nil { return seek(&fail.Status{}, file, offset, origin) }
-  if !usable(status, file, "seek") { return 0 }
-  if origin > 2 {
-    fail_kind(status, "seek", file.path, fail.Kind.InvalidInput, "origin must be 0, 1 or 2")
-    return 0
-  }
+// 2 end. Another origin fails with InvalidInput.
+pub fn seek(file: *File, offset: isize, origin: usize) usize!io.IoErr {
+  try usable(file)
+  if origin > 2 { fail .InvalidInput }
   value := native_seek(file.descriptor, offset, origin)
-  if value < 0 {
-    fail_native(status, "seek", file.path, value)
-    return 0
-  }
+  if value < 0 { fail native_err(value) }
   return #cast(usize, value)
 }
 // Makes written data durable.
-pub fn sync(status: *fail.Status, file: *File) {
-  if status == nil {
-    sync(&fail.Status{}, file)
-    return
-  }
-  if !usable(status, file, "sync") { return }
-  check(status, "sync", file.path, native_sync(file.descriptor))
+pub fn sync(file: *File) !io.IoErr {
+  try usable(file)
+  try check(native_sync(file.descriptor))
 }
 
 // A read-only view of the whole file, owned by the caller until unmap. The
@@ -254,32 +148,19 @@ pub fn sync(status: *fail.Status, file: *File) {
 // Truncating the file while mapped can fault on access. The file position is
 // unchanged, and the file may be closed while the mapping stays valid. A
 // zero-length file maps to an empty view without a native mapping.
-pub fn map(status: *fail.Status, file: *const File) []const u8 {
-  if status == nil { return map(&fail.Status{}, file) }
+pub fn map(file: *const File) []const u8!io.IoErr {
+  try usable(file)
   empty: []const u8
-  if !usable(status, file, "map") { return empty }
   current := native_seek(file.descriptor, 0, 1)
-  if current < 0 {
-    fail_native(status, "map", file.path, current)
-    return empty
-  }
+  if current < 0 { fail native_err(current) }
   end := native_seek(file.descriptor, 0, 2)
   restored := native_seek(file.descriptor, current, 0)
-  if end < 0 || restored < 0 {
-    code := end
-    if code >= 0 {
-      code = restored
-    }
-    fail_native(status, "map", file.path, code)
-    return empty
-  }
+  if end < 0 { fail native_err(end) }
+  if restored < 0 { fail native_err(restored) }
   size := #cast(usize, end)
   if size == 0 { return empty }
   address := native_map(file.descriptor, size)
-  if address < 0 {
-    fail_native(status, "map", file.path, address)
-    return empty
-  }
+  if address < 0 { fail native_err(address) }
   bytes := #cast(*const u8, #cast(usize, address))
   return #slice(bytes, size)
 }
@@ -293,35 +174,31 @@ pub fn unmap(mapping: *[]const u8) {
   mapping.* = empty
 }
 
-// Reads one complete file into arena storage, bounded by maximum. Empty after
-// a failure.
-pub fn read_all(arena: *memory.Arena, status: *fail.Status, path: []const u8, maximum: usize) []u8 {
-  if status == nil { return read_all(arena, &fail.Status{}, path, maximum) }
-  file := open(status, path)
-  bytes := read_contents(arena, status, &file, maximum)
-  close(&file)
-  return bytes
+// Reads one complete file into arena storage, bounded by maximum.
+pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) []u8!io.IoErr {
+  file := try open(path)
+  defer close(&file)
+  return try read_contents(arena, &file, maximum)
 }
 // Reads the rest of file into arena storage, bounded by maximum. On a
-// failure, including a file larger than maximum (Overflow), the result is
-// empty and the arena is as it was. Panics when the arena is exhausted.
-pub fn read_contents(arena: *memory.Arena, status: *fail.Status, file: *File, maximum: usize) []u8 {
-  if status == nil { return read_contents(arena, &fail.Status{}, file, maximum) }
-  if !usable(status, file, "read") { return file_empty() }
+// failure, including a file larger than maximum (Capacity), the arena is as
+// it was. Panics when the arena is exhausted.
+pub fn read_contents(arena: *memory.Arena, file: *File, maximum: usize) []u8!io.IoErr {
+  try usable(file)
   mark := memory.arena_mark(arena)
+  errdefer memory.arena_rewind(arena, mark)
   output: []u8
   output_mark := mark
   total: usize = 0
-  too_large := false
   // Size the first allocation from the descriptor when it reports a length.
   // Geometric growth copies into new arena space and retains each earlier
   // buffer until the caller rewinds, so a 20 MiB file can pin ~40 MiB.
   // The size is only a hint: growth and EOF probing still handle files that
   // change length while being read, and pseudo files that report zero.
   hint: usize = 0
-  hint_status: fail.Status
-  info := file_metadata(&hint_status, file)
-  if !hint_status.failed && info.size != 0 && info.size <= maximum {
+  unknown: Metadata
+  info := file_metadata(file) catch unknown
+  if info.size != 0 && info.size <= maximum {
     hint = #cast(usize, info.size)
   }
   for {
@@ -333,13 +210,9 @@ pub fn read_contents(arena: *memory.Arena, status: *fail.Status, file: *File, ma
       // Probe before growing: empty files need no allocation, and a full
       // caller buffer still distinguishes EOF from capacity/maximum overflow.
       probe: [1]u8
-      extra := read(status, file, probe[..])
-      if status.failed { break }
+      extra := try read(file, probe[..])
       if extra == 0 { break }
-      if total == maximum {
-        too_large = true
-        break
-      }
+      if total == maximum { fail .Capacity }
       wanted := maximum
       if total == 0 && hint != 0 {
         wanted = hint
@@ -367,56 +240,35 @@ pub fn read_contents(arena: *memory.Arena, status: *fail.Status, file: *File, ma
       total += 1
       continue
     }
-    part := read(status, file, output[total..total + capacity])
+    part := try read(file, output[total..total + capacity])
     total += part
-    if status.failed { break }
     if part == 0 { break }
-  }
-  if too_large {
-    fail_kind(status, "read", file.path, fail.Kind.Overflow, "file is larger than the limit")
-  }
-  if status.failed {
-    memory.arena_rewind(arena, mark)
-    return file_empty()
   }
   if output.len != 0 {
     memory.arena_rewind(arena, output_mark + total)
   }
   return output[..total]
 }
-fn file_empty() []u8 {
-  empty: []u8
-  return empty
-}
 
 // Creates or replaces path with source. A failed close is not reported: use
 // write_atomic, or create, write and sync, when the write must be durable.
-pub fn write_all(status: *fail.Status, path: []const u8, source: []const u8) {
-  if status == nil {
-    write_all(&fail.Status{}, path, source)
-    return
-  }
-  file := create(status, path)
-  write(status, &file, source)
-  close(&file)
+pub fn write_all(path: []const u8, source: []const u8) !io.IoErr {
+  file := try create(path)
+  defer close(&file)
+  try write(&file, source)
 }
 
-// Metadata for path, following symbolic links. Zero after a failure.
-pub fn metadata(status: *fail.Status, path: []const u8) Metadata {
-  if status == nil { return metadata(&fail.Status{}, path) }
+// Metadata for path, following symbolic links.
+pub fn metadata(path: []const u8) Metadata!io.IoErr {
   info: Metadata
-  if status.failed { return info }
-  check(status, "metadata", path, native_metadata(path, &info))
-  if status.failed { return Metadata{} }
+  try check(native_metadata(path, &info))
   return info
 }
 // Metadata for an open file.
-pub fn file_metadata(status: *fail.Status, file: *const File) Metadata {
-  if status == nil { return file_metadata(&fail.Status{}, file) }
+pub fn file_metadata(file: *const File) Metadata!io.IoErr {
+  try usable(file)
   info: Metadata
-  if !usable(status, file, "metadata") { return info }
-  check(status, "metadata", file.path, native_file_metadata(file, &info))
-  if status.failed { return Metadata{} }
+  try check(native_file_metadata(file, &info))
   return info
 }
 // Whether info describes a directory or a regular file.
@@ -428,113 +280,72 @@ pub fn is_file(info: Metadata) bool {
 }
 
 // Removes the file at path.
-pub fn remove(status: *fail.Status, path: []const u8) {
-  if status == nil {
-    remove(&fail.Status{}, path)
-    return
-  }
-  if status.failed { return }
-  check(status, "remove", path, native_remove(path))
+pub fn remove(path: []const u8) !io.IoErr {
+  try check(native_remove(path))
 }
 // Renames old_path to new_path, replacing new_path when it exists.
-pub fn rename(status: *fail.Status, old_path: []const u8, new_path: []const u8) {
-  if status == nil {
-    rename(&fail.Status{}, old_path, new_path)
-    return
-  }
-  if status.failed { return }
-  check(status, "rename", old_path, native_rename(old_path, new_path))
+pub fn rename(old_path: []const u8, new_path: []const u8) !io.IoErr {
+  try check(native_rename(old_path, new_path))
 }
 // Creates the directory path, readable by everyone and writable by its
 // owner (0o755). An existing directory is not a failure; an existing file
-// is.
-pub fn make_directory(status: *fail.Status, path: []const u8) {
-  if status == nil {
-    make_directory(&fail.Status{}, path)
-    return
-  }
-  make_directory_mode(status, path, 0o755)
+// fails with AlreadyExists.
+pub fn make_directory(path: []const u8) !io.IoErr {
+  try make_directory_mode(path, 0o755)
 }
 // Like make_directory, with the permission bits mode (ignored on Windows),
 // such as 0o700 for a directory only its owner may enter.
-pub fn make_directory_mode(status: *fail.Status, path: []const u8, mode: usize) {
-  if status == nil {
-    make_directory_mode(&fail.Status{}, path, mode)
-    return
-  }
-  if status.failed { return }
+pub fn make_directory_mode(path: []const u8, mode: usize) !io.IoErr {
   code := native_make_directory(path, mode)
-  if code < 0 && native_kind(code) == fail.Kind.AlreadyExists {
+  if code < 0 && already_exists(code) {
     info: Metadata
     if native_metadata(path, &info) == 0 && is_directory(info) { return }
-    fail_kind(status, "make directory", path, fail.Kind.AlreadyExists, "exists and is not a directory")
-    return
+    fail .AlreadyExists
   }
-  check(status, "make directory", path, code)
+  try check(code)
 }
 // Creates the directory path with mode; fails with AlreadyExists when
 // anything exists there, so the caller knows it made a new directory.
-pub fn make_directory_exclusive(status: *fail.Status, path: []const u8, mode: usize) {
-  if status == nil {
-    make_directory_exclusive(&fail.Status{}, path, mode)
-    return
-  }
-  if status.failed { return }
-  check(status, "make directory", path, native_make_directory(path, mode))
+pub fn make_directory_exclusive(path: []const u8, mode: usize) !io.IoErr {
+  try check(native_make_directory(path, mode))
 }
 // Removes the empty directory path.
-pub fn remove_directory(status: *fail.Status, path: []const u8) {
-  if status == nil {
-    remove_directory(&fail.Status{}, path)
-    return
-  }
-  if status.failed { return }
-  check(status, "remove directory", path, native_remove_directory(path))
+pub fn remove_directory(path: []const u8) !io.IoErr {
+  try check(native_remove_directory(path))
 }
 
 // Opens the directory path for listing with directory_next. storage holds
 // entry names and must outlive the directory; 4096 bytes is plenty.
-pub fn open_directory(status: *fail.Status, path: []const u8, storage: []u8) Directory {
-  if status == nil { return open_directory(&fail.Status{}, path, storage) }
+pub fn open_directory(path: []const u8, storage: []u8) Directory!io.IoErr {
   directory: Directory
-  if status.failed { return directory }
-  check(status, "list", path, native_open_directory(path, storage, &directory))
+  try check(native_open_directory(path, storage, &directory))
   directory.path = path
   return directory
 }
-// The next entry, without "." and "..". At the end, and after a failure, it
-// sets directory.ended and returns an entry with an empty name.
-pub fn directory_next(status: *fail.Status, directory: *Directory) DirectoryEntry {
-  if status == nil { return directory_next(&fail.Status{}, directory) }
+// The next entry, without "." and "..". At the end it sets
+// directory.ended and returns an entry with an empty name.
+pub fn directory_next(directory: *Directory) DirectoryEntry!io.IoErr {
   entry: DirectoryEntry
-  if !status.failed {
-    check(status, "list", directory.path, native_directory_next(directory, &entry))
-  }
-  if status.failed || entry.name.len == 0 {
+  try check(native_directory_next(directory, &entry))
+  if entry.name.len == 0 {
     directory.ended = true
     return DirectoryEntry{}
   }
   return entry
 }
 // The names in directory path, copied into arena, without "." and "..".
-// Empty after a failure. Entries are in the system's order.
-pub fn list(arena: *memory.Arena, status: *fail.Status, path: []const u8) []DirectoryEntry {
-  if status == nil { return list(arena, &fail.Status{}, path) }
-  empty: []DirectoryEntry
-  if status.failed { return empty }
+// Entries are in the system's order. On a failure the arena is as it was.
+pub fn list(arena: *memory.Arena, path: []const u8) []DirectoryEntry!io.IoErr {
   storage: [4096]u8
-  directory := open_directory(status, path, storage[..])
+  directory := try open_directory(path, storage[..])
   defer close_directory(&directory)
   mark := memory.arena_mark(arena)
+  errdefer memory.arena_rewind(arena, mark)
   capacity: usize = 16
   entries := memory.push_array<DirectoryEntry>(arena, capacity)
   count: usize = 0
   for {
-    entry := directory_next(status, &directory)
-    if status.failed {
-      memory.arena_rewind(arena, mark)
-      return empty
-    }
+    entry := try directory_next(&directory)
     if directory.ended { break }
     if count == capacity {
       grown := memory.push_array<DirectoryEntry>(arena, capacity * 2)

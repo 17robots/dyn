@@ -84,7 +84,7 @@ pub fn next_stream(status: *fail.Status, state: *StreamScanner) Event {
       fail.set(status, fail.make(fail.Kind.Capacity, "read XML", "", "an event does not fit storage"))
       return stream_ended(state)
     }
-    count := stream.read(status, state.input, state.storage[state.used..])
+    count := stream.read_status(status, state.input, state.storage[state.used..])
     if status.failed {
       state.failed = true
       return stream_ended(state)
@@ -101,7 +101,7 @@ pub fn writer(destination_writer: stream.Writer) Writer {
 }
 
 fn emit(status: *fail.Status, state: *Writer, data: []const u8) bool {
-  stream.write(status, state.sink, data)
+  stream.write_status(status, state.sink, data)
   return !status.failed
 }
 

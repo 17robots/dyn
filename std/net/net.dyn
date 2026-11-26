@@ -416,11 +416,23 @@ pub fn connection_write(status: *fail.Status, connection: *Connection, source: [
   return total
 }
 
-fn connection_reader_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn connection_reader_read(data: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := connection_reader_read_status(data, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn connection_reader_read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
   return connection_read(status, #cast(*Connection, data), destination)
 }
 
-fn connection_writer_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+fn connection_writer_write(data: rawptr, source: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := connection_writer_write_status(data, &status, source)
+  try io.check_status(&status)
+  return count
+}
+fn connection_writer_write_status(data: rawptr, status: *fail.Status, source: []const u8) usize {
   return connection_write(status, #cast(*Connection, data), source)
 }
 

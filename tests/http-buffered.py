@@ -28,7 +28,13 @@ fn commit(raw: rawptr, status: *fail.Status, head: []const u8, size: usize) usiz
   }
   return head.len + size
 }
-fn write(raw: rawptr, status: *fail.Status, source: []const u8) usize {
+fn write(raw: rawptr, source: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := write_status(raw, &status, source)
+  try io.check_status(&status)
+  return count
+}
+fn write_status(raw: rawptr, status: *fail.Status, source: []const u8) usize {
   sink := #cast(*Sink, raw)
   sink.writes += 1
   return source.len

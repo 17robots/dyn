@@ -905,7 +905,7 @@ fn stream_string(status: *fail.Status, destination: stream.Writer, source: []con
     invalid_value(status, "text is not valid UTF-8")
     return
   }
-  stream.write(status, destination, "\"")
+  stream.write_status(status, destination, "\"")
   start: usize = 0
   for i in 0..source.len {
     escaped: []const u8 = ""
@@ -926,19 +926,19 @@ fn stream_string(status: *fail.Status, destination: stream.Writer, source: []con
       escaped = "\\t"
     }
     if escaped.len == 0 && byte >= 32 { continue }
-    stream.write(status, destination, source[start..i])
+    stream.write_status(status, destination, source[start..i])
     if escaped.len == 0 {
       control: [6]u8 = ['\\', 'u', '0', '0', '0', '0']
       control[4] = hex_digit(byte / 16)
       control[5] = hex_digit(byte % 16)
-      stream.write(status, destination, control[..])
+      stream.write_status(status, destination, control[..])
     } else {
-      stream.write(status, destination, escaped)
+      stream.write_status(status, destination, escaped)
     }
     start = i + 1
   }
-  stream.write(status, destination, source[start..])
-  stream.write(status, destination, "\"")
+  stream.write_status(status, destination, source[start..])
+  stream.write_status(status, destination, "\"")
 }
 
 fn stream_value(status: *fail.Status, destination: stream.Writer, value: *const Value, depth: usize) {
@@ -948,15 +948,15 @@ fn stream_value(status: *fail.Status, destination: stream.Writer, value: *const 
     return
   }
   if value.kind == KindNull {
-    stream.write(status, destination, "null")
+    stream.write_status(status, destination, "null")
   } else if value.kind == KindBool {
     if value.boolean {
-      stream.write(status, destination, "true")
+      stream.write_status(status, destination, "true")
     } else {
-      stream.write(status, destination, "false")
+      stream.write_status(status, destination, "false")
     }
   } else if value.kind == KindNumber {
-    stream.write(status, destination, value.text)
+    stream.write_status(status, destination, value.text)
   } else if value.kind == KindString {
     stream_string(status, destination, value.text)
   } else {
@@ -966,20 +966,20 @@ fn stream_value(status: *fail.Status, destination: stream.Writer, value: *const 
       opening = "{"
       closing = "}"
     }
-    stream.write(status, destination, opening)
+    stream.write_status(status, destination, opening)
     child := value.first
     for child != nil {
       if child != value.first {
-        stream.write(status, destination, ",")
+        stream.write_status(status, destination, ",")
       }
       if value.kind == KindObject {
         stream_string(status, destination, child.key)
-        stream.write(status, destination, ":")
+        stream.write_status(status, destination, ":")
       }
       stream_value(status, destination, child, depth + 1)
       child = child.next
     }
-    stream.write(status, destination, closing)
+    stream.write_status(status, destination, closing)
   }
 }
 

@@ -53,9 +53,9 @@ fn main() {
  check(kind(backing[..],huge) == fail.Kind.Overflow && mem.equal(backing[..],before[..]))
  path:[4300]u8
  mem.fill(path[..],'a')
- removed: fail.Status
- fs.remove(&removed, path[..])
- check(removed.failed)
+ removed := false
+ fs.remove(path[..]) catch { removed = true }
+ check(removed)
  for byte in path { check(byte=='a') }
 }
 '''

@@ -41,10 +41,10 @@ fn main() {
     line := bufio.read_line(&status, &input)
     if status.failed { #panic("input failed") }
     if input.ended { break }
-    io.println_to(&status, io.stdout(), "[{}]", line)
+    io.println_to(io.stdout(), "[{}]", line) catch {}
     if status.failed { #panic("output failed") }
   }
-  io.write(&status, io.stderr(), "done\\n")
+  io.write_status(&status, io.stderr(), "done\\n")
   if status.failed { #panic("stderr failed") }
 }
 ''')
@@ -64,18 +64,20 @@ fn main() {
         assert (result.stdout, result.stderr) == (b'[from file]\n', b'done\n')
     errors = root/'errors'; errors.mkdir()
     (errors/'main.dyn').write_text('''use "std/io"
-use "std/fail"
+fn read_fails(destination: []u8) bool {
+  _ = io.read(io.stdin(), destination) catch { return true }
+  return false
+}
+fn write_fails() bool {
+  output := io.stdout()
+  _ = output.write(output.data, "x") catch { return true }
+  return false
+}
 fn main() {
   bytes: [1]u8
-  reading: fail.Status
-  count := io.read(&reading, io.stdin(), bytes[..])
-  if !reading.failed || reading.failure.native == 0 || count != 0 { #panic("missing read error") }
-  writing: fail.Status
-  output := io.stdout()
-  written := output.write(output.data, &writing, "x")
-  if !writing.failed || writing.failure.native == 0 || written != 0 { #panic("missing write error") }
-  empty: fail.Status
-  if io.read(&empty, io.stdin(), bytes[..0]) != 0 || empty.failed { #panic("empty read") }
+  if !read_fails(bytes[..]) { #panic("missing read error") }
+  if !write_fails() { #panic("missing write error") }
+  if read_fails(bytes[..0]) { #panic("empty read") }
   io.eprint("errors handled\\n")
 }
 ''')
@@ -128,7 +130,7 @@ fn main() {
   if status.failed || !time.valid(&date) { #panic("date failed") }
   cursor := io.cursor("ok")
   bytes: [2]u8
-  if io.read_exact(&status, io.cursor_reader(&cursor), bytes[..]) != 2 || status.failed { #panic("read failed") }
+  if io.read_exact_status(&status, io.cursor_reader(&cursor), bytes[..]) != 2 || status.failed { #panic("read failed") }
 }
 ''')
     for target in ('x86_64-windows', 'aarch64-macos', 'wasm32-browser', 'aarch64-linux'):

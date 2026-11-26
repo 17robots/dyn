@@ -52,24 +52,23 @@ fn count_chunk(counts: *Counts, chunk: []const u8) {
 }
 
 // io.Reader is the seam every input shares: a file, standard input, a
-// socket or bytes in memory. Each read takes the status; after a failure,
-// or at the end of the input, io.read returns 0, so the loop ends by itself
-// and nothing here needs to check.
-fn count_reader(status: *fail.Status, reader: io.Reader, counts: *Counts) {
+// socket or bytes in memory. io.read returns 0 at the end of the input, and
+// try passes a failure on to the caller.
+fn count_reader(reader: io.Reader, counts: *Counts) !io.IoErr {
   chunk: [64 * 1024]u8
   for {
-    count := io.read(status, reader, chunk[..])
+    count := try io.read(reader, chunk[..])
     if count == 0 { break }
     count_chunk(counts, chunk[..count])
   }
 }
 
 // Counts one file through the same reader code.
-fn count_file(status: *fail.Status, name: []const u8, counts: *Counts) {
-  file := fs.open(status, name)
+fn count_file(name: []const u8, counts: *Counts) !io.IoErr {
+  file := try fs.open(name)
   // defer runs when this function returns, however it returns.
   defer fs.close(&file)
-  count_reader(status, fs.reader(&file), counts)
+  try count_reader(fs.reader(&file), counts)
 }
 
 fn add(total: *Counts, part: Counts) {
@@ -100,11 +99,9 @@ fn show(counts: Counts, name: []const u8) {
   io.println("{}", fmt.bytes(&row))
 }
 
-// Prints what failed, such as "wordcount: open missing.txt: no such file or
-// directory".
-fn report(status: fail.Status) {
-  storage: [512]u8
-  io.eprintln("wordcount: {}", fail.describe(storage[..], status.failure))
+// Prints what failed, such as "wordcount: missing.txt: not found".
+fn report(name: []const u8, err: io.IoErr) {
+  io.eprintln("wordcount: {}: {}", name, err)
 }
 
 // main may return an i32: the process exit code.
@@ -115,11 +112,9 @@ fn main() i32 {
   files := program.args[1..]
 
   if files.len == 0 {
-    status: fail.Status
     counts: Counts
-    count_reader(&status, io.stdin(), &counts)
-    if status.failed {
-      report(status)
+    count_reader(io.stdin(), &counts) catch err {
+      report("standard input", err)
       return 1
     }
     show(counts, "")
@@ -129,13 +124,10 @@ fn main() i32 {
   total: Counts
   exit_code: i32 = 0
   for name in files {
-    // Each file has its own status, so one that cannot be read does not
-    // stop the others.
-    status: fail.Status
+    // A file that cannot be read does not stop the others.
     counts: Counts
-    count_file(&status, name, &counts)
-    if status.failed {
-      report(status)
+    count_file(name, &counts) catch err {
+      report(name, err)
       exit_code = 1
       continue
     }

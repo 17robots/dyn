@@ -100,7 +100,7 @@ fn main() {
   storage: [16384]u8
   arena := mem.arena_from_buffer(storage[..])
   arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
+  arguments := process.arguments(arena) catch { #panic("cannot read arguments") }
   if arguments_status.failed || arguments.len != 2 { #panic("arguments") }
   symbols := Symbols{}
   if !insert(&symbols, "alpha", '4') || !insert(&symbols, "beta", '7') { #panic("insert") }

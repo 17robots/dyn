@@ -22,7 +22,13 @@ fn trace_failure(status: *fail.Status, native: isize) usize {
   fail.set(status, failure)
   return 0
 }
-fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read(data: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := read_status(data, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
   trace := #cast(*Trace, data)
   trace.reads += 1
   if trace.mode == 0 { return trace_failure(status, -71) }
@@ -60,7 +66,13 @@ fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
   }
   return 2
 }
-fn write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+fn write(data: rawptr, source: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := write_status(data, &status, source)
+  try io.check_status(&status)
+  return count
+}
+fn write_status(data: rawptr, status: *fail.Status, source: []const u8) usize {
   trace := #cast(*Trace, data)
   trace.writes += 1
   if trace.mode == 10 { return trace_failure(status, -73) }
@@ -106,7 +118,13 @@ fn stays_failed(connection: *ws.WebSocketConnection, trace: *Trace) {
   if trace.reads != reads || trace.writes != writes || trace.bytes != bytes { #panic("I/O after failure") }
 }
 struct Wire { data: []const u8, at: usize, step: usize, calls: usize }
-fn wire_read(raw: rawptr, status: *fail.Status, destination: []u8) usize {
+fn wire_read(raw: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := wire_read_status(raw, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn wire_read_status(raw: rawptr, status: *fail.Status, destination: []u8) usize {
   wire := #cast(*Wire, raw)
   wire.calls += 1
   count := wire.data.len - wire.at

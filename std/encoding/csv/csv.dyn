@@ -25,7 +25,7 @@ fn stream_byte(status: *fail.Status, state: *StreamScanner) ByteResult {
   }
   if state.input_done { return ByteResult{ end: true, ok: true } }
   byte: [1]u8
-  count := stream.read(status, state.input, byte[..])
+  count := stream.read_status(status, state.input, byte[..])
   if status.failed {
     state.finished = true
     return ByteResult{}
@@ -135,7 +135,7 @@ pub fn writer(destination_writer: stream.Writer) Writer {
 }
 
 fn write_all(status: *fail.Status, state: *Writer, bytes: []const u8) bool {
-  stream.write(status, state.sink, bytes)
+  stream.write_status(status, state.sink, bytes)
   return !status.failed
 }
 

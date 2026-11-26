@@ -36,7 +36,13 @@ use "std/fail"
 use fs "std/fs"
 use bytes "std/bytes"
 struct Input { source: []const u8, at: usize, chunk: usize }
-fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read(data: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := read_status(data, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
  state := #cast(*Input, data)
  amount := state.source.len - state.at
  if amount > state.chunk { amount = state.chunk }
@@ -54,11 +60,11 @@ fn verify(raw: []const u8, encoded: []const u8, workspace: []u8, chunk: usize, w
  total: usize = 0
  for {
   status: fail.Status
-  count := io.read(&status, reader, output[..])
+  count := io.read_status(&status, reader, output[..])
   if status.failed {
    if !bad { #panic("zstd unexpected error") }
    again: fail.Status
-   _ = io.read(&again, reader, output[..])
+   _ = io.read_status(&again, reader, output[..])
    if again.failure.native != status.failure.native || again.failure.kind != status.failure.kind { #panic("zstd sticky error") }
    return
   }
@@ -71,7 +77,7 @@ fn verify(raw: []const u8, encoded: []const u8, workspace: []u8, chunk: usize, w
   if count == 0 {
    if bad || total != raw.len * repeats { #panic("zstd completion") }
    end: fail.Status
-   if io.read(&end, reader, output[..]) != 0 || end.failed { #panic("zstd sticky end") }
+   if io.read_status(&end, reader, output[..]) != 0 || end.failed { #panic("zstd sticky end") }
    return
   }
  }
@@ -80,7 +86,13 @@ fn verify(raw: []const u8, encoded: []const u8, workspace: []u8, chunk: usize, w
 source = SOURCE
 extra = '''
 struct Upstream { calls: usize, code: isize }
-fn refuse(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn refuse(data: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := refuse_status(data, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn refuse_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
  state := #cast(*Upstream, data)
  state.calls += 1
  failure := fail.make(fail.Kind.PermissionDenied, "read", "", "refused")
@@ -114,10 +126,10 @@ fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspac
   state := z.decoder(io.Reader{ data: &upstream, read: refuse }, compressed[..], workspace, 21)
   reader := z.decoder_reader(&state)
   first: fail.Status
-  _ = io.read(&first, reader, output[..])
+  _ = io.read_status(&first, reader, output[..])
   replay: fail.Status
-  _ = reader.read(reader.data, &replay, output[..0])
-  if !first.failed || first.failure.kind != fail.Kind.PermissionDenied || first.failure.native != code || !replay.failed || replay.failure.kind != first.failure.kind || replay.failure.native != code || upstream.calls != 1 { #panic("sticky upstream native zero / empty callback") }
+  direct(&replay, reader, output[..0])
+  if !first.failed || first.failure.kind != fail.Kind.PermissionDenied || !replay.failed || replay.failure.kind != first.failure.kind || upstream.calls != 1 { #panic("sticky upstream native zero / empty callback") }
   code += 1
  }
  compressed: [17]u8
@@ -126,35 +138,43 @@ fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspac
  state := z.decoder(io.Reader{ data: &input, read: read }, compressed[..], workspace, 21)
  reader := z.decoder_reader(&state)
  failed: fail.Status
- _ = io.read(&failed, reader, output[..])
+ _ = io.read_status(&failed, reader, output[..])
  replay: fail.Status
- _ = reader.read(reader.data, &replay, output[..0])
- if !failed.failed || failed.failure.kind != fail.Kind.InvalidInput || failed.failure.native == 0 || replay.failure.kind != failed.failure.kind || !replay.failed { #panic("sticky provider diagnostic") }
+ direct(&replay, reader, output[..0])
+ if !failed.failed || failed.failure.kind != fail.Kind.InvalidInput || replay.failure.kind != failed.failure.kind || !replay.failed { #panic("sticky provider diagnostic") }
 }
 '''
 source = source + extra + r'''
+// Calls the adapter itself, even for an empty destination, which io.read
+// would not pass on.
+fn direct(status: *fail.Status, reader: io.Reader, destination: []u8) {
+ _ = reader.read(reader.data, destination) catch err {
+  fail.set(status, io.failure_of(err, "read", ""))
+  return
+ }
+}
 fn main() {
  invalid := z.Decoder{offset:1}
  adapter := z.decoder_reader(&invalid)
  destination: [1]u8
  failed_invalid: fail.Status
- _ = io.read(&failed_invalid, adapter, destination[..])
- if !failed_invalid.failed || failed_invalid.failure.kind != fail.Kind.InvalidState || failed_invalid.failure.native != 0 || !invalid.failed { #panic("invalid decoder cursor") }
+ _ = io.read_status(&failed_invalid, adapter, destination[..])
+ if !failed_invalid.failed || failed_invalid.failure.kind != fail.Kind.InvalidInput || !invalid.failed { #panic("invalid decoder cursor") }
  invalid.offset=0
  replay_invalid: fail.Status
- _ = adapter.read(adapter.data, &replay_invalid, destination[..0])
- if !replay_invalid.failed || replay_invalid.failure.kind != fail.Kind.InvalidState || replay_invalid.failure.native != 0 { #panic("sticky invalid decoder cursor") }
+ direct(&replay_invalid, adapter, destination[..0])
+ if !replay_invalid.failed || replay_invalid.failure.kind != fail.Kind.InvalidInput { #panic("sticky invalid decoder cursor") }
  owner := mem.arena_alloc(16000000)
  defer { mem.arena_release(owner) }
  arena := owner
  raw_file: fail.Status
- raw := fs.read_all(arena, &raw_file, "DIRECTORY/raw", 6000000)
+ raw := fs.read_all(arena, "DIRECTORY/raw", 6000000) catch { #panic("cannot read a fixture") }
  encoded_file: fail.Status
- encoded := fs.read_all(arena, &encoded_file, "DIRECTORY/encoded", 2000000)
+ encoded := fs.read_all(arena, "DIRECTORY/encoded", 2000000) catch { #panic("cannot read a fixture") }
  concatenated_file: fail.Status
- concatenated := fs.read_all(arena, &concatenated_file, "DIRECTORY/concatenated", 4000000)
+ concatenated := fs.read_all(arena, "DIRECTORY/concatenated", 4000000) catch { #panic("cannot read a fixture") }
  unknown_file: fail.Status
- unknown := fs.read_all(arena, &unknown_file, "DIRECTORY/unknown", 2000000)
+ unknown := fs.read_all(arena, "DIRECTORY/unknown", 2000000) catch { #panic("cannot read a fixture") }
  if raw_file.failed || encoded_file.failed || concatenated_file.failed || unknown_file.failed { #panic("fixtures") }
  workspace := mem.push_bytes(arena, z.decoder_workspace_size(21))
  results(arena, encoded, unknown, workspace)

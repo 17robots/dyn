@@ -13,7 +13,6 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/fail"
 use "std/io"
-use "std/fs"
 use "std/mem"
 use "std/thread"
 use "std/bytes"
@@ -35,7 +34,7 @@ fn main() {
   check(#sizeof(fail.Failure) == 40 && #sizeof(fail.Status) == 64, "sizes")
   storage: [2048]u8
   status: fail.Status
-  _ = fs.open(&status, "/nonexistent/dir/file.txt")
+  fail.set(&status, io.from_linux("open", "/nonexistent/dir/file.txt", -2))
   io.println("{}", fail.describe(storage[..], status.failure))
   kept := status.failure
   for i in 0..10 {
@@ -48,7 +47,7 @@ fn main() {
   // stack is.
   for i in 0..2000 {
     other: fail.Status
-    _ = fs.open(&other, "/nonexistent/dir/file.txt")
+    fail.set(&other, io.from_linux("open", "/nonexistent/dir/file.txt", -2))
   }
   io.println("{}", fail.describe(storage[..], kept))
   check(fail.path_text(&kept).len == 0, "lost text is empty")

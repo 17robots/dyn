@@ -1,5 +1,4 @@
 use io "std/io"
-use "std/fail"
 use "std/os/macos/sys"
 #target(kernel: darwin)
 
@@ -31,16 +30,11 @@ fn numbers(set: Set, storage: []u64) usize {
   return count
 }
 
-fn watch_failed(status: *fail.Status, code: isize) Watch {
-  fail.set(status, io.from_darwin("watch signals", "", code))
-  return Watch{}
-}
-
-fn platform_watch(status: *fail.Status, set: Set) Watch {
+fn platform_watch(set: Set) Watch!io.IoErr {
   chosen: [3]u64
   count := numbers(set, chosen[..])
   queue := #syscall(sys.Kqueue)
-  if queue < 0 { return watch_failed(status, queue) }
+  if queue < 0 { fail io.darwin_err(queue) }
   changes: [3]Event
   for i in 0..count {
     // EVFILT_SIGNAL is -6; EV_ADD is 1.
@@ -49,7 +43,7 @@ fn platform_watch(status: *fail.Status, set: Set) Watch {
   code := #syscall(sys.Kevent, queue, &changes[0], count, 0, 0, 0)
   if code < 0 {
     _ = #syscall(sys.Close, queue)
-    return watch_failed(status, code)
+    fail io.darwin_err(code)
   }
   for i in 0..count {
     // SIG_IGN is 1.
@@ -58,7 +52,7 @@ fn platform_watch(status: *fail.Status, set: Set) Watch {
   return Watch{ handle: queue, set: set, active: true }
 }
 
-fn platform_next(status: *fail.Status, state: *Watch, block: bool) Kind {
+fn platform_next(state: *Watch, block: bool) Kind!io.IoErr {
   event: Event
   zero := Timeout{}
   for true {
@@ -80,10 +74,7 @@ fn platform_next(status: *fail.Status, state: *Watch, block: bool) Kind {
       return kind
     }
     if code == 0 && !block { return Kind.None }
-    if code < 0 && code != -4 {
-      fail.set(status, io.from_darwin("read signal", "", code))
-      return Kind.None
-    }
+    if code < 0 && code != -4 { fail io.darwin_err(code) }
   }
   return Kind.None
 }

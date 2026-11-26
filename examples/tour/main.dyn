@@ -314,15 +314,11 @@ fn memory() {
 // The first failure stays in the status and later calls do nothing, so you
 // check status.failed once, before acting on the results.
 fn read_config(arena: *mem.Arena) {
-  status: fail.Status
-  text := files.read_all(arena, &status, "does-not-exist.conf", 1 << 20)
-  if status.failed && status.failure.kind == fail.Kind.NotFound {
-    io.println("config missing")
-    return
-  }
-  if status.failed {
-    storage: [256]u8
-    io.println("config unreadable: {}", fail.describe(storage[..], status.failure))
+  text := files.read_all(arena, "does-not-exist.conf", 1 << 20) catch err {
+    case err {
+      .NotFound => { io.println("config missing") }
+      _ => { io.println("config unreadable: {}", err) }
+    }
     return
   }
   io.println("config {} bytes", text.len)

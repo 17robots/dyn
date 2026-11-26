@@ -79,7 +79,7 @@ fn path_match(context: rawptr, input: []const u8) bool {
 
 struct Capture { bytes: [4096]u8, length: usize }
 
-fn capture_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+fn capture_write(data: rawptr, source: []const u8) usize!io.IoErr {
   capture := #cast(*Capture, data)
   room := capture.bytes.len - capture.length
   count := source.len
@@ -158,9 +158,8 @@ fn main() {
   arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
   scale: u64 = 1
-  arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
-  if !arguments_status.failed && arguments.len > 1 {
+  arguments := process.arguments(arena) catch { #panic("cannot read arguments") }
+  if arguments.len > 1 {
     parsing: fail.Status
     parsed := parse.u64_decimal(&parsing, arguments[1])
     if !parsing.failed && parsed > 0 {

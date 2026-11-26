@@ -1071,61 +1071,56 @@ Layer: std
 - `struct File { descriptor: isize, active: bool, ended: bool, path: []const u8 }`: Files and directories.
 - `struct Metadata { size: u64, inode: u64, device: u64, mode: u16 }`: Size, inode, device and the POSIX mode (type and permission bits).
 - `struct DirectoryEntry { name: []const u8, kind: u8 }`: One directory entry.
-- `enum FsErr { NotFound, PermissionDenied, AlreadyExists, IsDirectory, NotDirectory, InvalidInput, Closed, TooLarge, Io(isize), }`: Structured filesystem error enum for T!FsErr APIs.
-- `fn open_file(path: str) File!FsErr`: Opens path for reading, returning File!FsErr.
-- `fn create_file(path: str) File!FsErr`: Creates path for writing (or truncates if existing), returning File!FsErr.
-- `fn read_file(arena: *memory.Arena, path: str, maximum: usize) []u8!FsErr`: Reads up to maximum bytes from path into arena storage, returning []u8!FsErr.
-- `fn write_file(path: str, source: str) !FsErr`: Writes source to a newly created or truncated file at path, returning !FsErr.
 - `fn is_open(file: *const File) bool`
 - `fn adopt_handle(handle: isize) File`: A File for a native handle opened elsewhere;
-- `fn open(status: *fail.Status, path: []const u8) File`: Opens path for reading.
-- `fn create(status: *fail.Status, path: []const u8) File`: Creates path for writing, or empties it when it exists.
-- `fn append(status: *fail.Status, path: []const u8) File`: Opens path for writing at its end, creating it when missing.
-- `fn create_exclusive(status: *fail.Status, path: []const u8) File`: Creates path for writing;
+- `fn open(path: []const u8) File!io.IoErr`: Opens path for reading.
+- `fn create(path: []const u8) File!io.IoErr`: Creates path for writing, or empties it when it exists.
+- `fn append(path: []const u8) File!io.IoErr`: Opens path for writing at its end, creating it when missing.
+- `fn create_exclusive(path: []const u8) File!io.IoErr`: Creates path for writing;
 - `fn close(file: *File)`: Closes the file.
-- `fn read(status: *fail.Status, file: *File, destination: []u8) usize`: Reads into destination and returns the byte count: 0 at the end of the file (file.ended) and after a failure.
-- `fn write(status: *fail.Status, file: *File, source: []const u8)`: Writes all of source.
+- `fn read(file: *File, destination: []u8) usize!io.IoErr`: Reads into destination and returns the byte count: 0 at the end of the file, which also sets file.ended.
+- `fn write(file: *File, source: []const u8) !io.IoErr`: Writes all of source.
 - `fn reader(file: *File) io.Reader`
 - `fn writer(file: *File) io.Writer`
-- `fn seek(status: *fail.Status, file: *File, offset: isize, origin: usize) usize`: Moves the file position and returns it;
-- `fn sync(status: *fail.Status, file: *File)`: Makes written data durable.
-- `fn map(status: *fail.Status, file: *const File) []const u8`: A read-only view of the whole file, owned by the caller until unmap.
+- `fn seek(file: *File, offset: isize, origin: usize) usize!io.IoErr`: Moves the file position and returns it;
+- `fn sync(file: *File) !io.IoErr`: Makes written data durable.
+- `fn map(file: *const File) []const u8!io.IoErr`: A read-only view of the whole file, owned by the caller until unmap.
 - `fn unmap(mapping: *[]const u8)`: Releases a mapping and empties it.
-- `fn read_all(arena: *memory.Arena, status: *fail.Status, path: []const u8, maximum: usize) []u8`: Reads one complete file into arena storage, bounded by maximum.
-- `fn read_contents(arena: *memory.Arena, status: *fail.Status, file: *File, maximum: usize) []u8`: Reads the rest of file into arena storage, bounded by maximum.
-- `fn write_all(status: *fail.Status, path: []const u8, source: []const u8)`: Creates or replaces path with source.
-- `fn metadata(status: *fail.Status, path: []const u8) Metadata`: Metadata for path, following symbolic links.
-- `fn file_metadata(status: *fail.Status, file: *const File) Metadata`: Metadata for an open file.
+- `fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) []u8!io.IoErr`: Reads one complete file into arena storage, bounded by maximum.
+- `fn read_contents(arena: *memory.Arena, file: *File, maximum: usize) []u8!io.IoErr`: Reads the rest of file into arena storage, bounded by maximum.
+- `fn write_all(path: []const u8, source: []const u8) !io.IoErr`: Creates or replaces path with source.
+- `fn metadata(path: []const u8) Metadata!io.IoErr`: Metadata for path, following symbolic links.
+- `fn file_metadata(file: *const File) Metadata!io.IoErr`: Metadata for an open file.
 - `fn is_directory(info: Metadata) bool`: Whether info describes a directory or a regular file.
 - `fn is_file(info: Metadata) bool`
-- `fn remove(status: *fail.Status, path: []const u8)`: Removes the file at path.
-- `fn rename(status: *fail.Status, old_path: []const u8, new_path: []const u8)`: Renames old_path to new_path, replacing new_path when it exists.
-- `fn make_directory(status: *fail.Status, path: []const u8)`: Creates the directory path, readable by everyone and writable by its owner (0o755).
-- `fn make_directory_mode(status: *fail.Status, path: []const u8, mode: usize)`: Like make_directory, with the permission bits mode (ignored on Windows), such as 0o700 for a directory only its owner may enter.
-- `fn make_directory_exclusive(status: *fail.Status, path: []const u8, mode: usize)`: Creates the directory path with mode;
-- `fn remove_directory(status: *fail.Status, path: []const u8)`: Removes the empty directory path.
-- `fn open_directory(status: *fail.Status, path: []const u8, storage: []u8) Directory`: Opens the directory path for listing with directory_next.
-- `fn directory_next(status: *fail.Status, directory: *Directory) DirectoryEntry`: The next entry, without "." and "..".
-- `fn list(arena: *memory.Arena, status: *fail.Status, path: []const u8) []DirectoryEntry`: The names in directory path, copied into arena, without "." and "..".
+- `fn remove(path: []const u8) !io.IoErr`: Removes the file at path.
+- `fn rename(old_path: []const u8, new_path: []const u8) !io.IoErr`: Renames old_path to new_path, replacing new_path when it exists.
+- `fn make_directory(path: []const u8) !io.IoErr`: Creates the directory path, readable by everyone and writable by its owner (0o755).
+- `fn make_directory_mode(path: []const u8, mode: usize) !io.IoErr`: Like make_directory, with the permission bits mode (ignored on Windows), such as 0o700 for a directory only its owner may enter.
+- `fn make_directory_exclusive(path: []const u8, mode: usize) !io.IoErr`: Creates the directory path with mode;
+- `fn remove_directory(path: []const u8) !io.IoErr`: Removes the empty directory path.
+- `fn open_directory(path: []const u8, storage: []u8) Directory!io.IoErr`: Opens the directory path for listing with directory_next.
+- `fn directory_next(directory: *Directory) DirectoryEntry!io.IoErr`: The next entry, without "." and "..".
+- `fn list(arena: *memory.Arena, path: []const u8) []DirectoryEntry!io.IoErr`: The names in directory path, copied into arena, without "." and "..".
 - `enum AppDirectory { Home, Config, Cache, Data, Runtime }`
 - `struct Directory { file: File, storage: []u8, offset: usize, used: usize, path: []const u8, // Set by directory_next when it returns no entry. ended: bool, }`
 - `fn close_directory(directory: *Directory)`
-- `fn copy_file(status: *fail.Status, source: []const u8, destination: []const u8, scratch: []u8) usize`: Copies source to destination, replacing it, and returns the bytes copied.
-- `fn symbolic_link(status: *fail.Status, target: []const u8, link: []const u8)`: Creates the symbolic link link pointing at target.
-- `fn sync_directory(status: *fail.Status, path: []const u8)`: Makes a directory's entries durable, such as a rename into it.
+- `fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) usize!io.IoErr`: Copies source to destination, replacing it, and returns the bytes copied.
+- `fn symbolic_link(target: []const u8, link: []const u8) !io.IoErr`: Creates the symbolic link link pointing at target.
+- `fn sync_directory(path: []const u8) !io.IoErr`: Makes a directory's entries durable, such as a rename into it.
 - `struct AtomicFile { file: File, destination: []const u8, temporary: []const u8, active: bool, }`: A file written under a temporary name and renamed onto its destination when committed, so the destination is never partly written.
-- `fn atomic_begin(status: *fail.Status, destination: []const u8, temporary: []const u8) AtomicFile`: Both paths are borrowed until commit or abort.
-- `fn atomic_commit(status: *fail.Status, transaction: *AtomicFile)`: Syncs and closes the temporary file and renames it onto the destination.
-- `fn atomic_commit_durable(status: *fail.Status, transaction: *AtomicFile, parent_directory: []const u8)`: Also syncs the parent directory, making the committed rename durable across power loss on Linux file systems that honor fsync for ...
+- `fn atomic_begin(destination: []const u8, temporary: []const u8) AtomicFile!io.IoErr`: Both paths are borrowed until commit or abort.
+- `fn atomic_commit(transaction: *AtomicFile) !io.IoErr`: Syncs and closes the temporary file and renames it onto the destination.
+- `fn atomic_commit_durable(transaction: *AtomicFile, parent_directory: []const u8) !io.IoErr`: Also syncs the parent directory, making the committed rename durable across power loss on Linux file systems that honor fsync for ...
 - `fn atomic_abort(transaction: *AtomicFile)`: Closes and removes the temporary file.
-- `fn write_atomic(status: *fail.Status, destination: []const u8, temporary: []const u8, source: []const u8)`: Writes source to destination through the sibling temporary file and renames it into place, so destination is either the old file or all of ...
-- `fn lock(status: *fail.Status, file: *File, operation: usize)`: Locks file with flock(2): operation is LOCK_SH (1), LOCK_EX (2), or either with LOCK_NB (4);
-- `fn truncate(status: *fail.Status, path: []const u8, length: usize)`: Sets the length of the file at path.
-- `fn read_link(arena: *mem.Arena, status: *fail.Status, path: []const u8) []u8`: The target of the symbolic link at path, in arena.
-- `fn app_directory(arena: *mem.Arena, status: *fail.Status, kind: AppDirectory) []u8`: The per-user directory of kind, in arena.
+- `fn write_atomic(destination: []const u8, temporary: []const u8, source: []const u8) !io.IoErr`: Writes source to destination through the sibling temporary file and renames it into place, so destination is either the old file or all of ...
+- `fn lock(file: *File, operation: usize) !io.IoErr`: Locks file with flock(2): operation is LOCK_SH (1), LOCK_EX (2), or either with LOCK_NB (4);
+- `fn truncate(path: []const u8, length: usize) !io.IoErr`: Sets the length of the file at path.
+- `fn read_link(arena: *mem.Arena, path: []const u8) []u8!io.IoErr`: The target of the symbolic link at path, in arena.
+- `fn app_directory(arena: *mem.Arena, kind: AppDirectory) []u8!io.IoErr`: The per-user directory of kind, in arena.
 - `struct Directory { file: File, storage: []u8, offset: usize, used: usize, base: i64, path: []const u8, ended: bool }`: Directory listing through getdirentries64, with the Linux API shape.
 - `struct RemovalFrame { directory: Directory, name: []const u8, parent: isize }`: Scratch frame storage for iterative, descriptor-relative tree removal.
-- `fn remove_tree(status: *fail.Status, path: []const u8, frames: []RemovalFrame, scratch: []u8)`: Removes path and everything under it, without following symbolic links.
+- `fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) !io.IoErr`: Removes path and everything under it, without following symbolic links.
 - `struct Directory { handle: rawptr, storage: []u8, data: [592]u8, pending: bool, active: bool, path: []const u8, ended: bool }`: Directory listing through FindFirstFileW, with the Linux API shape.
 
 ## std/fs/capability
@@ -1133,7 +1128,7 @@ Layer: std
 Layer: std
 
 - `struct Directory { descriptor: isize, active: bool, events: *observe.Log, resource: u64 }`: A borrowed directory descriptor limits file lookup through this interface.
-- `fn read(status: *fail.Status, directory: *const Directory, path: []const u8, destination: []u8) usize`: Kernel-enforced relative lookup: no absolute paths, parent escapes, symlinks or magic links.
+- `fn read(directory: *const Directory, path: []const u8, destination: []u8) usize!io.IoErr`: Kernel-enforced relative lookup: no absolute paths, parent escapes, symlinks or magic links.
 
 ## std/fs/watch
 
@@ -1157,26 +1152,26 @@ Layer: std
 - `const HasDirectoryFlag: bool = true`
 - `const FixedWatchCapacity: usize = 16`
 - `struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }`
-- `struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }`: Owns one bounded allocation: at most 16 streams and 63 queued names (1023 bytes).
-- `fn open(status: *fail.Status, storage: []u8) Watcher`
-- `fn add(status: *fail.Status, watcher: *Watcher, path: []const u8, mask: u32) i32`: Watches path;
-- `fn remove(status: *fail.Status, watcher: *Watcher, id: i32)`
+- `struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, error: io.IoErr, ended: bool }`: Owns one bounded allocation: at most 16 streams and 63 queued names (1023 bytes).
+- `fn open(storage: []u8) Watcher!io.IoErr`
+- `fn add(watcher: *Watcher, path: []const u8, mask: u32) i32!io.IoErr`: Watches path;
+- `fn remove(watcher: *Watcher, id: i32) !io.IoErr`
 - `fn close(watcher: *Watcher)`
-- `fn next(status: *fail.Status, watcher: *Watcher) Event`
+- `fn next(watcher: *Watcher) Event!io.IoErr`
 - `fn acknowledge_rescan(watcher: *Watcher)`
 - `const SupportedEvents: u32 = 4046`
 - `const HasCloseWrite: bool = true`
 - `const HasMoveCookies: bool = true`
 - `const FixedWatchCapacity: usize = 0`: Zero means no fixed userspace slot limit;
-- `struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }`: Zero is a closed watcher: active is false.
-- `fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i32`: Watches path;
-- `fn remove(status: *fail.Status, state: *Watcher, watch: i32)`
+- `struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, error: io.IoErr, ended: bool }`: Zero is a closed watcher: active is false.
+- `fn add(state: *Watcher, path: []const u8, mask: u32) i32!io.IoErr`: Watches path;
+- `fn remove(state: *Watcher, watch: i32) !io.IoErr`
 - `fn close(state: *Watcher)`
-- `fn next(status: *fail.Status, state: *Watcher) Event`
+- `fn next(state: *Watcher) Event!io.IoErr`
 - `fn acknowledge_rescan(state: *Watcher)`: Call only after rebuilding the snapshot;
 - `const SupportedEvents: u32 = 966`
 - `const HasDirectoryFlag: bool = false`
-- `struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }`: Noncopyable owner.
+- `struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, error: io.IoErr, ended: bool }`: Noncopyable owner.
 
 ## std/hash
 
@@ -1302,10 +1297,23 @@ Layer: heap
 
 Layer: heap
 
+- `fn read_status(status: *fail.Status, reader: Reader, destination: []u8) usize`
+- `fn read_exact_status(status: *fail.Status, reader: Reader, destination: []u8) usize`
+- `fn write_status(status: *fail.Status, writer: Writer, source: []const u8)`
+- `fn print_status(status: *fail.Status, writer: Writer, template: []const u8, arguments: []const any)`
+- `fn println_status(status: *fail.Status, writer: Writer, template: []const u8, arguments: []const any)`
+- `fn copy_status(status: *fail.Status, writer: Writer, reader: Reader, scratch: []u8) usize`
+- `fn check_status(status: *const fail.Status) !IoErr`: Fails with the IoErr for a status failure;
 - `fn from_linux(operation: []const u8, path: []const u8, code: isize) fail.Failure`: A fail.Failure for a native error code: its portable kind, the code in native, and the system's text for it as the message.
 - `fn from_darwin(operation: []const u8, path: []const u8, code: isize) fail.Failure`
 - `fn from_windows(operation: []const u8, path: []const u8, code: isize) fail.Failure`
 - `fn from_wasi(operation: []const u8, path: []const u8, code: isize) fail.Failure`
+- `fn linux_err(code: isize) IoErr`: The IoErr for a native code.
+- `fn darwin_err(code: isize) IoErr`
+- `fn windows_err(code: isize) IoErr`
+- `fn wasi_err(code: isize) IoErr`
+- `fn err_of(failure: fail.Failure) IoErr`: Bridges for std modules that still report through fail.Status.
+- `fn failure_of(err: IoErr, operation: []const u8, path: []const u8) fail.Failure`
 - `fn linux(code: isize) fail.Kind`
 - `fn windows(code: isize) fail.Kind`
 - `fn wasi(code: isize) fail.Kind`
@@ -1314,18 +1322,19 @@ Layer: heap
 - `fn darwin_text(code: isize) []const u8`
 - `fn windows_text(code: isize) []const u8`
 - `fn wasi_text(code: isize) []const u8`
-- `struct Reader { data: rawptr, read: fn(rawptr, *fail.Status, []u8) usize, }`: Byte streams.
-- `struct Writer { data: rawptr, write: fn(rawptr, *fail.Status, []const u8) usize, }`: A write returns how many bytes of source it took, possibly fewer than all;
-- `enum IoErr { EndOfStream, InvalidState, InvalidInput, BrokenPipe, System(isize), }`: Structured I/O error enum for T!IoErr APIs.
-- `fn read(status: *fail.Status, reader: Reader, destination: []u8) usize`: Reads into destination;
-- `fn read_exact(status: *fail.Status, reader: Reader, destination: []u8) usize`: Fills destination.
-- `fn write(status: *fail.Status, writer: Writer, source: []const u8)`: Writes all of source.
-- `fn print_arguments(status: *fail.Status, writer: Writer, template: []const u8, arguments: []const any)`: print_arguments is the non-variadic entry point used by forwarding wrappers.
-- `fn print_to(status: *fail.Status, writer: Writer, template: []const u8, arguments: ...any)`: Checked formatting to any writer: {} takes the next argument.
-- `fn println_arguments(status: *fail.Status, writer: Writer, template: []const u8, arguments: []const any)`: Like print_arguments, then a newline.
-- `fn println_to(status: *fail.Status, writer: Writer, template: []const u8, arguments: ...any)`
-- `fn copy(status: *fail.Status, writer: Writer, reader: Reader, scratch: []u8) usize`: Copies reader to writer until the end of the reader, through scratch;
-- `fn copy_n(status: *fail.Status, writer: Writer, reader: Reader, amount: usize, scratch: []u8)`: Copies exactly amount bytes;
+- `struct Reader { data: rawptr, read: fn(rawptr, []u8) usize!IoErr, }`: Byte streams.
+- `struct Writer { data: rawptr, write: fn(rawptr, []const u8) usize!IoErr, }`: A write returns how many bytes of source it took, possibly fewer than all;
+- `enum IoErr { NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System(isize), }`: Why an I/O call failed, shared by std/io, std/fs, std/net and std/process.
+- `fn text(err: IoErr) []const u8`: What err means, such as "not found";
+- `fn read(reader: Reader, destination: []u8) usize!IoErr`: Reads into destination;
+- `fn read_exact(reader: Reader, destination: []u8) usize!IoErr`: Fills destination.
+- `fn write(writer: Writer, source: []const u8) !IoErr`: Writes all of source.
+- `fn print_arguments(writer: Writer, template: []const u8, arguments: []const any) !IoErr`: print_arguments is the non-variadic entry point used by forwarding wrappers.
+- `fn print_to(writer: Writer, template: []const u8, arguments: ...any) !IoErr`: Checked formatting to any writer: {} takes the next argument.
+- `fn println_arguments(writer: Writer, template: []const u8, arguments: []const any) !IoErr`: Like print_arguments, then a newline.
+- `fn println_to(writer: Writer, template: []const u8, arguments: ...any) !IoErr`
+- `fn copy(writer: Writer, reader: Reader, scratch: []u8) usize!IoErr`: Copies reader to writer until the end of the reader, through scratch;
+- `fn copy_n(writer: Writer, reader: Reader, amount: usize, scratch: []u8) !IoErr`: Copies exactly amount bytes;
 - `struct Cursor { data: []const u8, offset: usize, }`
 - `fn cursor(data: []const u8) Cursor`
 - `fn cursor_reader(state: *Cursor) Reader`
@@ -2370,18 +2379,18 @@ Layer: std
 - `struct Exit { code: u32, signal: u32, finished: bool }`: How a child ended.
 - `struct Pipe { input: isize, output: isize }`
 - `struct Captured { output: []u8, errors: []u8, exit: Exit, timed_out: bool, limit_reached: bool }`
-- `fn spawn(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, configuration: Options) *Child`: Starts path with arguments (argv[0] first).
-- `fn wait(status: *fail.Status, child: *Child, nonblocking: bool) Exit`: Waits for child to end;
-- `fn terminate(status: *fail.Status, child: *Child)`: Kills child.
-- `fn pipe(status: *fail.Status) Pipe`: A pipe: write to output, read from input.
+- `fn spawn(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) *Child!io.IoErr`: Starts path with arguments (argv[0] first).
+- `fn wait(child: *Child, nonblocking: bool) Exit!io.IoErr`: Waits for child to end;
+- `fn terminate(child: *Child) !io.IoErr`: Kills child.
+- `fn pipe() Pipe!io.IoErr`: A pipe: write to output, read from input.
 - `fn close_pipe(handle: isize)`
 - `fn environment_or(arena: *mem.Arena, name: []const u8, fallback: []const u8) []const u8`: The variable's value in arena, or fallback when it is unset or unreadable.
-- `fn environment(arena: *mem.Arena, status: *fail.Status, name: []const u8) []u8`: The value of environment variable name, in arena;
+- `fn environment(arena: *mem.Arena, name: []const u8) []u8!io.IoErr`: The value of environment variable name, in arena.
 - `struct CaptureOptions { timeout_milliseconds: i64, no_wait: bool, output_limit: usize, error_limit: usize }`: Zero limits are unlimited.
-- `fn capture(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, configuration: Options, policy: CaptureOptions) Captured`: Drains both streams fairly into growing arena slices, valid until caller rewind/reset/release.
+- `fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options, policy: CaptureOptions) Captured!io.IoErr`: Drains both streams fairly into growing arena slices, valid until caller rewind/reset/release.
 - `struct Program { arena: *mem.Arena, args: [][]const u8 }`: What process.start() returns: an arena that lives for the whole program and the arguments, argv[0] first, stored in it.
 - `fn start() Program`: Call it on main's first line: `program := process.start()`.
-- `fn arguments(arena: *mem.Arena, status: *fail.Status) [][]const u8`: Includes argv[0].
+- `fn arguments(arena: *mem.Arena) [][]const u8!io.IoErr`: Includes argv[0].
 
 ## std/process/signal
 
@@ -2390,9 +2399,9 @@ Layer: std
 - `enum Kind { None, Interrupt, Terminate, Hangup }`: Process signals as events, not handlers.
 - `struct Set { interrupt: bool, terminate: bool, hangup: bool }`: Kinds to watch.
 - `struct Watch { handle: isize, set: Set, active: bool }`: An open watch.
-- `fn watch(status: *fail.Status, set: Set) Watch`
-- `fn poll(status: *fail.Status, state: *Watch) Kind`: The next pending signal without blocking;
-- `fn wait(status: *fail.Status, state: *Watch) Kind`: Blocks until a watched signal arrives.
+- `fn watch(set: Set) Watch!io.IoErr`: Fails with InvalidInput when set chooses no signal.
+- `fn poll(state: *Watch) Kind!io.IoErr`: The next pending signal without blocking;
+- `fn wait(state: *Watch) Kind!io.IoErr`: Blocks until a watched signal arrives.
 - `fn close(state: *Watch)`: Restores default signal behavior and releases the handle.
 
 ## std/profile

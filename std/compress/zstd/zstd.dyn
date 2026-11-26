@@ -99,7 +99,13 @@ fn decoder_failed(status: *fail.Status, state: *Decoder) usize {
   state.failure = status.failure
   return 0
 }
-fn decoder_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn decoder_read(data: rawptr, destination: []u8) usize!stream.IoErr {
+  status: fail.Status
+  count := decoder_read_status(data, &status, destination)
+  try stream.check_status(&status)
+  return count
+}
+fn decoder_read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
   state := #cast(*Decoder, data)
   if status.failed { return 0 }
   if state.failed {
@@ -143,7 +149,7 @@ fn decoder_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
       fail.at(status, fail.Kind.InvalidInput, "decompress", "the input ends inside a frame", state.offset)
       return decoder_failed(status, state)
     }
-    count := stream.read(status, state.source_reader, state.compressed_storage)
+    count := stream.read_status(status, state.source_reader, state.compressed_storage)
     state.offset = 0
     state.used = count
     if status.failed { return decoder_failed(status, state) }

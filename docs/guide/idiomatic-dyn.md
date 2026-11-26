@@ -185,26 +185,43 @@ borrowed; inspect them with an exhaustive type `case` and do not retain them.
 
 ## Errors and cleanup
 
-A function that can fail takes a `*fail.Status`, the way a function that
-allocates takes a `*mem.Arena`, so its signature says it can fail. The first
-failure is recorded in the status and stays there; every later call given that
-status does nothing and returns zero or empty. Code does not check after each
-call: it checks `status.failed` once, before it acts on the results, and prints
-`status.failure` with `fail.describe`, such as
-`open app.json: no such file or directory`.
+A function that can fail returns `T!E`: its value, or an error `E`. `E` is
+an enum, or a union of enums (`FsErr | ParseErr`) when a function can fail in
+more than one module's way. `try` passes a failure up, running `defer` and
+`errdefer` on the way; `catch` handles it where the program knows what to do.
+`std/io`, `std/fs` and `std/process` fail with `io.IoErr`, and printing one
+gives its meaning ("not found"). The error does not carry the path, so the
+code that catches it names what it was working on:
 
 ```dyn
-status: fail.Status
-text := fs.read_all(arena, &status, path, 1 << 20)   // fails: empty
-fs.write_all(&status, copy_path, text)               // already failed: writes nothing
-if status.failed {
-  storage: [512]u8
-  io.eprintln("tool: {}", fail.describe(storage[..], status.failure))
+fn copy(arena: *mem.Arena, path: []const u8, copy_path: []const u8) !io.IoErr {
+  text := try fs.read_all(arena, path, 1 << 20)
+  try fs.write_all(copy_path, text)
+}
+```
+
+```dyn
+copy(arena, path, copy_path) catch err {
+  io.eprintln("tool: copy {}: {}", path, err)
   return 1
 }
 ```
 
-Three rules cover every std and vendor call:
+React to one kind with `case`: `.NotFound => { ... }`, `_ => { fail err }`.
+Iterators return their value and set `ended` on their state at the end;
+the end of the input is not a failure. Cleanup cannot fail (`fs.close`,
+`mem.arena_release`), so it works in a `defer` after any failure.
+
+### Modules that still take a status
+
+The rest of std and the vendor packages are moving to `T!E`. Until then they
+take a `*fail.Status`, the way a function that allocates takes a
+`*mem.Arena`. The first failure is recorded in the status and stays there;
+every later call given that status does nothing and returns zero or empty.
+Code does not check after each call: it checks `status.failed` once, before it
+acts on the results, and prints `status.failure` with `fail.describe`.
+
+Three rules cover every such call:
 
 1. **If it can fail, it takes `&status`.** Its result is the value itself,
    zero or empty after a failure.
@@ -261,8 +278,8 @@ The same three rules, from the other side:
    check at all.
 
 ```dyn
-pub fn load(arena: *mem.Arena, status: *fail.Status, path: []const u8) Config {
-  doc := json.parse(arena, status, fs.read_all(arena, status, path, 1 << 20))
+pub fn load(arena: *mem.Arena, status: *fail.Status, text: []const u8, path: []const u8) Config {
+  doc := json.parse(arena, status, text)
   port := json.get(i64, status, doc, "port")
   if port > 65535 {
     fail.invalid(status, "config", path, "port out of range")
@@ -355,25 +372,23 @@ choice, not an arbitrary collection of flags.
 storage. None of these require printing to be a compiler builtin or allocate implicitly.
 
 ```dyn
-use "std/fail"
 use "std/io"
 
 io.println("count: {}", count)
-status: fail.Status
-io.println_to(&status, log_file, "count: {}", count)
+try io.println_to(log_file, "count: {}", count)
 ```
 
 `io.print` and `io.println` write to standard output and `io.eprint` and `io.eprintln` to standard
 error; they ignore write failures such as a closed pipe. `io.print_to` and `io.println_to` take any
-writer and a status, like every call that can fail. All of them support `{}` substitutions and
-`{{`/`}}` literal braces. `std/terminal` provides terminal controls.
+writer and return `!io.IoErr`. All of them support `{}` substitutions and `{{`/`}}` literal braces.
+`std/terminal` provides terminal controls.
 
-A `Reader` or `Writer` is a data pointer and one function that takes the status. `io.read` returns
-the count read, 0 at the end of the stream and after a failure, so a read loop ends by itself:
+A `Reader` or `Writer` is a data pointer and one function that returns `usize!io.IoErr`. `io.read`
+returns the count read, 0 at the end of the stream:
 
 ```dyn
 for {
-  count := io.read(status, reader, chunk[..])
+  count := try io.read(reader, chunk[..])
   if count == 0 { break }
   use_bytes(chunk[..count])
 }
@@ -411,22 +426,20 @@ promoted types. Do not expose Dyn slices, strings, or `any` as if they were C va
 
 ## Check errors once
 
-When several steps can fail, pass one status through them and check it at the end. Each step does
-nothing once a failure is recorded, and the failure names the operation and the path.
+When several steps can fail, `try` each one and handle the failure once, where the program knows
+what to do with it.
 
 ```dyn
-use "std/fail"
 use "std/fs"
+use "std/io"
 
-fn save(status: *fail.Status, path: []const u8) {
-  file := fs.create(status, path)
+fn save(path: []const u8) !io.IoErr {
+  file := try fs.create(path)
   defer fs.close(&file)
-  fs.write(status, &file, "name: ")
-  fs.write(status, &file, "dyn\n")
+  try fs.write(&file, "name: ")
+  try fs.write(&file, "dyn\n")
 }
 ```
 
-A function of your own that can fail takes the status the same way, and does not need to check it
-unless it is about to act on a result.
-
-The code stays straight, a failure stops the remaining work, and there is one `if` at the end.
+The code stays straight, a failure stops the remaining work, and the `defer` still closes the
+file.

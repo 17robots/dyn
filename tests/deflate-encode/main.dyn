@@ -12,7 +12,7 @@ fn main() {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
+  arguments := process.arguments(arena) catch { #panic("cannot read arguments") }
   level := arguments[1][0] - '0'
   read := fs_read_file(arena, arguments[2], 1 << 30)
   started := time.monotonic_now()
@@ -26,12 +26,13 @@ fn main() {
 // Writes data to path; whether it worked.
 fn fs_write_file(path: []const u8, data: []const u8) bool {
   status: fail.Status
-  fs.write_all(&status, path, data)
+  fs.write_all(path, data) catch { #panic("cannot write the file") }
   return !status.failed
 }
 
 // The whole file at path; empty when it cannot be read.
 fn fs_read_file(arena: *mem.Arena, path: []const u8, maximum: usize) []u8 {
-  status: fail.Status
-  return fs.read_all(arena, &status, path, maximum)
+  empty: []u8
+  data := fs.read_all(arena, path, maximum) catch { return empty }
+  return data
 }

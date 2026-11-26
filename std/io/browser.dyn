@@ -1,0 +1,7 @@
+#target(kernel: browser)
+
+// The browser gives no system codes.
+fn system_text(code: isize) []const u8 {
+  _ = code
+  return ""
+}

@@ -58,25 +58,28 @@ fn wide(arena: *mem.Arena, source: []const u8) Wide {
   if length == 0 { return Wide{} }
   return Wide{ data: destination[..length], ok: true }
 }
-fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, configuration: Options) Child {
+fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) Child!io.IoErr {
   mark := mem.arena_mark(arena)
   defer mem.arena_rewind(arena, mark)
   application := wide(arena, path)
   if !application.ok {
-    return spawn_failed(status, fail.make(fail.Kind.Capacity, "spawn", path, "the command line is too long"))
+    // The command line is too long.
+    fail .Capacity
   }
   directory: rawptr = nil
   if configuration.directory.len > 0 {
     converted_directory := wide(arena, configuration.directory)
     if !converted_directory.ok {
-      return spawn_failed(status, fail.make(fail.Kind.Capacity, "spawn", path, "the command line is too long"))
+      // The command line is too long.
+      fail .Capacity
     }
     directory = &converted_directory.data[0]
   }
   capacity: usize = 1
   for argument in arguments {
     if argument.len > 16380 || capacity > 32767 - (argument.len*2+3) {
-      return spawn_failed(status, fail.make(fail.Kind.Capacity, "spawn", path, "the command line is too long"))
+      // The command line is too long.
+      fail .Capacity
     }
     capacity += argument.len*2+3
   }
@@ -92,7 +95,8 @@ fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, argum
     if argument_index == 0 {
       for first_byte in argument_text {
         if first_byte == 34 {
-          return spawn_failed(status, fail.make(fail.Kind.InvalidInput, "spawn", path, "an argument cannot be passed on a Windows command line"))
+          // An argument cannot be passed on a Windows command line.
+          fail .InvalidInput
         }
       }
     }
@@ -117,7 +121,8 @@ fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, argum
       }
       decoded := utf8.decode(argument_text, at)
       if !decoded.valid {
-        return spawn_failed(status, fail.make(fail.Kind.InvalidInput, "spawn", path, "an argument cannot be passed on a Windows command line"))
+        // An argument cannot be passed on a Windows command line.
+        fail .InvalidInput
       }
       width := utf16.encode(command[used..], decoded.codepoint)
       used += width
@@ -137,7 +142,8 @@ fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, argum
   environment_capacity: usize = 2
   for item in configuration.environment {
     if item.len > 32766 || environment_capacity > 32767 - item.len - 1 {
-      return spawn_failed(status, fail.make(fail.Kind.Capacity, "spawn", path, "the command line is too long"))
+      // The command line is too long.
+      fail .Capacity
     }
     environment_capacity += item.len+1
   }
@@ -150,7 +156,8 @@ fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, argum
   for entry in configuration.environment {
     converted := wide(arena, entry)
     if !converted.ok {
-      return spawn_failed(status, fail.make(fail.Kind.Capacity, "spawn", path, "the command line is too long"))
+      // The command line is too long.
+      fail .Capacity
     }
     position := entry_index
     for position > 0 && win_compare(&entries[position-1].data[0], #cast(i32, entries[position-1].data.len)-1, &converted.data[0], #cast(i32, converted.data.len)-1, 1) == 3 {
@@ -188,7 +195,7 @@ fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, argum
     if source != nil && #cast(usize, source) != 18446744073709551615 {
       if win_duplicate(win_current(), source, win_current(), &duplicate, 0, 1, 2) == 0 {
         duplicate_error := win_failure()
-        return spawn_failed(status, io.from_windows("spawn", path, duplicate_error))
+        fail io.windows_err(duplicate_error)
       }
       handles[inherited_count] = duplicate
       inherited_count += 1
@@ -208,12 +215,12 @@ fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, argum
   startup.attributes = &attributes[0]
   if win_init_attributes(startup.attributes, 1, 0, &size) == 0 {
     initialize_error := win_failure()
-    return spawn_failed(status, io.from_windows("spawn", path, initialize_error))
+    fail io.windows_err(initialize_error)
   }
   defer win_delete_attributes(startup.attributes)
   if inherited_count > 0 && win_update_attributes(startup.attributes, 0, 131074, &handles[0], inherited_count*#sizeof(rawptr), nil, nil) == 0 {
     attribute_error := win_failure()
-    return spawn_failed(status, io.from_windows("spawn", path, attribute_error))
+    fail io.windows_err(attribute_error)
   }
   information := ProcessInformation{}
   inherit: i32 = 0
@@ -222,63 +229,44 @@ fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, argum
   }
   if win_create(&application.data[0], &command[0], nil, nil, inherit, 525312, &environment[0], directory, &startup, &information) == 0 {
     create_error := win_failure()
-    return spawn_failed(status, io.from_windows("spawn", path, create_error))
+    fail io.windows_err(create_error)
   }
   _ = win_close(information.thread)
   return Child{ handle: #cast(isize, #cast(usize, information.process)), active: true }
 }
-fn spawn_failed(status: *fail.Status, failure: fail.Failure) Child {
-  fail.set(status, failure)
-  return Child{}
-}
-fn windows_failed(status: *fail.Status, operation: []const u8) {
-  fail.set(status, io.from_windows(operation, "", win_failure()))
-}
-fn wait_native(status: *fail.Status, child: *Child, nonblocking: bool) Exit {
+fn wait_native(child: *Child, nonblocking: bool) Exit!io.IoErr {
   timeout: u32 = 4294967295
   if nonblocking {
     timeout = 0
   }
   value := win_wait(handle(child.handle), timeout)
   if value == 258 { return Exit{} }
-  if value != 0 {
-    windows_failed(status, "wait")
-    return Exit{}
-  }
+  if value != 0 { fail io.windows_err(win_failure()) }
   code: u32 = 0
-  if win_exit_code(handle(child.handle), &code) == 0 {
-    windows_failed(status, "wait")
-    return Exit{}
-  }
+  if win_exit_code(handle(child.handle), &code) == 0 { fail io.windows_err(win_failure()) }
   _ = win_close(handle(child.handle))
   child.active = false
   return Exit{ code: code, finished: true }
 }
-fn terminate_native(status: *fail.Status, child: *Child) {
-  if win_terminate(handle(child.handle), 1) == 0 {
-    windows_failed(status, "terminate")
-  }
+fn terminate_native(child: *Child) !io.IoErr {
+  if win_terminate(handle(child.handle), 1) == 0 { fail io.windows_err(win_failure()) }
 }
 fn close_native(value: isize) {
   _ = win_close(handle(value))
 }
-fn pipe_native(status: *fail.Status) Pipe {
+fn pipe_native() Pipe!io.IoErr {
   input: rawptr = nil
   output: rawptr = nil
-  if win_pipe(&input, &output, nil, 0) == 0 {
-    windows_failed(status, "pipe")
-    return Pipe{ input: -1, output: -1 }
-  }
+  if win_pipe(&input, &output, nil, 0) == 0 { fail io.windows_err(win_failure()) }
   return Pipe{ input: #cast(isize, #cast(usize, input)), output: #cast(isize, #cast(usize, output)) }
 }
 // A pipe with nothing to read yet is no failure: count 0, not ended.
-fn read_native(status: *fail.Status, value: isize, destination: []u8) Read {
+fn read_native(value: isize, destination: []u8) Read!io.IoErr {
   available: u32 = 0
   if win_peek(handle(value), nil, 0, nil, &available, nil) == 0 {
     error := win_error()
     if error == 109 { return Read{ ended: true } }
-    fail.set(status, io.from_windows("read", "", 0 - #cast(isize, error)))
-    return Read{}
+    fail io.windows_err(0 - #cast(isize, error))
   }
   if available == 0 { return Read{} }
   amount := #cast(usize, available)
@@ -286,10 +274,7 @@ fn read_native(status: *fail.Status, value: isize, destination: []u8) Read {
     amount = destination.len
   }
   read: u32 = 0
-  if win_read(handle(value), &destination[0], #cast(u32, amount), &read, nil) == 0 {
-    windows_failed(status, "read")
-    return Read{}
-  }
+  if win_read(handle(value), &destination[0], #cast(u32, amount), &read, nil) == 0 { fail io.windows_err(win_failure()) }
   return Read{ count: read }
 }
 fn milliseconds_native() u64 {
@@ -298,44 +283,34 @@ fn milliseconds_native() u64 {
 fn sleep_native() {
   win_sleep(1)
 }
-fn environment_failed(status: *fail.Status, kind: fail.Kind, name: []const u8, message: []const u8) []u8 {
-  fail.set(status, fail.make(kind, "read environment", name, message))
-  empty: []u8
-  return empty
-}
-fn environment_native(status: *fail.Status, name: []const u8, destination: []u8) []u8 {
+// A value longer than destination fails with Capacity.
+fn environment_native(name: []const u8, destination: []u8) []u8!io.IoErr {
   key: [32768]u16
   value: [32768]u16
-  if encode_wide(key[..], name) == 0 { return environment_failed(status, fail.Kind.InvalidInput, name, "the name is too long") }
+  if encode_wide(key[..], name) == 0 { fail .InvalidInput }
   win_set_error(0)
   length := win_environment(&key[0], &value[0], 32768)
   if length == 0 {
     error := win_error()
-    if error == 203 { return environment_failed(status, fail.Kind.NotFound, name, "not set") }
-    if error != 0 {
-      fail.set(status, io.from_windows("read environment", name, 0 - #cast(isize, error)))
-      return destination[..0]
-    }
+    if error == 203 { fail .NotFound }
+    if error != 0 { fail io.windows_err(0 - #cast(isize, error)) }
   }
-  if length >= 32768 { return environment_failed(status, fail.Kind.Capacity, name, "the value is too long") }
+  if length >= 32768 { fail .Capacity }
   at: usize = 0
   used: usize = 0
   for at < length {
     decoded := utf16.decode(value[..length], at)
-    if !decoded.valid { return environment_failed(status, fail.Kind.InvalidInput, name, "the value is not valid UTF-16") }
+    if !decoded.valid { fail .InvalidInput }
     width := utf8.encode(destination[used..], decoded.codepoint)
-    if width == 0 { return environment_failed(status, fail.Kind.Capacity, name, "the value does not fit the storage") }
+    if width == 0 { fail .Capacity }
     used += width
     at += decoded.width
   }
   return destination[..used]
 }
 
-fn duplicate_native(status: *fail.Status, value: isize) isize {
+fn duplicate_native(value: isize) isize!io.IoErr {
   copied: rawptr = nil
-  if win_duplicate(win_current(), handle(value), win_current(), &copied, 0, 0, 2) == 0 {
-    windows_failed(status, "duplicate")
-    return -1
-  }
+  if win_duplicate(win_current(), handle(value), win_current(), &copied, 0, 0, 2) == 0 { fail io.windows_err(win_failure()) }
   return #cast(isize, #cast(usize, copied))
 }

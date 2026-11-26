@@ -125,9 +125,8 @@ fn percentile(buckets: []const u64, total: u64, fraction_thousandths: u64) u64 {
 fn main() i32 {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
-  if arguments_status.failed || arguments.len < 5 {
+  arguments := process.arguments(arena) catch { #panic("httpbench: cannot read the arguments") }
+  if arguments.len < 5 {
     io.eprintln("usage: httpbench PORT PATH CONNECTIONS SECONDS [A.B.C.D]")
     return 2
   }

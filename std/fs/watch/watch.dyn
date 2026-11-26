@@ -1,7 +1,6 @@
 #target(kernel: linux)
 use mem "std/mem"
 use io "std/io"
-use "std/fail"
 use fs "std/fs"
 use c "std/c"
 use "std/os/linux/sys"
@@ -30,52 +29,32 @@ pub const FixedWatchCapacity: usize = 0
 // stable owner and close it before its storage is released or reused.
 // ended is set by a next call that returns no event: none is pending now,
 // and a later call may return one.
-pub struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }
+pub struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, error: io.IoErr, ended: bool }
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
 
 // Watches are non-recursive. Register each directory explicitly. Names borrow
 // storage until next refill. An overflow invalidates all cached workspace state.
 // storage holds event records: at least 272 bytes.
-pub fn open(status: *fail.Status, storage: []u8) Watcher {
-  if status == nil { return open(&fail.Status{}, storage) }
-  if status.failed { return Watcher{} }
-  if storage.len < 272 {
-    _ = failure(status, "watch", "", -28)
-    return Watcher{}
-  }
+pub fn open(storage: []u8) Watcher!io.IoErr {
+  if storage.len < 272 { fail io.linux_err(-28) }
   descriptor := #syscall(sys.InotifyInit1, 526336)
-  if descriptor < 0 {
-    _ = failure(status, "watch", "", descriptor)
-    return Watcher{}
-  }
+  if descriptor < 0 { fail io.linux_err(descriptor) }
   return Watcher{ descriptor: descriptor, active: true, storage: storage }
 }
-// Watches path; the watch identifier, -1 after a failure.
-pub fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i32 {
-  if status == nil { return add(&fail.Status{}, state, path, mask) }
-  if status.failed { return -1 }
-  if path.len == 0 || !state.active { return failure(status, "watch", path, -22) }
+// Watches path; the watch identifier.
+pub fn add(state: *Watcher, path: []const u8, mask: u32) i32!io.IoErr {
+  if path.len == 0 || !state.active { fail io.linux_err(-22) }
   storage: [4096 + mem.ArenaBufferOverhead]u8
-  name := c.string_into(status, storage[..], path)
-  if status.failed { return -1 }
+  name := c.string_into(nil, storage[..], path)
+  if name == nil { fail io.linux_err(-36) }
   value := #syscall(sys.InotifyAddWatch, state.descriptor, name, mask)
-  if value < 0 { return failure(status, "watch", path, value) }
+  if value < 0 { fail io.linux_err(value) }
   return #cast(i32, value)
 }
-pub fn remove(status: *fail.Status, state: *Watcher, watch: i32) {
-  if status == nil {
-    remove(&fail.Status{}, state, watch)
-    return
-  }
-  if status.failed { return }
-  if !state.active {
-    _ = failure(status, "unwatch", "", -9)
-    return
-  }
+pub fn remove(state: *Watcher, watch: i32) !io.IoErr {
+  if !state.active { fail io.linux_err(-9) }
   value := #syscall(sys.InotifyRmWatch, state.descriptor, watch)
-  if value < 0 {
-    _ = failure(status, "unwatch", "", value)
-  }
+  if value < 0 { fail io.linux_err(value) }
 }
 pub fn close(state: *Watcher) {
   if !state.active { return }
@@ -90,51 +69,46 @@ fn load(bytes: []const u8, at: usize) u32 {
 }
 // Buffered records are returned first; reading more needs an active watcher.
 // Empty and rescan events remain protocol states.
-fn next_failed(status: *fail.Status, state: *Watcher, code: isize) Event {
+fn next_failed(state: *Watcher, error: io.IoErr) Event!io.IoErr {
   state.failed = true
-  _ = failure(status, "read events", "", code)
-  state.failure = status.failure
-  return idle(state)
+  state.error = error
+  state.ended = true
+  fail error
 }
 fn idle(state: *Watcher) Event {
   state.ended = true
   return Event{}
 }
-pub fn next(status: *fail.Status, state: *Watcher) Event {
-  if status == nil { return next(&fail.Status{}, state) }
+pub fn next(state: *Watcher) Event!io.IoErr {
   state.ended = false
-  if status.failed { return idle(state) }
   if state.failed {
-    fail.set(status, state.failure)
-    return idle(state)
+    state.ended = true
+    fail state.error
   }
-  if state.used > state.storage.len || state.offset > state.used { return next_failed(status, state, -74) }
+  if state.used > state.storage.len || state.offset > state.used { return try next_failed(state, io.linux_err(-74)) }
   if state.offset == state.used {
-    if !state.active { return next_failed(status, state, -9) }
+    if !state.active { return try next_failed(state, io.linux_err(-9)) }
     file := fs.adopt_handle(state.descriptor)
-    reading: fail.Status
-    count := fs.read(&reading, &file, state.storage)
-    if reading.failed {
-      if reading.failure.native == -11 { return idle(state) }
-      state.failed = true
-      state.failure = reading.failure
-      fail.set(status, reading.failure)
-      return idle(state)
+    count := fs.read(&file, state.storage) catch err {
+      case err {
+        .WouldBlock => { return idle(state) }
+        _ => { return try next_failed(state, err) }
+      }
     }
-    if count == 0 { return next_failed(status, state, -5) }
+    if count == 0 { return try next_failed(state, io.linux_err(-5)) }
     state.offset = 0
     state.used = count
   }
   at := state.offset
-  if at > state.used || state.used - at < 16 { return next_failed(status, state, -74) }
+  if at > state.used || state.used - at < 16 { return try next_failed(state, io.linux_err(-74)) }
   length := #cast(usize, load(state.storage, at+12))
-  if length > state.used - at - 16 { return next_failed(status, state, -74) }
+  if length > state.used - at - 16 { return try next_failed(state, io.linux_err(-74)) }
   name := state.storage[at+16..at+16+length]
   end: usize = 0
   for end < length && name[end] != 0 {
     end += 1
   }
-  if length > 0 && end == length { return next_failed(status, state, -74) }
+  if length > 0 && end == length { return try next_failed(state, io.linux_err(-74)) }
   mask := load(state.storage, at+4)
   rescan := (mask & 16384) != 0
   watch: i32 = -1
@@ -152,9 +126,4 @@ pub fn next(status: *fail.Status, state: *Watcher) Event {
 // that scan, so drain/reconcile them before treating the workspace as current.
 pub fn acknowledge_rescan(state: *Watcher) {
   state.rescan_required = false
-}
-
-fn failure(status: *fail.Status, operation: []const u8, path: []const u8, code: isize) i32 {
-  fail.set(status, io.from_linux(operation, path, code))
-  return -1
 }

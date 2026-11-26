@@ -33,11 +33,8 @@ fn main() i32 {
     return 2
   }
   path := program.args[1]
-  status: fail.Status
-  file := fs.read_all(arena, &status, path, 16 << 20)
-  if status.failed {
-    storage: [512]u8
-    io.eprintln("ledger: {}", fail.describe(storage[..], status.failure))
+  file := fs.read_all(arena, path, 16 << 20) catch err {
+    io.eprintln("ledger: cannot read {}: {}", path, err)
     return 1
   }
 

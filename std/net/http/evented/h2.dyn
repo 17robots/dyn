@@ -320,8 +320,8 @@ fn send_frame(connection: *Connection, kind: u8, flags: u8, stream: u32, payload
     return push_bytes(connection, head[..]) && push_bytes(connection, payload)
   }
   status: fail.Status
-  _ = output_write(connection, &status, head[..])
-  _ = output_write(connection, &status, payload)
+  _ = output_write_status(connection, &status, head[..])
+  _ = output_write_status(connection, &status, payload)
   return !status.failed
 }
 
@@ -1305,7 +1305,13 @@ fn finish_stream(worker: *Worker, index: usize, stream_index: usize) {
 }
 
 // The response writer: HTTP/1.1 bytes in, frames out.
-fn h2_write_stream(data: rawptr, status: *fail.Status, source: []const u8) usize {
+fn h2_write_stream(data: rawptr, source: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := h2_write_stream_status(data, &status, source)
+  try io.check_status(&status)
+  return count
+}
+fn h2_write_stream_status(data: rawptr, status: *fail.Status, source: []const u8) usize {
   connection := #cast(*Connection, data)
   worker := connection.worker
   h2 := connection.h2
@@ -1337,9 +1343,9 @@ fn h2_commit(data: rawptr, status: *fail.Status, head: []const u8, length: usize
     fail.set(status, fail.make(fail.Kind.InvalidState, "respond", "", "the body is past the reserved storage"))
     return 0
   }
-  first := h2_write_stream(data, status, head)
+  first := h2_write_stream_status(data, status, head)
   if status.failed { return 0 }
-  return first + h2_write_stream(data, status, body[..length])
+  return first + h2_write_stream_status(data, status, body[..length])
 }
 
 // Turns response bytes into frames for a stream. blocking may wait for flow

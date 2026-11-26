@@ -74,8 +74,8 @@ fn main() i32 {
 
   tasks: array.Array<Task>
   array.init(&tasks, arena)
-  // Loading and saving can fail; both take this status. Check it before
-  // acting on what load returned.
+  // Loading can fail; it takes this status. Check it before acting on what
+  // load returned.
   status: fail.Status
   load(&tasks, arena, &status, path)
   if status.failed { return report(status) }
@@ -129,8 +129,10 @@ fn main() i32 {
   }
 
   if changed {
-    save(tasks.items, arena, &status, path)
-    if status.failed { return report(status) }
+    save(tasks.items, arena, path) catch err {
+      io.eprintln("todo: save {}: {}", path, err)
+      return 1
+    }
   }
   return 0
 }

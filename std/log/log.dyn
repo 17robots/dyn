@@ -41,19 +41,19 @@ pub fn write(status: *fail.Status, target: *Logger, level: Level, message: []con
   }
   length = put(line[..], length, "\n")
   if length <= line.len {
-    stream.write(status, target.output, line[..length])
+    stream.write_status(status, target.output, line[..length])
     return
   }
-  stream.write(status, target.output, name(level))
-  stream.write(status, target.output, ": ")
-  stream.write(status, target.output, message)
+  stream.write_status(status, target.output, name(level))
+  stream.write_status(status, target.output, ": ")
+  stream.write_status(status, target.output, message)
   for field in fields {
-    stream.write(status, target.output, " ")
-    stream.write(status, target.output, field.name)
-    stream.write(status, target.output, "=")
-    stream.write(status, target.output, field.value)
+    stream.write_status(status, target.output, " ")
+    stream.write_status(status, target.output, field.name)
+    stream.write_status(status, target.output, "=")
+    stream.write_status(status, target.output, field.value)
   }
-  stream.write(status, target.output, "\n")
+  stream.write_status(status, target.output, "\n")
 }
 
 // Appends text at length, or returns more than #len(line) once it no longer fits.

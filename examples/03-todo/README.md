@@ -27,12 +27,12 @@ Tasks are saved in `./todo.txt`, or the file named by `TODO_FILE`. See
   else that can fail; `parse.malformed` records what went wrong and the byte
   offset. `load` gives each line its own status, so its message can name the
   line. `parse.u64_decimal` reports bad numbers the same way.
-- **A status for loading and saving.** `load` and `save` take a
-  `*fail.Status`; `main` checks it once after each. Inside `save`, a failed
-  write makes the rename do nothing, so no check sits between them.
-- **Reacting to one kind of failure.** `load` reads with a status of its own
-  and treats `fail.Kind.NotFound` as an empty list; any other failure goes on
-  to the caller with `fail.set`.
+- **Loading and saving.** `load` takes a `*fail.Status`, because a bad
+  line is a parse failure with a message. `save` returns `!io.IoErr`: `try`
+  stops it at a failed write, before the rename.
+- **Reacting to one kind of failure.** `load` catches the read's failure and
+  treats `.NotFound` as an empty list; any other failure goes on to the
+  caller's status.
 - **Borrowing the file's text.** `fs.read_all` loads the whole file into the
   arena, and every `Task.text` is a slice of that text. Nothing is copied
   and nothing is freed one task at a time.

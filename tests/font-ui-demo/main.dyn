@@ -20,12 +20,12 @@ fn main() {
     mem.arena_release(frame)
   }
   arguments_status: fail.Status
-  arguments := process.arguments(output, &arguments_status)
+  arguments := process.arguments(output) catch { #panic("cannot read arguments") }
   if arguments_status.failed || arguments.len != 3 {
     #panic("usage: font-ui-demo FONT.ttf OUTPUT.png")
   }
   bytes_file: fail.Status
-  bytes := fs.read_all(output, &bytes_file, arguments[1], 64000000)
+  bytes := fs.read_all(output, arguments[1], 64000000) catch { #panic("cannot read the file") }
   if bytes_file.failed {
     #panic("cannot read font")
   }
@@ -86,6 +86,6 @@ fn main() {
 // Writes data to path; whether it worked.
 fn fs_write_file(path: []const u8, data: []const u8) bool {
   status: fail.Status
-  fs.write_all(&status, path, data)
+  fs.write_all(path, data) catch { #panic("cannot write the file") }
   return !status.failed
 }

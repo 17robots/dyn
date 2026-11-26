@@ -28,15 +28,15 @@ fn write_escaped(status: *fail.Status, destination: io.Writer, source: []const u
     }
     if replacement.len > 0 {
       if i > start {
-        io.write(status, destination, source[start..i])
+        io.write_status(status, destination, source[start..i])
       }
-      io.write(status, destination, replacement)
+      io.write_status(status, destination, replacement)
       if status.failed { return }
       start = i + 1
     }
   }
   if start < source.len {
-    io.write(status, destination, source[start..])
+    io.write_status(status, destination, source[start..])
   }
 }
 

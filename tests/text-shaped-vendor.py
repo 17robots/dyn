@@ -100,7 +100,7 @@ fn main() {
  b:=bidi_load(bidi_library.value)
  check(!failed(h.failure) && !failed(b.failure))
  data_file: fail.Status
- data := fs.read_all(arena, &data_file, "font.ttf", 10000000)
+ data := fs.read_all(arena, "font.ttf", 10000000) catch { #panic("cannot read a fixture") }
  check(!data_file.failed)
  created:=hb_font_owned(&h.api,data,0)
  check(!failed(created.failure))
@@ -174,7 +174,7 @@ fn main() {
 // Writes data to path; whether it worked.
 fn fs_write_file(path: []const u8, data: []const u8) bool {
   status: fail.Status
-  fs.write_all(&status, path, data)
+  fs.write_all(path, data) catch { #panic("cannot write a file") }
   return !status.failed
 }
 '''

@@ -1,24 +1,19 @@
 #target(streams: yes)
-use "std/fail"
 // Terminal output for every target with standard streams. These ignore write
 // failures such as a closed pipe; print_to and println_to report them.
 
 pub fn print(template: []const u8, arguments: ...any) {
-  status: fail.Status
-  print_arguments(&status, stdout(), template, arguments)
+  print_arguments(stdout(), template, arguments) catch {}
 }
 
 pub fn println(template: []const u8, arguments: ...any) {
-  status: fail.Status
-  println_arguments(&status, stdout(), template, arguments)
+  println_arguments(stdout(), template, arguments) catch {}
 }
 
 pub fn eprint(template: []const u8, arguments: ...any) {
-  status: fail.Status
-  print_arguments(&status, stderr(), template, arguments)
+  print_arguments(stderr(), template, arguments) catch {}
 }
 
 pub fn eprintln(template: []const u8, arguments: ...any) {
-  status: fail.Status
-  println_arguments(&status, stderr(), template, arguments)
+  println_arguments(stderr(), template, arguments) catch {}
 }

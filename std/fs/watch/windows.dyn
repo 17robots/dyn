@@ -31,7 +31,7 @@ struct Native { slots: [16]Slot, next_id: i32, cursor: usize }
 // close-write, directory flags, or deletion/movement of the watched directory.
 // ended is set by a next call that returns no event: none is pending now,
 // and a later call may return one.
-pub struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }
+pub struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, error: io.IoErr, ended: bool }
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
 extern fn native_open "dyn_watch_open"(name: *const u16, access: u32, share: u32, security: rawptr, creation: u32, flags: u32, template: rawptr) rawptr
 extern fn native_close "dyn_watch_close"(handle: rawptr) i32
@@ -64,13 +64,8 @@ fn arm(slot: *Slot, code: *isize) bool {
   slot.pending = true
   return true
 }
-pub fn open(status: *fail.Status, storage: []u8) Watcher {
-  if status == nil { return open(&fail.Status{}, storage) }
-  if status.failed { return Watcher{} }
-  if storage.len < 272 {
-    _ = validation_failure(status, "watch", "", -28)
-    return Watcher{}
-  }
+pub fn open(storage: []u8) Watcher!io.IoErr {
+  if storage.len < 272 { fail io.linux_err(-28) }
   owner := mem.arena_alloc(#sizeof(Native))
   native := mem.push<Native>(owner)
   native.next_id = 1
@@ -104,12 +99,10 @@ fn retire(slot: *Slot) isize {
   slot.offset = 0
   return 0
 }
-// Watches path; the watch identifier, -1 after a failure.
-pub fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i32 {
-  if status == nil { return add(&fail.Status{}, state, path, mask) }
-  if status.failed { return -1 }
-  if state.native == nil || path.len == 0 { return validation_failure(status, "watch", path, -22) }
-  if (mask & SupportedEvents) == 0 { return validation_failure(status, "watch", path, -95) }
+// Watches path; the watch identifier.
+pub fn add(state: *Watcher, path: []const u8, mask: u32) i32!io.IoErr {
+  if state.native == nil || path.len == 0 { fail io.linux_err(-22) }
+  if (mask & SupportedEvents) == 0 { fail io.linux_err(-95) }
   index: usize = 16
   for i in 0..16 {
     if state.native.slots[i].handle == nil && state.native.slots[i].event == nil {
@@ -117,15 +110,15 @@ pub fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i
       break
     }
   }
-  if index == 16 || state.native.next_id == 2147483647 { return validation_failure(status, "watch", path, -28) }
+  if index == 16 || state.native.next_id == 2147483647 { fail io.linux_err(-28) }
   wide: [4096]u16
   at: usize = 0
   used: usize = 0
   for at < path.len {
     decoded := utf8.decode(path, at)
-    if !decoded.valid || decoded.codepoint == 0 { return validation_failure(status, "watch", path, -22) }
+    if !decoded.valid || decoded.codepoint == 0 { fail io.linux_err(-22) }
     width := utf16.encode(wide[used..4095], decoded.codepoint)
-    if width == 0 { return validation_failure(status, "watch", path, -36) }
+    if width == 0 { fail io.linux_err(-36) }
     used += width
     at += decoded.width
   }
@@ -133,44 +126,34 @@ pub fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i
   slot.handle = native_open(&wide[0], 1, 7, nil, 3, 1107296256, nil)
   if #cast(usize, slot.handle) == #max(usize) {
     slot.handle = nil
-    return failure(status, "watch", path, error())
+    fail io.windows_err(error())
   }
   slot.event = create_event(nil, 1, 0, nil)
   if slot.event == nil {
     code := error()
     _ = retire(slot)
-    return failure(status, "watch", path, code)
+    fail io.windows_err(code)
   }
   armed: isize = 0
   if !arm(slot, &armed) {
     _ = retire(slot)
-    return failure(status, "watch", path, armed)
+    fail io.windows_err(armed)
   }
   slot.id = state.native.next_id
   state.native.next_id += 1
   slot.mask = mask
   return slot.id
 }
-pub fn remove(status: *fail.Status, state: *Watcher, watch: i32) {
-  if status == nil {
-    remove(&fail.Status{}, state, watch)
-    return
-  }
-  if status.failed { return }
-  if state.native == nil || watch <= 0 {
-    _ = validation_failure(status, "unwatch", "", -22)
-    return
-  }
+pub fn remove(state: *Watcher, watch: i32) !io.IoErr {
+  if state.native == nil || watch <= 0 { fail io.linux_err(-22) }
   for i in 0..16 {
     if state.native.slots[i].id == watch {
       code := retire(&state.native.slots[i])
-      if code != 0 {
-        _ = failure(status, "unwatch", "", code)
-      }
+      if code != 0 { fail io.windows_err(code) }
       return
     }
   }
-  _ = validation_failure(status, "unwatch", "", -22)
+  fail io.linux_err(-22)
 }
 pub fn close(state: *Watcher) {
   if state.native == nil { return }
@@ -187,29 +170,28 @@ fn rescan(state: *Watcher, id: i32) Event {
   return Event{ watch: id, rescan: true }
 }
 // Empty and rescan events remain protocol states.
-fn next_failed(status: *fail.Status, state: *Watcher, code: isize) Event {
+fn next_failed(state: *Watcher, code: isize) Event!io.IoErr {
   state.failed = true
-  _ = failure(status, "read events", "", code)
-  state.failure = status.failure
-  return idle(state)
+  state.error = io.windows_err(code)
+  state.ended = true
+  fail state.error
 }
 fn idle(state: *Watcher) Event {
   state.ended = true
   return Event{}
 }
-pub fn next(status: *fail.Status, state: *Watcher) Event {
-  if status == nil { return next(&fail.Status{}, state) }
+pub fn next(state: *Watcher) Event!io.IoErr {
   state.ended = false
-  if status.failed { return idle(state) }
   if state.failed {
-    fail.set(status, state.failure)
-    return idle(state)
+    state.ended = true
+    fail state.error
   }
   if state.native == nil {
+    // The watcher is closed.
     state.failed = true
-    fail.set(status, fail.make(fail.Kind.InvalidState, "read events", "", "the watcher is closed"))
-    state.failure = status.failure
-    return idle(state)
+    state.error = io.IoErr.InvalidInput
+    state.ended = true
+    fail state.error
   }
   for checked in 0..16 {
     index := state.native.cursor
@@ -218,7 +200,7 @@ pub fn next(status: *fail.Status, state: *Watcher) Event {
     if slot.id == 0 { continue }
     if !slot.pending && slot.offset == slot.used {
       armed: isize = 0
-      if !arm(slot, &armed) { return next_failed(status, state, armed) }
+      if !arm(slot, &armed) { return try next_failed(state, armed) }
     }
     if slot.pending {
       transferred: u32 = 0
@@ -229,7 +211,7 @@ pub fn next(status: *fail.Status, state: *Watcher) Event {
           slot.pending = false
           return rescan(state, slot.id)
         }
-        return next_failed(status, state, 0 - #cast(isize, code))
+        return try next_failed(state, 0 - #cast(isize, code))
       }
       slot.pending = false
       slot.used = transferred
@@ -291,14 +273,4 @@ pub fn next(status: *fail.Status, state: *Watcher) Event {
 }
 pub fn acknowledge_rescan(state: *Watcher) {
   state.rescan_required = false
-}
-
-fn failure(status: *fail.Status, operation: []const u8, path: []const u8, code: isize) i32 {
-  fail.set(status, io.from_windows(operation, path, code))
-  return -1
-}
-// Checks that fail before Windows is asked use errno-style codes.
-fn validation_failure(status: *fail.Status, operation: []const u8, path: []const u8, code: isize) i32 {
-  fail.set(status, io.from_linux(operation, path, code))
-  return -1
 }

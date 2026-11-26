@@ -1,5 +1,6 @@
 use "std/fail"
 use fs "std/fs"
+use io "std/io"
 use process "std/process"
 
 // Zone files are small; a larger file is not a zone.
@@ -7,7 +8,11 @@ const tzif_limit: usize = 1048576
 
 fn read_zone(arena: *mem.Arena, status: *fail.Status, name: []const u8, path: []const u8) Zone {
   mark := mem.arena_mark(arena)
-  data := fs.read_all(arena, status, path, tzif_limit)
+  if status.failed { return Zone{} }
+  data := fs.read_all(arena, path, tzif_limit) catch err {
+    fail.set(status, io.failure_of(err, "load zone", path))
+    return Zone{}
+  }
   parsed := parse_tzif(arena, status, name, data)
   if status.failed {
     mem.arena_rewind(arena, mark)

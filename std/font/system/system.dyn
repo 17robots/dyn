@@ -195,14 +195,19 @@ fn font_file(name: []const u8) bool {
 
 struct Walk { entries: []Entry, count: usize }
 
+fn map_file(path: []const u8) []const u8!io.IoErr {
+  handle := try fs.open(path)
+  defer fs.close(&handle)
+  return try fs.map(&handle)
+}
+
 fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const u8, depth: usize) {
   if depth > depth_limit || walk.count == walk.entries.len { return }
   storage: [8192]u8
-  status: fail.Status
-  listing := fs.open_directory(&status, directory, storage[..])
+  listing := fs.open_directory(directory, storage[..]) catch { return }
   defer fs.close_directory(&listing)
   for walk.count < walk.entries.len {
-    item := fs.directory_next(&status, &listing)
+    item := fs.directory_next(&listing) catch { break }
     if listing.ended { break }
     mark := mem.arena_mark(scratch)
     parts: [2][]const u8 = [directory, item.name]
@@ -211,23 +216,19 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
       // Directories recurse with their own scratch path, then release it.
       visit(arena, scratch, walk, path, depth + 1)
     } else if font_file(item.name) && walk.count < walk.entries.len {
-      // Each font file has its own status: an unreadable one is skipped.
-      file_status: fail.Status
-      handle := fs.open(&file_status, path)
-      mapped := fs.map(&file_status, &handle)
-      fs.close(&handle)
-      if !file_status.failed {
-        {
-          entry_mark := mem.arena_mark(arena)
-          entry := describe(arena, path, mapped)
-          fs.unmap(&mapped)
-          if entry.family.len != 0 {
-            walk.entries[walk.count] = entry
-            walk.count += 1
-          } else {
-            mem.arena_rewind(arena, entry_mark)
-          }
-        }
+      // An unreadable font file is skipped.
+      mapped := map_file(path) catch {
+        mem.arena_rewind(scratch, mark)
+        continue
+      }
+      entry_mark := mem.arena_mark(arena)
+      entry := describe(arena, path, mapped)
+      fs.unmap(&mapped)
+      if entry.family.len != 0 {
+        walk.entries[walk.count] = entry
+        walk.count += 1
+      } else {
+        mem.arena_rewind(arena, entry_mark)
       }
     }
     mem.arena_rewind(scratch, mark)
@@ -353,12 +354,9 @@ pub fn covering(entries: []const Entry, codepoint: u32, regular_only: bool) *con
   for i in 0..entries.len {
     entry := &entries[i]
     if regular_only && (entry.italic || entry.weight != 400) { continue }
-    // Each file has its own status: an unreadable one is skipped.
+    // An unreadable file is skipped.
+    mapped := map_file(entry.path) catch { continue }
     status: fail.Status
-    handle := fs.open(&status, entry.path)
-    mapped := fs.map(&status, &handle)
-    fs.close(&handle)
-    if status.failed { continue }
     face := font.open(&status, mapped)
     found := !status.failed && font.glyph_index(&face, codepoint) != 0
     fs.unmap(&mapped)

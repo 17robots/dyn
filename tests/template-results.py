@@ -15,7 +15,13 @@ use mem "std/mem"
 use bytes "std/bytes"
 fn check(ok: bool) { if !ok { #panic("template results") } }
 struct Sink { calls: usize, code: isize }
-fn refuse(data: rawptr, status: *fail.Status, source: []const u8) usize {
+fn refuse(data: rawptr, source: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := refuse_status(data, &status, source)
+  try io.check_status(&status)
+  return count
+}
+fn refuse_status(data: rawptr, status: *fail.Status, source: []const u8) usize {
   state := #cast(*Sink, data)
   state.calls += 1
   failure := fail.make(fail.Kind.Capacity, "write", "", "full")
@@ -81,11 +87,11 @@ fn main() {
       sink := Sink{ code: code }
       failing := io.Writer{ data: &sink, write: refuse }
       rendered := render(mode, failing, &parsed.value, fields[..])
-      check(rendered.kind == fail.Kind.Capacity && rendered.native == #cast(isize, code) && sink.calls == 1)
+      check(rendered.kind == fail.Kind.Capacity && sink.calls == 1)
       field_only := text.Template{ source: "{{x}}tail" }
       sink.calls = 0
       rendered = render(mode, failing, &field_only, fields[..])
-      check(rendered.kind == fail.Kind.Capacity && rendered.native == #cast(isize, code) && sink.calls == 1)
+      check(rendered.kind == fail.Kind.Capacity && sink.calls == 1)
     }
     mem.arena_rewind(arena, mark)
   }

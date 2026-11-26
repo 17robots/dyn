@@ -17,7 +17,13 @@ use http "std/net/http"
 use bytes "std/bytes"
 use mem "std/mem"
 struct Feed { data: []const u8, at: usize, cut: usize, step: usize }
-fn read_feed(raw: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read_feed(raw: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := read_feed_status(raw, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn read_feed_status(raw: rawptr, status: *fail.Status, destination: []u8) usize {
   feed := #cast(*Feed, raw)
   count := feed.data.len - feed.at
   if feed.at < feed.cut && count > feed.cut - feed.at { count = feed.cut - feed.at }
@@ -27,7 +33,13 @@ fn read_feed(raw: rawptr, status: *fail.Status, destination: []u8) usize {
   feed.at += count
   return count
 }
-fn sink(raw: rawptr, status: *fail.Status, data: []const u8) usize {
+fn sink(raw: rawptr, data: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := sink_status(raw, &status, data)
+  try io.check_status(&status)
+  return count
+}
+fn sink_status(raw: rawptr, status: *fail.Status, data: []const u8) usize {
   _ = raw
   return data.len
 }

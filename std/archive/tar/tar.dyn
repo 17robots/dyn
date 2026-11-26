@@ -104,7 +104,7 @@ fn read_exact(state: *StreamReader, destination: []u8) usize {
   total: usize = 0
   for !state.failed && total < destination.len {
     reading: fail.Status
-    count := stream.read(&reading, state.source_reader, destination[total..])
+    count := stream.read_status(&reading, state.source_reader, destination[total..])
     if reading.failed {
       state.failed = true
       state.failure = reading.failure

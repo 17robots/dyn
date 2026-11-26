@@ -52,11 +52,7 @@ fn dump(out: *Output, arena: *mem.Arena, tree: *const Tree, root: u32) {
 fn main() {
   arena := mem.arena_alloc(4 * mem.GiB)
   defer mem.arena_release(arena)
-  arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
-  if arguments_status.failed {
-    #panic("cannot read arguments")
-  }
+  arguments := process.arguments(arena) catch { #panic("cannot read arguments") }
   for path in arguments[1..] {
     mark := mem.arena_mark(arena)
     out := Output{}
@@ -64,7 +60,7 @@ fn main() {
     put(&out, arena, path)
     put(&out, arena, "\n")
     source_file: fail.Status
-    source := fs.read_all(arena, &source_file, path, 64 * mem.MiB)
+    source := fs.read_all(arena, path, 64 * mem.MiB) catch { #panic("cannot read the file") }
     if source_file.failed {
       #panic("cannot read source")
     }
@@ -79,11 +75,7 @@ fn main() {
     } else {
       dump(&out, arena, &tree, root)
     }
-    written: fail.Status
-    io.write(&written, io.stdout(), out.data[..out.count])
-    if written.failed {
-      #panic("cannot write output")
-    }
+    io.write(io.stdout(), out.data[..out.count]) catch { #panic("cannot write output") }
     mem.arena_rewind(arena, mark)
   }
 }

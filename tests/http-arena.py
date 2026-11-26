@@ -17,7 +17,13 @@ use http "std/net/http"
 use bytes "std/bytes"
 use mem "std/mem"
 struct Oracle { expected: []const u8, at: usize }
-fn oracle_write(raw: rawptr, status: *fail.Status, data: []const u8) usize {
+fn oracle_write(raw: rawptr, data: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := oracle_write_status(raw, &status, data)
+  try io.check_status(&status)
+  return count
+}
+fn oracle_write_status(raw: rawptr, status: *fail.Status, data: []const u8) usize {
   oracle := #cast(*Oracle, raw)
   if data.len > oracle.expected.len - oracle.at { #panic("extra request bytes") }
   if !bytes.equal(data, oracle.expected[oracle.at..oracle.at + data.len]) { #panic("request wire") }
@@ -33,13 +39,25 @@ fn request_check(body: []const u8, expected: []const u8) {
   if status.failed || oracle.at != expected.len { #panic("large request") }
   mem.arena_release(arena)
 }
-fn error_read(raw: rawptr, status: *fail.Status, data: []u8) usize {
+fn error_read(raw: rawptr, data: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := error_read_status(raw, &status, data)
+  try io.check_status(&status)
+  return count
+}
+fn error_read_status(raw: rawptr, status: *fail.Status, data: []u8) usize {
   _ = raw
   _ = data
   fail.set(status, fail.make(fail.Kind.PermissionDenied, "read", "", "mock"))
   return 0
 }
-fn error_write(raw: rawptr, status: *fail.Status, data: []const u8) usize {
+fn error_write(raw: rawptr, data: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := error_write_status(raw, &status, data)
+  try io.check_status(&status)
+  return count
+}
+fn error_write_status(raw: rawptr, status: *fail.Status, data: []const u8) usize {
   _ = raw
   _ = data
   fail.set(status, fail.make(fail.Kind.PermissionDenied, "write", "", "mock"))
@@ -57,7 +75,13 @@ fn io_check(write_failure: bool) {
   mem.arena_release(arena)
 }
 struct Feed { data: []const u8, at: usize, cut: usize, step: usize }
-fn read_feed(raw: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read_feed(raw: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := read_feed_status(raw, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn read_feed_status(raw: rawptr, status: *fail.Status, destination: []u8) usize {
   feed := #cast(*Feed, raw)
   count := feed.data.len - feed.at
   if feed.at < feed.cut && count > feed.cut - feed.at { count = feed.cut - feed.at }
@@ -67,7 +91,13 @@ fn read_feed(raw: rawptr, status: *fail.Status, destination: []u8) usize {
   feed.at += count
   return count
 }
-fn sink(raw: rawptr, status: *fail.Status, data: []const u8) usize {
+fn sink(raw: rawptr, data: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := sink_status(raw, &status, data)
+  try io.check_status(&status)
+  return count
+}
+fn sink_status(raw: rawptr, status: *fail.Status, data: []const u8) usize {
   _ = raw
   return data.len
 }

@@ -138,7 +138,7 @@ fn save(api: *const gl.Api, arena: *mem.Arena, path: []const u8, width, height: 
   }
   status := fail.Status{ on_failure: fail.panic_on_failure }
   encoded := png.encode(arena, &status, rows, #cast(u32, width), #cast(u32, height), 4)
-  fs.write_all(&status, path, encoded)
+  fs.write_all(path, encoded) catch { #panic("cannot write the file") }
 }
 
 fn main() {
@@ -149,7 +149,7 @@ fn main() {
     mem.arena_release(persistent)
   }
   failures := fail.Status{ on_failure: fail.panic_on_failure }
-  arguments := process.arguments(persistent, &failures)
+  arguments := process.arguments(persistent) catch { #panic("cannot read arguments") }
   path: []const u8 = ""
   frames: usize = 0
   screenshot: []const u8 = ""
@@ -176,7 +176,7 @@ fn main() {
   }
   // A demo: any failure here ends it, with the failure's description.
   status := fail.Status{ on_failure: fail.panic_on_failure }
-  data := fs.read_all(persistent, &status, path, 67108864)
+  data := fs.read_all(persistent, path, 67108864) catch { #panic("cannot read the file") }
   face := font.open(&status, data)
   codepoints: [95]u32
   for c in 0..95 {

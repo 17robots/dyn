@@ -28,13 +28,13 @@ fn main() {
   data: [16]u8
   count := wasi.read(&status, fd, data[..])
   if count != 5 { #panic("read") }
-  io.write(&status, io.stdout(), data[..count])
+  io.write_status(&status, io.stdout(), data[..count])
   if wasi.read(&status, fd, data[..]) != 0 { #panic("EOF") }
   bad: fail.Status
   _ = wasi.read(&bad, 999999, data[..])
   if !bad.failed { #panic("bad fd") }
-  if io.read_exact(&status, io.stdin(), data[..3]) != 3 { #panic("stdin") }
-  io.write(&status, io.stdout(), data[..3])
+  if io.read_exact_status(&status, io.stdin(), data[..3]) != 3 { #panic("stdin") }
+  io.write_status(&status, io.stdout(), data[..3])
   if wasi.random(data[..]) != 0 { #panic("random") }
   now: u64 = 0
   if wasi.clock_time(1, 0, &now) != 0 || now == 0 { #panic("clock") }

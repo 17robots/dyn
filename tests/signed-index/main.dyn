@@ -20,8 +20,7 @@ fn main() {
   }
   // Empty standard input makes this index -1, unknown to the compiler.
   buffer: [1]u8
-  status: fail.Status
-  count := io.read(&status, io.stdin(), buffer[..])
+  count := io.read(io.stdin(), buffer[..]) catch 0
   io.print("ok\n")
   _ = pick(values[..], #cast(i32, count) - 1)
 }

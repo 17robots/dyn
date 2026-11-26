@@ -47,20 +47,32 @@ fn denied(status: *fail.Status, operation: []const u8, trace: *Trace) {
   failure.native = trace.native
   fail.set(status, failure)
 }
-fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read(data: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := read_status(data, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
   trace := #cast(*Trace, data)
   trace.calls += 1
   denied(status, "read", trace)
   return 0
 }
-fn write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+fn write(data: rawptr, source: []const u8) usize!io.IoErr {
+  status: fail.Status
+  count := write_status(data, &status, source)
+  try io.check_status(&status)
+  return count
+}
+fn write_status(data: rawptr, status: *fail.Status, source: []const u8) usize {
   trace := #cast(*Trace, data)
   trace.calls += 1
   denied(status, "write", trace)
   return 0
 }
 fn denied_with(status: *const fail.Status, trace: *const Trace) {
-  if !status.failed || status.failure.kind != fail.Kind.PermissionDenied || status.failure.native != trace.native || status.failure.has_offset { #panic("native metadata") }
+  if !status.failed || status.failure.kind != fail.Kind.PermissionDenied || status.failure.has_offset { #panic("native metadata") }
 }
 fn finished(status: *const fail.Status) {
   if !status.failed || status.failure.kind != fail.Kind.InvalidState { #panic("failed state") }

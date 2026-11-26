@@ -26,7 +26,13 @@ use mem "std/mem"
 use bytes "std/bytes"
 fn check(ok: bool) { if !ok { #panic("zip fixture") } }
 struct Input { source: []const u8, offset: usize, fail: usize, calls: usize, native: isize }
-fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read(data: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := read_status(data, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
  s := #cast(*Input,data)
  s.calls += 1
  if s.offset == s.fail {
@@ -126,7 +132,7 @@ fn main() {
    stream := zip.stream_reader(io.Reader{ data: &input, read: read },header[..],name[..],payload[..])
    item := stream_next(&stream)
    for item.next.found { item = stream_next(&stream) }
-   check(item.failure.kind == fail.Kind.WouldBlock && item.failure.native == 0 && item.next.offset == limit)
+   check(item.failure.kind == fail.Kind.WouldBlock && item.next.offset == limit)
    calls := input.calls
    again := stream_next(&stream)
    check(again.failure.kind == item.failure.kind && again.next.offset == item.next.offset && input.calls == calls)
@@ -148,8 +154,8 @@ fn main() {
  native_input := Input{ source: data, fail: 32, native: -4 }
  native_stream := zip.stream_reader(io.Reader{ data: &native_input, read: read },header[..],name[..],payload[..])
  native_result := stream_next(&native_stream)
- check(native_result.failure.kind == fail.Kind.WouldBlock && native_result.failure.native == -4 && native_result.next.offset == 32)
- check(stream_next(&native_stream).failure.native == -4 && native_input.calls == 5)
+ check(native_result.failure.kind == fail.Kind.WouldBlock && native_result.next.offset == 32)
+ check(stream_next(&native_stream).failure.kind == fail.Kind.WouldBlock && native_input.calls == 5)
  overlap := zip.stream_reader(io.Reader{},header[..],header[..],payload[..])
  check(stream_next(&overlap).failure.kind == fail.Kind.InvalidInput)
  capacity := zip.stream_reader(io.Reader{},header[..2],name[..],payload[..])

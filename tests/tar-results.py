@@ -33,7 +33,13 @@ use io "std/io"
 use bytes "std/bytes"
 fn check(ok: bool) { if !ok { #panic("tar fixture") } }
 struct Input { source: []const u8, offset: usize, fail: usize, calls: usize, native: isize }
-fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read(data: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := read_status(data, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
  s := #cast(*Input,data)
  s.calls += 1
  if s.offset == s.fail {
@@ -82,11 +88,11 @@ fn next(state: *tar.ArchiveReader) Found {
 fn replay(state: *tar.StreamReader, input: *Input, native: isize, offset: usize) {
  calls := input.calls
  again := stream_next(state)
- check(!again.entry.found && again.failure.kind == fail.Kind.PermissionDenied && again.failure.native == native && again.entry.offset == offset)
+ check(!again.entry.found && again.failure.kind == fail.Kind.PermissionDenied && again.entry.offset == offset)
  storage: [8]u8
  for count in [0, 8] {
    failure := read_failure(state, storage[..count])
-   check(failure.kind == fail.Kind.PermissionDenied && failure.native == native)
+   check(failure.kind == fail.Kind.PermissionDenied)
  }
  check(input.calls == calls)
 }
@@ -140,7 +146,7 @@ fn main() {
      stream := tar.stream_reader(io.Reader{ data: &input, read: read },header[..],header[..0])
      item := stream_next(&stream)
      for item.entry.found { item = stream_next(&stream) }
-     check(item.failure.kind == fail.Kind.PermissionDenied && item.failure.native == native && item.entry.offset == limit)
+     check(item.failure.kind == fail.Kind.PermissionDenied && item.entry.offset == limit)
      replay(&stream,&input,native,limit)
    }
    for raw_limit in [512, 513, 517] {
@@ -158,7 +164,7 @@ fn main() {
        if !reading.failed {
          reading.failure = stream_next(&stream).failure
        }
-       check(reading.failure.kind == fail.Kind.PermissionDenied && reading.failure.native == native && stream.offset == limit)
+       check(reading.failure.kind == fail.Kind.PermissionDenied && stream.offset == limit)
      }
      replay(&stream,&input,native,limit)
    }
@@ -170,7 +176,7 @@ fn main() {
      metadata: [2048]u8
      stream := tar.stream_reader(io.Reader{ data: &input, read: read },header[..],metadata[..])
      item := stream_next(&stream)
-     check(!item.entry.found && item.failure.kind == fail.Kind.PermissionDenied && item.failure.native == native && item.entry.offset == limit)
+     check(!item.entry.found && item.failure.kind == fail.Kind.PermissionDenied && item.entry.offset == limit)
      replay(&stream,&input,native,limit)
    }
  }

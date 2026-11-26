@@ -21,7 +21,10 @@ fn report(path: []const u8, failure: fail.Failure) {
 }
 
 fn load(arena: *mem.Arena, status: *fail.Status, path: []const u8) Settings {
-  text := fs.read_all(arena, status, path, mem.MiB)
+  text := fs.read_all(arena, path, mem.MiB) catch err {
+    fail.set(status, io.failure_of(err, "read", path))
+    return Settings{}
+  }
   root := json.parse(arena, status, text)
   name := json.get<[]const u8>(status, root, "name")
   port := json.get<i64>(status, root, "port")
@@ -30,6 +33,16 @@ fn load(arena: *mem.Arena, status: *fail.Status, path: []const u8) Settings {
   }
   if status.failed { return Settings{} }
   return Settings{ name: name, port: port }
+}
+
+fn missing(path: []const u8) bool {
+  _ = fs.metadata(path) catch err {
+    case err {
+      .NotFound => { return true }
+      _ => { return false }
+    }
+  }
+  return false
 }
 
 fn main() i32 {
@@ -42,9 +55,7 @@ fn main() i32 {
   defer mem.arena_release(arena)
   used := program.args[1]
   // Only a missing FIRST falls back; any other failure of FIRST stands.
-  probe: fail.Status
-  _ = fs.metadata(&probe, used)
-  if probe.failed && probe.failure.kind == fail.Kind.NotFound {
+  if missing(used) {
     used = program.args[2]
   }
   status: fail.Status

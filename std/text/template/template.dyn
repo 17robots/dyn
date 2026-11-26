@@ -65,7 +65,7 @@ fn value(fields: []const Field, name: []const u8) []const u8 {
 }
 
 fn write(status: *fail.Status, destination: stream.Writer, source: []const u8) {
-  stream.write(status, destination, source)
+  stream.write_status(status, destination, source)
 }
 
 pub fn render(status: *fail.Status, destination: stream.Writer, template: *const Template, fields: []const Field) {
@@ -94,7 +94,7 @@ pub fn render_with(status: *fail.Status, destination: stream.Writer, template: *
   for cursor < template.source.len {
     if cursor + 1 < template.source.len && template.source[cursor] == '{' && template.source[cursor + 1] == '{' {
       if cursor > literal {
-        stream.write(status, destination, template.source[literal..cursor])
+        stream.write_status(status, destination, template.source[literal..cursor])
         if status.failed { return }
       }
       end := cursor + 2
@@ -114,6 +114,6 @@ pub fn render_with(status: *fail.Status, destination: stream.Writer, template: *
     }
   }
   if literal < template.source.len {
-    stream.write(status, destination, template.source[literal..])
+    stream.write_status(status, destination, template.source[literal..])
   }
 }

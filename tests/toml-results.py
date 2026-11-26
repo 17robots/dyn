@@ -21,10 +21,10 @@ fn main() {
  arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  args_status: fail.Status
- args := process.arguments(arena, &args_status)
+ args := process.arguments(arena) catch { #panic("cannot read arguments") }
  if args_status.failed || args.len != 3 { #panic("arguments") }
  source_file: fail.Status
- source := fs.read_all(arena, &source_file, args[1], 16777216)
+ source := fs.read_all(arena, args[1], 16777216) catch { #panic("cannot read a fixture") }
  if source_file.failed { #panic("read") }
  mark := mem.arena_mark(arena)
  parsing: fail.Status
@@ -43,7 +43,7 @@ fn main() {
 // Writes data to path; whether it worked.
 fn fs_write_file(path: []const u8, data: []const u8) bool {
   status: fail.Status
-  fs.write_all(&status, path, data)
+  fs.write_all(path, data) catch { #panic("cannot write a file") }
   return !status.failed
 }
 '''

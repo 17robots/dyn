@@ -2,7 +2,6 @@ use native_windows "std/os/windows"
 #target(kernel: windows)
 
 use io "std/io"
-use "std/fail"
 use sync "std/sync"
 
 // Console control events arrive on a thread that Windows creates. The handler
@@ -20,10 +19,8 @@ pending: sync.AtomicU32
 watched: sync.AtomicU32
 event_handle: sync.AtomicU64
 
-fn failure(status: *fail.Status) Watch {
-  code := #cast(isize, native_windows.last_error_raw())
-  fail.set(status, io.from_windows("watch signals", "", code))
-  return Watch{}
+fn last_err() io.IoErr {
+  return io.windows_err(#cast(isize, native_windows.last_error_raw()))
 }
 
 fn console_event(event: u32) i32 {
@@ -43,7 +40,7 @@ fn console_event(event: u32) i32 {
   return 1
 }
 
-fn platform_watch(status: *fail.Status, set: Set) Watch {
+fn platform_watch(set: Set) Watch!io.IoErr {
   bits: u32 = 0
   if set.interrupt {
     bits |= interrupt_bit
@@ -51,20 +48,18 @@ fn platform_watch(status: *fail.Status, set: Set) Watch {
   if set.terminate {
     bits |= terminate_bit
   }
-  if sync.load_u32(&watched) != 0 {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "watch signals", "", "signals are already watched"))
-    return Watch{}
-  }
+  // Signals are already watched.
+  if sync.load_u32(&watched) != 0 { fail .InvalidInput }
   event := create_event(nil, 0, 0, nil)
-  if event == nil { return failure(status) }
+  if event == nil { fail last_err() }
   sync.store_u64(&event_handle, #cast(usize, event))
   sync.store_u32(&pending, 0)
   sync.store_u32(&watched, bits)
   if console_handler(console_event, 1) == 0 {
-    failed := failure(status)
+    failed := last_err()
     sync.store_u32(&watched, 0)
     _ = native_windows.close_handle_raw(event)
-    return failed
+    fail failed
   }
   return Watch{ handle: #cast(isize, #cast(usize, event)), set: set, active: true }
 }
@@ -85,15 +80,13 @@ fn take() Kind {
   return Kind.None
 }
 
-fn platform_next(status: *fail.Status, state: *Watch, block: bool) Kind {
+fn platform_next(state: *Watch, block: bool) Kind!io.IoErr {
   for true {
     kind := take()
     if kind != Kind.None || !block { return kind }
     // INFINITE; WAIT_FAILED is 0xffffffff.
     if native_windows.wait_raw(#cast(rawptr, #cast(usize, state.handle)), 4294967295) == 4294967295 {
-      code := #cast(isize, native_windows.last_error_raw())
-      fail.set(status, io.from_windows("read signal", "", code))
-      return Kind.None
+      fail last_err()
     }
   }
   return Kind.None

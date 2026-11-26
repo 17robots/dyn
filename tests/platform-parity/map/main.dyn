@@ -1,5 +1,5 @@
-use "std/fail"
 use fs "std/fs"
+use io "std/io"
 use bytes "std/bytes"
 fn check(ok: bool) {
   if !ok {
@@ -7,36 +7,47 @@ fn check(ok: bool) {
   }
 }
 
-fn main() {
-  zero: []const u8
-  fs.unmap(&zero)
-  check(zero.len == 0)
-  closed_status: fail.Status
+// A File that is not open fails with InvalidInput.
+fn map_closed_fails() bool {
   closed: fs.File
-  _ = fs.map(&closed_status, &closed)
-  check(closed_status.failed && closed_status.failure.kind == fail.Kind.InvalidState)
+  _ = fs.map(&closed) catch err {
+    case err {
+      .InvalidInput => { return true }
+      _ => { return false }
+    }
+  }
+  return false
+}
+
+fn run() !io.IoErr {
   content: [5000]u8
   for i in 0..content.len {
     content[i] = #cast(u8, (i * 7) & 255)
   }
-  status: fail.Status
-  fs.write_all(&status, "map-fixture.bin", content[..])
-  file := fs.open(&status, "map-fixture.bin")
+  try fs.write_all("map-fixture.bin", content[..])
+  file := try fs.open("map-fixture.bin")
   head: [3]u8
-  check(fs.read(&status, &file, head[..]) != 0)
-  mapping := fs.map(&status, &file)
-  check(!status.failed && bytes.equal(mapping, content[..]))
-  check(fs.seek(&status, &file, 0, 1) == 3)
+  check(try fs.read(&file, head[..]) != 0)
+  mapping := try fs.map(&file)
+  check(bytes.equal(mapping, content[..]))
+  check(try fs.seek(&file, 0, 1) == 3)
   fs.close(&file)
   // The view stays valid after its file closes.
   check(mapping[4999] == content[4999])
   fs.unmap(&mapping)
   check(mapping.len == 0)
-  fs.write_all(&status, "map-empty.bin", "")
-  empty_handle := fs.open(&status, "map-empty.bin")
-  empty := fs.map(&status, &empty_handle)
-  check(!status.failed && empty.len == 0)
+  try fs.write_all("map-empty.bin", "")
+  empty_handle := try fs.open("map-empty.bin")
+  empty := try fs.map(&empty_handle)
+  check(empty.len == 0)
   fs.unmap(&empty)
   fs.close(&empty_handle)
-  check(!status.failed)
+}
+
+fn main() {
+  zero: []const u8
+  fs.unmap(&zero)
+  check(zero.len == 0)
+  check(map_closed_fails())
+  run() catch { #panic("fs map operations") }
 }

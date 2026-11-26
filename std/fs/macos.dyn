@@ -40,8 +40,8 @@ fn native_seek(handle: isize, offset: isize, origin: usize) isize {
 fn native_sync(handle: isize) isize {
   return #syscall(sys.Fsync, handle)
 }
-fn native_kind(code: isize) fail.Kind {
-  return io.darwin(code)
+fn native_err(code: isize) io.IoErr {
+  return io.darwin_err(code)
 }
 fn native_valid(handle: isize) bool {
   return handle >= 0
@@ -55,7 +55,4 @@ fn native_map(handle: isize, size: usize) isize {
 }
 fn native_unmap(address: usize, size: usize) isize {
   return #syscall(sys.Munmap, address, size)
-}
-fn native_text(code: isize) []const u8 {
-  return io.darwin_text(code)
 }

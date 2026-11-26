@@ -49,8 +49,8 @@ fn main() {
   resolved := dns.resolve_ipv4(arena, &resolving, "example.test", &server, 10)
   require(resolving.failed && resolved.len == 0 && mem.arena_mark(arena) == mem.ArenaHeader)
   arguments: [3][]const u8 = ["sh", "-c", "exit 0"]
-  captured := process.capture(arena, &status, "/bin/sh", arguments[..], process.Options{}, process.CaptureOptions{timeout_milliseconds:1000})
-  require(!status.failed && captured.exit.finished && captured.exit.code == 0)
+  captured := process.capture(arena, "/bin/sh", arguments[..], process.Options{}, process.CaptureOptions{timeout_milliseconds:1000}) catch { #panic("capture") }
+  require(captured.exit.finished && captured.exit.code == 0)
   wait_status: i32 = 0
   require(#syscall(61,-1,&wait_status,1,0) == -10)
 }

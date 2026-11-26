@@ -20,7 +20,7 @@ fn main() {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
+  arguments := process.arguments(arena) catch { #panic("cannot read arguments") }
   status := fail.Status{ on_failure: fail.panic_on_failure }
   if bytes.equal(arguments[1], "rfc") {
     secret_password: [32]u8

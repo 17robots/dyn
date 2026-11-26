@@ -12,12 +12,18 @@ SOURCE = '''use terminal "std/terminal"
 use cap "std/fs/capability"
 use "std/fail"
 use bytes "std/bytes"
+use io "std/io"
 fn require(ok: bool) { if !ok { #panic("OS edge result contract") } }
-fn read_failure(directory: *const cap.Directory, path: []const u8, output: []u8) fail.Failure {
- status: fail.Status
- count := cap.read(&status, directory, path, output)
- require(status.failed && count == 0)
- return status.failure
+// 1 NotFound, 2 InvalidInput, 3 another failure.
+fn read_failure(directory: *const cap.Directory, path: []const u8, output: []u8) u8 {
+ _ = cap.read(directory, path, output) catch err {
+  case err {
+   .NotFound => { return 1 }
+   .InvalidInput => { return 2 }
+   _ => { return 3 }
+  }
+ }
+ #panic("capability read succeeded")
 }
 fn main() {
  r: fail.Status
@@ -45,17 +51,15 @@ fn main() {
  require(!status.failed && bytes.equal(original.bytes[..], after.bytes[..]))
  output: [32]u8
  directory := cap.Directory{descriptor: DIRECTORY_DESCRIPTOR, active: true}
- count := cap.read(&status, &directory, "ok", output[..])
+ count := cap.read(&directory, "ok", output[..]) catch { #panic("capability read") }
  require(!status.failed && count == 3 && bytes.equal(output[..3], "yes"))
- absent := read_failure(&directory, "missing", output[..])
- require(absent.native == -2 && absent.kind == fail.Kind.NotFound)
- require(read_failure(&directory, "../secret", output[..]).native < 0)
- require(read_failure(&directory, "link", output[..]).native < 0)
- none := read_failure(nil, "ok", output[..])
- require(none.native == -22 && none.kind == fail.Kind.InvalidInput)
+ require(read_failure(&directory, "missing", output[..]) == 1)
+ require(read_failure(&directory, "../secret", output[..]) != 0)
+ require(read_failure(&directory, "link", output[..]) != 0)
+ require(read_failure(nil, "ok", output[..]) == 2)
  zero := cap.Directory{}
- closed := read_failure(&zero, "ok", output[..])
- require(closed.native == -9 && closed.kind == fail.Kind.InvalidState)
+ // EBADF.
+ require(read_failure(&zero, "ok", output[..]) == 2)
 }
 '''
 

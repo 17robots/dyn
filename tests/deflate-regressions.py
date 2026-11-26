@@ -19,7 +19,13 @@ use fs "std/fs"
 use memory "std/mem"
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 struct Source { bytes: []const u8, at: usize, chunk: usize }
-fn source_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn source_read(data: rawptr, destination: []u8) usize!io.IoErr {
+  status: fail.Status
+  count := source_read_status(data, &status, destination)
+  try io.check_status(&status)
+  return count
+}
+fn source_read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
   source := #cast(*Source, data)
   amount := source.bytes.len - source.at
   if amount > destination.len { amount = destination.len }
@@ -38,13 +44,13 @@ fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool
   if wrapped { state = gzip.decoder(reader, compressed[..], history[..history_size]) }
   decoder := deflate.decoder_reader(&state)
   empty: fail.Status
-  require(io.read(&empty, decoder, output[..0]) == 0 && source.at == 0, "zero destination")
+  require(io.read_status(&empty, decoder, output[..0]) == 0 && source.at == 0, "zero destination")
   total: usize = 0
   for {
     status: fail.Status
-    count := io.read(&status, decoder, output[..chunk])
+    count := io.read_status(&status, decoder, output[..chunk])
     if status.failed {
-      require(corrupt && status.failure.native != 0, "unexpected decode error")
+      require(corrupt, "unexpected decode error")
       return
     }
     require(total + count <= expected.len, "extra output")
@@ -59,9 +65,9 @@ fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool
 fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, corrupt: bool) {
   owned := memory.arena_alloc(4000000)
   encoded_file: fail.Status
-  encoded := fs.read_all(owned, &encoded_file, encoded_path, 1000000)
+  encoded := fs.read_all(owned, encoded_path, 1000000) catch { #panic("cannot read a fixture") }
   expected_file: fail.Status
-  expected := fs.read_all(owned, &expected_file, expected_path, 1000000)
+  expected := fs.read_all(owned, expected_path, 1000000) catch { #panic("cannot read a fixture") }
   require(!encoded_file.failed && !expected_file.failed, "read fixture")
   chunks: [5]usize = [1, 257, 258, 33025, 65536]
   for chunk in chunks {

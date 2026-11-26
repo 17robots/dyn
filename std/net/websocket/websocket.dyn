@@ -682,7 +682,7 @@ pub fn connection_send(status: *fail.Status, state: *WebSocketConnection, opcode
     connection_failed(status, state, fail.Kind.Capacity, "the frame does not fit frame storage")
     return
   }
-  io.write(status, state.output, frame)
+  io.write_status(status, state.output, frame)
   if status.failed {
     state.failed = true
     return
@@ -769,7 +769,7 @@ pub fn connection_receive(status: *fail.Status, state: *WebSocketConnection) Web
       connection_failed(status, state, fail.Kind.Capacity, "the frame does not fit frame storage")
       return WebSocketEvent{}
     }
-    count := io.read(status, state.input, state.frames[state.frame_used..])
+    count := io.read_status(status, state.input, state.frames[state.frame_used..])
     if status.failed {
       state.failed = true
       return WebSocketEvent{}

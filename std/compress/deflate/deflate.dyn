@@ -47,7 +47,7 @@ fn refill(status: *fail.Status, state: *Decoder) bool {
     state.error = -28
     return false
   }
-  count := stream.read(status, state.source_reader, state.compressed_storage[remaining..])
+  count := stream.read_status(status, state.source_reader, state.compressed_storage[remaining..])
   state.compressed_used += count
   if status.failed {
     // The source's own failure is in status; -5 stops the decoder.
@@ -145,7 +145,13 @@ fn gzip_header(status: *fail.Status, state: *Decoder) bool {
 // too little storage for a header or the history with Capacity; native
 // keeps the decoder's code (-74, -28). A failure of the source is reported
 // as it came.
-fn decoder_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn decoder_read(data: rawptr, destination: []u8) usize!stream.IoErr {
+  status: fail.Status
+  count := decoder_read_status(data, &status, destination)
+  try stream.check_status(&status)
+  return count
+}
+fn decoder_read_status(data: rawptr, status: *fail.Status, destination: []u8) usize {
   state := #cast(*Decoder, data)
   if status.failed || destination.len == 0 { return 0 }
   for state.offset == state.engine.written && !state.finished && state.error == 0 {
