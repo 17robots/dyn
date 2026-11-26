@@ -1,4 +1,4 @@
-use "std/mem" mem
+use mem "std/mem"
 use "std/fail"
 pub struct URL {
   scheme: []const u8,
@@ -25,7 +25,7 @@ pub fn parse(status: *fail.Status, text: []const u8) URL {
   at: usize = 0
   colon: isize = -1
   scan: usize = 0
-  for scan < #len(text) && text[scan] != '/' && text[scan] != '?' && text[scan] != '#' {
+  for scan < text.len && text[scan] != '/' && text[scan] != '?' && text[scan] != '#' {
     if text[scan] == ':' {
       colon = #cast(isize, scan)
       break
@@ -50,31 +50,31 @@ pub fn parse(status: *fail.Status, text: []const u8) URL {
     result.scheme = text[..#cast(usize, colon)]
     at = #cast(usize, colon) + 1
   }
-  if at + 2 <= #len(text) && text[at] == '/' && text[at + 1] == '/' {
+  if at + 2 <= text.len && text[at] == '/' && text[at + 1] == '/' {
     at += 2
     end := at
-    for end < #len(text) && text[end] != '/' && text[end] != '?' && text[end] != '#' {
+    for end < text.len && text[end] != '/' && text[end] != '?' && text[end] != '#' {
       end += 1
     }
     result.authority = text[at..end]
     at = end
   }
   path_end := at
-  for path_end < #len(text) && text[path_end] != '?' && text[path_end] != '#' {
+  for path_end < text.len && text[path_end] != '?' && text[path_end] != '#' {
     path_end += 1
   }
   result.path = text[at..path_end]
   at = path_end
-  if at < #len(text) && text[at] == '?' {
+  if at < text.len && text[at] == '?' {
     at += 1
     query_end := at
-    for query_end < #len(text) && text[query_end] != '#' {
+    for query_end < text.len && text[query_end] != '#' {
       query_end += 1
     }
     result.query = text[at..query_end]
     at = query_end
   }
-  if at < #len(text) && text[at] == '#' {
+  if at < text.len && text[at] == '#' {
     result.fragment = text[at + 1..]
   }
   return result
@@ -100,7 +100,7 @@ fn percent_encode_into(destination: []u8, source: []const u8) Encoded {
     if unreserved(byte) {
       amount = 1
     }
-    if amount > #len(destination) - required {
+    if amount > destination.len - required {
       return Encoded{ value: destination[..0], failed: true }
     }
     required += amount
@@ -124,14 +124,14 @@ fn percent_encode_into(destination: []u8, source: []const u8) Encoded {
 fn percent_decode_into(destination: []u8, source: []const u8) Encoded {
   required: usize = 0
   i: usize = 0
-  for i < #len(source) {
+  for i < source.len {
     if source[i] == '%' {
-      if #len(source) - i < 3 || hex_value(source[i + 1]) < 0 || hex_value(source[i + 2]) < 0 {
+      if source.len - i < 3 || hex_value(source[i + 1]) < 0 || hex_value(source[i + 2]) < 0 {
         return Encoded{ value: destination[..0], offset: i, failed: true }
       }
       i += 2
     }
-    if required == #len(destination) {
+    if required == destination.len {
       return Encoded{ value: destination[..0], offset: i, failed: true }
     }
     required += 1
@@ -139,7 +139,7 @@ fn percent_decode_into(destination: []u8, source: []const u8) Encoded {
   }
   i = 0
   at: usize = 0
-  for i < #len(source) {
+  for i < source.len {
     if source[i] == '%' {
       destination[at] = #cast(u8, (hex_value(source[i + 1]) * 16 + hex_value(source[i + 2])))
       i += 3
@@ -155,9 +155,9 @@ fn percent_decode_into(destination: []u8, source: []const u8) Encoded {
 // One component percent-encoded, slashes included, in arena.
 pub fn percent_encode(arena: *mem.Arena, source: []const u8) []u8 {
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes(arena, 3 * #len(source))
+  space := mem.push_bytes(arena, 3 * source.len)
   encoded := percent_encode_into(space, source)
-  mem.arena_rewind(arena, mark + #len(encoded.value))
+  mem.arena_rewind(arena, mark + encoded.value.len)
   return encoded.value
 }
 
@@ -168,13 +168,13 @@ pub fn percent_decode(arena: *mem.Arena, status: *fail.Status, source: []const u
   empty: []u8
   if status.failed { return empty }
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes(arena, #len(source))
+  space := mem.push_bytes(arena, source.len)
   decoded := percent_decode_into(space, source)
   if decoded.failed {
     mem.arena_rewind(arena, mark)
     malformed(status, "percent-decode", "malformed %XX escape", decoded.offset)
     return empty
   }
-  mem.arena_rewind(arena, mark + #len(decoded.value))
+  mem.arena_rewind(arena, mark + decoded.value.len)
   return decoded.value
 }

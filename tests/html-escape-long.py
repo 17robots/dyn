@@ -29,7 +29,7 @@ def literal(text):
 
 source = ['use "std/html"', 'use "std/io"', 'use "std/fail"', '', 'fn show(text: []const u8) {', '  storage: [8192]u8',
           '  status: fail.Status', '  out := html.writer(&status, storage[..])', '  html.text(&out, text)', '  written := html.output(&out).bytes',
-          '  untouched := true', '  for i in #len(written)..#len(storage) {', '    untouched = untouched && storage[i] == 0',
+          '  untouched := true', '  for i in written.len..storage.len {', '    untouched = untouched && storage[i] == 0',
           '  }', '  io.println("{} {}", untouched, written)', '}', '', 'fn main() {']
 source += [f'  show({literal(case)})' for case in cases]
 source += ['}', '']

@@ -71,7 +71,7 @@ fn main() {
   arena := mem.arena_from_buffer(backing[..])
   arguments_status: fail.Status
   arguments := process.arguments(arena, &arguments_status)
-  require(!arguments_status.failed && #len(arguments) == 7, "stdlib assertion 49")
+  require(!arguments_status.failed && arguments.len == 7, "stdlib assertion 49")
   require(bytes.equal(arguments[1], "space argument"), "stdlib assertion 50")
   require(bytes.equal(arguments[2], ""), "stdlib assertion 51")
   require(bytes.equal(arguments[3], "quote\"inside"), "stdlib assertion 52")

@@ -14,21 +14,21 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get("DYN", ROOT / "build/dyn-release")).resolve())
 
-AEAD = r'''use "std/crypto/aead" aead
-use "std/crypto/aes" aes
+AEAD = r'''use aead "std/crypto/aead"
+use aes "std/crypto/aes"
 use "std/fail"
-use "std/mem" mem
+use mem "std/mem"
 fn check(ok: bool) { if !ok { #panic("fixture failed") } }
 fn seal_fails(arena: *mem.Arena, kind: aead.Cipher, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) fail.Kind {
  status: fail.Status
  sealed := aead.seal(arena, &status, kind, plaintext, additional, key, nonce)
- check(!status.failed || (#len(sealed.ciphertext) == 0 && #len(sealed.tag) == 0))
+ check(!status.failed || (sealed.ciphertext.len == 0 && sealed.tag.len == 0))
  return status.failure.kind
 }
 fn open_fails(arena: *mem.Arena, kind: aead.Cipher, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) fail.Kind {
  status: fail.Status
  plaintext := aead.open(arena, &status, kind, ciphertext, tag, additional, key, nonce)
- check(!status.failed || #len(plaintext) == 0)
+ check(!status.failed || plaintext.len == 0)
  return status.failure.kind
 }
 fn main() {
@@ -52,9 +52,9 @@ fn main() {
  for byte in prefix { check(byte == 77) }
  sealed.tag[0] ^= 1
  empty := aes.gcm_seal(arena, &status, "", "", key[..], nonce[..])
- check(#len(empty.ciphertext) == 0 && mem.equal(empty.tag, "\x53\x0f\x8a\xfb\xc7\x45\x36\xb9\xa9\x63\xb4\xf1\xc4\xcb\x73\x8b"))
+ check(empty.ciphertext.len == 0 && mem.equal(empty.tag, "\x53\x0f\x8a\xfb\xc7\x45\x36\xb9\xa9\x63\xb4\xf1\xc4\xcb\x73\x8b"))
  empty_open := aes.gcm_open(arena, &status, "", empty.tag, "", key[..], nonce[..])
- check(#len(empty_open) == 0)
+ check(empty_open.len == 0)
  ch := aead.seal(arena, &status, aead.Cipher.Chacha20Poly1305, "\x69\x6e\x64\x65\x70\x65\x6e\x64\x65\x6e\x74\x20\x4f\x70\x65\x6e\x53\x53\x4c\x20\x43\x68\x61\x43\x68\x61\x20\x6f\x72\x61\x63\x6c\x65\x20\x70\x6c\x61\x69\x6e\x74\x65\x78\x74", "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b")
  check(mem.equal(ch.ciphertext, "\xe0\x95\x6c\x65\x59\x72\xcb\x24\xd2\xed\x4b\xd3\xd7\x6d\x6b\x0d\x9a\x23\xfe\xc7\x12\x1c\xcc\xfa\x8e\xf6\x0f\xaa\x07\xa1\xc5\x50\x89\xa0\x5c\x9f\x87\x77\xdf\xec\x52\x4a\x02") && mem.equal(ch.tag, "\x46\x3e\x13\xac\xd0\x49\xe9\xc3\x29\x84\x24\x9a\xe9\x49\xc1\x4e"))
  co := aead.open(arena, &status, aead.Cipher.Chacha20Poly1305, "\xe0\x95\x6c\x65\x59\x72\xcb\x24\xd2\xed\x4b\xd3\xd7\x6d\x6b\x0d\x9a\x23\xfe\xc7\x12\x1c\xcc\xfa\x8e\xf6\x0f\xaa\x07\xa1\xc5\x50\x89\xa0\x5c\x9f\x87\x77\xdf\xec\x52\x4a\x02", "\x46\x3e\x13\xac\xd0\x49\xe9\xc3\x29\x84\x24\x9a\xe9\x49\xc1\x4e", "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b")
@@ -62,7 +62,7 @@ fn main() {
  mark = mem.arena_mark(arena)
  ch.tag[0] ^= 1
  check(open_fails(arena, aead.Cipher.Chacha20Poly1305, "\xe0\x95\x6c\x65\x59\x72\xcb\x24\xd2\xed\x4b\xd3\xd7\x6d\x6b\x0d\x9a\x23\xfe\xc7\x12\x1c\xcc\xfa\x8e\xf6\x0f\xaa\x07\xa1\xc5\x50\x89\xa0\x5c\x9f\x87\x77\xdf\xec\x52\x4a\x02", ch.tag, "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b") == fail.Kind.InvalidInput && mem.arena_mark(arena) == mark)
- for i in mark..mark + #len("\x69\x6e\x64\x65\x70\x65\x6e\x64\x65\x6e\x74\x20\x4f\x70\x65\x6e\x53\x53\x4c\x20\x43\x68\x61\x43\x68\x61\x20\x6f\x72\x61\x63\x6c\x65\x20\x70\x6c\x61\x69\x6e\x74\x65\x78\x74") { check(arena.data[i] == 0) }
+ for i in mark..mark + "\x69\x6e\x64\x65\x70\x65\x6e\x64\x65\x6e\x74\x20\x4f\x70\x65\x6e\x53\x53\x4c\x20\x43\x68\x61\x43\x68\x61\x20\x6f\x72\x61\x63\x6c\x65\x20\x70\x6c\x61\x69\x6e\x74\x65\x78\x74".len { check(arena.data[i] == 0) }
  for k in 0..2 {
   kind := aead.Cipher.Aes256Gcm
   if k == 1 { kind = aead.Cipher.Chacha20Poly1305 }
@@ -136,14 +136,14 @@ fn main() {
 }
 '''
 
-KEYS = r'''use "std/crypto/exchange" ex
-use "std/crypto/signature" sig
+KEYS = r'''use ex "std/crypto/exchange"
+use sig "std/crypto/signature"
 use "std/bytes"
 use "std/fail"
 fn check(ok: bool) { if !ok { #panic("key contract") } }
-fn filled(data: []const u8, value: u8) bool { for i in 0..#len(data) { if data[i] != value { return false } }
+fn filled(data: []const u8, value: u8) bool { for i in 0..data.len { if data[i] != value { return false } }
 return true }
-fn fill(data: []u8) { for i in 0..#len(data) { data[i] = 165 } }
+fn fill(data: []u8) { for i in 0..data.len { data[i] = 165 } }
 fn main() {
   alice: [32]u8 = [119, 7, 109, 10, 115, 24, 165, 125, 60, 22, 193, 114, 81, 178, 102, 69, 223, 76, 47, 135, 235, 192, 153, 42, 177, 119, 251, 165, 29, 185, 44, 42]
   alice_public: [32]u8 = [133, 32, 240, 9, 137, 48, 167, 84, 116, 139, 125, 220, 180, 62, 247, 90, 13, 191, 58, 13, 38, 56, 26, 244, 235, 164, 169, 142, 170, 155, 78, 106]
@@ -159,7 +159,7 @@ fn main() {
     status: fail.Status
     r := ex.x25519_public(&status, output[..], alice[..])
     check(!status.failed)
-    check(#len(r) == 32 && bytes.equal(r, alice_public[..]) && filled(output[32..], 165))
+    check(r.len == 32 && bytes.equal(r, alice_public[..]) && filled(output[32..], 165))
     check(&r[0] == &output[0])
     r[0] = 19
     check(output[0] == 19)
@@ -169,7 +169,7 @@ fn main() {
     status: fail.Status
     r := ex.x25519(&status, output[..], alice[..], bob_public[..])
     check(!status.failed)
-    check(#len(r) == 32 && bytes.equal(r, shared[..]) && filled(output[32..], 165))
+    check(r.len == 32 && bytes.equal(r, shared[..]) && filled(output[32..], 165))
     check(&r[0] == &output[0])
     r[0] = 19
     check(output[0] == 19)
@@ -179,7 +179,7 @@ fn main() {
     status: fail.Status
     r := sig.ed25519_public(&status, output[..], seed[..])
     check(!status.failed)
-    check(#len(r) == 32 && bytes.equal(r, public[..]) && filled(output[32..], 165))
+    check(r.len == 32 && bytes.equal(r, public[..]) && filled(output[32..], 165))
     check(&r[0] == &output[0])
     r[0] = 19
     check(output[0] == 19)
@@ -189,7 +189,7 @@ fn main() {
     status: fail.Status
     r := sig.ed25519_sign(&status, output[..], "", seed[..])
     check(!status.failed)
-    check(#len(r) == 64 && bytes.equal(r, signature[..]) && filled(output[64..], 165))
+    check(r.len == 64 && bytes.equal(r, signature[..]) && filled(output[64..], 165))
     check(&r[0] == &output[0])
     r[0] = 19
     check(output[0] == 19)
@@ -201,125 +201,125 @@ fn main() {
   if true {
     status: fail.Status
     r := ex.x25519_public(&status, output[..31], alice[..])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := ex.x25519_public(&status, output[..], alice[..31])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := ex.x25519(&status, output[..31], alice[..], bob_public[..])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := ex.x25519(&status, output[..], alice[..31], bob_public[..])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := ex.x25519(&status, output[..], alice[..], bob_public[..31])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := sig.ed25519_public(&status, output[..31], seed[..])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := sig.ed25519_public(&status, output[..], seed[..31])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := sig.ed25519_sign(&status, output[..63], "", seed[..])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := sig.ed25519_sign(&status, output[..], "", seed[..31])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := ex.x25519_public(&status, output[..], output[..32])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := ex.x25519_public(&status, output[..], output[64..96])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := ex.x25519(&status, output[..], alice[..], output[32..64])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := ex.x25519(&status, output[..], output[16..48], bob_public[..])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := sig.ed25519_public(&status, output[..], output[64..96])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := sig.ed25519_sign(&status, output[..], "", output[..32])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := sig.ed25519_sign(&status, output[..], output[80..96], seed[..])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   if true {
     status: fail.Status
     r := sig.ed25519_sign(&status, output[..], output[..1], seed[..])
-    check(status.failure.kind == fail.Kind.InvalidInput && #len(r) == 0)
+    check(status.failure.kind == fail.Kind.InvalidInput && r.len == 0)
     check(filled(output[..], 165))
   }
   fill(output[..])
   rejected: fail.Status
   failed := ex.x25519(&rejected, output[..], alice[..], zero[..])
-  check(rejected.failed && rejected.failure.kind == fail.Kind.InvalidInput && #len(failed) == 0)
+  check(rejected.failed && rejected.failure.kind == fail.Kind.InvalidInput && failed.len == 0)
   check(filled(output[..32], 0) && filled(output[32..], 165))
   check(bytes.equal(alice[..], alice[..]) && filled(zero[..], 0))
 }
@@ -354,10 +354,10 @@ with tempfile.TemporaryDirectory(prefix="dyn-crypto-results-") as temporary:
             arguments = '"hello", "", key[..], nonce[..]'
             if operation == "open":
                 arguments = '"hello", tag[..], "", key[..], nonce[..]'
-            source = ('use "std/mem" mem\nuse "std/fail"\nuse "std/crypto/aead" aead\n'
+            source = ('use mem "std/mem"\nuse "std/fail"\nuse aead "std/crypto/aead"\n'
                       'fn main() {\n status: fail.Status\n backing: [mem.ArenaBufferOverhead+4]u8\n'
                       ' arena := mem.arena_from_buffer(backing[..])\n'
-                      ' _ = mem.push_bytes(arena, #len(arena.data) - arena.offset - 4)\n'
+                      ' _ = mem.push_bytes(arena, arena.data.len - arena.offset - 4)\n'
                       ' key: [32]u8\n nonce: [12]u8\n tag: [16]u8\n'
                       f' _ = aead.{operation}(arena, &status, aead.Cipher.{cipher}, {arguments})\n}}\n')
             exhaustion.append(project(root, cipher + "-" + operation, source))

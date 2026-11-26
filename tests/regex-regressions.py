@@ -7,10 +7,10 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
-SOURCE = r'''use "std/text/regex" regex
-use "std/io" io
+SOURCE = r'''use regex "std/text/regex"
+use io "std/io"
 use "std/fail"
-use "std/mem" memory
+use memory "std/mem"
 fn require(ok:bool,message:[]const u8){ if !ok { #panic(message) } }
 fn compile(arena:*memory.Arena,pattern:[]const u8) regex.Program {
   status:fail.Status
@@ -54,8 +54,8 @@ fn main(){
   require(compile_kind(arena,"a{18446744073709551616}") == fail.Kind.InvalidInput,"count overflow")
   require(compile_kind(arena,"a{1,18446744073709551616}") == fail.Kind.InvalidInput,"maximum overflow")
   program:=compile(arena,"(a)*")
-  input:=memory.push_array(u8,arena,100000)
-  for i in 0..#len(input){input[i]='a'}
+  input:=memory.push_array<u8>(arena, 100000)
+  for i in 0..input.len{input[i]='a'}
   result:=find(program,input)
   require(result.end==100000,"long repetition")
   require(result.captures[0].start==99999 && result.captures[0].end==100000,"last capture")

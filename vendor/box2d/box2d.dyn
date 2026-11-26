@@ -143,18 +143,18 @@ pub fn query(status: *fail.Status, world: World, x0: f32, y0: f32, x1: f32, y1: 
   if status == nil { return query(&fail.Status{}, world, x0, y0, x1, y1, output) }
   if status.failed { return Query{} }
   data: *Shape = nil
-  if #len(output) != 0 {
+  if output.len != 0 {
     data = &output[0]
   }
-  count := native_query(world, x0, y0, x1, y1, data, #len(output))
+  count := native_query(world, x0, y0, x1, y1, data, output.len)
   if count < 0 {
     fail.invalid(status, "query world", "", "invalid world or box")
     return Query{}
   }
   total := #cast(usize, count)
   written := total
-  if written > #len(output) {
-    written = #len(output)
+  if written > output.len {
+    written = output.len
   }
   return Query{ total: total, written: written }
 }

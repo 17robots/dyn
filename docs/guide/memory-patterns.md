@@ -26,7 +26,7 @@ struct Item { value: u64 }
 fn main() {
   storage: [WorkspaceBytes + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(storage[..])
-  items := mem.push_array(Item, arena, 10)
+  items := mem.push_array<Item>(arena, 10)
   items[9].value = 42
   if items[0].value != 0 || items[9].value != 42 { #panic("array contents") }
   if mem.arena_used(arena) > WorkspaceBytes { #panic("budget") }
@@ -84,7 +84,7 @@ Capacity failure preserves old content. Builders manipulate bytes; UTF-8 validit
 is a separate concern.
 
 ```dyn
-use "std/bytes/builder" builder
+use builder "std/bytes/builder"
 use "std/fail"
 use "std/bytes"
 
@@ -130,7 +130,7 @@ fn main() {
     strings.list_push_format(current, &parts, "frame {}", frame)
     strings.list_push(current, &parts, "ok")
     line := strings.list_join(current, &parts, ": ")
-    if #len(line) == 0 { #panic("join") }
+    if line.len == 0 { #panic("join") }
   }
 }
 ```

@@ -32,7 +32,7 @@ fn main() {
     for i in 0..8 { secret[i] = 3 }
     for i in 0..12 { associated[i] = 4 }
     parameters := password.Argon2Parameters{ memory: 32, iterations: 3, parallelism: 4 }
-    workspace := mem.push_array(u64, arena, password.argon2id_workspace_words(parameters))
+    workspace := mem.push_array<u64>(arena, password.argon2id_workspace_words(parameters))
     tag: [32]u8
     password.argon2id_keyed(&status, tag[..], secret_password[..], salt[..], secret[..], associated[..], parameters, workspace)
     io.println("{}", hex.encode(arena, tag[..], false))
@@ -45,8 +45,8 @@ fn main() {
     // Fed in uneven pieces to cross block boundaries.
     at: usize = 0
     step: usize = 1
-    for at < #len(text) {
-      take := #len(text) - at
+    for at < text.len {
+      take := text.len - at
       if take > step {
         take = step
       }
@@ -58,7 +58,7 @@ fn main() {
     return
   }
   parameters := password.Argon2Parameters{ memory: number(arguments[3]), iterations: number(arguments[4]), parallelism: number(arguments[5]) }
-  workspace := mem.push_array(u64, arena, password.argon2id_workspace_words(parameters))
+  workspace := mem.push_array<u64>(arena, password.argon2id_workspace_words(parameters))
   hash := mem.push_bytes(arena, number(arguments[6]))
   password.argon2id(&status, hash, arguments[1], arguments[2], parameters, workspace)
   text: [512]u8

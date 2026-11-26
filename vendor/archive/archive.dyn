@@ -11,7 +11,7 @@ pub const Warn: i32 = -20
 // Records libarchive's failure: its message for reader, native keeps code.
 fn provider_failed(status: *fail.Status, reader: *const Reader, operation: []const u8, code: isize) {
   message := error_message(reader, 160)
-  if #len(message) == 0 {
+  if message.len == 0 {
     message = "libarchive failed"
   }
   failure := fail.make(fail.Kind.InvalidInput, operation, "", message)
@@ -24,7 +24,7 @@ fn provider_failed(status: *fail.Status, reader: *const Reader, operation: []con
 pub fn open_memory_owned(status: *fail.Status, source: []const u8) Reader {
   if status == nil { return open_memory_owned(&fail.Status{}, source) }
   if status.failed { return Reader{ ended: true } }
-  if #len(source) == 0 {
+  if source.len == 0 {
     fail.invalid(status, "open archive", "", "empty archive")
     return Reader{ ended: true }
   }
@@ -38,7 +38,7 @@ pub fn open_memory_owned(status: *fail.Status, source: []const u8) Reader {
     code = native_formats(reader.handle)
   }
   if code >= Warn {
-    code = native_open(reader.handle, #cast(rawptr, &source[0]), #len(source))
+    code = native_open(reader.handle, #cast(rawptr, &source[0]), source.len)
   }
   if code != Ok {
     provider_failed(status, &reader, "open archive", code)
@@ -96,12 +96,12 @@ pub fn entry_size(entry: Entry) i64 {
 // Reads the current entry's data; zero at its end.
 pub fn read(status: *fail.Status, reader: *const Reader, destination: []u8) usize {
   if status == nil { return read(&fail.Status{}, reader, destination) }
-  if status.failed || #len(destination) == 0 { return 0 }
+  if status.failed || destination.len == 0 { return 0 }
   if reader.handle == nil {
     fail.invalid(status, "read archive", "", "no reader")
     return 0
   }
-  count := native_read(reader.handle, #cast(rawptr, &destination[0]), #len(destination))
+  count := native_read(reader.handle, #cast(rawptr, &destination[0]), destination.len)
   if count < 0 {
     provider_failed(status, reader, "read archive", count)
     return 0

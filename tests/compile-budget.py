@@ -90,9 +90,9 @@ def project(root):
                   f'  return total + {i}',
                   '}', '']
     (gen/'gen.dyn').write_text('\n'.join(lines))
-    imports = ''.join(f'use "{module.split()[0]}"{" " + module.split()[1] if " " in module else ""}\n'
+    imports = ''.join(f'use {(module.split()[1] + " ") if " " in module else ""}"{module.split()[0]}"\n'
                       for module in IMPORTS)
-    (root/'main.dyn').write_text(imports + f'''use "./gen" gen
+    (root/'main.dyn').write_text(imports + f'''use gen "./gen"
 
 fn main() {{
   p := gen.Point{{x: 3, y: 1}}

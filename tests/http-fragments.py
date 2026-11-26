@@ -12,27 +12,27 @@ DYN = Path(os.environ.get('DYN', ROOT / 'build' / 'dyn-release')).resolve()
 ENV = dict(os.environ, DYN_SDK=str(ROOT))
 SOURCE = r'''
 use "std/fail"
-use "std/io" io
-use "std/net/http" http
-use "std/bytes" bytes
-use "std/mem" mem
+use io "std/io"
+use http "std/net/http"
+use bytes "std/bytes"
+use mem "std/mem"
 struct Feed { data: []const u8, at: usize, cut: usize, step: usize }
 fn read_feed(raw: rawptr, status: *fail.Status, destination: []u8) usize {
   feed := #cast(*Feed, raw)
-  count := #len(feed.data) - feed.at
+  count := feed.data.len - feed.at
   if feed.at < feed.cut && count > feed.cut - feed.at { count = feed.cut - feed.at }
   if count > feed.step { count = feed.step }
-  if count > #len(destination) { count = #len(destination) }
+  if count > destination.len { count = destination.len }
   for i in 0..count { destination[i] = feed.data[feed.at + i] }
   feed.at += count
   return count
 }
 fn sink(raw: rawptr, status: *fail.Status, data: []const u8) usize {
   _ = raw
-  return #len(data)
+  return data.len
 }
 fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8) {
-  splits := #len(wire) + 1
+  splits := wire.len + 1
   if splits > 256 { splits = 2 }
   for cut in 0..splits {
     for step in [1, 7, 65536] {
@@ -48,7 +48,7 @@ fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8
   }
 }
 fn server_check(wire: []const u8) {
-  for cut in 0..#len(wire) + 1 {
+  for cut in 0..wire.len + 1 {
     for step in [1, 7, 65536] {
       feed := Feed{ data: wire, cut: cut, step: #cast(usize, step) }
       storage: [65536]u8

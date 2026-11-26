@@ -12,18 +12,18 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 CASES=['office AV','السلام','אבג','abc سلام 123 (xyz)','אבג 123, abc!','A\tאבג\tB','a\u2067אב 12\u2069 z','e\u0301 שָׁלוֹם']
 def lit(text): return '"'+''.join(f'\\x{x:02x}' for x in text.encode())+'"'
-SOURCE=r'''use "vendor/text/layout" layout
-use "vendor/harfbuzz" hb
-use "vendor/fribidi" bidi
-use "std/mem" mem
+SOURCE=r'''use layout "vendor/text/layout"
+use hb "vendor/harfbuzz"
+use bidi "vendor/fribidi"
+use mem "std/mem"
 use "std/io"
 use "std/fail"
-use "std/fs" fs
-use "std/dynlib" dynlib
-use "std/io" errors
-use "std/bytes" bytes
-use "std/unicode/utf8" utf8
-use "std/encoding/binary" binary
+use fs "std/fs"
+use dynlib "std/dynlib"
+use errors "std/io"
+use bytes "std/bytes"
+use utf8 "std/unicode/utf8"
+use binary "std/encoding/binary"
 struct layout_build_Outcome { value: layout.Layout, failure: fail.Failure, kind: fail.Kind }
 fn layout_build(a0: *mem.Arena, p0:[]const u8, p1:layout.Font, p2:*const hb.Api, p3:*const bidi.Api, p4:layout.Options) layout_build_Outcome {
   status: fail.Status
@@ -79,9 +79,9 @@ fn context_select(data:rawptr,text:[]const u8) layout.Face {
 }
 fn reject(data:rawptr,text:[]const u8) layout.Face {return layout.Face{}}
 fn save(arena:*mem.Arena,result:*const layout.Layout,path:[]const u8) {
- out:=mem.push_bytes(arena,4+#len(result.glyphs)*32)
- binary.store_u32_le(out[..4],#cast(u32,#len(result.glyphs)))
- for i in 0..#len(result.glyphs) {
+ out:=mem.push_bytes(arena,4+result.glyphs.len*32)
+ binary.store_u32_le(out[..4],#cast(u32,result.glyphs.len))
+ for i in 0..result.glyphs.len {
   g:=result.glyphs[i]
   values:[8]u32=[g.id,#cast(u32,g.start),#cast(u32,g.end),#cast(u32,#cast(i32,g.x*64.0)),#cast(u32,#cast(i32,g.y*64.0)),#cast(u32,#cast(i32,g.x_offset*64.0)),#cast(u32,#cast(i32,g.y_offset*64.0)),#cast(u32,#cast(i32,g.advance*64.0))]
   for j in 0..8 {binary.store_u32_le(out[4+i*32+j*4..8+i*32+j*4],values[j])}
@@ -113,18 +113,18 @@ fn main() {
  defer h.api.font_destroy(other.value)
  h.api.font_set_scale(other.value,2048,2048)
  fallback:=layout_build(arena,"بجح",layout.Font{data:created.value,select:context_select,line_height:40,space_advance:10.171875},&h.api,&b.api,layout.Options{})
- check(!failed(fallback.failure) && #len(fallback.value.glyphs)==3)
+ check(!failed(fallback.failure) && fallback.value.glyphs.len==3)
  save(arena,&fallback.value,"actual-fallback.bin")
  CASES
  empty:=layout_build(arena,"",font,&h.api,&b.api,layout.Options{})
- check(!failed(empty.failure) && #len(empty.value.lines)==1 && #len(empty.value.glyphs)==0 && empty.value.height==40.0)
+ check(!failed(empty.failure) && empty.value.lines.len==1 && empty.value.glyphs.len==0 && empty.value.height==40.0)
  hits: fail.Status
  eof:=layout.cluster_at(&hits,&empty.value,0)
  check(!hits.failed && eof.start==0 && eof.end==0)
  multiline:=layout_build(arena,"a\r\n\nאבג\xe2\x80\xa8z",font,&h.api,&b.api,layout.Options{})
- check(!failed(multiline.failure) && #len(multiline.value.lines)==4 && multiline.value.lines[1].start==3 && multiline.value.lines[2].start==4)
+ check(!failed(multiline.failure) && multiline.value.lines.len==4 && multiline.value.lines[1].start==3 && multiline.value.lines[2].start==4)
  rtl:=layout_build(arena,"אבג",font,&h.api,&b.api,layout.Options{})
- check(!failed(rtl.failure) && rtl.value.glyphs[0].start>rtl.value.glyphs[#len(rtl.value.glyphs)-1].start)
+ check(!failed(rtl.failure) && rtl.value.glyphs[0].start>rtl.value.glyphs[rtl.value.glyphs.len-1].start)
  _=layout.at_point(&hits,&rtl.value,-10.0,0.0)
  right:=layout.at_point(&hits,&rtl.value,10000.0,0.0)
  check(!hits.failed && right.start==0 && right.end==0)
@@ -132,27 +132,27 @@ fn main() {
  check(layout_build(arena,"\xff",font,&h.api,&b.api,layout.Options{}).kind==fail.Kind.InvalidInput && mem.arena_mark(arena)==mark)
  check(layout_build(arena,"x",layout.Font{select:reject,line_height:40,space_advance:10.0},&h.api,&b.api,layout.Options{}).kind==fail.Kind.NotFound && mem.arena_mark(arena)==mark)
  wrapped:=layout_build(arena,"office office السلام abc אבג",font,&h.api,&b.api,layout.Options{width:65})
- check(!failed(wrapped.failure) && #len(wrapped.value.lines)>1)
+ check(!failed(wrapped.failure) && wrapped.value.lines.len>1)
  for line in wrapped.value.lines {
   if line.width>65.0 {check(line.glyph_count>0)
    first:=wrapped.value.glyphs[line.glyph_start]
    for i in line.glyph_start..line.glyph_start+line.glyph_count {check(wrapped.value.glyphs[i].start==first.start)}
   }
  }
- for g in wrapped.value.glyphs {check(g.start<g.end && g.end<=#len(wrapped.value.text))
+ for g in wrapped.value.glyphs {check(g.start<g.end && g.end<=wrapped.value.text.len)
   hit:=layout.cluster_at(&hits,&wrapped.value,g.start)
   check(!hits.failed && hit.start==g.start && hit.end==g.end)
  }
  past: fail.Status
- _=layout.cluster_at(&past,&wrapped.value,#len(wrapped.value.text)+1)
+ _=layout.cluster_at(&past,&wrapped.value,wrapped.value.text.len+1)
  check(past.failure.kind==fail.Kind.InvalidInput)
  alias:=layout_build(arena,wrapped.value.text,font,&h.api,&b.api,layout.Options{})
  check(!failed(alias.failure) && bytes.equal(alias.value.text,wrapped.value.text))
  // A long unwrapped editor line must not perform a source scan per glyph.
  long_text:=mem.push_bytes(arena,20000)
- for i in 0..#len(long_text) {long_text[i]=120}
+ for i in 0..long_text.len {long_text[i]=120}
  long_line:=layout_build(arena,long_text,font,&h.api,&b.api,layout.Options{})
- check(!failed(long_line.failure) && #len(long_line.value.glyphs)==20000 && #len(long_line.value.lines)==1)
+ check(!failed(long_line.failure) && long_line.value.glyphs.len==20000 && long_line.value.lines.len==1)
  long_hit:=layout.at_point(&hits,&long_line.value,long_line.value.width-1.0,0.0)
  check(!hits.failed && long_hit.start==19999)
  missing:=layout_build(arena,"कर्म",font,&h.api,&b.api,layout.Options{width:5})
@@ -160,13 +160,13 @@ fn main() {
  for g in missing.value.glyphs {check(g.start<g.end && g.end<=12)}
  dash:=layout_build(arena,"-",font,&h.api,&b.api,layout.Options{})
  soft:=layout_build(arena,"ab\xc2\xadcd",font,&h.api,&b.api,layout.Options{width:55})
- check(!failed(dash.failure) && !failed(soft.failure) && #len(soft.value.lines)==2)
+ check(!failed(dash.failure) && !failed(soft.failure) && soft.value.lines.len==2)
  soft_line:=soft.value.lines[0]
  soft_glyph:=soft.value.glyphs[soft_line.glyph_start+soft_line.glyph_count-1]
  check(soft_glyph.id==dash.value.glyphs[0].id && soft_glyph.start==2 && soft_glyph.end==4)
  mixed:=layout_build(arena,"abc אבג",font,&h.api,&b.api,layout.Options{})
  check(!failed(mixed.failure))
- mixed_eof:=layout.cluster_at(&hits,&mixed.value,#len(mixed.value.text))
+ mixed_eof:=layout.cluster_at(&hits,&mixed.value,mixed.value.text.len)
  check(!hits.failed && mixed_eof.rtl && mixed_eof.x<mixed.value.width)
 
 }

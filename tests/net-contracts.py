@@ -16,7 +16,7 @@ if sys.platform != 'linux':
     raise SystemExit(0)
 
 CASES = {
-    'unopened-connection': '''use "std/io" io
+    'unopened-connection': '''use io "std/io"
 use "std/net"
 fn main() {
   connection := net.Connection{}
@@ -24,7 +24,7 @@ fn main() {
   if #syscall(72, 0, 1, 0) < 0 { #panic("closed stdin") }
 }
 ''',
-    'unopened-listener': '''use "std/io" io
+    'unopened-listener': '''use io "std/io"
 use "std/net"
 fn main() {
   listener := net.Listener{}

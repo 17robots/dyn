@@ -8,15 +8,15 @@ import sys
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
-ORACLE = r'''use "std/bytes" oracle_bytes
+ORACLE = r'''use oracle_bytes "std/bytes"
 extern fn abi "dyn_xim_abi"(index: u32) usize
 fn ime_check(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn ime_drain(host: *Window) { value := ordered.Event{}
   for next_event(host, &value) {} }
 fn ime_clipboard_reply(host: *Window, text: []const u8) {
   desktop := &host.desktop
-  desktop.incoming_arena = clipboard_arena(#len(text))
-  _ = mem.copy(mem.push_bytes(desktop.incoming_arena, #len(text)), text)
+  desktop.incoming_arena = clipboard_arena(text.len)
+  _ = mem.copy(mem.push_bytes(desktop.incoming_arena, text.len), text)
   desktop.paste_ordered = true
   clipboard_finish(host, true)
 }
@@ -120,7 +120,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-xim-callback-') as directory:
         raise SystemExit(0)
     shutil.copytree(ROOT/'vendor/window/x11',work/'x11')
     (work/'x11/ime_oracle.dyn').write_text(ORACLE)
-    (work/'main.dyn').write_text('use "./x11" x11\nfn main() { x11.ime_oracle() }\n')
+    (work/'main.dyn').write_text('use x11 "./x11"\nfn main() { x11.ime_oracle() }\n')
     (work/'abi.c').write_text(C)
     subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-c',str(work/'abi.c'),'-o',str(work/'abi.o')],check=True)
     for flags in (['--debug'],['--release'],['--release','--opt-level','3']):

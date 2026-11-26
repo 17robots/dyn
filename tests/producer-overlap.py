@@ -6,12 +6,12 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "std/archive/zip" zip
-use "std/unicode/text" text
+SOURCE=r'''use zip "std/archive/zip"
+use text "std/unicode/text"
 use "std/fail"
-use "std/mem" mem
-use "std/hash" hashing
-use "std/bytes" bytes
+use mem "std/mem"
+use hashing "std/hash"
+use bytes "std/bytes"
 fn main() {
   buffer:[4+mem.ArenaBufferOverhead]u8
   pad:=(16-(#cast(usize,&buffer[0])&15))&15
@@ -23,7 +23,7 @@ fn main() {
   entry:=zip.Entry{payload:payload[..3],compressed_size:3,uncompressed_size:3,checksum:hashing.crc32(payload[..3])}
   extracting:fail.Status
   result:=zip.extract(arena,&extracting,entry)
-  if extracting.failure.kind != fail.Kind.InvalidInput || #len(result)!=0 || mem.arena_mark(arena)!=mark || !bytes.equal(payload[..3],"abc") { #panic("ZIP overlap preflight") }
+  if extracting.failure.kind != fail.Kind.InvalidInput || result.len!=0 || mem.arena_mark(arena)!=mark || !bytes.equal(payload[..3],"abc") { #panic("ZIP overlap preflight") }
   backing:[1024+mem.ArenaBufferOverhead]u8
   unicodearena:=mem.arena_from_buffer(backing[..])
   text_payload:=unicodearena.data[mem.ArenaHeader..]

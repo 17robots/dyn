@@ -12,10 +12,10 @@ if sys.platform not in ('linux', 'darwin', 'win32'):
     print('SKIP network edge results: unsupported native host')
     raise SystemExit(0)
 
-SOURCE = r'''use "std/net/http" http
-use "std/net/websocket" ws
+SOURCE = r'''use http "std/net/http"
+use ws "std/net/websocket"
 use "std/fail"
-use "std/io" io
+use io "std/io"
 // A failure golden: InvalidInput at offset.
 fn malformed_at(status: *const fail.Status, at: usize) {
   if !status.failed || status.failure.kind != fail.Kind.InvalidInput || status.failure.offset != at { #panic("parser metadata golden") }
@@ -121,7 +121,7 @@ fn main() {
   ws.validate_upgrade_response(&status, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n", "dGhlIHNhbXBsZSBub25jZQ==")
   if status.failed { #panic("upgrade success metadata") }
 
-  routes: [1]http.TypedRoute(Trace)
+  routes: [1]http.TypedRoute<Trace>
   route_state := Trace{}
   router := http.typed_routes(routes[..], &route_state)
   invalid: fail.Status

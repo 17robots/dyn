@@ -29,12 +29,12 @@ fn main() {
   arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
   // Failures are dropped; the value is the usual zero.
-  check(#len(fs.read_all(arena, nil, "/no/such/file", 1024)) == 0, "read_all")
-  check(#len(process.environment(arena, nil, "DYN_NIL_STATUS_UNSET")) == 0, "environment")
+  check(fs.read_all(arena, nil, "/no/such/file", 1024).len == 0, "read_all")
+  check(process.environment(arena, nil, "DYN_NIL_STATUS_UNSET").len == 0, "environment")
   fail.invalid(nil, "check", "", "dropped")
   root := json.parse(arena, nil, "{\"port\": 8080}")
-  check(json.get(i64, nil, root, "port") == 8080, "json present")
-  check(json.get(i64, nil, root, "missing") == 0, "json missing")
+  check(json.get<i64>(nil, root, "port") == 8080, "json present")
+  check(json.get<i64>(nil, root, "missing") == 0, "json missing")
   // A reader on a file that is not there ends at once.
   file := fs.open(nil, "/no/such/file")
   storage: [64]u8
@@ -64,7 +64,7 @@ fn main() {
   doc := json.writer(nil, json_storage[..])
   json.key(&doc, "outside")
   json.object_begin(&doc)
-  check(#len(json.output(&doc)) == 0, "json writer stops after misuse")
+  check(json.output(&doc).len == 0, "json writer stops after misuse")
   io.println("nil status ok")
 }
 '''

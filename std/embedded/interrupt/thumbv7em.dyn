@@ -1,5 +1,5 @@
 #target(arch: thumbv7em, kernel: none)
-use "std/mmio" mmio
+use mmio "std/mmio"
 // Hardware may require stricter alignment for a larger vector table.
 const VectorAlignment: usize = 128
 fn register(base: usize, irq: u16) usize {

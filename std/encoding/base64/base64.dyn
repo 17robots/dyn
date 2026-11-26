@@ -1,6 +1,6 @@
-use "std/mem" mem
+use mem "std/mem"
 use "std/fail"
-use "std/bytes" bytes
+use bytes "std/bytes"
 // A pass over the input: the bytes written, the exact size needed, or failed.
 struct Result { data: []u8, required: usize, failed: bool }
 
@@ -16,16 +16,16 @@ fn encoded_size(source_size: usize) usize {
 }
 
 fn encode_into(destination: []u8, source: []const u8) Result {
-  required := encoded_size(#len(source))
-  if #len(source) != 0 && required == 0 { return Result{ failed: true } }
-  if required > #len(destination) { return Result{ failed: true, required: required } }
+  required := encoded_size(source.len)
+  if source.len != 0 && required == 0 { return Result{ failed: true } }
+  if required > destination.len { return Result{ failed: true, required: required } }
   if bytes.overlaps(destination[..required], source) {
     return Result{ failed: true, required: required }
   }
   input: usize = 0
   output: usize = 0
-  for input < #len(source) {
-    left := #len(source) - input
+  for input < source.len {
+    left := source.len - input
     a := #cast(usize, source[input])
     b: usize = 0
     c: usize = 0
@@ -63,32 +63,32 @@ fn digit_value(byte: u8) isize {
 }
 
 fn decoded_extent(source: []const u8, output: *usize) bool {
-  if #len(source) == 0 {
+  if source.len == 0 {
     output.* = 0
     return true
   }
-  if #len(source) % 4 != 0 { return false }
+  if source.len % 4 != 0 { return false }
   padding: usize = 0
-  if source[#len(source) - 1] == '=' {
+  if source[source.len - 1] == '=' {
     padding += 1
   }
-  if source[#len(source) - 2] == '=' {
+  if source[source.len - 2] == '=' {
     padding += 1
   }
-  output.* = (#len(source) / 4) * 3 - padding
+  output.* = (source.len / 4) * 3 - padding
   return true
 }
 
 fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usize) Result {
-  offset.* = #len(source)
+  offset.* = source.len
   required: usize = 0
-  if !decoded_extent(source, &required) || (write && required > #len(destination)) {
+  if !decoded_extent(source, &required) || (write && required > destination.len) {
     return Result{ data: destination[..0], failed: true }
   }
   input: usize = 0
   output: usize = 0
-  for input < #len(source) {
-    last := input + 4 == #len(source)
+  for input < source.len {
+    last := input + 4 == source.len
     if source[input] == '=' || source[input + 1] == '=' {
       offset.* = input
       if source[input] != '=' {
@@ -165,7 +165,7 @@ fn decode_into(destination: []u8, source: []const u8) Result {
   offset: usize = 0
   measured := decode_pass(destination[..0], source, false, &offset)
   if measured.failed { return measured }
-  if measured.required > #len(destination) {
+  if measured.required > destination.len {
     return Result{ failed: true, required: measured.required }
   }
   if bytes.overlaps(destination[..measured.required], source) {
@@ -189,8 +189,8 @@ fn decoded_size(source: []const u8) Size {
 
 // Encodes source into arena. Size overflow or overlapping input/output panics.
 pub fn encode(arena: *mem.Arena, source: []const u8) []u8 {
-  required := encoded_size(#len(source))
-  if #len(source) != 0 && required == 0 {
+  required := encoded_size(source.len)
+  if source.len != 0 && required == 0 {
     #panic("base64.encode: size overflows")
   }
   output := mem.push_bytes(arena, required)

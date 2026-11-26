@@ -51,11 +51,11 @@ pub fn destroy_owned(mixer: Mixer) {
 pub fn decode_owned(status: *fail.Status, mixer: Mixer, bytes: []const u8) Audio {
   if status == nil { return decode_owned(&fail.Status{}, mixer, bytes) }
   if status.failed { return nil }
-  if mixer == nil || #len(bytes) == 0 {
+  if mixer == nil || bytes.len == 0 {
     fail.invalid(status, "decode audio", "", "no mixer or no bytes")
     return nil
   }
-  input := native_io(#cast(rawptr, &bytes[0]), #len(bytes))
+  input := native_io(#cast(rawptr, &bytes[0]), bytes.len)
   if input == nil {
     sdl3.record_error(status, "decode audio")
     return nil
@@ -125,11 +125,11 @@ pub fn playing(track: Track) bool {
 pub fn generate(status: *fail.Status, mixer: Mixer, samples: []f32) usize {
   if status == nil { return generate(&fail.Status{}, mixer, samples) }
   if status.failed { return 0 }
-  if mixer == nil || #len(samples) == 0 || #len(samples) % 2 != 0 || #len(samples) > 536870911 {
+  if mixer == nil || samples.len == 0 || samples.len % 2 != 0 || samples.len > 536870911 {
     fail.invalid(status, "generate audio", "", "no mixer, or an odd or empty sample buffer")
     return 0
   }
-  code := native_generate(mixer, #cast(rawptr, &samples[0]), #cast(i32, (#len(samples) * 4)))
+  code := native_generate(mixer, #cast(rawptr, &samples[0]), #cast(i32, (samples.len * 4)))
   if code < 0 {
     sdl3.record_error(status, "generate audio")
     return 0

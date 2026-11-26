@@ -1,6 +1,6 @@
-use "std/thread/pool" pool
-use "std/sync" sync
-use "std/mem" mem
+use pool "std/thread/pool"
+use sync "std/sync"
+use mem "std/mem"
 use "std/fail"
 fn check(ok: bool) {
   if !ok {

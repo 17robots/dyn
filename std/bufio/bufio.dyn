@@ -27,7 +27,7 @@ pub fn writer_flush(status: *fail.Status, state: *Writer) {
     return
   }
   if status.failed || state.used == 0 { return }
-  if state.used > #len(state.storage) {
+  if state.used > state.storage.len {
     fail.set(status, fail.make(fail.Kind.InvalidState, "flush", "", "buffered count is past the storage"))
     return
   }
@@ -39,31 +39,31 @@ pub fn writer_flush(status: *fail.Status, state: *Writer) {
 
 fn writer_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
   state := #cast(*Writer, data)
-  if state.used > #len(state.storage) {
+  if state.used > state.storage.len {
     fail.set(status, fail.make(fail.Kind.InvalidState, "write", "", "buffered count is past the storage"))
     return 0
   }
-  if #len(state.storage) == 0 {
+  if state.storage.len == 0 {
     io.write(status, state.destination, source)
     if status.failed { return 0 }
-    return #len(source)
+    return source.len
   }
   total: usize = 0
-  for total < #len(source) {
-    if state.used == #len(state.storage) {
+  for total < source.len {
+    if state.used == state.storage.len {
       writer_flush(status, state)
       if status.failed { return total }
     }
     // Large writes need no staging copy when the buffer is empty. Keep the
     // final partial or full tail buffered so the buffered count stays the same.
-    if state.used == 0 && #len(source) - total > #len(state.storage) {
-      amount := ((#len(source) - total - 1) / #len(state.storage)) * #len(state.storage)
+    if state.used == 0 && source.len - total > state.storage.len {
+      amount := ((source.len - total - 1) / state.storage.len) * state.storage.len
       io.write(status, state.destination, source[total..total + amount])
       if status.failed { return total }
       total += amount
     }
-    available := #len(state.storage) - state.used
-    amount := #len(source) - total
+    available := state.storage.len - state.used
+    amount := source.len - total
     if amount > available {
       amount = available
     }
@@ -104,12 +104,12 @@ pub fn reader(source: io.Reader, storage: []u8) Reader {
 
 fn reader_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
   state := #cast(*Reader, data)
-  if state.start > state.end || state.end > #len(state.storage) || state.pending_count > 2 {
+  if state.start > state.end || state.end > state.storage.len || state.pending_count > 2 {
     fail.set(status, fail.make(fail.Kind.InvalidState, "read", "", "buffer positions are out of range"))
     return 0
   }
   total: usize = 0
-  for total < #len(destination) {
+  for total < destination.len {
     if state.pending_count > 0 {
       destination[total] = state.pending[0]
       state.pending[0] = state.pending[1]
@@ -121,7 +121,7 @@ fn reader_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
       if state.input_done || status.failed { return total }
       // With bytes in hand, return them rather than wait for more.
       if total > 0 { return total }
-      if #len(state.storage) == 0 {
+      if state.storage.len == 0 {
         count := io.read(status, state.source, destination[total..])
         if count == 0 {
           state.input_done = !status.failed
@@ -137,7 +137,7 @@ fn reader_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
       continue
     }
     available := state.end - state.start
-    amount := #len(destination) - total
+    amount := destination.len - total
     if amount > available {
       amount = available
     }
@@ -172,7 +172,7 @@ fn unread(state: *Reader, byte: u8) {
 
 fn read_record(status: *fail.Status, state: *Reader, destination: []u8, delimiter: u8) ReadResult {
   if status.failed { return ReadResult{ status: ReadStatus.End } }
-  if #len(destination) == 0 { return ReadResult{ status: ReadStatus.More } }
+  if destination.len == 0 { return ReadResult{ status: ReadStatus.More } }
   total: usize = 0
   byte: [1]u8
   for {
@@ -180,7 +180,7 @@ fn read_record(status: *fail.Status, state: *Reader, destination: []u8, delimite
       return ReadResult{ transferred: total, status: ReadStatus.End }
     }
     if byte[0] == delimiter { return ReadResult{ transferred: total, status: ReadStatus.Complete } }
-    if total == #len(destination) {
+    if total == destination.len {
       unread(state, byte[0])
       return ReadResult{ transferred: total, status: ReadStatus.More }
     }
@@ -207,18 +207,18 @@ pub fn read_line(status: *fail.Status, state: *Reader) []const u8 {
   if status == nil { return read_line(&fail.Status{}, state) }
   state.ended = false
   if status.failed { return line_ended(state) }
-  if state.start > state.end || state.end > #len(state.storage) || state.pending_count > 2 {
+  if state.start > state.end || state.end > state.storage.len || state.pending_count > 2 {
     fail.set(status, fail.make(fail.Kind.InvalidState, "read line", "", "buffer positions are out of range"))
     return line_ended(state)
   }
-  if #len(state.storage) == 0 {
+  if state.storage.len == 0 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "read line", "", "the reader has no storage"))
     return line_ended(state)
   }
   if state.pending_count > 0 {
     // Bytes read_until put back go in front of the buffered ones.
     compact(state)
-    if state.end + state.pending_count > #len(state.storage) { return line_too_long(status, state) }
+    if state.end + state.pending_count > state.storage.len { return line_too_long(status, state) }
     at := state.end
     for at > 0 {
       at -= 1
@@ -259,7 +259,7 @@ pub fn read_line(status: *fail.Status, state: *Reader) []const u8 {
     }
     scanned -= state.start
     compact(state)
-    if state.end == #len(state.storage) { return line_too_long(status, state) }
+    if state.end == state.storage.len { return line_too_long(status, state) }
     count := io.read(status, state.source, state.storage[state.end..])
     if status.failed { return line_ended(state) }
     if count == 0 {

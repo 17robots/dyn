@@ -20,7 +20,7 @@ fn main() {
   ended := time.monotonic_now()
   elapsed := time.elapsed(started, ended)
   _ = fs_write_file(arguments[3], encoded)
-  io.println("{} -> {} in {} us", #len(read), #len(encoded), elapsed / 1000)
+  io.println("{} -> {} in {} us", read.len, encoded.len, elapsed / 1000)
 }
 
 // Writes data to path; whether it worked.

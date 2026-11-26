@@ -6,7 +6,7 @@ the input in the caller's arena. This is an experimental API, not a replacement
 for the existing mutable tree, constructors, or writer.
 
 ```dyn
-use "std/encoding/json/read" json
+use json "std/encoding/json/read"
 use "std/fail"
 use "std/mem"
 

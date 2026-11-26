@@ -1,17 +1,17 @@
 // Usage: font-ui-demo FONT.ttf OUTPUT.png. No platform font service is used.
-use "std/io" io
-use "std/ui" ui
-use "std/ui/software" software
-use "std/mem" mem
-use "std/image/png" png
+use io "std/io"
+use ui "std/ui"
+use software "std/ui/software"
+use mem "std/mem"
+use png "std/image/png"
 use "std/fail"
-use "std/fs" fs
-use "std/fmt" fmt
-use "std/font" font
-use "std/font/ui" font_ui
-use "std/process" process
-use "std/text/layout" layout
-use "std/ui/text" ui_text
+use fs "std/fs"
+use fmt "std/fmt"
+use font "std/font"
+use font_ui "std/font/ui"
+use process "std/process"
+use layout "std/text/layout"
+use ui_text "std/ui/text"
 fn main() {
   frame := mem.arena_alloc(0)
   output := mem.arena_alloc(0)
@@ -21,7 +21,7 @@ fn main() {
   }
   arguments_status: fail.Status
   arguments := process.arguments(output, &arguments_status)
-  if arguments_status.failed || #len(arguments) != 3 {
+  if arguments_status.failed || arguments.len != 3 {
     #panic("usage: font-ui-demo FONT.ttf OUTPUT.png")
   }
   bytes_file: fail.Status
@@ -70,7 +70,7 @@ fn main() {
   positioned := layout.build(frame, &status, "AV Café Å ñ ü Ç", font_ui.layout_font(&metrics), layout.Options{ width: 416 })
   ui_text.label(&context, ui.Rect{ x: 32, y: 188, width: 416, height: 28 }, &positioned, context.style.foreground)
   ui.end(&context)
-  pixels := mem.push_array(u8, output, #cast(usize, 480 * 240 * 4))
+  pixels := mem.push_array<u8>(output, #cast(usize, 480 * 240 * 4))
   surface := software.Surface{ pixels: pixels, width: 480, height: 240, stride: 480 * 4 }
   rendering: fail.Status
   software.render(&rendering, &surface, ui.first(&context), font_ui.atlas_renderer(&cached))

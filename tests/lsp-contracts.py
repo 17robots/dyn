@@ -143,7 +143,7 @@ class Contracts(unittest.TestCase):
 
     def test_fill_fields_uses_imported_types_and_multiline_syntax(self):
         self.file('types/module.dyn', 'pub struct Record { name: []const u8, flag: bool, values: []i32, pointer: *i32 }\n')
-        text = ('use "./types" t\nfn main() {\n value := t.Record{\n'
+        text = ('use t "./types"\nfn main() {\n value := t.Record{\n'
                 '  name: "} flag: fake", // values: not a member\n'
                 ' }\n _ = value\n}\n')
         path = self.file('main.dyn', text)
@@ -166,7 +166,7 @@ class Contracts(unittest.TestCase):
     def test_enum_context_and_snippets_skip_comments(self):
         definitions = ('enum Choice { One, Two }\n'
                        'fn /* comment */ take(first, second: Choice) {}\n'
-                       'fn /* return */ pick() Choice {\n return\n O|\n}\n')
+                       'fn /* return */ pick() Choice {\n return O|\n}\n')
         self.assertIn('One', {i['label'] for i in self.complete(definitions)})
         items = self.complete('fn take(first, /* misleading: comma, */ second: i32) {}\nfn main() { ta| }\n')
         take = next(i for i in items if i['label'] == 'take')
@@ -282,7 +282,7 @@ class Contracts(unittest.TestCase):
                 self.assertEqual(next(item['insertText'] for item in items if item['label'] == 'std'), 'std')
 
     def test_completion_declarations_follow_syntax(self):
-        text = ('use "std/io" stream\n'
+        text = ('use stream "std/io"\n'
                 'value: i32 = 42\nfn one() {} fn two() {}\n'
                 'pub /* comment */ fn commented() {}\n'
                 '/* fn fake() {} */\nfn main() { | }')
@@ -329,11 +329,11 @@ class Contracts(unittest.TestCase):
 
     def test_remove_unused_import_preserves_adjacent_code(self):
         self.file('helper/helper.dyn', 'pub fn answer() i32 { return 42 }\n')
-        for text in ['use "./helper" h fn main() {}\n', 'use\t"./helper"\nh\nfn main() {}\n']:
+        for text in ['use h "./helper" fn main() {}\n', 'use\th\n"./helper"\nfn main() {}\n']:
             with self.subTest(text=text):
                 path = self.file('main.dyn', text)
-                end_line = 1 if '\nh\n' in text else 0
-                end_column = 1 if end_line else len('use "./helper" h')
+                end_line = 1 if '\n"./helper"\n' in text else 0
+                end_column = len('"./helper"') if end_line else len('use h "./helper"')
                 params = {'textDocument': {'uri': path.as_uri()},
                           'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': end_line, 'character': end_column}},
                           'context': {'diagnostics': [{'code': 'unused-use', 'message': 'unused import'}]}}
@@ -353,8 +353,8 @@ class Contracts(unittest.TestCase):
         self.file('helper/helper.dyn', 'pub fn answer() i32 { return 42 }\n')
         self.file('other/other.dyn', 'pub fn value() i32 { return 1 }\n')
         body = '\nfn main() { _ = o.value() }\n'
-        cases = [('use "./helper" h, "./other" o', 'h', 'use "./other" o'),
-                 ('use "./other" o, "./helper" h', 'h', 'use "./other" o')]
+        cases = [('use h "./helper", o "./other"', 'h', 'use o "./other"'),
+                 ('use o "./other", h "./helper"', 'h', 'use o "./other"')]
         for use, alias, expected in cases:
             with self.subTest(use=use):
                 text = use + body
@@ -374,7 +374,7 @@ class Contracts(unittest.TestCase):
 
     def test_import_comments_keep_path_and_alias(self):
         self.file('helper/helper.dyn', 'pub fn answer() i32 { return 42 }\n')
-        for use in ['use /* path */ "./helper" h', 'use "./helper" /* alias */ h', 'use "./helper"\nh']:
+        for use in ['use /* alias */ h "./helper"', 'use h /* path */ "./helper"', 'use h\n"./helper"']:
             with self.subTest(use=use):
                 text = use + '\nfn main() { _ = h.answer() }\n'
                 path = self.file('main.dyn', text)
@@ -394,11 +394,11 @@ class Contracts(unittest.TestCase):
 
     def test_import_followed_by_global_keeps_declaration(self):
         self.file('helper/helper.dyn', 'pub fn answer() i32 { return 42 }\n')
-        for alias in ['', ' h']:
+        for alias in ['', 'h ']:
             for declaration in ['value := 42', 'value: i32 = 42', 'const value := 42']:
                 with self.subTest(alias=alias, declaration=declaration):
                     qualifier = 'h' if alias else 'helper'
-                    text = ('use "./helper"' + alias + '\n' + declaration + '\n'
+                    text = ('use ' + alias + '"./helper"\n' + declaration + '\n'
                             'fn main() { _ = value\n_ = ' + qualifier + '.answer() }\n')
                     path = self.file('main.dyn', text)
                     responses, stderr = run_lsp([opened(path, text)])
@@ -521,7 +521,7 @@ class Contracts(unittest.TestCase):
 
     def test_imported_rename_uses_original_identifier_ranges(self):
         helper = self.file('helper/helper.dyn', 'pub fn target() {}\n')
-        text = 'use "./helper" h\nfn main() { h.target() }\n'
+        text = 'use h "./helper"\nfn main() { h.target() }\n'
         main = self.file('main.dyn', text)
         responses, stderr = run_lsp([opened(main, text), request('textDocument/rename', {
             'textDocument': {'uri': main.as_uri()}, 'position': {'line': 1, 'character': 16}, 'newName': 'renamed'}, 42)])
@@ -538,7 +538,7 @@ class Contracts(unittest.TestCase):
 
     def test_imported_type_definition_has_original_range(self):
         helper = self.file('helper/helper.dyn', 'pub struct Item { value: i32 }\n')
-        text = 'use "./helper" h\nfn main() { item := h.Item{ value: 42 }\n_ = item }\n'
+        text = 'use h "./helper"\nfn main() { item := h.Item{ value: 42 }\n_ = item }\n'
         main = self.file('main.dyn', text)
         responses, stderr = run_lsp([opened(main, text), request('textDocument/typeDefinition', {
             'textDocument': {'uri': main.as_uri()}, 'position': {'line': 1, 'character': text.splitlines()[1].rindex('item')}}, 42)])
@@ -696,7 +696,7 @@ class Contracts(unittest.TestCase):
 
     def test_const_tokens_preserve_bindings_and_unicode_columns(self):
         self.file('values/module.dyn', 'pub const Value: i32 = 7\n')
-        text = ('use "./values" values\nconst Global: i32 = 42\n'
+        text = ('use values "./values"\nconst Global: i32 = 42\n'
                 'fn main() { /* 😀 */ const Local: i32 = Global\n'
                 ' mutable: i32 = Local\n _ = values.Value\n _ = mutable\n}\n')
         path = self.file('main.dyn', text)
@@ -768,7 +768,7 @@ class Contracts(unittest.TestCase):
         from unittest.mock import patch
         import re
         self.file('library/module.dyn', 'pub fn answer() i32 { return 42 }\n')
-        text = 'use "./library" lib\nfn main() { _ = lib.answer() }\n'
+        text = 'use lib "./library"\nfn main() { _ = lib.answer() }\n'
         path = self.file('main.dyn', text)
         def change(value, version):
             return request('textDocument/didChange', {'textDocument': {'uri': path.as_uri(), 'version': version},
@@ -795,7 +795,7 @@ class Contracts(unittest.TestCase):
         import re
         library = self.file('library/module.dyn', 'pub fn answer() i32 { return 41 }\n')
         self.file('other/module.dyn', 'pub fn zero() i32 { return 0 }\n')
-        text = 'use "./library" lib\nuse "./other" o\nfn main() { _ = lib.answer()\n_ = o.zero() }\n'
+        text = 'use lib "./library"\nuse o "./other"\nfn main() { _ = lib.answer()\n_ = o.zero() }\n'
         path = self.file('main.dyn', text)
         def change(value, version):
             return request('textDocument/didChange', {'textDocument': {'uri': library.as_uri(), 'version': version},

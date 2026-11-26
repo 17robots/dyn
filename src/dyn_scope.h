@@ -47,7 +47,17 @@ static inline bool dyn_scope_compact_add(DynScopeIndex *index, const DynSource *
 static inline bool dyn_scope_compact_collect(DynScopeIndex *index, const DynSource *source, const ExpSnapshotTree *tree, uint32_t id) {
   const ExpNode *nodes = tree->nodes, *scope = &nodes[id];
   bool block = scope->kind == SRC_BLOCK, function = scope->kind == SRC_FN, loop = scope->kind == SRC_FOR, arm = scope->kind == SRC_CASE_ARM;
-  if (!block && !function && !loop && !arm) return true;
+  bool container = scope->kind == SRC_STRUCT || scope->kind == SRC_ENUM;
+  bool catch_expr = scope->kind == EXP_CATCH;
+  if (!block && !function && !loop && !arm && !container && !catch_expr) return true;
+  if (catch_expr) {
+    uint32_t err_name = scope->first != UINT32_MAX ? nodes[scope->first].next : UINT32_MAX;
+    uint32_t body = err_name != UINT32_MAX ? nodes[err_name].next : UINT32_MAX;
+    if (err_name != UINT32_MAX && body != UINT32_MAX &&
+        nodes[err_name].kind == EXP_NAME && nodes[body].kind == SRC_BLOCK)
+      return dyn_scope_compact_add(index, source, tree, err_name, nodes[body].start, nodes[body].end);
+    return true;
+  }
   uint32_t start = scope->start, end = scope->end;
   if (loop || arm) {
     uint32_t body = scope->first;
@@ -61,12 +71,23 @@ static inline bool dyn_scope_compact_collect(DynScopeIndex *index, const DynSour
   for (uint32_t child = scope->first; child != UINT32_MAX; child = nodes[child].next) {
     if (!dyn_work_step(&source->context, 1)) return false;
     uint32_t node = child;
-    if (block) {
+    if (container) {
+      if (nodes[node].kind == EXP_TYPE_PARAMETER &&
+          !dyn_scope_add_text(index, source->text + nodes[node].start,
+                              nodes[node].end - nodes[node].start, start, end))
+        return false;
+    } else if (block) {
       uint32_t visible = nodes[node].end;
       while (node != UINT32_MAX && nodes[node].kind == SRC_CONST)
         node = nodes[node].first;
       if (node != UINT32_MAX && nodes[node].kind == SRC_VARIABLE && !dyn_scope_compact_add(index, source, tree, nodes[node].first, visible, end)) return false;
     } else if (function) {
+      if (nodes[node].kind == EXP_TYPE_PARAMETER) {
+        if (!dyn_scope_add_text(index, source->text + nodes[node].start,
+                                nodes[node].end - nodes[node].start, start, end))
+          return false;
+        continue;
+      }
       if (nodes[node].kind != SRC_FN_PARAM && nodes[node].kind != SRC_VARIADIC_PARAM) continue;
       for (uint32_t name = nodes[node].first; name != UINT32_MAX; name = nodes[name].next) {
         if (!dyn_work_step(&source->context, 1) ||
@@ -93,8 +114,7 @@ static inline bool dyn_scope_compact_build(DynScopeIndex *index, const DynSource
   uint32_t node = tree->root;
   while (node != UINT32_MAX) {
     if (!dyn_work_step(&source->context, 1) || !dyn_scope_compact_collect(index, source, tree, node)) return false;
-    /* Expressions and types cannot introduce scopes. Skip their subtrees. */
-    if (tree->nodes[node].kind >= SRC_FILE && tree->nodes[node].first != UINT32_MAX) {
+    if (tree->nodes[node].first != UINT32_MAX) {
       node = tree->nodes[node].first; continue;
     }
     while (node != UINT32_MAX && tree->nodes[node].next == UINT32_MAX) node = tree->nodes[node].parent;

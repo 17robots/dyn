@@ -1,8 +1,8 @@
 #target(pointer_bits: 64)
-use "std/mem" mem
+use mem "std/mem"
 use "std/fail"
-use "std/net" net
-use "std/time" clock
+use net "std/net"
+use clock "std/time"
 
 pub const Readable: u32 = 1
 pub const Writable: u32 = 4
@@ -51,10 +51,10 @@ pub fn open(arena: *mem.Arena, status: *fail.Status, capacity: usize) Queue {
     batch = MaxBatch
   }
   queue := Queue{
-    handle: handle, active: true, entries: mem.push_array(Entry, arena, capacity),
-    free: mem.push_array(u32, arena, capacity), free_count: capacity,
-    table: mem.push_array(u32, arena, table_size), batch: batch,
-    native: mem.push_array(u64, arena, (batch * NativeEventSize + 7) / 8),
+    handle: handle, active: true, entries: mem.push_array<Entry>(arena, capacity),
+    free: mem.push_array<u32>(arena, capacity), free_count: capacity,
+    table: mem.push_array<u32>(arena, table_size), batch: batch,
+    native: mem.push_array<u64>(arena, (batch * NativeEventSize + 7) / 8),
   }
   for i in 0..capacity {
     queue.free[i] = #cast(u32, capacity - 1 - i)
@@ -64,27 +64,27 @@ pub fn open(arena: *mem.Arena, status: *fail.Status, capacity: usize) Queue {
 fn slot_start(queue: *const Queue, descriptor: isize) usize {
   // Fibonacci hashing spreads consecutive descriptors.
   hashed := #wrapping(#cast(u64, descriptor) * 11400714819323198485)
-  return #cast(usize, hashed >> 32) & (#len(queue.table) - 1)
+  return #cast(usize, hashed >> 32) & (queue.table.len - 1)
 }
 // Table slot holding descriptor, or #len(queue.table).
 fn find_slot(queue: *const Queue, descriptor: isize) usize {
-  mask := #len(queue.table) - 1
+  mask := queue.table.len - 1
   at := slot_start(queue, descriptor)
-  for _ in 0..#len(queue.table) {
+  for _ in 0..queue.table.len {
     value := queue.table[at]
-    if value == SlotEmpty { return #len(queue.table) }
+    if value == SlotEmpty { return queue.table.len }
     if value != SlotRemoved && queue.entries[value - 1].descriptor == descriptor { return at }
     at = (at + 1) & mask
   }
-  return #len(queue.table)
+  return queue.table.len
 }
 fn find(queue: *Queue, descriptor: isize) usize {
   slot := find_slot(queue, descriptor)
-  if slot == #len(queue.table) { return #len(queue.entries) }
+  if slot == queue.table.len { return queue.entries.len }
   return queue.table[slot] - 1
 }
 fn table_place(queue: *Queue, descriptor: isize, index: usize) {
-  mask := #len(queue.table) - 1
+  mask := queue.table.len - 1
   at := slot_start(queue, descriptor)
   for queue.table[at] != SlotEmpty && queue.table[at] != SlotRemoved {
     at = (at + 1) & mask
@@ -97,11 +97,11 @@ fn table_place(queue: *Queue, descriptor: isize, index: usize) {
 // Removed markers only shorten probes when cleared; rebuild once live plus
 // removed slots pass three quarters of the table.
 fn table_rebuild(queue: *Queue) {
-  for i in 0..#len(queue.table) {
+  for i in 0..queue.table.len {
     queue.table[i] = SlotEmpty
   }
   queue.used_slots = 0
-  for i in 0..#len(queue.entries) {
+  for i in 0..queue.entries.len {
     if queue.entries[i].active {
       table_place(queue, queue.entries[i].descriptor, i)
     }
@@ -138,7 +138,7 @@ pub fn add(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, 
     fail.invalid(status, "add", "", "events must be Readable and/or Writable on a valid descriptor")
     return
   }
-  if find(queue, descriptor) != #len(queue.entries) {
+  if find(queue, descriptor) != queue.entries.len {
     fail.set(status, fail.make(fail.Kind.AlreadyExists, "add", "", "the descriptor is already in the queue"))
     return
   }
@@ -150,7 +150,7 @@ pub fn add(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, 
   control(status, queue, index, Entry{ descriptor: descriptor, token: token, events: events, active: true })
   if status.failed { return }
   queue.free_count -= 1
-  if 4 * (queue.used_slots + 1) > 3 * #len(queue.table) {
+  if 4 * (queue.used_slots + 1) > 3 * queue.table.len {
     table_rebuild(queue)
   }
   table_place(queue, descriptor, index)
@@ -166,7 +166,7 @@ pub fn modify(status: *fail.Status, queue: *Queue, descriptor: isize, events: u3
     return
   }
   index := find(queue, descriptor)
-  if index == #len(queue.entries) {
+  if index == queue.entries.len {
     fail.set(status, fail.make(fail.Kind.NotFound, "modify", "", "the descriptor is not in the queue"))
     return
   }
@@ -179,7 +179,7 @@ pub fn remove(status: *fail.Status, queue: *Queue, descriptor: isize) {
   }
   if !usable(status, queue, "remove") { return }
   slot := find_slot(queue, descriptor)
-  if slot == #len(queue.table) {
+  if slot == queue.table.len {
     fail.set(status, fail.make(fail.Kind.NotFound, "remove", "", "the descriptor is not in the queue"))
     return
   }

@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];DYN=Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve()
 SOURCE=r'''
 use "std/fail"
-use "vendor/sqlite" sqlite
+use sqlite "vendor/sqlite"
 extern fn db_mutex "sqlite3_db_mutex"(database:rawptr) rawptr
 extern fn threadsafe "sqlite3_threadsafe"() i32
 fn close(database: sqlite.Database) {
@@ -51,7 +51,7 @@ int sqlite3_open_v2(const char *name, void **out, int flags, const char *vfs){(v
 int sqlite3_close(void *db){if(db==(void *)(uintptr_t)0x123)closes++;return 0;}
 ''')
     obj=p/'provider.o';subprocess.run(['cc','-c',str(stub),'-o',str(obj)],check=True)
-    (p/'main.dyn').write_text(r'''use "vendor/sqlite" sqlite
+    (p/'main.dyn').write_text(r'''use sqlite "vendor/sqlite"
 use "std/fail"
 extern fn set_mode(value:i32)
 extern fn close_count() i32

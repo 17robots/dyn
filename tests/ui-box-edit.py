@@ -7,11 +7,11 @@ import subprocess
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
-SOURCE = r'''use "std/ui/box" box
-use "std/ui" ui
-use "std/mem" mem
-use "std/bytes" bytes
-use "std/unicode/utf8" utf8
+SOURCE = r'''use box "std/ui/box"
+use ui "std/ui"
+use mem "std/mem"
+use bytes "std/bytes"
+use utf8 "std/unicode/utf8"
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
 fn measure(data: *u8, text: []const u8) f32 {
   _ = data
@@ -37,8 +37,8 @@ fn main() {
   state := box.push_state(persistent, measure, nil, 16.0)
   app := App{}
   initial := "héllo world"
-  _ = mem.copy(app.storage[..#len(initial)], initial)
-  app.edit.length = #len(initial)
+  _ = mem.copy(app.storage[..initial.len], initial)
+  app.edit.length = initial.len
   frame(state, arena, &app, box.Input{})
   frame(state, arena, &app, box.Input{ tab: true })
   check(state.focused == app.field.key, "tab first")

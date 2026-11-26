@@ -8,7 +8,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
 COMMON = '''use "std/fail"
-use "std/os/windows" win
+use win "std/os/windows"
 fn sockets() {
   for i in 0..32 {
     status: fail.Status
@@ -26,7 +26,7 @@ fn sockets() {
 CASES = {
     'first-open': COMMON + 'fn main() { sockets() }\n',
     'concurrent-first-open': COMMON + '''
-use "std/sync" sync
+use sync "std/sync"
 ready: sync.AtomicU32 = sync.AtomicU32{}
 start: sync.AtomicU32 = sync.AtomicU32{}
 fn worker(context: rawptr) isize {

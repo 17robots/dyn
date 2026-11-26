@@ -10,8 +10,8 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 macos = (ROOT / 'std/process/macos.dyn').read_text()
 process = (ROOT / 'std/process/process.dyn').read_text()
 # Compile the production conversion/setup bodies, replacing only OS entry points.
-adapter = ('use "std/mem" mem\nuse "std/c" c\nuse "std/bytes" bytes\n'
-           'use "std/io" io\nuse "std/fail"\n'
+adapter = ('use mem "std/mem"\nuse c "std/c"\nuse bytes "std/bytes"\n'
+           'use io "std/io"\nuse "std/fail"\n'
            + process[process.index('pub struct Redirect'):process.index('// Starts path with arguments')]
            + macos[macos.index('struct CString'):macos.index('fn wait_native')])
 MOCKS = '''

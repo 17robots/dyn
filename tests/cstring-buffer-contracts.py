@@ -14,11 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 ENV = dict(os.environ, DYN_SDK=str(ROOT))
 
-SOURCE = r'''use "std/c" c
-use "std/io" io
-use "std/mem" mem
+SOURCE = r'''use c "std/c"
+use io "std/io"
+use mem "std/mem"
 use "std/fail"
-use "std/fs" fs
+use fs "std/fs"
 fn check(ok:bool) { if !ok { #panic("CString buffer contract") } }
 fn kind(destination:[]u8, source:[]const u8) fail.Kind {
  status:fail.Status
@@ -60,7 +60,7 @@ fn main() {
 }
 '''
 SQLITE = r'''use "std/fail"
-use "vendor/sqlite" sqlite
+use sqlite "vendor/sqlite"
 fn main() {
  backing:[11]u8
  for *byte in backing { byte.*=165 }
@@ -94,17 +94,17 @@ with tempfile.TemporaryDirectory(prefix='dyn-cstring-buffers-') as temporary:
     names = re.findall(r'symbol\(loader, "([^"]+)"\)',
                        (ROOT / 'vendor/opengl/opengl.dyn').read_text())
     assert names and len(set(names)) == len(names)
-    gl = '''use "vendor/opengl" gl
+    gl = '''use gl "vendor/opengl"
 use "std/fail"
-use "std/c" c
-use "std/mem" mem
+use c "std/c"
+use mem "std/mem"
 const names:[COUNT][]const u8=[NAMES]
 visited:usize=0
 fail_second:bool=false
 fn loader(name:*const u8) rawptr {
  reading:fail.Status
  text:=c.bytes_from_string(&reading,name,64)
- if reading.failed || visited>=#len(names) || !mem.equal(text,names[visited]) { #panic("OpenGL CString loader") }
+ if reading.failed || visited>=names.len || !mem.equal(text,names[visited]) { #panic("OpenGL CString loader") }
  visited+=1
  if fail_second && visited==2 { return nil }
  return #cast(rawptr,1)
@@ -115,7 +115,7 @@ fn main() {
  if !none.failed || !mem.equal(fail.path_text(&none.failure),"loader") || visited!=0 { #panic("nil loader") }
  complete:fail.Status
  _=gl.load(&complete,loader)
- if complete.failed || visited!=#len(names) { #panic("OpenGL complete table") }
+ if complete.failed || visited!=names.len { #panic("OpenGL complete table") }
  visited=0
  fail_second=true
  missing:fail.Status

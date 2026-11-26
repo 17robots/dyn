@@ -19,11 +19,11 @@ pub fn load_owned(status: *fail.Status, path: []const u8, path_buffer: []u8) sdl
 pub fn decode_owned(status: *fail.Status, bytes: []const u8) sdl3.Surface {
   if status == nil { return decode_owned(&fail.Status{}, bytes) }
   if status.failed { return nil }
-  if #len(bytes) == 0 {
+  if bytes.len == 0 {
     fail.invalid(status, "decode image", "", "no data")
     return nil
   }
-  stream := native_io(#cast(rawptr, &bytes[0]), #len(bytes))
+  stream := native_io(#cast(rawptr, &bytes[0]), bytes.len)
   value: sdl3.Surface = nil
   if stream != nil {
     value = native_load_io(stream, true)

@@ -9,7 +9,7 @@ COUNT=32
 SOURCE=r'''use "std/mem"
 fn wait() {
  ready:="ready\n"
- _=#syscall(1,1,&ready[0],#len(ready))
+ _=#syscall(1,1,&ready[0],ready.len)
  input:[1]u8
  _=#syscall(0,0,&input[0],1)
 }

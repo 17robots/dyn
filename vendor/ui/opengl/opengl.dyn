@@ -1,9 +1,9 @@
 use "std/fail"
-use "vendor/opengl" gl
-use "std/ui" ui
-use "std/ui/software" software
-use "std/unicode/utf8" utf8
-use "std/io" io
+use gl "vendor/opengl"
+use ui "std/ui"
+use software "std/ui/software"
+use utf8 "std/unicode/utf8"
+use io "std/io"
 // Explicit GL ownership; create/render/close on the current owning context.
 // Rendering owns GL state: viewport, program, VAO, VBO, texture unit zero,
 // blending, scissor, depth/cull/stencil and unpack state. Caller resets as needed.
@@ -22,7 +22,7 @@ fn healthy(api: *const gl.Api) bool {
 fn shader(api: *const gl.Api, kind: u32, source: []const u8) u32 {
   id := api.create_shader(kind)
   pointer := &source[0]
-  length := #cast(i32, #len(source))
+  length := #cast(i32, source.len)
   if id == 0 { return 0 }
   api.shader_source(id, 1, &pointer, &length)
   api.compile_shader(id)
@@ -121,10 +121,10 @@ fn glyph(renderer: *Renderer, clip: ui.Rect, tint: ui.Color, font: software.Font
   bitmap := font.glyph(font.data, codepoint)
   if bitmap.width < 0 || bitmap.height < 0 || bitmap.advance < 0 { return -1 }
   if bitmap.width == 0 || bitmap.height == 0 { return bitmap.advance }
-  if bitmap.stride < #cast(usize, bitmap.width) || bitmap.stride > 2147483647 || #cast(usize, bitmap.width) > #len(bitmap.pixels) {
+  if bitmap.stride < #cast(usize, bitmap.width) || bitmap.stride > 2147483647 || #cast(usize, bitmap.width) > bitmap.pixels.len {
     return -1
   }
-  if #cast(usize, bitmap.height-1) > (#len(bitmap.pixels)-#cast(usize, bitmap.width))/bitmap.stride {
+  if #cast(usize, bitmap.height-1) > (bitmap.pixels.len-#cast(usize, bitmap.width))/bitmap.stride {
     return -1
   }
   left := x+bitmap.x_offset
@@ -254,7 +254,7 @@ pub fn render(status: *fail.Status, renderer: *Renderer, commands: *const ui.Com
         x := #cast(i64, command.bounds.x)
         y := #cast(i64, command.bounds.y)
         offset: usize = 0
-        for offset < #len(command.text) {
+        for offset < command.text.len {
           decoded := utf8.decode(command.text, offset)
           offset += decoded.width
           codepoint := decoded.codepoint

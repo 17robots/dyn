@@ -124,9 +124,9 @@ int main(void) {
   assert(!exp_parse("a\0b", 3, &tree));
   assert(!exp_parse(NULL, 0, &tree));
   exp_free(&tree);
-  allocation_failures("#cast(fn([]const u8,[4]i32)*m.T,f($T,Point{x:[1,2,3],y:#sizeof(a+b)}))", exp_parse);
-  allocation_failures("f([1,2,3],#sizeof([1,2]),#typeof(a+b),[4]*const m.T)", exp_parse);
-  allocation_failures("use \"dep\" d pub struct S {x:i32} pub fn f(x:$T) T { if true { return x } else { return x } }", exp_parse_source);
+  allocation_failures("#cast(fn([]const u8,[4]i32)*m.T,f<T>(Point{x:[1,2,3],y:#sizeof(a+b)}))", exp_parse);
+  allocation_failures("f([1,2,3],#sizeof([1,2]),#typeof(a+b),#sizeof([4]*const m.T))", exp_parse);
+  allocation_failures("use d \"dep\"\npub struct S {x:i32} pub fn f<T>(x:T) T { if true { return x } else { return x } }", exp_parse_source);
   allocation_failures("#target(os:linux) #link(\"c\") extern fn puts(x:*const u8)i32 fn f() { for i in 0..10 { defer foo() } }", exp_parse_source);
   const char *bad_sources[] = {"fn", "fn f(){", "struct S{x:", "use", "fn f(){if x{", "fn f(){return #cast()}"};
   for (size_t i = 0; i < sizeof(bad_sources) / sizeof(*bad_sources); ++i) {
@@ -167,9 +167,9 @@ int main(void) {
   assert(tree.root == NONE && tree.error_offset <= length);
   assert(strstr(tree.error, "nesting limit exceeded"));
   exp_free(&tree);
-  const char *metadata = "use \"a\" mod\n#link(\"c\")\npub packed struct S{x:i32}\ndistinct type T=i32\n"
+  const char *metadata = "use mod \"a\"\n#link(\"c\")\npub packed struct S{x:i32}\ndistinct type T=i32\n"
       "extern fn f \"c_f\"(...) fn(i32)u8\nfn g(p:*const T,x:[]const T){\n"
-      "for *v in x{v.* = 1}\ncase p{_=>{}}\nfoo($T,#bitcast(u64,p))\n}";
+      "for *v in x{v.* = 1}\ncase p{_=>{}}\nfoo<T>(#bitcast(u64,p))\n}";
   cancellation(metadata, true);
   assert(exp_parse_source(metadata, strlen(metadata), &tree));
   assert(tree.nodes[tree.root].parent == NONE);

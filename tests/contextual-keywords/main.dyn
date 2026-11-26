@@ -6,7 +6,7 @@ packed struct Header { tag: u8, size: u32 }
 
 fn describe(value: any) i64 {
   case value {
-    i64 number => {
+    i64(number) => {
       return number
     }
     bool => {

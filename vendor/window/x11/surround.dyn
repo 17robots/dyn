@@ -14,15 +14,15 @@ pub fn set_surrounding_text(status: *fail.Status, window: *Window, text: []const
     window_failed(status, fail.Kind.InvalidState, "set surrounding text")
     return
   }
-  if #len(text) > 4096 {
+  if text.len > 4096 {
     window_failed(status, fail.Kind.Capacity, "set surrounding text")
     return
   }
-  if token == 0 || cursor > #len(text) || anchor > #len(text) || !utf8.valid(text) {
+  if token == 0 || cursor > text.len || anchor > text.len || !utf8.valid(text) {
     window_failed(status, fail.Kind.InvalidInput, "set surrounding text")
     return
   }
-  if (cursor < #len(text) && (text[cursor] & 0xc0) == 0x80) || (anchor < #len(text) && (text[anchor] & 0xc0) == 0x80) {
+  if (cursor < text.len && (text[cursor] & 0xc0) == 0x80) || (anchor < text.len && (text[anchor] & 0xc0) == 0x80) {
     window_failed(status, fail.Kind.InvalidInput, "set surrounding text")
     return
   }

@@ -50,12 +50,12 @@ pub fn measure(status: *fail.Status, font: Font, text: []const u8) Size {
   }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
-  if #len(text) > 0 {
+  if text.len > 0 {
     pointer = &text[0]
   }
   width: i32 = 0
   height: i32 = 0
-  if !native_measure(font, pointer, #len(text), &width, &height) {
+  if !native_measure(font, pointer, text.len, &width, &height) {
     sdl3.record_error(status, "measure text")
     return Size{}
   }
@@ -64,11 +64,11 @@ pub fn measure(status: *fail.Status, font: Font, text: []const u8) Size {
 pub fn render_owned(status: *fail.Status, font: Font, text: []const u8, color: sdl3.Color) sdl3.Surface {
   if status == nil { return render_owned(&fail.Status{}, font, text, color) }
   if status.failed { return nil }
-  if font == nil || #len(text) == 0 {
+  if font == nil || text.len == 0 {
     fail.invalid(status, "render text", "", "no font or text")
     return nil
   }
-  value := native_render(font, &text[0], #len(text), color)
+  value := native_render(font, &text[0], text.len, color)
   if value == nil {
     sdl3.record_error(status, "render text")
   }

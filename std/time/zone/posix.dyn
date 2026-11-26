@@ -1,6 +1,6 @@
 use "std/fail"
-use "std/fs" fs
-use "std/process" process
+use fs "std/fs"
+use process "std/process"
 
 // Zone files are small; a larger file is not a zone.
 const tzif_limit: usize = 1048576
@@ -17,10 +17,10 @@ fn read_zone(arena: *mem.Arena, status: *fail.Status, name: []const u8, path: []
 
 fn posix_load(arena: *mem.Arena, status: *fail.Status, name: []const u8) Zone {
   mark := mem.arena_mark(arena)
-  path := mem.push_bytes(arena, #len(zoneinfo_root) + 1 + #len(name))
+  path := mem.push_bytes(arena, zoneinfo_root.len + 1 + name.len)
   _ = mem.copy(path, zoneinfo_root)
-  path[#len(zoneinfo_root)] = '/'
-  _ = mem.copy(path[#len(zoneinfo_root) + 1..], name)
+  path[zoneinfo_root.len] = '/'
+  _ = mem.copy(path[zoneinfo_root.len + 1..], name)
   loaded := read_zone(arena, status, name, path)
   if status.failed {
     mem.arena_rewind(arena, mark)
@@ -37,18 +37,18 @@ fn local_name(arena: *mem.Arena) []const u8 {
     target := storage[..#cast(usize, length)]
     marker := "zoneinfo/"
     at := bytes.find(target, marker)
-    if at != #len(target) { return strings.clone(arena, target[at + #len(marker)..]) }
+    if at != target.len { return strings.clone(arena, target[at + marker.len..]) }
   }
   return "localtime"
 }
 
 fn posix_system(arena: *mem.Arena, status: *fail.Status) Zone {
   text := process.environment_or(arena, "TZ", "")
-  if #len(text) != 0 {
+  if text.len != 0 {
     if text[0] == ':' {
       text = text[1..]
     }
-    if #len(text) != 0 && text[0] == '/' { return read_zone(arena, status, text, text) }
+    if text.len != 0 && text[0] == '/' { return read_zone(arena, status, text, text) }
     // A zone name, else a POSIX rule.
     named: fail.Status
     loaded := load(arena, &named, text)

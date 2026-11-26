@@ -21,9 +21,9 @@ values += [rng.uniform(-1e6, 1e6) for _ in range(1000)] + [float(rng.randint(-10
 bits = [int.from_bytes(struct.pack('<d', value), 'little') for value in values]
 rows = ',\n'.join('  ' + ', '.join(str(b) for b in bits[i:i + 6]) for i in range(0, len(bits), 6))
 SOURCE = f'''use "std/fail"
-use "std/fmt" fmt
-use "std/io" io
-use "std/mem" mem
+use fmt "std/fmt"
+use io "std/io"
+use mem "std/mem"
 
 const values: [{len(bits)}]u64 = [
 {rows}

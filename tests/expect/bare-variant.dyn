@@ -1,7 +1,10 @@
-// Dyn always writes the enum type: Color.Red, never .Red.
+// Enum shorthand .Variant works when a single concrete enum type is expected,
+// and errors when no enum type is known.
 enum Color { Red, Green }
 
 fn main() {
-  c: Color = .Red // error: write Enum.Variant, not .Variant
-  _ = c
+  ok: Color = .Red
+  _ = ok
+  bad := .Red // error: enum shorthand .Variant requires an expected enum type
+  _ = bad
 }

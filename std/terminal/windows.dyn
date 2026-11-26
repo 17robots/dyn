@@ -1,5 +1,5 @@
-use "std/os/windows" native_windows
-use "std/io" io
+use native_windows "std/os/windows"
+use io "std/io"
 use "std/fail"
 #target(kernel: windows)
 

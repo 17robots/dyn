@@ -8,7 +8,7 @@ use "std/io"
 use "std/log"
 use "std/mem"
 use "std/net/http"
-use "std/net/http/session" sessions
+use sessions "std/net/http/session"
 use "std/process"
 
 struct Post { id: i64, author: []const u8, body: []const u8, created: i64, ok: bool, score: f64, small: u8, count: usize }
@@ -50,7 +50,7 @@ fn main() {
   shared := sessions.Shared{}
   random: fail.Status
   started := sessions.start(arena, &random, 3600)
-  io.println("start {} {} {} {}", !random.failed, #len(started.token), #len(started.csrf), started.cookie.name)
+  io.println("start {} {} {} {}", !random.failed, started.token.len, started.csrf.len, started.cookie.name)
   cold: fail.Status
   _ = sessions.cached(&cold, &cache, &shared, started.token, 100)
   io.println("cold {}", !cold.failed)

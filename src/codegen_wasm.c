@@ -1545,7 +1545,7 @@ static void statement(WG *g, const DynIrStmt *s) {
         p = x->is_type ? load(g, offset(g, subject, 8), DYN_TYPE_RAWPTR)
                        : offset(g, subject, wpayload(g, t));
         if (a->pointer_binding)
-          g->localalias[a->local_id] = p;
+          store(g, offset(g, g->base, g->localoffset[a->local_id]), p, bt);
         else {
           v = load(g, p, bt);
           store(g, offset(g, g->base, g->localoffset[a->local_id]), v, bt);

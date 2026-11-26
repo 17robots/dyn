@@ -1,7 +1,7 @@
 use "std/encoding/binary"
-use "std/fmt" format
+use format "std/fmt"
 use "std/fail"
-use "std/unicode/utf8" utf8
+use utf8 "std/unicode/utf8"
 
 // JSON output into bounded caller storage, without a Value tree. Separators
 // are automatic: write a key before each object member, then its value.
@@ -115,13 +115,13 @@ fn zero_byte(word: u64) u64 {
 // 0x20, '"' or '\\'), eight at a time.
 fn clean_prefix(text: []const u8) usize {
   at: usize = 0
-  for #len(text) - at >= 8 {
+  for text.len - at >= 8 {
     word := binary.load_u64_le(text[at..at + 8])
     below := #wrapping(word - 0x2020202020202020) & ~word & 0x8080808080808080
     if (below | zero_byte(word ^ 0x2222222222222222) | zero_byte(word ^ 0x5c5c5c5c5c5c5c5c)) != 0 { break }
     at += 8
   }
-  for at < #len(text) {
+  for at < text.len {
     byte := text[at]
     if byte < 0x20 || byte == '"' || byte == '\\' { break }
     at += 1
@@ -138,9 +138,9 @@ fn quoted(target: *Writer, value: []const u8) {
   format.write_byte(&target.buffer, '"')
   start: usize = 0
   i: usize = 0
-  for i < #len(value) {
+  for i < value.len {
     i += clean_prefix(value[i..])
-    if i == #len(value) { break }
+    if i == value.len { break }
     byte := value[i]
     i += 1
     if byte >= 0x20 && byte != '"' && byte != '\\' { continue }
@@ -238,21 +238,21 @@ pub fn raw(target: *Writer, encoded: []const u8) {
 pub fn field(target: *Writer, name: []const u8, value: any) {
   key(target, name)
   case value {
-    []const u8 v => { text(target, v) }
-    []u8 v => { text(target, v) }
-    i64 v => { integer(target, v) }
-    i32 v => { integer(target, v) }
-    i16 v => { integer(target, v) }
-    i8 v => { integer(target, v) }
-    isize v => { integer(target, v) }
-    u64 v => { unsigned(target, v) }
-    u32 v => { unsigned(target, v) }
-    u16 v => { unsigned(target, v) }
-    u8 v => { unsigned(target, v) }
-    usize v => { unsigned(target, v) }
-    f64 v => { float(target, v) }
-    f32 v => { float(target, v) }
-    bool v => { boolean(target, v) }
+    []const u8(v) => { text(target, v) }
+    []u8(v) => { text(target, v) }
+    i64(v) => { integer(target, v) }
+    i32(v) => { integer(target, v) }
+    i16(v) => { integer(target, v) }
+    i8(v) => { integer(target, v) }
+    isize(v) => { integer(target, v) }
+    u64(v) => { unsigned(target, v) }
+    u32(v) => { unsigned(target, v) }
+    u16(v) => { unsigned(target, v) }
+    u8(v) => { unsigned(target, v) }
+    usize(v) => { unsigned(target, v) }
+    f64(v) => { float(target, v) }
+    f32(v) => { float(target, v) }
+    bool(v) => { boolean(target, v) }
     _ => { rejected(target, "a value of a type JSON cannot hold") }
   }
 }
@@ -261,20 +261,20 @@ pub fn field(target: *Writer, name: []const u8, value: any) {
 // declaration order. Fields may be integers, floats, bool or text
 // ([]const u8, []u8); any other field type fails the writer (write nested
 // values with key and their own object_of).
-pub fn object_of(target: *Writer, value: $T) {
+pub fn object_of<T>(target: *Writer, value: T) {
   object_at(target, &value)
 }
 
 // Writes the structs in values as a JSON array of objects (see object_of).
-pub fn array_of(target: *Writer, values: []const $T) {
+pub fn array_of<T>(target: *Writer, values: []const T) {
   array_begin(target)
-  for i in 0..#len(values) {
+  for i in 0..values.len {
     object_at(target, &values[i])
   }
   array_end(target)
 }
 
-fn object_at(target: *Writer, value: *const $T) {
+fn object_at<T>(target: *Writer, value: *const T) {
   #assert(#typeof(T).kind == TypeKind.Struct, "json.object_of: value must be a struct")
   info := #typeof(T)
   base := #cast(usize, value)

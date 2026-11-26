@@ -20,8 +20,8 @@ const NativeEventSize: usize = #sizeof(net.Event)
 fn native_wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout: i32) []Event {
   native := #slice(#cast(*net.Event, &queue.native[0]), queue.batch)
   count := net.event_wait(status, queue.handle, native, timeout)
-  events := mem.push_array(Event, arena, count)
-  for i in 0..#len(events) {
+  events := mem.push_array<Event>(arena, count)
+  for i in 0..events.len {
     index := #cast(usize, net.event_data(&native[i]))
     entry := queue.entries[index]
     events[i] = Event{ descriptor: entry.descriptor, token: entry.token, events: net.event_events(&native[i]) & 29 }

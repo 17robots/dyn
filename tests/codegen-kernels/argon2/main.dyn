@@ -8,7 +8,7 @@ fn main() {
   arena := mem.arena_alloc(64 * mem.MiB)
   defer mem.arena_release(arena)
   parameters := password.Argon2Recommended
-  workspace := mem.push_array(u64, arena, password.argon2id_workspace_words(parameters))
+  workspace := mem.push_array<u64>(arena, password.argon2id_workspace_words(parameters))
   out: [32]u8
   check: u64 = 0
   status := fail.Status{ on_failure: fail.panic_on_failure }

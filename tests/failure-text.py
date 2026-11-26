@@ -51,7 +51,7 @@ fn main() {
     _ = fs.open(&other, "/nonexistent/dir/file.txt")
   }
   io.println("{}", fail.describe(storage[..], kept))
-  check(#len(fail.path_text(&kept)) == 0, "lost text is empty")
+  check(fail.path_text(&kept).len == 0, "lost text is empty")
   long: [3000]u8
   for i in 0..3000 {
     long[i] = 'a' + #cast(u8, i % 26)
@@ -59,7 +59,7 @@ fn main() {
   big: fail.Status
   fail.invalid(&big, "read", long[..], "too long")
   path := fail.path_text(&big.failure)
-  check(#len(path) == 1024 - 4 - 8 && bytes.equal(path[..3], "...") && bytes.equal(path[#len(path) - 4..], long[2996..]), "long path keeps its end")
+  check(path.len == 1024 - 4 - 8 && bytes.equal(path[..3], "...") && bytes.equal(path[path.len - 4..], long[2996..]), "long path keeps its end")
   bare: fail.Status
   fail.at(&bare, fail.Kind.InvalidInput, "", "", 7)
   io.println("{}", fail.describe(storage[..], bare.failure))

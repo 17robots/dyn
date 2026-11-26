@@ -9,8 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve()
 SOURCE = r'''
 use "std/fail"
-use "std/io" io
-use "std/net/http" http
+use io "std/io"
+use http "std/net/http"
 // A writer that fails its fail-th call with code, counting calls.
 struct Sink { calls: usize, fail: usize, code: isize, partial: bool }
 fn write(raw: rawptr, status: *fail.Status, source: []const u8) usize {
@@ -22,7 +22,7 @@ fn write(raw: rawptr, status: *fail.Status, source: []const u8) usize {
     fail.set(status, failure)
     return 0
   }
-  count := #len(source)
+  count := source.len
   if s.partial && count > 1 { count = 1 }
   return count
 }
@@ -39,8 +39,8 @@ fn read(raw: rawptr, status: *fail.Status, destination: []u8) usize {
   }
   if f.delivered { return 0 }
   f.delivered = true
-  count := #len(f.wire)
-  if count > #len(destination) { count = #len(destination) }
+  count := f.wire.len
+  if count > destination.len { count = destination.len }
   for i in 0..count { destination[i] = f.wire[i] }
   return count
 }

@@ -3,7 +3,7 @@
 // bytes), a field larger than destination with Capacity. A scanner's ended
 // turns true when next returns no field, at the end of the input or after a
 // failure; that field's text is empty.
-use "std/io" stream
+use stream "std/io"
 use "std/fail"
 pub struct Scanner { source: []const u8, offset: usize, finished: bool, ended: bool }
 pub struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, record_ended: bool, input_done: bool, finished: bool, ended: bool }
@@ -105,7 +105,7 @@ pub fn next_stream(status: *fail.Status, state: *StreamScanner, destination: []u
       delimiter = byte
       break
     }
-    if used == #len(destination) { return stream_fail(status, state, fail.Kind.Capacity) }
+    if used == destination.len { return stream_fail(status, state, fail.Kind.Capacity) }
     destination[used] = byte
     used += 1
   }
@@ -156,14 +156,14 @@ pub fn write_field(status: *fail.Status, state: *Writer, value: []const u8, end_
   }
   if quoted && !write_all(status, state, "\"") { return }
   start: usize = 0
-  for i in 0..#len(value) {
+  for i in 0..value.len {
     if value[i] == '"' {
       if i > start && !write_all(status, state, value[start..i]) { return }
       if !write_all(status, state, "\"\"") { return }
       start = i + 1
     }
   }
-  if start < #len(value) && !write_all(status, state, value[start..]) { return }
+  if start < value.len && !write_all(status, state, value[start..]) { return }
   if quoted && !write_all(status, state, "\"") { return }
   state.fields += 1
   if end_record {
@@ -191,17 +191,17 @@ pub fn next(status: *fail.Status, state: *Scanner, destination: []u8) Field {
   }
   at := state.offset
   output_at: usize = 0
-  quoted := at < #len(state.source) && state.source[at] == '"'
+  quoted := at < state.source.len && state.source[at] == '"'
   if quoted {
     at += 1
   }
   closed := !quoted
-  for at < #len(state.source) {
+  for at < state.source.len {
     byte := state.source[at]
     if quoted {
       if byte == '"' {
-        if at + 1 < #len(state.source) && state.source[at + 1] == '"' {
-          if output_at == #len(destination) { return fail_at(status, state, destination, fail.Kind.Capacity) }
+        if at + 1 < state.source.len && state.source[at + 1] == '"' {
+          if output_at == destination.len { return fail_at(status, state, destination, fail.Kind.Capacity) }
           destination[output_at] = '"'
           output_at += 1
           at += 2
@@ -211,7 +211,7 @@ pub fn next(status: *fail.Status, state: *Scanner, destination: []u8) Field {
           break
         }
       } else {
-        if output_at == #len(destination) { return fail_at(status, state, destination, fail.Kind.Capacity) }
+        if output_at == destination.len { return fail_at(status, state, destination, fail.Kind.Capacity) }
         destination[output_at] = byte
         output_at += 1
         at += 1
@@ -219,18 +219,18 @@ pub fn next(status: *fail.Status, state: *Scanner, destination: []u8) Field {
     } else {
       if byte == ',' || byte == '\n' || byte == '\r' { break }
       if byte == '"' { return fail_at(status, state, destination, fail.Kind.InvalidInput) }
-      if output_at == #len(destination) { return fail_at(status, state, destination, fail.Kind.Capacity) }
+      if output_at == destination.len { return fail_at(status, state, destination, fail.Kind.Capacity) }
       destination[output_at] = byte
       output_at += 1
       at += 1
     }
   }
   if !closed { return fail_at(status, state, destination, fail.Kind.InvalidInput) }
-  if quoted && at < #len(state.source) && state.source[at] != ',' && state.source[at] != '\n' && state.source[at] != '\r' {
+  if quoted && at < state.source.len && state.source[at] != ',' && state.source[at] != '\n' && state.source[at] != '\r' {
     return fail_at(status, state, destination, fail.Kind.InvalidInput)
   }
   end_record := false
-  if at == #len(state.source) {
+  if at == state.source.len {
     state.finished = true
     end_record = true
   } else if state.source[at] == ',' {
@@ -239,13 +239,13 @@ pub fn next(status: *fail.Status, state: *Scanner, destination: []u8) Field {
     end_record = true
     if state.source[at] == '\r' {
       at += 1
-      if at < #len(state.source) && state.source[at] == '\n' {
+      if at < state.source.len && state.source[at] == '\n' {
         at += 1
       }
     } else {
       at += 1
     }
-    if at == #len(state.source) {
+    if at == state.source.len {
       state.finished = true
     }
   }

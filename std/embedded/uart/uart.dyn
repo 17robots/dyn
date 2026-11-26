@@ -1,4 +1,4 @@
-use "std/mmio" mmio
+use mmio "std/mmio"
 
 pub enum RegisterWidth { Byte, Word }
 // The caller configures and initializes the hardware before transmitting.

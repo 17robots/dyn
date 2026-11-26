@@ -1,4 +1,4 @@
-use "std/mem" mem
+use mem "std/mem"
 
 fn digit(value: u8) u8 {
   if value < 10 { return '0' + value }
@@ -11,12 +11,12 @@ pub fn hexdump(arena: *mem.Arena, source: []const u8, columns: usize) []u8 {
   if columns == 0 {
     #panic("hexdump needs at least one column")
   }
-  rows := (#len(source) + columns - 1) / columns
-  destination := mem.push_bytes(arena, rows * 11 + #len(source) * 3)
+  rows := (source.len + columns - 1) / columns
+  destination := mem.push_bytes(arena, rows * 11 + source.len * 3)
   output_at: usize = 0
   input_at: usize = 0
-  for input_at < #len(source) {
-    row := #len(source) - input_at
+  for input_at < source.len {
+    row := source.len - input_at
     if row > columns {
       row = columns
     }
@@ -44,7 +44,7 @@ pub fn hexdump(arena: *mem.Arena, source: []const u8, columns: usize) []u8 {
 }
 
 pub fn poison(destination: []u8, pattern: u8) {
-  for index in 0..#len(destination) {
+  for index in 0..destination.len {
     destination[index] = pattern
   }
 }

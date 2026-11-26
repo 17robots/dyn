@@ -1,5 +1,5 @@
 use "std/fail"
-use "std/dynlib" dl
+use dl "std/dynlib"
 
 fn check(ok: bool) {
   if !ok {

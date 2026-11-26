@@ -16,9 +16,9 @@ def literal(value):
 
 
 SOURCE = '''use "std/fail"
-use "std/unicode/text" text
-use "std/mem" mem
-use "std/bytes" bytes
+use text "std/unicode/text"
+use mem "std/mem"
+use bytes "std/bytes"
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 struct Converted { value: []u8, offset: usize, failure: fail.Failure }
 struct Grapheme { value: []const u8, found: bool, offset: usize, failure: fail.Failure }
@@ -50,7 +50,7 @@ fn good(input: []const u8, expected: []const u8, mode: usize) {
  prefix := mem.push_bytes(a, 7)
  r := convert(a, input, mode)
  converted(r, expected)
- require(mem.arena_mark(a) == mem.ArenaHeader + 7 + #len(expected), "exact retained allocation")
+ require(mem.arena_mark(a) == mem.ArenaHeader + 7 + expected.len, "exact retained allocation")
  for c in prefix { require(c == 99, "prefix preserved") }
 }
 fn chained(input: []const u8, expected: []const u8, mode: usize, block: usize, prior: bool) {
@@ -66,14 +66,14 @@ fn chained(input: []const u8, expected: []const u8, mode: usize, block: usize, p
   mem.fill(guard, 73)
   require(a.current != a, "forced prior chain")
  }
- owned_input := mem.push_bytes(a, #len(input))
+ owned_input := mem.push_bytes(a, input.len)
  _ = mem.copy(owned_input, input)
  mark := mem.arena_mark(a)
  used := mem.arena_used(a)
  r := convert(a, owned_input, mode)
  converted(r, expected)
- require(mem.arena_mark(a) == mark + #len(expected), "chained exact retained mark")
- require(mem.arena_used(a) == used + #len(expected), "chained scratch reclaimed")
+ require(mem.arena_mark(a) == mark + expected.len, "chained exact retained mark")
+ require(mem.arena_used(a) == used + expected.len, "chained scratch reclaimed")
  require(bytes.equal(owned_input, input), "live input preserved across chain")
  for value in prefix { require(value == 91, "chained prefix canary") }
  for value in guard { require(value == 73, "earlier block canary") }
@@ -92,14 +92,14 @@ fn bad(input: []const u8, off: usize) {
   snapshot: [256+mem.ArenaBufferOverhead]u8
   _ = mem.copy(snapshot[..], backing[..])
   r := convert(a, input, mode)
-  require(r.failure.kind != fail.Kind.Ok && #len(r.value) == 0 && r.failure.kind == fail.Kind.InvalidInput && r.offset == off, "invalid diagnostics")
+  require(r.failure.kind != fail.Kind.Ok && r.value.len == 0 && r.failure.kind == fail.Kind.InvalidInput && r.offset == off, "invalid diagnostics")
   require(mem.arena_mark(a) == mem.ArenaHeader + 7, "invalid rollback")
   require(bytes.equal(backing[..], snapshot[..]), "validation wrote arena")
   empty: [mem.ArenaBufferOverhead]u8
   pad := (16-(#cast(usize,&empty[0])&15))&15
   full := mem.arena_from_buffer(empty[pad..pad+mem.ArenaHeader])
   r = convert(full, input, mode)
-  require(r.failure.kind != fail.Kind.Ok && r.offset == off && r.failure.kind == fail.Kind.InvalidInput && #len(r.value) == 0 && mem.arena_mark(full) == mem.ArenaHeader, "validate before allocation")
+  require(r.failure.kind != fail.Kind.Ok && r.offset == off && r.failure.kind == fail.Kind.InvalidInput && r.value.len == 0 && mem.arena_mark(full) == mem.ArenaHeader, "validate before allocation")
  }
 }
 fn overlap(start: usize, mode: usize) {
@@ -113,11 +113,11 @@ fn overlap(start: usize, mode: usize) {
  payload := a.data[mem.ArenaHeader..]
  _ = mem.copy(snapshot[..], payload)
  r := convert(a, a.data[at..at+4], mode)
- require(r.failure.kind != fail.Kind.Ok && #len(r.value) == 0 && r.failure.kind == fail.Kind.InvalidInput && r.offset == 0, "overlap diagnostics")
- require(mem.arena_mark(a) == mem.ArenaHeader + 8 && bytes.equal(payload, snapshot[..#len(payload)]), "overlap preserved bytes and mark")
+ require(r.failure.kind != fail.Kind.Ok && r.value.len == 0 && r.failure.kind == fail.Kind.InvalidInput && r.offset == 0, "overlap diagnostics")
+ require(mem.arena_mark(a) == mem.ArenaHeader + 8 && bytes.equal(payload, snapshot[..payload.len]), "overlap preserved bytes and mark")
 }
 fn end(r: Grapheme) {
- require(!r.found && #len(r.value) == 0 && r.failure.kind == fail.Kind.Ok && r.offset == 0, "ordinary EOF")
+ require(!r.found && r.value.len == 0 && r.failure.kind == fail.Kind.Ok && r.offset == 0, "ordinary EOF")
 }
 fn cluster(r: Grapheme, expected: []const u8) {
  require(r.found && bytes.equal(r.value, expected) && r.failure.kind == fail.Kind.Ok && r.offset == 0, "grapheme value")
@@ -127,7 +127,7 @@ fn sticky(input: []const u8, off: usize, start: usize) {
  g.offset = start
  for repeat in 0..3 {
   r := next_grapheme(&g)
-  require(r.failure.kind != fail.Kind.Ok && #len(r.value) == 0 && r.failure.kind == fail.Kind.InvalidInput && r.offset == off, "sticky error diagnostics")
+  require(r.failure.kind != fail.Kind.Ok && r.value.len == 0 && r.failure.kind == fail.Kind.InvalidInput && r.offset == off, "sticky error diagnostics")
   require(g.offset == start && g.failed && g.error_offset == off, "sticky iterator state")
  }
 }
@@ -188,7 +188,7 @@ overlap(10, 4)
     program += 'cluster(next_grapheme(&partial), "a")\n'
     program += '''for repeat in 0..3 {
  r := next_grapheme(&partial)
- require(r.failure.kind != fail.Kind.Ok && #len(r.value) == 0 && r.failure.kind == fail.Kind.InvalidInput && r.offset == 2 && partial.offset == 1, "sticky after success")
+ require(r.failure.kind != fail.Kind.Ok && r.value.len == 0 && r.failure.kind == fail.Kind.InvalidInput && r.offset == 2 && partial.offset == 1, "sticky after success")
 }
 '''
     for raw, off, start in [(b'\xff', 0, 0), (b'a\xff', 1, 0),
@@ -218,8 +218,8 @@ def main():
                 subprocess.run([str(work / 'run')], check=True, capture_output=True, timeout=30)
                 print(f'PASS Unicode {mode} {"tree" if tree else "SSA"}: {goldens} goldens, {invalid} invalid UTF-8 cases × 5 operations; 120 chained conversions, overlap, zero, grapheme EOF/sticky', flush=True)
                 for operation in ['text.case_fold(a, &status, "ABCD")', 'text.normalize(a, &status, "ABCD", text.Form.NFD)']:
-                    (work / 'main.dyn').write_text('''use "std/unicode/text" text
-    use "std/mem" mem
+                    (work / 'main.dyn').write_text('''use text "std/unicode/text"
+    use mem "std/mem"
     use "std/fail"
     fn main() {
      status: fail.Status

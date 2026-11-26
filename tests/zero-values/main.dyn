@@ -1,9 +1,9 @@
 use "std/fail"
 use "std/mem"
-use "std/io" io
-use "std/encoding/csv" csv
-use "std/encoding/ini" ini
-use "std/text/scanner" text
+use io "std/io"
+use csv "std/encoding/csv"
+use ini "std/encoding/ini"
+use text "std/text/scanner"
 use "std/net"
 
 
@@ -14,16 +14,16 @@ fn read_nothing(data: rawptr, status: *fail.Status, destination: []u8) usize {
 // Explicit default arenas initialize zeroed payload; replacement follows release.
 fn zero_arena() {
   arena := mem.arena_alloc(0)
-  first := mem.push(u64, arena)
+  first := mem.push<u64>(arena)
   first.* = 7
-  many := mem.push_array(u64, arena, 100000)
+  many := mem.push_array<u64>(arena, 100000)
   many[99999] = first.*
   if many[99999] != 7 || !arena.owns_memory {
     #panic("zero arena push")
   }
   mem.arena_release(arena)
   arena = mem.arena_alloc(0)
-  again := mem.push(u32, arena)
+  again := mem.push<u32>(arena)
   if again.* != 0 {
     #panic("zero arena after release")
   }
@@ -48,14 +48,14 @@ fn zero_scanners() {
   empty := csv.StreamScanner{ input: io.Reader{ read: read_nothing } }
   storage: [4]u8
   field := csv.next_stream(&status, &empty, storage[..])
-  if empty.ended || #len(field.text) != 0 || !field.end_input {
+  if empty.ended || field.text.len != 0 || !field.end_input {
     #panic("zero CSV stream scanner")
   }
 }
 
 fn bytes_equal(a: []const u8, b: []const u8) bool {
-  if #len(a) != #len(b) { return false }
-  for i in 0..#len(a) {
+  if a.len != b.len { return false }
+  for i in 0..a.len {
     if a[i] != b[i] { return false }
   }
   return true
@@ -65,8 +65,8 @@ fn bytes_equal(a: []const u8, b: []const u8) bool {
 fn zero_net_handles() {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  connection := mem.push(net.Connection, arena)
-  listener := mem.push(net.Listener, arena)
+  connection := mem.push<net.Connection>(arena)
+  listener := mem.push<net.Listener>(arena)
   net.connection_close(connection)
   net.listener_close(listener)
 }

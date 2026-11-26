@@ -1,11 +1,11 @@
 #target(kernel: darwin)
-use "std/io" io
+use io "std/io"
 use "std/fail"
-use "std/mem" mem
-use "std/c" c
-use "std/sync" sync
-use "std/bytes" bytes
-use "std/unicode/utf8" utf8
+use mem "std/mem"
+use c "std/c"
+use sync "std/sync"
+use bytes "std/bytes"
+use utf8 "std/unicode/utf8"
 use "std/os/macos/sys"
 
 pub const Modify: u32 = 2
@@ -131,12 +131,12 @@ fn discard_slot(state: *State, slot: *Slot) {
 pub fn open(status: *fail.Status, storage: []u8) Watcher {
   if status == nil { return open(&fail.Status{}, storage) }
   if status.failed { return Watcher{} }
-  if #len(storage) < 272 {
+  if storage.len < 272 {
     _ = failure(status, "watch", "", -28)
     return Watcher{}
   }
   arena := mem.arena_alloc(#sizeof(State))
-  state := mem.push(State, arena)
+  state := mem.push<State>(arena)
   if !load(&state.api) {
     unload(&state.api)
     mem.arena_release(arena)
@@ -158,7 +158,7 @@ fn publish(slot: *Slot, name: []const u8, mask: u32, rescan: bool) {
   state := slot.owner
   write := sync.load_u32(&state.write)
   following := (write + 1) % 64
-  if following == sync.load_u32(&state.read) || #len(name) > 1023 {
+  if following == sync.load_u32(&state.read) || name.len > 1023 {
     sync.store_u32(&state.lost, 1)
     return
   }
@@ -166,8 +166,8 @@ fn publish(slot: *Slot, name: []const u8, mask: u32, rescan: bool) {
   record.watch = slot.id
   record.mask = mask
   record.rescan = rescan
-  record.length = #len(name)
-  for i in 0..#len(name) {
+  record.length = name.len
+  for i in 0..name.len {
     record.name[i] = name[i]
   }
   sync.store_u32(&state.write, following)
@@ -195,11 +195,11 @@ fn callback(_stream: rawptr, info: rawptr, count: usize, paths: rawptr, flags: *
       sync.store_u32(&slot.owner.lost, 1)
       continue
     }
-    if #len(path) < slot.length || !bytes.equal(path[..slot.length], slot.root[..slot.length]) {
+    if path.len < slot.length || !bytes.equal(path[..slot.length], slot.root[..slot.length]) {
       continue
     }
     start := slot.length
-    if #len(path) > start {
+    if path.len > start {
       if slot.length != 1 {
         if path[start] != '/' { continue }
         start += 1
@@ -230,7 +230,7 @@ fn callback(_stream: rawptr, info: rawptr, count: usize, paths: rawptr, flags: *
       mask = mask | MoveFrom | MoveTo
       rescan = true
     }
-    if #len(name) == 0 {
+    if name.len == 0 {
       rescan = true
     }
     if (kind & 32) != 0 {
@@ -249,7 +249,7 @@ pub fn add(status: *fail.Status, watcher: *Watcher, path: []const u8, mask: u32)
   if status == nil { return add(&fail.Status{}, watcher, path, mask) }
   if status.failed { return -1 }
   state := watcher.state
-  if state == nil || #len(path) == 0 || !utf8.valid(path) { return failure(status, "watch", path, -22) }
+  if state == nil || path.len == 0 || !utf8.valid(path) { return failure(status, "watch", path, -22) }
   if (mask & SupportedEvents) == 0 {
     unsupported := fail.make(fail.Kind.Unsupported, "watch", path, "none of the events can be watched here")
     unsupported.native = -95
@@ -290,7 +290,7 @@ pub fn add(status: *fail.Status, watcher: *Watcher, path: []const u8, mask: u32)
   slot.owner = state
   slot.id = state.serial
   slot.mask = mask
-  slot.length = #len(rooted_path)
+  slot.length = rooted_path.len
   for i in 0..slot.length {
     slot.root[i] = rooted_path[i]
   }
@@ -390,7 +390,7 @@ pub fn next(status: *fail.Status, watcher: *Watcher) Event {
       }
     }
     if !live { continue }
-    if record.length > #len(watcher.storage) {
+    if record.length > watcher.storage.len {
       watcher.rescan_required = true
       return Event{ watch: record.watch, name: watcher.storage[..0], rescan: true }
     }

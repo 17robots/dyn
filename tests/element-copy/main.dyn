@@ -10,14 +10,14 @@ fn copy_bytes(destination: []u8, source: []const u8, n: usize) {
 }
 
 fn copy_words(destination: []u32, source: []const u32) {
-  for i in 0..#len(source) {
+  for i in 0..source.len {
     destination[i] = source[i]
   }
 }
 
 fn checksum(bytes: []const u8) u64 {
   total: u64 = 0
-  for i in 0..#len(bytes) {
+  for i in 0..bytes.len {
     total = total * 31 + #cast(u64, bytes[i])
   }
   return total
@@ -27,13 +27,13 @@ fn main() {
   program := process.start()
   buffer: [256]u8
   scratch: [256]u8
-  for i in 0..#len(buffer) {
+  for i in 0..buffer.len {
     buffer[i] = #cast(u8, i * 7 + 3)
   }
   total: u64 = 0
   // Every length from 0 to 100, through mem.copy and the loop above.
   for n in 0..101 {
-    for i in 0..#len(scratch) {
+    for i in 0..scratch.len {
       scratch[i] = 0
     }
     _ = mem.copy(scratch[5..5 + n], buffer[n..2 * n])
@@ -44,7 +44,7 @@ fn main() {
   // shifts, as a forward byte loop does.
   for distance in 1..12 {
     overlap: [64]u8
-    for i in 0..#len(overlap) {
+    for i in 0..overlap.len {
       overlap[i] = #cast(u8, i)
     }
     copy_bytes(overlap[distance..], overlap[..], 40)
@@ -54,16 +54,16 @@ fn main() {
   }
   words: [40]u32
   copies: [40]u32
-  for i in 0..#len(words) {
+  for i in 0..words.len {
     words[i] = #cast(u32, i * 2654435761)
   }
   copy_words(copies[..], words[..])
-  for i in 0..#len(copies) {
+  for i in 0..copies.len {
     total = total * 3 + #cast(u64, copies[i])
   }
   io.println("{}", total)
   // A destination shorter than the count fails at its first missing index.
-  if #len(program.args) > 1 {
+  if program.args.len > 1 {
     short: [10]u8
     copy_bytes(short[..], buffer[..], 20)
   }

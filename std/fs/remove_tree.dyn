@@ -34,11 +34,11 @@ pub fn remove_tree(status: *fail.Status, path: []const u8, frames: []RemovalFram
     return
   }
   if status.failed { return }
-  if #len(frames) == 0 || #len(scratch) / #len(frames) < 280 {
+  if frames.len == 0 || scratch.len / frames.len < 280 {
     fail.invalid(status, "remove", path, "too little scratch space")
     return
   }
-  stride := #len(scratch) / #len(frames)
+  stride := scratch.len / frames.len
   root: Directory
   opened := open_removal(-100, path, scratch[..stride], &root)
   if opened != 0 {
@@ -64,7 +64,7 @@ pub fn remove_tree(status: *fail.Status, path: []const u8, frames: []RemovalFram
       check(status, "remove", frames[depth - 1].name, listed)
       return
     }
-    if #len(item.name) == 0 {
+    if item.name.len == 0 {
       frame := &frames[depth - 1]
       removed_directory := unlink_at(frame.parent, frame.name, true)
       if removed_directory != 0 {
@@ -83,7 +83,7 @@ pub fn remove_tree(status: *fail.Status, path: []const u8, frames: []RemovalFram
       check(status, "remove", item.name, removed_file)
       return
     }
-    if depth == #len(frames) {
+    if depth == frames.len {
       fail.set(status, fail.make(fail.Kind.Capacity, "remove", path, "tree is deeper than the frames"))
       return
     }

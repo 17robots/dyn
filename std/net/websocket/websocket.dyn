@@ -1,8 +1,8 @@
 use "std/fail"
-use "std/io" io
-use "std/mem" mem
-use "std/encoding/base64" base64
-use "std/net/http" http
+use io "std/io"
+use mem "std/mem"
+use base64 "std/encoding/base64"
+use http "std/net/http"
 
 // complete is false when input holds only part of a frame: read more.
 pub struct WebSocketFrame { payload: []const u8, opcode: u8, mask: u32, consumed: usize, final: bool, masked: bool, complete: bool }
@@ -131,15 +131,15 @@ fn ws_sha1_block(state: []u32, block: []const u8) {
 }
 
 fn ws_equal(left: []const u8, right: []const u8) bool {
-  if #len(left) != #len(right) { return false }
-  for i in 0..#len(left) {
+  if left.len != right.len { return false }
+  for i in 0..left.len {
     if left[i] != right[i] { return false }
   }
   return true
 }
 fn ws_equal_case(left: []const u8, right: []const u8) bool {
-  if #len(left) != #len(right) { return false }
-  for i in 0..#len(left) {
+  if left.len != right.len { return false }
+  for i in 0..left.len {
     a := left[i]
     b := right[i]
     if a >= 'A' && a <= 'Z' {
@@ -153,13 +153,13 @@ fn ws_equal_case(left: []const u8, right: []const u8) bool {
   return true
 }
 fn ws_append(destination: []u8, offset: usize, source: []const u8) usize {
-  if offset > #len(destination) || #len(source) > #len(destination) - offset {
-    return #len(destination) + 1
+  if offset > destination.len || source.len > destination.len - offset {
+    return destination.len + 1
   }
-  for i in 0..#len(source) {
+  for i in 0..source.len {
     destination[offset + i] = source[i]
   }
-  return offset + #len(source)
+  return offset + source.len
 }
 
 // Computes RFC 6455 Sec-WebSocket-Accept into 28 caller-owned bytes.
@@ -167,20 +167,20 @@ fn websocket_accept(destination: []u8, key: []const u8) []u8 {
   decoded: [18 + mem.ArenaBufferOverhead]u8
   decoded_arena := mem.arena_from_buffer(decoded[..])
   decoding: fail.Status
-  if #len(key) != 24 || #len(base64.decode(decoded_arena, &decoding, key)) != 16 || #len(destination) < 28 {
+  if key.len != 24 || base64.decode(decoded_arena, &decoding, key).len != 16 || destination.len < 28 {
     return destination[..0]
   }
   guid: []const u8 = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
   message: [128]u8
   i: usize = 0
-  for i < #len(key) {
+  for i < key.len {
     message[i] = key[i]
     i += 1
   }
-  for j in 0..#len(guid) {
+  for j in 0..guid.len {
     message[i + j] = guid[j]
   }
-  message_length := #len(key) + #len(guid)
+  message_length := key.len + guid.len
   message[message_length] = 128
   bit_length := message_length * 8
   message[126] = #cast(u8, (bit_length >> 8))
@@ -200,17 +200,17 @@ fn websocket_accept(destination: []u8, key: []const u8) []u8 {
   encoding_storage: [28 + mem.ArenaBufferOverhead]u8
   encoded := mem.arena_from_buffer(encoding_storage[..])
   text := base64.encode(encoded, digest[..])
-  for j in 0..#len(text) {
+  for j in 0..text.len {
     destination[j] = text[j]
   }
-  return destination[..#len(text)]
+  return destination[..text.len]
 }
 
 // Validates the HTTP request-side RFC 6455 upgrade fields. Returned key borrows request.
 fn websocket_validate_upgrade_request(status: *fail.Status, request: []const u8) []const u8 {
   _ = http.parse_request(status, request)
   if status.failed { return request[..0] }
-  if #len(request) < 4 || !ws_equal(request[..4], "GET ") {
+  if request.len < 4 || !ws_equal(request[..4], "GET ") {
     fail.invalid(status, "upgrade to WebSocket", "", "not a GET request")
     return request[..0]
   }
@@ -224,7 +224,7 @@ fn websocket_validate_upgrade_request(status: *fail.Status, request: []const u8)
   scratch_arena := mem.arena_from_buffer(scratch[..])
   decoding: fail.Status
   if fields.failed || !ws_equal_case(upgrade, "websocket") || !ws_equal_case(connection_header, "Upgrade") || !ws_equal(version, "13") ||
-    #len(base64.decode(scratch_arena, &decoding, key)) != 16 {
+    base64.decode(scratch_arena, &decoding, key).len != 16 {
     fail.invalid(status, "upgrade to WebSocket", "", "missing or invalid upgrade fields")
     return request[..0]
   }
@@ -235,11 +235,11 @@ fn websocket_validate_upgrade_request(status: *fail.Status, request: []const u8)
 fn websocket_write_upgrade_response(destination: []u8, key: []const u8) []u8 {
   accept_storage: [28]u8
   accept_value := websocket_accept(accept_storage[..], key)
-  if #len(accept_value) == 0 { return destination[..0] }
+  if accept_value.len == 0 { return destination[..0] }
   at := ws_append(destination, 0, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ")
   at = ws_append(destination, at, accept_value)
   at = ws_append(destination, at, "\r\n\r\n")
-  if at > #len(destination) { return destination[..0] }
+  if at > destination.len { return destination[..0] }
   return destination[..at]
 }
 
@@ -269,37 +269,35 @@ fn ws_put64(output: []u8, at: usize, value: usize) {
 fn websocket_write(destination: []u8, opcode: u8, payload: []const u8, final: bool, masked: bool, mask: u32) []u8 {
   opcode_value: usize = opcode
   control := opcode_value >= WsEight
-  if opcode_value > WsTen || (opcode_value >= WsThree && opcode_value <= WsSeven) || (control && (!final || #len(payload) > Ws125)) {
+  if opcode_value > WsTen || (opcode_value >= WsThree && opcode_value <= WsSeven) || (control && (!final || payload.len > Ws125)) {
     return destination[..0]
   }
   extended: usize = 0
-  if #len(payload) >= Ws126 && #len(payload) <= Ws65535 {
+  if payload.len >= Ws126 && payload.len <= Ws65535 {
     extended = WsTwo
-  } else if #len(payload) > Ws65535 {
+  } else if payload.len > Ws65535 {
     extended = WsEight
   }
   header := WsTwo + extended
   if masked {
     header += 4
   }
-  if header > #len(destination) || #len(payload) > #len(destination) - header {
-    return destination[..0]
-  }
+  if header > destination.len || payload.len > destination.len - header { return destination[..0] }
   destination[0] = opcode
   if final {
     destination[0] = destination[0] | WsU8Mask128
   }
-  length_value := #len(payload) % Ws256
+  length_value := payload.len % Ws256
   length: u8 = #cast(u8, length_value)
   if extended == WsTwo {
     length = 126
-    high := #len(payload) / Ws256
+    high := payload.len / Ws256
     destination[2] = #cast(u8, high)
-    low := #len(payload) % Ws256
+    low := payload.len % Ws256
     destination[3] = #cast(u8, low)
   } else if extended == WsEight {
     length = 127
-    ws_put64(destination, WsTwo, #len(payload))
+    ws_put64(destination, WsTwo, payload.len)
   }
   destination[1] = length
   if masked {
@@ -319,21 +317,21 @@ fn websocket_write(destination: []u8, opcode: u8, payload: []const u8, final: bo
     destination[mask_at + 3] = #cast(u8, mask)
     payload_at += 4
   }
-  for i in 0..#len(payload) {
+  for i in 0..payload.len {
     byte := payload[i]
     if masked {
       byte = byte ^ destination[mask_at + i % WsFour]
     }
     destination[payload_at + i] = byte
   }
-  return destination[..payload_at + #len(payload)]
+  return destination[..payload_at + payload.len]
 }
 
 // Offsets identify bytes in the supplied frame; semantic message/upgrade errors
 // without a single source cursor use zero.
 // Parses one complete frame prefix. Payload borrows input and remains masked.
 fn websocket_parse(input: []const u8) Scanned {
-  if #len(input) < 2 { return Scanned{} }
+  if input.len < 2 { return Scanned{} }
   if (input[0] & WsU8Mask112) != WsU8Zero { return Scanned{ invalid: true, offset: 0 } }
   opcode := input[0] & WsU8Mask15
   opcode_value: usize = opcode
@@ -346,14 +344,14 @@ fn websocket_parse(input: []const u8) Scanned {
   size: usize = length_byte
   at: usize = 2
   if size == Ws126 {
-    if #len(input) < WsFour { return Scanned{} }
+    if input.len < WsFour { return Scanned{} }
     high := #cast(usize, input[2])
     low := #cast(usize, input[3])
     size = high * Ws256 + low
     at = WsFour
     if size < Ws126 { return Scanned{ invalid: true, offset: 2 } }
   } else if size == 127 {
-    if #len(input) < 10 { return Scanned{} }
+    if input.len < 10 { return Scanned{} }
     if (input[2] & WsU8Mask128) != WsU8Zero { return Scanned{ invalid: true, offset: 2 } }
     size = 0
     for i in 0..8 {
@@ -367,7 +365,7 @@ fn websocket_parse(input: []const u8) Scanned {
   if opcode_value >= 8 && (!final || size > 125) { return Scanned{ invalid: true, offset: 0 } }
   mask: u32 = 0
   if masked {
-    if at + 4 > #len(input) { return Scanned{} }
+    if at + 4 > input.len { return Scanned{} }
     m0: u32 = input[at]
     m1: u32 = input[at + 1]
     m2: u32 = input[at + 2]
@@ -375,12 +373,12 @@ fn websocket_parse(input: []const u8) Scanned {
     mask = m0 * 16777216 + m1 * 65536 + m2 * 256 + m3
     at += 4
   }
-  if at > #len(input) || size > #len(input) - at { return Scanned{} }
+  if at > input.len || size > input.len - at { return Scanned{} }
   return Scanned{ frame: WebSocketFrame{ payload: input[at..at + size], opcode: opcode, mask: mask, consumed: at + size, final: final, masked: masked, complete: true } }
 }
 
 fn websocket_decode(destination: []u8, frame: WebSocketFrame) []u8 {
-  if !frame.complete || #len(destination) < #len(frame.payload) { return destination[..0] }
+  if !frame.complete || destination.len < frame.payload.len { return destination[..0] }
   fm0 := frame.mask >> 24
   fm1 := frame.mask >> 16
   fm2 := frame.mask >> 8
@@ -390,21 +388,21 @@ fn websocket_decode(destination: []u8, frame: WebSocketFrame) []u8 {
   keys[2] = #cast(u8, fm2)
   keys[3] = #cast(u8, frame.mask)
   i: usize = 0
-  for i < #len(frame.payload) {
+  for i < frame.payload.len {
     destination[i] = frame.payload[i]
     if frame.masked {
       destination[i] = destination[i] ^ keys[i % WsFour]
     }
     i += 1
   }
-  return destination[..#len(frame.payload)]
+  return destination[..frame.payload.len]
 }
 
 fn ws_decode_at(destination: []u8, at: usize, frame: WebSocketFrame) bool {
-  if at > #len(destination) || #len(frame.payload) > #len(destination) - at { return false }
+  if at > destination.len || frame.payload.len > destination.len - at { return false }
   keys: [4]u8 = [#cast(u8, (frame.mask >> 24)), #cast(u8, (frame.mask >> 16)), #cast(u8, (frame.mask >> 8)), #cast(u8, frame.mask)]
   i: usize = 0
-  for i < #len(frame.payload) {
+  for i < frame.payload.len {
     destination[at + i] = frame.payload[i]
     if frame.masked {
       destination[at + i] = destination[at + i] ^ keys[i % WsFour]
@@ -416,7 +414,7 @@ fn ws_decode_at(destination: []u8, at: usize, frame: WebSocketFrame) bool {
 
 fn ws_utf8(bytes: []const u8) bool {
   i: usize = 0
-  for i < #len(bytes) {
+  for i < bytes.len {
     first := bytes[i]
     need: usize = 0
     minimum: u32 = 0
@@ -440,7 +438,7 @@ fn ws_utf8(bytes: []const u8) bool {
     } else {
       return false
     }
-    if need > #len(bytes) - i - 1 { return false }
+    if need > bytes.len - i - 1 { return false }
     for j in 0..need {
       next := bytes[i + j + 1]
       if next < 128 || next > 191 { return false }
@@ -487,18 +485,18 @@ fn websocket_receive(status: *fail.Status, state: *WebSocketMessageState, messag
     if !ws_decode_at(control, 0, frame) {
       return message_failure(status, fail.Kind.Capacity, "a control frame does not fit control storage")
     }
-    payload := control[..#len(frame.payload)]
+    payload := control[..frame.payload.len]
     if frame.opcode == WsU8Eight {
-      if #len(payload) == 1 {
+      if payload.len == 1 {
         return message_failure(status, fail.Kind.InvalidInput, "a Close payload of one byte")
       }
       code: u16 = 0
-      if #len(payload) >= 2 {
+      if payload.len >= 2 {
         first: u16 = payload[0]
         second: u16 = payload[1]
         code = first * WsU16Byte + second
       }
-      if (#len(payload) >= 2 && !ws_close_code(code)) || (#len(payload) > 2 && !ws_utf8(payload[2..])) {
+      if (payload.len >= 2 && !ws_close_code(code)) || (payload.len > 2 && !ws_utf8(payload[2..])) {
         return message_failure(status, fail.Kind.InvalidInput, "invalid Close code or reason")
       }
       state.closed = true
@@ -523,7 +521,7 @@ fn websocket_receive(status: *fail.Status, state: *WebSocketMessageState, messag
   if !ws_decode_at(message, state.used, frame) {
     return message_failure(status, fail.Kind.Capacity, "the message does not fit message storage")
   }
-  state.used += #len(frame.payload)
+  state.used += frame.payload.len
   if !frame.final {
     state.fragmented = true
     return WebSocketEvent{ detail: WebSocketEventKind.None, opcode: state.opcode }
@@ -556,7 +554,7 @@ pub fn write_upgrade_response(arena: *mem.Arena, key: []const u8) []u8 {
   mark := mem.arena_mark(arena)
   space := mem.push_bytes(arena, 160)
   output := websocket_write_upgrade_response(space, key)
-  mem.arena_rewind(arena, mark + #len(output))
+  mem.arena_rewind(arena, mark + output.len)
   return output
 }
 
@@ -575,9 +573,9 @@ pub fn validate_upgrade_response(status: *fail.Status, response: []const u8, key
 // One encoded frame, in arena.
 pub fn write_frame(arena: *mem.Arena, opcode: u8, payload: []const u8, final: bool, masked: bool, mask: u32) []u8 {
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes(arena, #len(payload) + 14)
+  space := mem.push_bytes(arena, payload.len + 14)
   output := websocket_write(space, opcode, payload, final, masked, mask)
-  mem.arena_rewind(arena, mark + #len(output))
+  mem.arena_rewind(arena, mark + output.len)
   return output
 }
 
@@ -596,9 +594,9 @@ pub fn parse_frame(status: *fail.Status, input: []const u8) WebSocketFrame {
 // The frame's payload, unmasked, in arena.
 pub fn decode_frame(arena: *mem.Arena, frame: WebSocketFrame) []u8 {
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes(arena, #len(frame.payload))
+  space := mem.push_bytes(arena, frame.payload.len)
   output := websocket_decode(space, frame)
-  mem.arena_rewind(arena, mark + #len(output))
+  mem.arena_rewind(arena, mark + output.len)
   return output
 }
 pub fn message_state(expect_masked: bool) WebSocketMessageState {
@@ -645,7 +643,7 @@ fn connection_usable(status: *fail.Status, state: *WebSocketConnection) bool {
     fail.set(status, fail.make(fail.Kind.InvalidState, "WebSocket", "", "an earlier call failed"))
     return false
   }
-  if !state.active || state.frame_used > #len(state.frames) || state.frame_consumed > state.frame_used {
+  if !state.active || state.frame_used > state.frames.len || state.frame_consumed > state.frame_used {
     connection_failed(status, state, fail.Kind.InvalidState, "the connection is not set up")
     return false
   }
@@ -667,7 +665,7 @@ pub fn connection_send(status: *fail.Status, state: *WebSocketConnection, opcode
     return
   }
   opcode_value := #cast(usize, opcode)
-  if opcode_value > 10 || (opcode_value >= 3 && opcode_value <= 7) || (opcode_value >= 8 && (!final || #len(payload) > 125)) {
+  if opcode_value > 10 || (opcode_value >= 3 && opcode_value <= 7) || (opcode_value >= 8 && (!final || payload.len > 125)) {
     connection_failed(status, state, fail.Kind.InvalidInput, "invalid opcode or control payload")
     return
   }
@@ -677,10 +675,10 @@ pub fn connection_send(status: *fail.Status, state: *WebSocketConnection, opcode
     state.frame_used = 0
   }
   frame := websocket_write(state.frames[..state.frame_consumed], opcode, payload, final, state.client, mask)
-  if #len(frame) == 0 {
+  if frame.len == 0 {
     frame = websocket_write(state.frames[state.frame_used..], opcode, payload, final, state.client, mask)
   }
-  if #len(frame) == 0 {
+  if frame.len == 0 {
     connection_failed(status, state, fail.Kind.Capacity, "the frame does not fit frame storage")
     return
   }
@@ -767,7 +765,7 @@ pub fn connection_receive(status: *fail.Status, state: *WebSocketConnection) Web
       connection_failed(status, state, fail.Kind.InvalidInput, "the stream ended inside a frame")
       return WebSocketEvent{}
     }
-    if state.frame_used == #len(state.frames) {
+    if state.frame_used == state.frames.len {
       connection_failed(status, state, fail.Kind.Capacity, "the frame does not fit frame storage")
       return WebSocketEvent{}
     }

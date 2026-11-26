@@ -13,7 +13,7 @@ struct Settings {
 fn report(path: []const u8, failure: fail.Failure) {
   storage: [512]u8
   text := fail.describe(storage[..], failure)
-  if #len(fail.path_text(&failure)) == 0 {
+  if fail.path_text(&failure).len == 0 {
     io.eprintln("settings: {}: {}", path, text)
   } else {
     io.eprintln("settings: {}", text)
@@ -23,8 +23,8 @@ fn report(path: []const u8, failure: fail.Failure) {
 fn load(arena: *mem.Arena, status: *fail.Status, path: []const u8) Settings {
   text := fs.read_all(arena, status, path, mem.MiB)
   root := json.parse(arena, status, text)
-  name := json.get([]const u8, status, root, "name")
-  port := json.get(i64, status, root, "port")
+  name := json.get<[]const u8>(status, root, "name")
+  port := json.get<i64>(status, root, "port")
   if !status.failed && (port < 1 || port > 65535) {
     fail.invalid(status, "read", path, "\"port\" is not a whole number from 1 to 65535")
   }
@@ -34,7 +34,7 @@ fn load(arena: *mem.Arena, status: *fail.Status, path: []const u8) Settings {
 
 fn main() i32 {
   program := process.start()
-  if #len(program.args) != 3 {
+  if program.args.len != 3 {
     io.eprintln("settings: usage: settings FIRST SECOND")
     return 1
   }

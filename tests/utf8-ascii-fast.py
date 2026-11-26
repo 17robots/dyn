@@ -50,8 +50,8 @@ def cases():
             yield b'a' * offset + b'\xf4\x90\x80\x80' + b'z' * n
 
 
-SOURCE = '''use "std/unicode/utf8" utf8
-use "std/io" io
+SOURCE = '''use utf8 "std/unicode/utf8"
+use io "std/io"
 extern fn exercise(check:fn(*const u8,usize) i32) i32
 fn check(data:*const u8,length:usize) i32 {
   if utf8.valid(#slice(data, length)) { return 1 }

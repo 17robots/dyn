@@ -106,7 +106,7 @@ pub fn indirect(p:*u64,x:u64) { p.*=x }
 pub fn indirect_read(p:*u64) u64 { return p.* }
 struct Pair { a:u64,b:u64 }
 pub fn aggregate_negative(x:Pair) Pair { return x }
-pub fn descriptor_negative(x:[]u8) usize { return #len(x) }
+pub fn descriptor_negative(x:[]u8) usize { return x.len }
 pub fn array_negative() u8 { a:[8]u8
 return a[0] }
 pub fn switch_negative(x:i64) i64 {

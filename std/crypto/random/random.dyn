@@ -1,4 +1,4 @@
-use "std/crypto/core" crypto_core
+use crypto_core "std/crypto/core"
 use "std/fail"
 
 // Fills destination with cryptographically secure random bytes. A target with

@@ -8,7 +8,7 @@ fn main() {
   defer tls.config_release(&context)
   backing: [256]u8
   arena := mem.arena_from_buffer(backing[..])
-  held := mem.push(u8, arena)
+  held := mem.push<u8>(arena)
   held.* = 42
   mark := mem.arena_mark(arena)
   invalid: fail.Status

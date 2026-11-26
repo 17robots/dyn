@@ -1,6 +1,6 @@
 use "std/fail"
-use "std/mem" mem
-use "std/encoding/binary" binary
+use mem "std/mem"
+use binary "std/encoding/binary"
 // Decodes the first composited GIF87a/89a image, including interlace and
 // transparency. consumed ends after that image's data; later animation frames
 // remain available to the caller. No animation timing/disposal is performed.
@@ -15,7 +15,7 @@ fn byte(bits: *Bits) u8 {
     return 0
   }
   if bits.remaining == 0 {
-    if bits.at == #len(bits.source) {
+    if bits.at == bits.source.len {
       bits.failed = true
       return 0
     }
@@ -26,7 +26,7 @@ fn byte(bits: *Bits) u8 {
       bits.failed = true
       return 0
     }
-    if bits.remaining > #len(bits.source) - bits.at {
+    if bits.remaining > bits.source.len - bits.at {
       bits.failed = true
       return 0
     }
@@ -53,7 +53,7 @@ fn finish(bits: *Bits) {
   bits.at += bits.remaining
   bits.remaining = 0
   for true {
-    if bits.at == #len(bits.source) {
+    if bits.at == bits.source.len {
       bits.failed = true
       return
     }
@@ -63,7 +63,7 @@ fn finish(bits: *Bits) {
       bits.ended = true
       return
     }
-    if length > #len(bits.source) - bits.at {
+    if length > bits.source.len - bits.at {
       bits.failed = true
       return
     }
@@ -72,14 +72,14 @@ fn finish(bits: *Bits) {
 }
 fn skip(source: []const u8, start: usize) usize {
   at := start
-  for at < #len(source) {
+  for at < source.len {
     length := #cast(usize, source[at])
     at += 1
     if length == 0 { return at }
-    if length > #len(source) - at { return #len(source) + 1 }
+    if length > source.len - at { return source.len + 1 }
     at += length
   }
-  return #len(source) + 1
+  return source.len + 1
 }
 // Ownership: pixels borrow arena backing; source is read only during this call.
 // Inputs must not borrow unused backing of the output arena.
@@ -87,7 +87,7 @@ fn skip(source: []const u8, start: usize) usize {
 pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decoded {
   if status == nil { return decode(arena, &fail.Status{}, source) }
   if status.failed { return Decoded{} }
-  if #len(source) < 13 || source[0] != 71 || source[1] != 73 || source[2] != 70 || source[3] != 56 || (source[4] != 55 && source[4] != 57) || source[5] != 97 {
+  if source.len < 13 || source[0] != 71 || source[1] != 73 || source[2] != 70 || source[3] != 56 || (source[4] != 55 && source[4] != 57) || source[5] != 97 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "decode GIF", "", "malformed GIF"))
     return Decoded{}
   }
@@ -105,7 +105,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
   palette: []const u8
   if (source[10] & 128) != 0 {
     count := #cast(usize, 1) << ((source[10] & 7) + 1)
-    if count * 3 > #len(source) - at || source[11] >= count {
+    if count * 3 > source.len - at || source[11] >= count {
       fail.at(status, fail.Kind.InvalidInput, "decode GIF", "malformed GIF", at)
       return Decoded{}
     }
@@ -114,18 +114,18 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
   }
   transparent := false
   transparent_index: u8 = 0
-  for at < #len(source) {
+  for at < source.len {
     marker := source[at]
     at += 1
     if marker == 33 {
-      if at == #len(source) {
+      if at == source.len {
         fail.at(status, fail.Kind.InvalidInput, "decode GIF", "malformed GIF", at)
         return Decoded{}
       }
       label := source[at]
       at += 1
       if label == 249 {
-        if #len(source) - at < 6 || source[at] != 4 || source[at + 5] != 0 {
+        if source.len - at < 6 || source[at] != 4 || source[at + 5] != 0 {
           fail.at(status, fail.Kind.InvalidInput, "decode GIF", "malformed GIF", at)
           return Decoded{}
         }
@@ -134,8 +134,8 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
         at += 6
       } else {
         at = skip(source, at)
-        if at > #len(source) {
-          fail.at(status, fail.Kind.InvalidInput, "decode GIF", "malformed GIF", #len(source))
+        if at > source.len {
+          fail.at(status, fail.Kind.InvalidInput, "decode GIF", "malformed GIF", source.len)
           return Decoded{}
         }
         // A plain-text rendering block consumes its associated graphic control.
@@ -145,7 +145,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
       }
       continue
     }
-    if marker != 44 || #len(source) - at < 9 {
+    if marker != 44 || source.len - at < 9 {
       fail.at(status, fail.Kind.InvalidInput, "decode GIF", "malformed GIF", at - 1)
       return Decoded{}
     }
@@ -162,14 +162,14 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
     background := palette
     if (flags & 128) != 0 {
       count := #cast(usize, 1) << ((flags & 7) + 1)
-      if count * 3 > #len(source) - at {
+      if count * 3 > source.len - at {
         fail.at(status, fail.Kind.InvalidInput, "decode GIF", "malformed GIF", at)
         return Decoded{}
       }
       palette = source[at..at + count * 3]
       at += count * 3
     }
-    if #len(palette) == 0 || at == #len(source) {
+    if palette.len == 0 || at == source.len {
       fail.at(status, fail.Kind.InvalidInput, "decode GIF", "malformed GIF", at)
       return Decoded{}
     }
@@ -186,10 +186,10 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
         mem.arena_rewind(arena, mark)
       }
     }
-    pixels := mem.push_array(u8, arena, #cast(usize, width) * #cast(usize, height) * 4)
-    if !transparent && #len(background) > 0 {
+    pixels := mem.push_array<u8>(arena, #cast(usize, width) * #cast(usize, height) * 4)
+    if !transparent && background.len > 0 {
       color_at := #cast(usize, source[11]) * 3
-      for p in 0..#len(pixels) / 4 {
+      for p in 0..pixels.len / 4 {
         pixels[p * 4] = background[color_at]
         pixels[p * 4 + 1] = background[color_at + 1]
         pixels[p * 4 + 2] = background[color_at + 2]
@@ -197,9 +197,9 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
       }
     }
     scratch := mem.arena_mark(arena)
-    prefixes := mem.push_array(u16, arena, 4096)
-    suffixes := mem.push_array(u8, arena, 4096)
-    stack := mem.push_array(u8, arena, 4097)
+    prefixes := mem.push_array<u16>(arena, 4096)
+    suffixes := mem.push_array<u8>(arena, 4096)
+    stack := mem.push_array<u8>(arena, 4097)
     clear := #cast(u16, 1) << minimum
     end := clear + 1
     next := clear + 2
@@ -269,7 +269,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decod
         x := produced % image_width
         dst := ((top + row) * width + left + x) * 4
         if !transparent || index != transparent_index {
-          if #cast(usize, index) >= #len(palette) / 3 {
+          if #cast(usize, index) >= palette.len / 3 {
             fail.at(status, fail.Kind.InvalidInput, "decode GIF", "malformed GIF", bits.at)
             return Decoded{}
           }

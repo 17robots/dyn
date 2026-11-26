@@ -2,9 +2,9 @@
 // comes from the caller's arena when the pool starts; submit never allocates
 // and reports a full queue instead of growing it.
 
-use "std/mem" mem
-use "std/sync" sync
-use "std/thread" thread
+use mem "std/mem"
+use sync "std/sync"
+use thread "std/thread"
 use "std/fail"
 // One unit of work. run receives data on a worker thread.
 pub struct Task { run: fn(rawptr), data: rawptr }
@@ -36,7 +36,7 @@ fn worker(pool: *Pool) isize {
     }
     if pool.count == 0 { break }
     task := pool.tasks[pool.head]
-    pool.head = (pool.head + 1) % #len(pool.tasks)
+    pool.head = (pool.head + 1) % pool.tasks.len
     pool.count -= 1
     pool.running += 1
     sync.unlock(&pool.lock)
@@ -63,12 +63,12 @@ pub fn start(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: 
     return nil
   }
   mark := mem.arena_mark(arena)
-  pool := mem.push(Pool, arena)
+  pool := mem.push<Pool>(arena)
   pool.lock = sync.mutex()
   pool.ready = sync.condition()
   pool.idle = sync.condition()
-  pool.tasks = mem.push_array(Task, arena, capacity)
-  pool.workers = mem.push_array(*thread.Thread, arena, workers)
+  pool.tasks = mem.push_array<Task>(arena, capacity)
+  pool.workers = mem.push_array<*thread.Thread>(arena, workers)
   for i in 0..workers {
     spawned := thread.spawn_with_size(arena, status, stack_size, worker, pool)
     if status.failed {
@@ -88,11 +88,11 @@ pub fn start(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: 
 pub fn submit(pool: *Pool, task: Task) bool {
   if pool == nil || task.run == nil { return false }
   sync.lock(&pool.lock)
-  if pool.stopping || pool.count == #len(pool.tasks) {
+  if pool.stopping || pool.count == pool.tasks.len {
     sync.unlock(&pool.lock)
     return false
   }
-  pool.tasks[(pool.head + pool.count) % #len(pool.tasks)] = task
+  pool.tasks[(pool.head + pool.count) % pool.tasks.len] = task
   pool.count += 1
   sync.condition_signal(&pool.ready)
   sync.unlock(&pool.lock)
@@ -120,12 +120,12 @@ pub fn start_spawned(arena: *mem.Arena, status: *fail.Status, workers: usize, ca
     return nil
   }
   mark := mem.arena_mark(arena)
-  pool := mem.push(Pool, arena)
+  pool := mem.push<Pool>(arena)
   pool.lock = sync.mutex()
   pool.ready = sync.condition()
   pool.idle = sync.condition()
-  pool.tasks = mem.push_array(Task, arena, capacity)
-  pool.natives = mem.push_array(rawptr, arena, workers)
+  pool.tasks = mem.push_array<Task>(arena, capacity)
+  pool.natives = mem.push_array<rawptr>(arena, workers)
   pool.spawner = spawner
   for i in 0..workers {
     native := spawner.spawn(spawner.data, arena, stack_size, #cast(fn(rawptr) isize, worker), pool)

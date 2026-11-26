@@ -9,14 +9,14 @@ import shlex
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/('build/dyn-release.exe' if sys.platform=='win32' else 'build/dyn-release'))).resolve())
-SOURCE = r'''use "vendor/window" window
-use "vendor/opengl" gl
-use "vendor/ui/opengl" gpu
-use "std/ui" ui
+SOURCE = r'''use window "vendor/window"
+use gl "vendor/opengl"
+use gpu "vendor/ui/opengl"
+use ui "std/ui"
 use "std/io"
-use "std/ui/software" software
-use "std/io" errors
-use "std/mem" mem
+use software "std/ui/software"
+use errors "std/io"
+use mem "std/mem"
 use "std/fail"
 fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
   status: fail.Status
@@ -69,7 +69,7 @@ struct Wide { pixels: []u8 }
 fn wide_bitmap(data: rawptr, codepoint: u32) software.Glyph {
  _ = codepoint
  wide := #cast(*Wide,data)
- return software.Glyph{pixels:wide.pixels,width:#cast(i32,#len(wide.pixels)),height:1,stride:#len(wide.pixels)}
+ return software.Glyph{pixels:wide.pixels,width:#cast(i32,wide.pixels.len),height:1,stride:wide.pixels.len}
 }
 fn no_textures(count: i32, output: *u32) { _ = count
  output.* = 0 }
@@ -123,7 +123,7 @@ fn main() {
  arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  check(renderer.max_texture > 0 && renderer.max_texture < 1048576)
- wide := Wide{pixels:mem.push_array(u8,arena,#cast(usize,renderer.max_texture)+1)}
+ wide := Wide{pixels:mem.push_array<u8>(arena, #cast(usize,renderer.max_texture)+1)}
  wide.pixels[0] = 255
  single := ui.Command{kind:ui.Kind.Glyph,bounds:ui.Rect{width:32,height:32},clip:ui.Rect{x:2,y:2,width:1,height:1},glyph_x:2,glyph_y:2,color:ui.Color{r:255,a:255}}
  check(!failed(gpu_render(&renderer,&single,32,32,software.Font{data:&wide,glyph:wide_bitmap,line_height:1})))
@@ -164,7 +164,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-ui-') as directory:
         if os.environ.get('WAYLAND_DISPLAY') and shutil.which('wayland-scanner'):
             bridge=work/'libdyn_window.so'
             subprocess.run(['python3',str(ROOT/'vendor/window/native/build.py'),'--output',str(bridge)],check=True,timeout=60)
-            backends.append(('Wayland',SOURCE.replace('use "vendor/window" window','use "vendor/window/wayland" window'),['--link',str(bridge)]))
+            backends.append(('Wayland',SOURCE.replace('use window "vendor/window"','use window "vendor/window/wayland"'),['--link',str(bridge)]))
         else:
             print('SKIP native Wayland: display or scanner unavailable')
     elif sys.platform in ('darwin','win32'):
@@ -182,7 +182,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-ui-') as directory:
     if sys.platform.startswith('linux') and os.environ.get('DISPLAY'):
         shim=work/'glx-failure.so'
         subprocess.run([*shlex.split(os.environ.get('CC','cc')),'-shared','-fPIC','-Wall','-Wextra','-Werror',str(ROOT/'tests/x11-context-failure.c'),'-ldl','-o',str(shim)],check=True,timeout=60)
-        (work/'main.dyn').write_text('use "vendor/window" window\nuse "std/fail"\nfn main(){ host := window.Window{}\n result: fail.Status\n window.open(&result,&host,"Expected failure",32,32)\n if !result.failed || result.failure.kind != fail.Kind.System || host.display != nil { #panic("GLX error was not recovered") }\n window.close(&host)\n}\n', encoding='utf-8')
+        (work/'main.dyn').write_text('use window "vendor/window"\nuse "std/fail"\nfn main(){ host := window.Window{}\n result: fail.Status\n window.open(&result,&host,"Expected failure",32,32)\n if !result.failed || result.failure.kind != fail.Kind.System || host.display != nil { #panic("GLX error was not recovered") }\n window.close(&host)\n}\n', encoding='utf-8')
         output=work/'context-failure'
         subprocess.run([DYN,'build',str(work),'--debug','--quiet','--output',str(output)],check=True,timeout=300)
         subprocess.run([str(output)],env={**os.environ,'LD_PRELOAD':str(shim)},check=True,timeout=60)

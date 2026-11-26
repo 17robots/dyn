@@ -1,6 +1,6 @@
-use "std/bytes" byte_ops
-use "std/io" stream
-use "std/mem" memory
+use byte_ops "std/bytes"
+use stream "std/io"
+use memory "std/mem"
 use "std/fail"
 
 pub struct Template { source: []const u8 }
@@ -8,7 +8,7 @@ pub struct Field { name: []const u8, value: []const u8 }
 
 fn trim(source: []const u8) []const u8 {
   start: usize = 0
-  end := #len(source)
+  end := source.len
   for start < end && (source[start] == ' ' || source[start] == '\t' || source[start] == '\n' || source[start] == '\r') {
     start += 1
   }
@@ -19,8 +19,8 @@ fn trim(source: []const u8) []const u8 {
 }
 
 fn valid_name(name: []const u8) bool {
-  if #len(name) == 0 { return false }
-  for i in 0..#len(name) {
+  if name.len == 0 { return false }
+  for i in 0..name.len {
     byte := name[i]
     if !((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
         (byte >= '0' && byte <= '9') || byte == '_' || byte == '.') {
@@ -37,13 +37,13 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) Tem
   if status == nil { return parse(arena, &fail.Status{}, source) }
   if status.failed { return Template{} }
   cursor: usize = 0
-  for cursor < #len(source) {
-    if cursor + 1 < #len(source) && source[cursor] == '{' && source[cursor + 1] == '{' {
+  for cursor < source.len {
+    if cursor + 1 < source.len && source[cursor] == '{' && source[cursor + 1] == '{' {
       end := cursor + 2
-      for end + 1 < #len(source) && !(source[end] == '}' && source[end + 1] == '}') {
+      for end + 1 < source.len && !(source[end] == '}' && source[end + 1] == '}') {
         end += 1
       }
-      if end + 1 >= #len(source) || !valid_name(trim(source[cursor + 2..end])) {
+      if end + 1 >= source.len || !valid_name(trim(source[cursor + 2..end])) {
         fail.at(status, fail.Kind.InvalidInput, "parse template", "malformed field", cursor)
         return Template{}
       }
@@ -52,7 +52,7 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) Tem
       cursor += 1
     }
   }
-  retained := memory.push_bytes(arena, #len(source))
+  retained := memory.push_bytes(arena, source.len)
   _ = memory.copy(retained, source)
   return Template{ source: retained }
 }
@@ -91,17 +91,17 @@ pub fn render_with(status: *fail.Status, destination: stream.Writer, template: *
   }
   cursor: usize = 0
   literal: usize = 0
-  for cursor < #len(template.source) {
-    if cursor + 1 < #len(template.source) && template.source[cursor] == '{' && template.source[cursor + 1] == '{' {
+  for cursor < template.source.len {
+    if cursor + 1 < template.source.len && template.source[cursor] == '{' && template.source[cursor + 1] == '{' {
       if cursor > literal {
         stream.write(status, destination, template.source[literal..cursor])
         if status.failed { return }
       }
       end := cursor + 2
-      for end + 1 < #len(template.source) && !(template.source[end] == '}' && template.source[end + 1] == '}') {
+      for end + 1 < template.source.len && !(template.source[end] == '}' && template.source[end + 1] == '}') {
         end += 1
       }
-      if end + 1 >= #len(template.source) || !valid_name(trim(template.source[cursor + 2..end])) {
+      if end + 1 >= template.source.len || !valid_name(trim(template.source[cursor + 2..end])) {
         fail.at(status, fail.Kind.InvalidInput, "render template", "malformed field", cursor)
         return
       }
@@ -113,7 +113,7 @@ pub fn render_with(status: *fail.Status, destination: stream.Writer, template: *
       cursor += 1
     }
   }
-  if literal < #len(template.source) {
+  if literal < template.source.len {
     stream.write(status, destination, template.source[literal..])
   }
 }

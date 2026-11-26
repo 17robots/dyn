@@ -26,7 +26,7 @@ fn main() {
  require(missing_file.failed && missing_file.failure.kind == fail.Kind.NotFound && mem.arena_used(zero)==0,"missing state")
  none_file: fail.Status
  none := fs.read_all(zero, &none_file, "DIR/empty", 0)
- require(!none_file.failed && #len(none)==0 && mem.arena_used(zero)==0,"zero max empty")
+ require(!none_file.failed && none.len==0 && mem.arena_used(zero)==0,"zero max empty")
  extra_file: fail.Status
  extra := fs.read_all(zero, &extra_file, "DIR/small", 0)
  require(extra_file.failed && extra_file.failure.kind==fail.Kind.Overflow && mem.arena_used(zero)==0,"zero max overflow")
@@ -38,8 +38,8 @@ fn main() {
  defer mem.arena_release(argv)
  arguments_status: fail.Status
  arguments := process.arguments(argv, &arguments_status)
- require(!arguments_status.failed && #len(arguments)>0,"lazy arguments")
- prefix := mem.push_array(u8,zero,8)
+ require(!arguments_status.failed && arguments.len>0,"lazy arguments")
+ prefix := mem.push_array<u8>(zero, 8)
  for i in 0..8 { prefix[i]=77 }
  mark := mem.arena_mark(zero)
  overflow_file: fail.Status
@@ -48,14 +48,14 @@ fn main() {
  for byte in prefix { require(byte==77,"prefix") }
  large_file: fail.Status
  large := fs.read_all(zero, &large_file, "DIR/large", 131073)
- require(!large_file.failed && #len(large)==131073,"large extent")
- for i in 0..#len(large) { require(large[i]==#cast(u8,i%251),"large payload") }
+ require(!large_file.failed && large.len==131073,"large extent")
+ for i in 0..large.len { require(large[i]==#cast(u8,i%251),"large payload") }
  storage: [5 + mem.ArenaBufferOverhead]u8
  fixed_empty := mem.arena_from_buffer(storage[..])
  fixed_empty.data = fixed_empty.data[..mem.ArenaHeader]
  empty_file: fail.Status
  empty := fs.read_all(fixed_empty, &empty_file, "DIR/empty", 100)
- require(!empty_file.failed && #len(empty)==0 && fixed_empty.fixed_buffer && !fixed_empty.owns_memory,"fixed empty")
+ require(!empty_file.failed && empty.len==0 && fixed_empty.fixed_buffer && !fixed_empty.owns_memory,"fixed empty")
  bounded := mem.arena_from_source(mem.pages(160))
  defer mem.arena_release(bounded)
  bounded_small_file: fail.Status
@@ -72,7 +72,7 @@ fn main() {
  chain_blocks:=blocks(chained)
  chain_empty_file: fail.Status
  chain_empty := fs.read_all(chained, &chain_empty_file, "DIR/empty", 100)
- require(!chain_empty_file.failed && #len(chain_empty)==0 && mem.arena_mark(chained)==chain_mark,"chain empty")
+ require(!chain_empty_file.failed && chain_empty.len==0 && mem.arena_mark(chained)==chain_mark,"chain empty")
  chain_overflow_file: fail.Status
  chain_overflow := fs.read_all(chained, &chain_overflow_file, "DIR/large", 65537)
  require(chain_overflow_file.failed && chain_overflow_file.failure.kind==fail.Kind.Overflow && mem.arena_mark(chained)==chain_mark && blocks(chained)==chain_blocks,"chain rollback")
@@ -84,8 +84,8 @@ fn main() {
  require(!chain_small_file.failed && bytes.equal(chain_small,"abcdef"),"chain small payload")
  chain_large_file: fail.Status
  chain_large := fs.read_all(chained, &chain_large_file, "DIR/large", 131073)
- require(!chain_large_file.failed && #len(chain_large)==131073,"chain large extent")
- for i in 0..#len(chain_large) { require(chain_large[i]==#cast(u8,i%251),"chain large payload") }
+ require(!chain_large_file.failed && chain_large.len==131073,"chain large extent")
+ for i in 0..chain_large.len { require(chain_large[i]==#cast(u8,i%251),"chain large payload") }
  // Another block must not move earlier output or overwrite independent data.
  tail:=mem.push_bytes(chained,4096)
  for *byte in tail { byte.*=99 }
@@ -99,18 +99,18 @@ fn main() {
  _=mem.push_bytes(fifo_arena,17)
  pipe_file: fail.Status
  pipe := fs.read_all(fifo_arena, &pipe_file, "DIR/pipe", 70003)
- require(!pipe_file.failed && #len(pipe)==70003,"FIFO short reads")
- for i in 0..#len(pipe) { require(pipe[i]==#cast(u8,i%239),"FIFO payload") }
+ require(!pipe_file.failed && pipe.len==70003,"FIFO short reads")
+ for i in 0..pipe.len { require(pipe[i]==#cast(u8,i%239),"FIFO payload") }
  _=mem.push_bytes(fifo_arena,4096)
- for i in 0..#len(pipe) { require(pipe[i]==#cast(u8,i%239),"FIFO output lifetime") }
+ for i in 0..pipe.len { require(pipe[i]==#cast(u8,i%239),"FIFO output lifetime") }
  for byte in fifo_prefix { require(byte==83,"FIFO prefix canary") }
  // Regular files are sized once: no geometric copies stay pinned in the arena.
  sized:=mem.arena_alloc(0)
  defer mem.arena_release(sized)
  sized_large_file: fail.Status
  sized_large := fs.read_all(sized, &sized_large_file, "DIR/large", 1048576)
- require(!sized_large_file.failed && #len(sized_large)==131073,"sized extent")
- for i in 0..#len(sized_large) { require(sized_large[i]==#cast(u8,i%251),"sized payload") }
+ require(!sized_large_file.failed && sized_large.len==131073,"sized extent")
+ for i in 0..sized_large.len { require(sized_large[i]==#cast(u8,i%251),"sized payload") }
  require(mem.arena_used(sized)==131073,"sized single allocation")
 }
 '''

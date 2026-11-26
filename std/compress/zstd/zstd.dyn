@@ -1,7 +1,7 @@
-use "vendor/zstd" provider
+use provider "vendor/zstd"
 use "std/fail"
-use "std/io" stream
-use "std/mem" memory
+use stream "std/io"
+use memory "std/mem"
 // A frame's decompressed size, when the frame header records it.
 pub struct FrameSize { size: u64, known: bool }
 // A failed decoder stays failed: later reads report the same failure.
@@ -30,7 +30,7 @@ pub fn compress(arena: *memory.Arena, status: *fail.Status, source: []const u8, 
   empty: []u8
   if status.failed { return empty }
   mark := memory.arena_mark(arena)
-  capacity := compress_bound(#len(source))
+  capacity := compress_bound(source.len)
   allocation := memory.push_bytes(arena, capacity)
   written := provider.compress(status, allocation, source, level)
   if status.failed {
@@ -88,7 +88,7 @@ pub fn decoder(input: stream.Reader, compressed_bytes: []u8, workspace: []u8, wi
   if starting.failed {
     state.failed = true
     state.failure = starting.failure
-  } else if #len(compressed_bytes) == 0 {
+  } else if compressed_bytes.len == 0 {
     state.failed = true
     state.failure = fail.make(fail.Kind.Capacity, "decompress", "", "no input storage")
   }
@@ -106,11 +106,11 @@ fn decoder_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
     fail.set(status, state.failure)
     return 0
   }
-  if state.offset > state.used || state.used > #len(state.compressed_storage) {
+  if state.offset > state.used || state.used > state.compressed_storage.len {
     fail.set(status, fail.make(fail.Kind.InvalidState, "decompress", "", "the decoder positions are out of range"))
     return decoder_failed(status, state)
   }
-  if #len(destination) == 0 || state.finished { return 0 }
+  if destination.len == 0 || state.finished { return 0 }
   for {
     // First flush provider output, even with no new input. Reading the next chunk
     // before doing so would stall a caller while output is already available.

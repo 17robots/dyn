@@ -2,8 +2,8 @@ use "std/fail"
 // Widgets are builder code over boxes. Each returns its Signal; state such as
 // a checkbox value or text buffer belongs to the caller.
 
-use "std/unicode/utf8" utf8
-use "std/unicode/text" unicode_text
+use utf8 "std/unicode/utf8"
+use unicode_text "std/unicode/text"
 
 // A box that lays its children left to right.
 pub fn row(state: *State, label: []const u8) *Box {
@@ -180,7 +180,7 @@ fn previous_boundary(text: []const u8, at: usize) usize {
 }
 
 fn next_boundary(text: []const u8, at: usize) usize {
-  if at >= #len(text) { return #len(text) }
+  if at >= text.len { return text.len }
   decoded := utf8.decode(text, at)
   if !decoded.valid { return at + 1 }
   return at + decoded.width
@@ -199,27 +199,27 @@ fn selection_high(edit: *const Edit) usize {
 fn insert(state: *State, storage: []u8, edit: *Edit, text: []const u8) bool {
   low := selection_low(edit)
   high := selection_high(edit)
-  if !utf8.valid(text) || #len(text) > #len(storage) - (edit.length - (high - low)) { return false }
+  if !utf8.valid(text) || text.len > storage.len - (edit.length - (high - low)) { return false }
   for byte in text {
     if byte == 0 || byte == 10 || byte == 13 { return false }
   }
-  replacement := mem.push_bytes(state.frame, #len(text))
+  replacement := mem.push_bytes(state.frame, text.len)
   _ = mem.copy(replacement, text)
   remove(storage, edit, low, high)
   edit.cursor = low
   index := edit.length
   for index > edit.cursor {
     index -= 1
-    storage[index + #len(text)] = storage[index]
+    storage[index + text.len] = storage[index]
   }
-  for i in 0..#len(text) {
+  for i in 0..text.len {
     storage[edit.cursor + i] = replacement[i]
   }
-  edit.length += #len(text)
-  edit.cursor += #len(text)
+  edit.length += text.len
+  edit.cursor += text.len
   edit.anchor = edit.cursor
   edit.selecting = false
-  return #len(text) != 0 || high != low
+  return text.len != 0 || high != low
 }
 
 fn remove(storage: []u8, edit: *Edit, from: usize, to: usize) {
@@ -248,14 +248,14 @@ fn word_boundary(state: *State, text: []const u8, at: usize, forward: bool) usiz
   boundaries := unicode_text.word_breaks(state.frame, &status, text)
   if status.failed { return at }
   if forward {
-    target := #len(text)
+    target := text.len
     for boundary in boundaries {
       if boundary > at {
         target = boundary
         break
       }
     }
-    for target < #len(text) && space(text[target]) {
+    for target < text.len && space(text[target]) {
       target += 1
     }
     return target
@@ -276,14 +276,14 @@ fn pointer_boundary(state: *State, box: *const Box, text: []const u8, scroll: f3
   x := state.input.x - box.rect[0] - 4.0 + scroll
   previous: usize = 0
   previous_width: f32 = 0.0
-  for previous < #len(text) {
+  for previous < text.len {
     next := next_boundary(text, previous)
     width := state.measure(state.measure_data, text[..next])
     if x < (previous_width + width) / 2.0 { return previous }
     previous = next
     previous_width = width
   }
-  return #len(text)
+  return text.len
 }
 
 pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) FieldSignal {
@@ -291,8 +291,8 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
   box.width = pixels(220.0, 0.5)
   box.height = text_size(5.0, 1.0)
   result := FieldSignal{ signal: signal(state, box) }
-  if edit.length > #len(storage) {
-    edit.length = #len(storage)
+  if edit.length > storage.len {
+    edit.length = storage.len
   }
   // Caller offsets may have become stale after replacing its buffer.
   if !utf8.valid(storage[..edit.length]) { return result }
@@ -334,7 +334,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     before := text_edits.snapshot(&published, &state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, text_edits.Cause.Other)
     if state.input.correction != nil {
       replacement := state.input.correction
-      invalid := #len(state.input.text) != 0 || state.input.backspace || state.input.delete || state.input.left || state.input.right || state.input.home || state.input.end ||
+      invalid := state.input.text.len != 0 || state.input.backspace || state.input.delete || state.input.left || state.input.right || state.input.home || state.input.end ||
         state.input.copy || state.input.cut || state.input.paste || state.input.select_all || state.input.enter || state.input.escape || state.input.tab
       for byte in replacement.text {
         if byte == 0 || byte == 10 || byte == 13 {
@@ -363,7 +363,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
       text_edits.invalidate(&state.text_tracker)
     }
     input := state.input
-    if input.composition_handled || #len(input.composition) != 0 || input.correction != nil {
+    if input.composition_handled || input.composition.len != 0 || input.correction != nil {
       input.home = false
       input.end = false
       input.left = false
@@ -467,10 +467,10 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
         result.changed = true
       }
     }
-    if input.paste && #len(input.clipboard) != 0 {
+    if input.paste && input.clipboard.len != 0 {
       result.changed = insert(state, storage, edit, input.clipboard) || result.changed
     }
-    if input.correction == nil && #len(input.text) != 0 {
+    if input.correction == nil && input.text.len != 0 {
       result.changed = insert(state, storage, edit, input.text) || result.changed
     }
     if input.enter {
@@ -492,22 +492,22 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
   }
   caret_x := state.measure(state.measure_data, storage[..edit.cursor])
   caret_offset: f32 = 0.0
-  if #len(composing) != 0 {
+  if composing.len != 0 {
     low := selection_low(edit)
     high := selection_high(edit)
     // Preview the replacement as one text run. Overlaying a second label
     // would draw preedit on top of the unchanged suffix beneath it.
-    preview := mem.push_bytes(state.frame, edit.length - (high - low) + #len(composing))
+    preview := mem.push_bytes(state.frame, edit.length - (high - low) + composing.len)
     _ = mem.copy(preview[..low], storage[..low])
-    _ = mem.copy(preview[low..low + #len(composing)], composing)
-    _ = mem.copy(preview[low + #len(composing)..], storage[high..edit.length])
+    _ = mem.copy(preview[low..low + composing.len], composing)
+    _ = mem.copy(preview[low + composing.len..], storage[high..edit.length])
     box.text = preview
     caret_x = state.measure(state.measure_data, storage[..low])
-    cursor := #len(composing)
-    if state.input.composition_cursor >= 0 && #cast(usize, state.input.composition_cursor) <= #len(composing) {
+    cursor := composing.len
+    if state.input.composition_cursor >= 0 && #cast(usize, state.input.composition_cursor) <= composing.len {
       cursor = #cast(usize, state.input.composition_cursor)
     }
-    for cursor > 0 && cursor < #len(composing) && (composing[cursor] & 0xc0) == 0x80 {
+    for cursor > 0 && cursor < composing.len && (composing[cursor] & 0xc0) == 0x80 {
       cursor -= 1
     }
     caret_offset = state.measure(state.measure_data, composing[..cursor])
@@ -527,13 +527,13 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
   }
   box.text_offset = edit.scroll_x
   if focused {
-    if edit.selecting && #len(composing) == 0 {
+    if edit.selecting && composing.len == 0 {
       box.selection[0] = state.measure(state.measure_data, storage[..selection_low(edit)])
       box.selection[1] = state.measure(state.measure_data, storage[..selection_high(edit)])
     }
     push_parent(state, box)
     box.axis = 0
-    if #len(composing) != 0 {
+    if composing.len != 0 {
       line := build(state, DrawBackground | FloatingX | FloatingY, "##composition-line")
       line.floating[0] = 4.0 + caret_x - edit.scroll_x
       line.floating[1] = (box.size[1] + state.line_height) / 2.0
@@ -567,7 +567,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     caret.width = pixels(1.0 / state.scale, 1.0)
     caret.height = pixels(state.line_height / state.scale, 1.0)
     caret.background = box.foreground
-    if #len(composing) != 0 && state.input.composition_cursor < 0 {
+    if composing.len != 0 && state.input.composition_cursor < 0 {
       caret.flags = 0
     }
     pop_parent(state)

@@ -19,7 +19,7 @@ use "std/process"
 fn main() i32 {
   program := process.start()
   name: []const u8 = "world"
-  if #len(program.args) > 1 {
+  if program.args.len > 1 {
     name = program.args[1]
   }
   io.println("hello {}", name)
@@ -31,7 +31,7 @@ Compiler resource contract currently limits one source file to 64 MiB, one modul
 files, one merged module to 256 MiB, and syntax nesting to 1024 levels. Exceeding a limit is a diagnostic, not an allocation
 failure or compiler crash.
 
-`use "std/terminal"` binds `terminal`; `use "std/io" raw_io` binds `raw_io`; `use "std/io" io,
+`use "std/terminal"` binds `terminal`; `use raw_io "std/io"` binds `raw_io`; `use io "std/io",
 "std/fs" fs` imports several modules in one `use`. `as` is invalid. Relative
 imports use `./` or `../` but cannot escape project root. Other paths resolve from project
 root; `std/` and `vendor/` resolve only inside the SDK. Third-party libraries
@@ -112,7 +112,7 @@ a parameter type where `T` is inferred: each generic has one spelling and each c
 `$` appears only in parameter types; the result type and the body write plain `T`.
 
 ```dyn
-fn max(a: $T, b: $T) T {
+fn max<T>(a: T, b: T) T {
   if a > b { return a }
   return b
 }
@@ -137,7 +137,7 @@ function, once per instance. With `#typeof`, whose scalar fields (`kind`, `size`
 `element_id` and the rest) are compile-time constants, it states what a generic function accepts:
 
 ```dyn
-fn bits(key: $K) u64 {
+fn bits<K>(key: K) u64 {
   #assert(#typeof(K).kind == TypeKind.Integer, "bits: K must be an integer")
   return #cast(u64, key)
 }
@@ -151,20 +151,20 @@ removes dead code but never chooses code by type.
 A struct may take type parameters, and each set of arguments makes one concrete struct:
 
 ```dyn
-struct Box(T) { value: T, failed: bool }
-type IntBox = Box(i32)
+struct Box<T> { value: T, failed: bool }
+type IntBox = Box<i32>
 
-fn wrap(value: $T) Box(T) {
-  result: Box(T)
+fn wrap<T>(value: T) Box<T> {
+  result: Box<T>
   result.value = value
   return result
 }
 
-fn read(box: Box($T)) T {
+fn read<T>(box: Box<T>) T {
   return box.value
 }
 
-a := Box(f64){ value: 1.5 }
+a := Box<f64>{ value: 1.5 }
 ```
 
 A struct or enum lists its type parameters as bare names, `List(T)` or `Map(K, V)`: its parentheses

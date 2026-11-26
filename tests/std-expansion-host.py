@@ -52,14 +52,14 @@ jpeg = (b'\xff\xd8' + segment(219, b'\0' + bytes([1]) * 64)
         + segment(218, bytes([1, 1, 0, 0, 63, 0])) + b'\x3f\xff\xd9')
 gif = (b'GIF89a\x01\0\x01\0\x80\0\0\xff\0\0\0\0\0'
        b',\0\0\0\0\x01\0\x01\0\0\x02\x02\x44\x01\0;')
-FORMATS = r'''use "std/image/bmp" bmp
-use "std/image/tga" tga
-use "std/image/gif" gif
-use "std/image/jpeg" jpeg
-use "std/encoding/toml" toml
+FORMATS = r'''use bmp "std/image/bmp"
+use tga "std/image/tga"
+use gif "std/image/gif"
+use jpeg "std/image/jpeg"
+use toml "std/encoding/toml"
 use "std/fail"
-use "std/mem" mem
-use "std/bytes" bytes
+use mem "std/mem"
+use bytes "std/bytes"
 fn check(ok: bool) { if !ok { #panic("host formats") } }
 fn rejected(arena: *mem.Arena, kind: u8, source: []const u8) bool {
  status: fail.Status

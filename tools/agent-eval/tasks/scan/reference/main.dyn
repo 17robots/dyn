@@ -10,7 +10,7 @@ use "std/process"
 fn report(name: []const u8, failure: fail.Failure) {
   storage: [512]u8
   text := fail.describe(storage[..], failure)
-  if #len(fail.path_text(&failure)) == 0 {
+  if fail.path_text(&failure).len == 0 {
     io.eprintln("scan: {}: {}", name, text)
   } else {
     io.eprintln("scan: {}", text)
@@ -21,12 +21,12 @@ fn report(name: []const u8, failure: fail.Failure) {
 fn port(arena: *mem.Arena, status: *fail.Status, file: []const u8) i64 {
   text := fs.read_all(arena, status, file, mem.MiB)
   root := json.parse(arena, status, text)
-  return json.get(i64, status, root, "port")
+  return json.get<i64>(status, root, "port")
 }
 
 fn main() i32 {
   program := process.start()
-  if #len(program.args) != 2 {
+  if program.args.len != 2 {
     io.eprintln("scan: usage: scan DIR")
     return 1
   }

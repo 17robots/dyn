@@ -67,8 +67,8 @@ values=list(range(1,31))
 expected=sum(values[i]*values[i+1]+values[i+2] for i in range(27,-1,-3))+sum(values)
 args=','.join(f'#bitcast(f64,opaque({bits(float(v))}))' for v in values)
 checks.append(f'if pressure({args})!={expected}.0 {{ #panic("fused spills") }}')
-SOURCE='''use "std/math" m
-use "fake" fake
+SOURCE='''use m "std/math"
+use fake "fake"
 extern fn opaque "dyn_math_opaque"(x:u64) u64
 calls:i32
 trace:i32
@@ -81,7 +81,7 @@ pub fn signed(x,y:f64) f64 { return m.copysign64(x,y) }
 pub fn fused64(x,y,z:f64) f64 { return m.fma64(x,y,z) }
 pub fn fused32(x,y,z:f32) f32 { return m.fma(x,y,z) }
 '''+''.join(f'pub fn rounded_{name}(x:f64)f64 {{ return m.{name}64(x) }}\n' for name in ('floor','ceil','trunc','round'))+pressure+'fn main() {\n'+ '\n'.join(checks)+'\n}\n'
-WASM='''use "std/math" m
+WASM='''use m "std/math"
 pub fn square(x:f64) f64 { return m.sqrt64(x) }
 pub fn floor(x:f64) f64 { return m.floor64(x) }
 pub fn ceil(x:f64) f64 { return m.ceil64(x) }

@@ -1,4 +1,4 @@
-use "std/html" html
+use html "std/html"
 
 // One-call answers for the usual responses. Each is respond with its
 // options filled in; pass headers for anything more.
@@ -37,8 +37,8 @@ pub fn redirect(status: *fail.Status, response: *Response, location: []const u8,
 // it is free, so the page goes out without a copy, else over fallback. A page
 // that does not fit fails status with Capacity; the server then answers 500.
 pub fn page_writer(status: *fail.Status, response: *Response, fallback: []u8) html.Writer {
-  storage := body_buffer(response, #len(fallback))
-  if #len(storage) == 0 { return html.writer(status, fallback) }
+  storage := body_buffer(response, fallback.len)
+  if storage.len == 0 { return html.writer(status, fallback) }
   return html.writer(status, storage)
 }
 
@@ -58,8 +58,8 @@ pub fn page(status: *fail.Status, response: *Response, code: u16, rendered: *con
   ]
   options := ResponseOptions{ status: code, content_type: "text/html; charset=utf-8", headers: headers[..] }
   body := html.output(rendered).bytes
-  if #len(response.reserved) > 0 && #len(body) > 0 && &body[0] == &response.reserved[0] {
-    respond_buffered(status, response, #len(body), options)
+  if response.reserved.len > 0 && body.len > 0 && &body[0] == &response.reserved[0] {
+    respond_buffered(status, response, body.len, options)
     return
   }
   respond(status, response, body, options)

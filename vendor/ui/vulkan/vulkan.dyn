@@ -1,9 +1,9 @@
 use "std/fail"
-use "std/mem" mem
-use "std/ui" ui
-use "std/ui/software" software
-use "std/unicode/utf8" utf8
-use "std/io" io
+use mem "std/mem"
+use ui "std/ui"
+use software "std/ui/software"
+use utf8 "std/unicode/utf8"
+use io "std/io"
 #link("dyn_ui_vulkan")
 // Headless Vulkan compute renderer. Ordered integer compositing matches the
 // software renderer, including straight alpha over transparent destinations.
@@ -62,7 +62,7 @@ fn append(build: *Build, bounds: ui.Rect, tint: ui.Color, glyph: *const software
       return
     }
     count := width*height
-    pixels = mem.push_array(u8, build.arena, count)
+    pixels = mem.push_array<u8>(build.arena, count)
     for row in 0..height {
       for x in 0..width {
         pixels[row*width+x] = glyph.pixels[(source_y+row)*glyph.stride+source_x+x]
@@ -70,7 +70,7 @@ fn append(build: *Build, bounds: ui.Rect, tint: ui.Color, glyph: *const software
     }
     build.coverage_bytes += count
   }
-  draw := mem.push(Draw, build.arena)
+  draw := mem.push<Draw>(build.arena)
   draw.* = Draw{bounds:bounds, tint:tint, coverage:pixels}
   if build.last == nil { build.first = draw } else { build.last.next = draw }
   build.last = draw
@@ -90,11 +90,11 @@ fn glyph(build: *Build, clip: ui.Rect, tint: ui.Color, font: software.Font, code
     return 0
   }
   if bitmap.width == 0 || bitmap.height == 0 { return bitmap.advance }
-  if bitmap.stride < #cast(usize, bitmap.width) || #cast(usize, bitmap.width) > #len(bitmap.pixels) {
+  if bitmap.stride < #cast(usize, bitmap.width) || #cast(usize, bitmap.width) > bitmap.pixels.len {
     build.kind = fail.Kind.InvalidInput
     return 0
   }
-  if #cast(usize, bitmap.height-1) > (#len(bitmap.pixels)-#cast(usize, bitmap.width))/bitmap.stride {
+  if #cast(usize, bitmap.height-1) > (bitmap.pixels.len-#cast(usize, bitmap.width))/bitmap.stride {
     build.kind = fail.Kind.InvalidInput
     return 0
   }
@@ -141,7 +141,7 @@ pub fn render(status: *fail.Status, renderer: *Renderer, scratch: *mem.Arena, su
   if surface.width == 0 || surface.height == 0 { return }
   width := #cast(usize, surface.width)
   height := #cast(usize, surface.height)
-  if width > #len(surface.pixels)/4 || surface.stride < width*4 || height > #len(surface.pixels)/surface.stride {
+  if width > surface.pixels.len/4 || surface.stride < width*4 || height > surface.pixels.len/surface.stride {
     render_failed(status, fail.Kind.InvalidInput, "render")
     return
   }
@@ -163,7 +163,7 @@ pub fn render(status: *fail.Status, renderer: *Renderer, scratch: *mem.Arena, su
         x := #cast(i64, command.bounds.x)
         y := #cast(i64, command.bounds.y)
         offset: usize = 0
-        for offset < #len(command.text) {
+        for offset < command.text.len {
           decoded := utf8.decode(command.text, offset)
           offset += decoded.width
           codepoint := decoded.codepoint
@@ -213,7 +213,7 @@ pub fn render(status: *fail.Status, renderer: *Renderer, scratch: *mem.Arena, su
     render_failed(status, fail.Kind.Overflow, "render")
     return
   }
-  words := mem.push_array(u32, scratch, draw_words+coverage_words)
+  words := mem.push_array<u32>(scratch, draw_words+coverage_words)
   words[2] = #cast(u32, build.count)
   words[3] = #cast(u32, draw_words)
   draw := build.first
@@ -225,9 +225,9 @@ pub fn render(status: *fail.Status, renderer: *Renderer, scratch: *mem.Arena, su
     words[index+2] = #cast(u32, draw.bounds.x+draw.bounds.width)
     words[index+3] = #cast(u32, draw.bounds.y+draw.bounds.height)
     words[index+4] = #cast(u32, draw.tint.r)|(#cast(u32, draw.tint.g)<<8)|(#cast(u32, draw.tint.b)<<16)|(#cast(u32, draw.tint.a)<<24)
-    if #len(draw.coverage) != 0 {
+    if draw.coverage.len != 0 {
       words[index+5] = 1
-      if coverage_at > 0xffffffff || #len(draw.coverage) > 0xffffffff-coverage_at {
+      if coverage_at > 0xffffffff || draw.coverage.len > 0xffffffff-coverage_at {
         render_failed(status, fail.Kind.Overflow, "render")
         return
       }
@@ -242,12 +242,12 @@ pub fn render(status: *fail.Status, renderer: *Renderer, scratch: *mem.Arena, su
   }
   output := surface.pixels
   if surface.stride != width*4 {
-    output = mem.push_array(u8, scratch, width*height*4)
+    output = mem.push_array<u8>(scratch, width*height*4)
     for row in 0..height {
       _ = mem.copy(output[row*width*4..(row+1)*width*4], surface.pixels[row*surface.stride..row*surface.stride+width*4])
     }
   }
-  code := native_render(renderer.handle, &words[0], #cast(u32, #len(words)), &output[0], #cast(u32, surface.width), #cast(u32, surface.height))
+  code := native_render(renderer.handle, &words[0], #cast(u32, words.len), &output[0], #cast(u32, surface.width), #cast(u32, surface.height))
   if code == 2 {
     render_failed(status, fail.Kind.Capacity, "render")
     return

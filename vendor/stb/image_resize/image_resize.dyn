@@ -13,7 +13,7 @@ pub fn resize(scratch: *mem.Arena, status: *fail.Status, source: []const u8, wid
     return
   }
   if status.failed { return }
-  if scratch == nil || #len(source) == 0 || #len(destination) == 0 {
+  if scratch == nil || source.len == 0 || destination.len == 0 {
     fail.invalid(status, "resize", "", "no scratch arena, source or destination")
     return
   }
@@ -24,14 +24,14 @@ pub fn resize(scratch: *mem.Arena, status: *fail.Status, source: []const u8, wid
   // Each size is at most 32768, so the products fit in u64.
   input_size := #cast(u64, width) * #cast(u64, height) * #cast(u64, channels)
   output_size := #cast(u64, out_width) * #cast(u64, out_height) * #cast(u64, channels)
-  if input_size > 2147483647 || output_size > 2147483647 || #len(source) < input_size || #len(destination) < output_size {
+  if input_size > 2147483647 || output_size > 2147483647 || source.len < input_size || destination.len < output_size {
     fail.invalid(status, "resize", "", "source or destination is smaller than its image")
     return
   }
   mark := mem.arena_mark(scratch)
   defer mem.arena_rewind(scratch, mark)
-  if !native_resize(#cast(rawptr, &source[0]), #len(source), #cast(i32, width), #cast(i32, height), #cast(rawptr, &destination[0]),
-    #len(destination), #cast(i32, out_width), #cast(i32, out_height), #cast(i32, channels), srgb, #cast(rawptr, scratch),
+  if !native_resize(#cast(rawptr, &source[0]), source.len, #cast(i32, width), #cast(i32, height), #cast(rawptr, &destination[0]),
+    destination.len, #cast(i32, out_width), #cast(i32, out_height), #cast(i32, channels), srgb, #cast(rawptr, scratch),
     scratch_allocate) {
     fail.set(status, fail.make(fail.Kind.System, "resize", "", "the resize failed"))
   }

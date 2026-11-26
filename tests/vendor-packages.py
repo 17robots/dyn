@@ -20,7 +20,7 @@ if platform.system() != 'Linux':
 CASES = {
     'lua': ('lua5.4', r'''use "vendor/lua"
 use "std/fail"
-use "std/io" io
+use io "std/io"
 use "std/strings"
 use "std/bytes"
 fn fails(state: lua.State, source: []const u8) bool {
@@ -70,9 +70,9 @@ fn main() {
   io.println("Lua: 42; protected syntax/runtime failures; balanced stack")
 }
 ''', 'Lua: 42; protected syntax/runtime failures; balanced stack'),
-    'pcre2': ('libpcre2-8', r'''use "vendor/pcre2" regex
+    'pcre2': ('libpcre2-8', r'''use regex "vendor/pcre2"
 use "std/fail"
-use "std/io" io
+use io "std/io"
 use "std/strings"
 use "std/bytes"
 fn fails(pattern: regex.Pattern, data: regex.MatchData, subject: []const u8, start: usize) bool {
@@ -131,9 +131,9 @@ fn main() {
   io.println("PCRE2: captured ada; no-match and invalid pattern handled")
 }
 ''', 'PCRE2: captured ada; no-match and invalid pattern handled'),
-    'sqlite': ('sqlite3', r'''use "vendor/sqlite" sqlite
+    'sqlite': ('sqlite3', r'''use sqlite "vendor/sqlite"
 use "std/fail"
-use "std/io" io
+use io "std/io"
 
 fn main() {
   backing: [128]u8
@@ -165,7 +165,7 @@ fn main() {
 ''', 'sqlite ok'),
     'lz4': ('liblz4', r'''use "vendor/lz4"
 use "std/fail"
-use "std/io" io
+use io "std/io"
 use "std/strings"
 use "std/bytes"
 fn compress_fails(destination: []u8, source: []const u8) bool {

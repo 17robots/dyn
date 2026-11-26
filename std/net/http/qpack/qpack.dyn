@@ -4,7 +4,7 @@
 // decodes on its own, in any order, and needs no encoder or decoder stream.
 // The encoder here likewise sends static indexes and literals, Huffman-coded
 // when shorter (the code is HPACK's).
-use "std/net/http/hpack" hpack
+use hpack "std/net/http/hpack"
 use "std/fail"
 
 pub const StaticCount: usize = 99
@@ -17,13 +17,13 @@ pub struct Prefix { consumed: usize, valid: bool }
 struct Integer { value: usize, consumed: usize, valid: bool }
 
 fn read_integer(block: []const u8, prefix: u8) Integer {
-  if #len(block) == 0 { return Integer{} }
+  if block.len == 0 { return Integer{} }
   mask := (#cast(usize, 1) << #cast(usize, prefix)) - 1
   value := block[0] & mask
   if value < mask { return Integer{ value: value, consumed: 1, valid: true } }
   shift: usize = 0
   at: usize = 1
-  for at < #len(block) {
+  for at < block.len {
     byte := block[at]
     at += 1
     value += (#cast(usize, byte) & 127) << shift
@@ -39,21 +39,21 @@ struct Text { length: usize, consumed: usize, valid: bool }
 // A string literal whose length has an N-bit prefix, with the Huffman flag
 // just above it.
 fn read_string(block: []const u8, prefix: u8, destination: []u8) Text {
-  if #len(block) == 0 { return Text{} }
+  if block.len == 0 { return Text{} }
   huffman := (block[0] & (#cast(u8, 1) << prefix)) != 0
   length := read_integer(block, prefix)
-  if !length.valid || length.value > #len(block) - length.consumed { return Text{} }
+  if !length.valid || length.value > block.len - length.consumed { return Text{} }
   encoded := block[length.consumed..length.consumed + length.value]
   if huffman {
     decoded := hpack.huffman_decode(encoded, destination)
     if !decoded.valid { return Text{} }
     return Text{ length: decoded.length, consumed: length.consumed + length.value, valid: true }
   }
-  if #len(encoded) > #len(destination) { return Text{} }
-  for i in 0..#len(encoded) {
+  if encoded.len > destination.len { return Text{} }
+  for i in 0..encoded.len {
     destination[i] = encoded[i]
   }
-  return Text{ length: #len(encoded), consumed: length.consumed + length.value, valid: true }
+  return Text{ length: encoded.len, consumed: length.consumed + length.value, valid: true }
 }
 
 fn static_name(index: usize) []const u8 {
@@ -78,8 +78,8 @@ fn failed(status: *fail.Status, kind: fail.Kind, offset: usize) Field {
 }
 
 fn copy_into(destination: []u8, source: []const u8) bool {
-  if #len(source) > #len(destination) { return false }
-  for i in 0..#len(source) {
+  if source.len > destination.len { return false }
+  for i in 0..source.len {
     destination[i] = source[i]
   }
   return true
@@ -100,7 +100,7 @@ pub fn decode_prefix(section: []const u8) Prefix {
 pub fn decode_field(status: *fail.Status, section: []const u8, scratch: []u8) Field {
   if status == nil { return decode_field(&fail.Status{}, section, scratch) }
   if status.failed { return Field{} }
-  if #len(section) == 0 { return failed(status, fail.Kind.InvalidInput, 0) }
+  if section.len == 0 { return failed(status, fail.Kind.InvalidInput, 0) }
   first := section[0]
   if (first & 0x80) != 0 {
     // Indexed field line; T (0x40) selects the static table.
@@ -110,10 +110,10 @@ pub fn decode_field(status: *fail.Status, section: []const u8, scratch: []u8) Fi
     }
     name := static_name(index.value)
     value := static_value(index.value)
-    if !copy_into(scratch, name) || !copy_into(scratch[#len(name)..], value) {
+    if !copy_into(scratch, name) || !copy_into(scratch[name.len..], value) {
       return failed(status, fail.Kind.Capacity, 0)
     }
-    return Field{ name: scratch[..#len(name)], value: scratch[#len(name)..#len(name) + #len(value)], consumed: index.consumed }
+    return Field{ name: scratch[..name.len], value: scratch[name.len..name.len + value.len], consumed: index.consumed }
   }
   if (first & 0xc0) == 0x40 {
     // Literal with a name reference; T (0x10) selects the static table.
@@ -123,9 +123,9 @@ pub fn decode_field(status: *fail.Status, section: []const u8, scratch: []u8) Fi
     }
     name := static_name(index.value)
     if !copy_into(scratch, name) { return failed(status, fail.Kind.Capacity, 0) }
-    value := read_string(section[index.consumed..], 7, scratch[#len(name)..])
+    value := read_string(section[index.consumed..], 7, scratch[name.len..])
     if !value.valid { return failed(status, fail.Kind.InvalidInput, index.consumed) }
-    return Field{ name: scratch[..#len(name)], value: scratch[#len(name)..#len(name) + value.length],
+    return Field{ name: scratch[..name.len], value: scratch[name.len..name.len + value.length],
       consumed: index.consumed + value.consumed }
   }
   if (first & 0xe0) == 0x20 {
@@ -144,7 +144,7 @@ pub fn decode_field(status: *fail.Status, section: []const u8, scratch: []u8) Fi
 // ---------------------------------------------------------------- encoding
 
 fn write_integer(destination: []u8, flags: u8, prefix: u8, value: usize) usize {
-  if #len(destination) == 0 { return 0 }
+  if destination.len == 0 { return 0 }
   mask := (#cast(usize, 1) << #cast(usize, prefix)) - 1
   if value < mask {
     destination[0] = flags | #cast(u8, value)
@@ -154,12 +154,12 @@ fn write_integer(destination: []u8, flags: u8, prefix: u8, value: usize) usize {
   rest := value - mask
   at: usize = 1
   for rest >= 128 {
-    if at == #len(destination) { return 0 }
+    if at == destination.len { return 0 }
     destination[at] = #cast(u8, rest & 127) | 128
     rest >>= 7
     at += 1
   }
-  if at == #len(destination) { return 0 }
+  if at == destination.len { return 0 }
   destination[at] = #cast(u8, rest)
   return at + 1
 }
@@ -174,37 +174,37 @@ fn lower(byte: u8) u8 {
 fn write_string(destination: []u8, flags: u8, prefix: u8, text: []const u8, lowercase: bool) usize {
   folded: [256]u8
   source := text
-  if lowercase && #len(text) <= #len(folded) {
-    for i in 0..#len(text) {
+  if lowercase && text.len <= folded.len {
+    for i in 0..text.len {
       folded[i] = lower(text[i])
     }
-    source = folded[..#len(text)]
+    source = folded[..text.len]
   }
   coded := hpack.huffman_length(source)
-  if coded < #len(source) {
+  if coded < source.len {
     head := write_integer(destination, flags | (#cast(u8, 1) << prefix), prefix, coded)
-    if head == 0 || coded > #len(destination) - head { return 0 }
+    if head == 0 || coded > destination.len - head { return 0 }
     return head + hpack.huffman_encode(source, destination[head..])
   }
-  head := write_integer(destination, flags, prefix, #len(source))
-  if head == 0 || #len(source) > #len(destination) - head { return 0 }
-  for i in 0..#len(source) {
+  head := write_integer(destination, flags, prefix, source.len)
+  if head == 0 || source.len > destination.len - head { return 0 }
+  for i in 0..source.len {
     destination[head + i] = source[i]
   }
-  return head + #len(source)
+  return head + source.len
 }
 
 fn equal_folded(name: []const u8, known: []const u8) bool {
-  if #len(name) != #len(known) { return false }
-  for i in 0..#len(name) {
+  if name.len != known.len { return false }
+  for i in 0..name.len {
     if lower(name[i]) != known[i] { return false }
   }
   return true
 }
 
 fn equal(left: []const u8, right: []const u8) bool {
-  if #len(left) != #len(right) { return false }
-  for i in 0..#len(left) {
+  if left.len != right.len { return false }
+  for i in 0..left.len {
     if left[i] != right[i] { return false }
   }
   return true
@@ -212,7 +212,7 @@ fn equal(left: []const u8, right: []const u8) bool {
 
 // The prefix of a section that uses no dynamic table: two zero bytes.
 pub fn encode_prefix(destination: []u8) usize {
-  if #len(destination) < 2 { return 0 }
+  if destination.len < 2 { return 0 }
   destination[0] = 0
   destination[1] = 0
   return 2

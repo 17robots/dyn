@@ -49,7 +49,7 @@ fn main() {
   expect(bytes.equal(mdesk.child_at(title, 0).string, "Hello, world"), "string")
   expect(bytes.equal(mdesk.child_at(mdesk.child(root, "path"), 0).string, "a \"b\" c"), "triple string")
   empty_string := mdesk.child_at(mdesk.child(root, "empty"), 0)
-  expect(empty_string.label == mdesk.Label.String && #len(empty_string.string) == 0, "empty string")
+  expect(empty_string.label == mdesk.Label.String && empty_string.string.len == 0, "empty string")
   nested := mdesk.parse(arena, &status, "op: + version: 1.2.3 a: b: c")
   expect(mdesk.child_count(nested) == 3, "chained children")
   expect(mdesk.child_at(mdesk.child(nested, "op"), 0).label == mdesk.Label.Symbol, "symbol")
@@ -57,7 +57,7 @@ fn main() {
 
   missing := mdesk.child(mdesk.child_at(mdesk.child(root, "Nope"), 4), "deeper")
   expect(mdesk.is_nil(missing) && missing == mdesk.empty(), "nil chain")
-  expect(#len(missing.string) == 0 && mdesk.child_count(missing) == 0 && !mdesk.has_tag(missing, "x"), "nil reads")
+  expect(missing.string.len == 0 && mdesk.child_count(missing) == 0 && !mdesk.has_tag(missing, "x"), "nil reads")
   expect(mdesk.line_of(source, types.offset) == 3, "line_of")
 
   fails(arena, "a: {b c", "unclosed scope", 3)

@@ -47,7 +47,7 @@ use "std/mem"
 use "std/bytes"
 use "std/fail"
 fn copy(arena: *mem.Arena, source: []const u8) []u8 {
-  destination := mem.push_bytes(arena, #len(source))
+  destination := mem.push_bytes(arena, source.len)
   _ = mem.move(destination, source)
   return destination
 }
@@ -60,7 +60,7 @@ fn main() {
   argv: [3][]const u8 = [command, script, "large"]
   result_status: fail.Status
   result := process.capture(arena, &result_status, command, argv[..], process.Options{}, process.CaptureOptions{})
-  if result_status.failed || #len(result.output) != 131072 || #len(result.errors) != 131072 { #panic("large lengths") }
+  if result_status.failed || result.output.len != 131072 || result.errors.len != 131072 { #panic("large lengths") }
   for i in 0..131072 {
     if result.output[i] != #cast(u8, i / 1024) || result.errors[i] != #cast(u8, 255 - i / 1024) { #panic("growth prefix") }
   }
@@ -73,20 +73,20 @@ fn main() {
   argv[2] = "limit"
   limited_status: fail.Status
   limited := process.capture(arena, &limited_status, command, argv[..], process.Options{}, process.CaptureOptions{output_limit: 4097, error_limit: 2049, timeout_milliseconds: 2000})
-  if !limited_status.failed || !limited.limit_reached || limited.timed_out || #len(limited.output) > 4097 || #len(limited.errors) > 2049 { #panic("explicit limits") }
-  if #len(limited.output) != 4097 && #len(limited.errors) != 2049 { #panic("limit prefix") }
+  if !limited_status.failed || !limited.limit_reached || limited.timed_out || limited.output.len > 4097 || limited.errors.len > 2049 { #panic("explicit limits") }
+  if limited.output.len != 4097 && limited.errors.len != 2049 { #panic("limit prefix") }
   argv[2] = "out"
   out_limit_status: fail.Status
   out_limit := process.capture(arena, &out_limit_status, command, argv[..], process.Options{}, process.CaptureOptions{output_limit: 4097})
-  if !out_limit.limit_reached || #len(out_limit.output) != 4097 || #len(out_limit.errors) != 0 { #panic("stdout limit") }
+  if !out_limit.limit_reached || out_limit.output.len != 4097 || out_limit.errors.len != 0 { #panic("stdout limit") }
   argv[2] = "err"
   err_limit_status: fail.Status
   err_limit := process.capture(arena, &err_limit_status, command, argv[..], process.Options{}, process.CaptureOptions{error_limit: 2049})
-  if !err_limit.limit_reached || #len(err_limit.errors) != 2049 || #len(err_limit.output) != 0 { #panic("stderr limit") }
+  if !err_limit.limit_reached || err_limit.errors.len != 2049 || err_limit.output.len != 0 { #panic("stderr limit") }
   argv[2] = "empty"
   empty_status: fail.Status
   empty := process.capture(arena, &empty_status, command, argv[..], process.Options{}, process.CaptureOptions{})
-  if empty_status.failed || #len(empty.output) != 0 || #len(empty.errors) != 0 { #panic("empty zero policy") }
+  if empty_status.failed || empty.output.len != 0 || empty.errors.len != 0 { #panic("empty zero policy") }
   argv[2] = "sleep"
   timed_status: fail.Status
   timed := process.capture(arena, &timed_status, command, argv[..], process.Options{}, process.CaptureOptions{timeout_milliseconds: 200})
@@ -94,7 +94,7 @@ fn main() {
   mark := mem.arena_mark(arena)
   invalid_status: fail.Status
   invalid := process.capture(arena, &invalid_status, "", argv[..], process.Options{}, process.CaptureOptions{})
-  if invalid_status.failure.kind != fail.Kind.InvalidInput || #len(invalid.output) != 0 || #len(invalid.errors) != 0 || mem.arena_mark(arena) != mark { #panic("invalid rollback") }
+  if invalid_status.failure.kind != fail.Kind.InvalidInput || invalid.output.len != 0 || invalid.errors.len != 0 || mem.arena_mark(arena) != mark { #panic("invalid rollback") }
   rejected_status: fail.Status
   rejected := process.capture(arena, &rejected_status, arena.data[mark..mark+1], argv[..], process.Options{}, process.CaptureOptions{})
   if rejected_status.failure.kind != fail.Kind.InvalidInput || mem.arena_mark(arena) != mark { #panic("input overlap") }
@@ -107,7 +107,7 @@ fn main() {
   if descriptors_status.failure.kind != fail.Kind.InvalidInput || mem.arena_mark(arena) != mark { #panic("descriptor overlap") }
   missing_status: fail.Status
   missing := process.capture(arena, &missing_status, "/no/such/dyn-capture-program", argv[..], process.Options{}, process.CaptureOptions{})
-  if !missing_status.failed || #len(missing.output) != 0 || mem.arena_mark(arena) != mark { #panic("spawn rollback") }
+  if !missing_status.failed || missing.output.len != 0 || mem.arena_mark(arena) != mark { #panic("spawn rollback") }
 }'''
     source = source.replace('PYTHON', json.dumps(sys.executable)).replace('SCRIPT', json.dumps(str(child)))
     project = root / 'parent'; project.mkdir()

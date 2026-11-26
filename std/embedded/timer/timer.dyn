@@ -1,4 +1,4 @@
-use "std/mmio" mmio
+use mmio "std/mmio"
 use "std/fail"
 // Little-endian split 64-bit MTIME/MTIMECMP registers. These descriptors borrow
 // hardware registers; clock frequency and hart ownership belong to the caller.

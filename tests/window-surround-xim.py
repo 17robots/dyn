@@ -59,7 +59,7 @@ pub fn surround_oracle() {
   result = surround_result(&host,"abc",0,0,0)
   surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.InvalidInput,"zero revision")
   large: [4097]u8
-  for i in 0..#len(large) { large[i] = 'a' }
+  for i in 0..large.len { large[i] = 'a' }
   result = surround_result(&host,large[..],0,0,1)
   surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.Capacity,"context byte cap")
   result = surround_result(&host,large[..4096],4096,0,1)
@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-xim-surround-') as directory:
         raise SystemExit(0)
     shutil.copytree(ROOT/'vendor/window/x11',work/'x11')
     (work/'x11/surround_oracle.dyn').write_text(ORACLE,encoding='utf-8')
-    (work/'main.dyn').write_text('use "./x11" x11\nfn main() { x11.surround_oracle() }\n')
+    (work/'main.dyn').write_text('use x11 "./x11"\nfn main() { x11.surround_oracle() }\n')
     for flags in (['--debug'],['--release'],['--release','--opt-level','3']):
         output=work/'test'
         subprocess.run([DYN,'build',str(work),*flags,'--quiet','--output',str(output)],check=True,timeout=120)

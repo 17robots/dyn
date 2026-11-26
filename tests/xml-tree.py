@@ -12,9 +12,9 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve()
 source = '''use "std/fail"
-use "std/encoding/xml" xml
-use "std/mem" mem
-use "std/bytes" bytes
+use xml "std/encoding/xml"
+use mem "std/mem"
+use bytes "std/bytes"
 fn check(ok: bool) { if !ok { #panic("xml tree contract") } }
 struct Tree { root: *const xml.Node, offset: usize, failure: fail.Failure }
 fn parse(arena: *mem.Arena, source: []const u8) Tree {
@@ -74,9 +74,9 @@ source += '''
   check(bad_utf8.failure.kind != fail.Kind.Ok && bad_utf8.offset == 3 && bad_utf8.failure.kind == fail.Kind.InvalidInput && bad_utf8.failure.kind == fail.Kind.InvalidInput && bad_utf8.root == &xml.nil_node)
   check(mem.arena_mark(arena) == mark)
   backing: [4096]u8
-  for i in 0..#len(backing) { backing[i] = 255 }
+  for i in 0..backing.len { backing[i] = 255 }
   fixed := mem.arena_from_buffer(backing[..])
-  prefix := mem.push(u8, fixed)
+  prefix := mem.push<u8>(fixed)
   prefix.* = 42
   fixed_mark := mem.arena_mark(fixed)
   failed := parse(fixed, "<a><b/></z>")
@@ -84,14 +84,14 @@ source += '''
   input: [11]u8 = ['<', 'a', ' ', 'x', '=', '"', 'v', '"', '/', '>', ' ']
   owned := parse(fixed, input[..])
   element := xml.child(owned.root, "a")
-  check(owned.failure.kind == fail.Kind.Ok && element.first == nil && element.last == nil && element.next == xml.at(owned.root, 1) && #len(element.text) == 0)
+  check(owned.failure.kind == fail.Kind.Ok && element.first == nil && element.last == nil && element.next == xml.at(owned.root, 1) && element.text.len == 0)
   check(#cast(usize, owned.root) >= #cast(usize, &backing[0]) && #cast(usize, owned.root) < #cast(usize, &backing[4095]))
   check(#cast(usize, element) >= #cast(usize, &backing[0]) && #cast(usize, element) < #cast(usize, &backing[4095]))
   check(#cast(usize, &element.name[0]) == #cast(usize, &input[1]) && #cast(usize, &element.attributes[0]) == #cast(usize, &input[2]))
   input[1] = 'z'
   input[6] = 'w'
   check(bytes.equal(element.name, "z") && bytes.equal(element.attributes, " x=\\"w\\""))
-  deep := mem.push_array(u8, arena, 70000)
+  deep := mem.push_array<u8>(arena, 70000)
   for i in 0..10000 {
     deep[i * 3] = '<'
     deep[i * 3 + 1] = 'a'
@@ -113,9 +113,9 @@ source += '''
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-xml-tree-') as temporary:
     work = Path(temporary)
-    for name, code in [('main', source), ('capacity', '''use "std/encoding/xml" xml
+    for name, code in [('main', source), ('capacity', '''use xml "std/encoding/xml"
 use "std/fail"
-use "std/mem" mem
+use mem "std/mem"
 fn main() {
   status: fail.Status
   backing: [8]u8

@@ -9,20 +9,20 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get("DYN", ROOT / "build/dyn-release")).resolve()
 ENV = dict(os.environ, DYN_SDK=str(ROOT))
 SOURCE = r'''
-use "std/image/png" png
-use "std/image/qoi" qoi
+use png "std/image/png"
+use qoi "std/image/qoi"
 use "std/fail"
-use "std/mem" mem
+use mem "std/mem"
 fn png_failure(arena: *mem.Arena, data: []const u8) fail.Failure {
   status: fail.Status
   image := png.decode(arena, &status, data)
-  if !status.failed || #len(image.pixels) != 0 || image.info.width != 0 { #panic("PNG should fail") }
+  if !status.failed || image.pixels.len != 0 || image.info.width != 0 { #panic("PNG should fail") }
   return status.failure
 }
 fn qoi_failure(arena: *mem.Arena, data: []const u8) fail.Failure {
   status: fail.Status
   image := qoi.decode(arena, &status, data)
-  if !status.failed || #len(image.pixels) != 0 || image.info.width != 0 { #panic("QOI should fail") }
+  if !status.failed || image.pixels.len != 0 || image.info.width != 0 { #panic("QOI should fail") }
   return status.failure
 }
 fn main() {
@@ -34,7 +34,7 @@ fn main() {
   pi := png.inspect(&status, p)
   if pi.width != 2 { #panic("PNG inspect") }
   pd := png.decode(arena, &status, p)
-  if pd.info.width != 2 || #len(pd.pixels) != 8 { #panic("PNG decode") }
+  if pd.info.width != 2 || pd.pixels.len != 8 { #panic("PNG decode") }
   for i in 0..8 { if pd.pixels[i] != pixels[i] { #panic("PNG pixels") } }
   q := qoi.encode(arena, &status, pixels[..], 2, 1, 4, true)
   qi := qoi.inspect(&status, q)
@@ -48,7 +48,7 @@ fn main() {
     channels := #cast(u8, c)
     enc := png.encode(arena, &status, pixels[..c], 1, 1, channels)
     dec := png.decode(arena, &status, enc)
-    if #len(dec.pixels) != c { #panic("PNG channels") }
+    if dec.pixels.len != c { #panic("PNG channels") }
     for i in 0..c { if dec.pixels[i] != pixels[i] { #panic("PNG channels pixels") } }
   }
   rgb := qoi.encode(arena, &status, pixels[..3], 1, 1, 3, false)
@@ -62,13 +62,13 @@ fn main() {
   }
   pzero: png.Image
   qzero: qoi.Image
-  if pzero.info.width != 0 || qzero.info.width != 0 || #len(pzero.pixels) != 0 || #len(qzero.pixels) != 0 { #panic("zero values") }
+  if pzero.info.width != 0 || qzero.info.width != 0 || pzero.pixels.len != 0 || qzero.pixels.len != 0 { #panic("zero values") }
   mark := mem.arena_mark(arena)
-  marker_original := q[#len(q)-1]
-  q[#len(q)-1] = 99
+  marker_original := q[q.len-1]
+  q[q.len-1] = 99
   corrupt := qoi_failure(arena, q)
   if corrupt.kind != fail.Kind.InvalidInput || mem.arena_mark(arena) != mark { #panic("QOI end marker") }
-  q[#len(q)-1] = marker_original
+  q[q.len-1] = marker_original
   excessive: [23]u8 = [113,111,105,102,0,0,0,1,0,0,0,1,4,0,253,0,0,0,0,0,0,0,1]
   runbad := qoi_failure(arena, excessive[..])
   if runbad.kind != fail.Kind.InvalidInput || mem.arena_mark(arena) != mark { #panic("QOI excessive run") }
@@ -93,7 +93,7 @@ fn main() {
   qe_status: fail.Status
   pe := png.encode(arena, &pe_status, empty[..], 0, 1, 4)
   qe := qoi.encode(arena, &qe_status, empty[..], 1, 1, 4, true)
-  if #len(pe) != 0 || #len(qe) != 0 || pe_status.failure.kind != fail.Kind.InvalidInput || qe_status.failure.kind != fail.Kind.InvalidInput || mem.arena_mark(arena) != mark { #panic("validation") }
+  if pe.len != 0 || qe.len != 0 || pe_status.failure.kind != fail.Kind.InvalidInput || qe_status.failure.kind != fail.Kind.InvalidInput || mem.arena_mark(arena) != mark { #panic("validation") }
   po: fail.Status
   qo: fail.Status
   _ = png.encode(arena, &po, empty[..], 4294967295, 4294967295, 4)
@@ -116,10 +116,10 @@ with tempfile.TemporaryDirectory(prefix="dyn-image-results-") as directory:
         print("PASS image result contracts " + mode, flush=True)
 
 # Fixed arena exhaustion is a programming error, not an external-input result.
-PANIC_SOURCE = '''use "std/image/png" png
-use "std/image/qoi" qoi
+PANIC_SOURCE = '''use png "std/image/png"
+use qoi "std/image/qoi"
 use "std/fail"
-use "std/mem" mem
+use mem "std/mem"
 fn main() {
   status: fail.Status
   backing: [mem.ArenaBufferOverhead+1]u8

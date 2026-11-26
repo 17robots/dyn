@@ -28,8 +28,8 @@ fn marker(state: State) []const u8 {
 // parse.malformed records InvalidInput, a message and the byte offset where
 // the line went wrong, and the task is zero.
 fn parse_task(status: *fail.Status, line: []const u8) Task {
-  if #len(line) < 4 {
-    fail.at(status, fail.Kind.InvalidInput, "read task", "a task needs a marker and text", #len(line))
+  if line.len < 4 {
+    fail.at(status, fail.Kind.InvalidInput, "read task", "a task needs a marker and text", line.len)
     return Task{}
   }
   task := Task{ text: line[4..] }

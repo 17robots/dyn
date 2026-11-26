@@ -1,9 +1,9 @@
 #target(kernel: linux)
-use "std/io" io
-use "std/mem" mem
+use io "std/io"
+use mem "std/mem"
 use "std/fail"
-use "std/c" cstrings
-use "std/os/linux" platform
+use cstrings "std/c"
+use platform "std/os/linux"
 use "std/os/linux/sys"
 
 pub enum AppDirectory { Home, Config, Cache, Data, Runtime }
@@ -18,13 +18,13 @@ pub struct Directory {
 }
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
-  if #len(path) == 0 { return nil }
+  if path.len == 0 { return nil }
   status: fail.Status
   return cstrings.string_into(&status, storage, path)
 }
 
 fn native_open_directory(path: []const u8, storage: []u8, directory: *Directory) isize {
-  if #len(storage) < 24 { return -22 }
+  if storage.len < 24 { return -22 }
   opened := open_flags(path, directory_flag, 0)
   if opened < 0 { return opened }
   directory.* = Directory{ file: owned_file(opened), storage: storage }
@@ -33,12 +33,12 @@ fn native_open_directory(path: []const u8, storage: []u8, directory: *Directory)
 
 // Entry name borrows directory storage and may be invalidated by next refill.
 fn native_directory_next(directory: *Directory, entry: *DirectoryEntry) isize {
-  if !is_open(&directory.file) || #len(directory.storage) < 24 { return -9 }
+  if !is_open(&directory.file) || directory.storage.len < 24 { return -9 }
   for {
     if directory.offset >= directory.used {
-      value := #syscall(sys.Getdents64, directory.file.descriptor, &directory.storage[0], #len(directory.storage))
+      value := #syscall(sys.Getdents64, directory.file.descriptor, &directory.storage[0], directory.storage.len)
       for value == -4 {
-        value = #syscall(sys.Getdents64, directory.file.descriptor, &directory.storage[0], #len(directory.storage))
+        value = #syscall(sys.Getdents64, directory.file.descriptor, &directory.storage[0], directory.storage.len)
       }
       if value < 0 { return value }
       if value == 0 { return 0 }
@@ -58,8 +58,8 @@ fn native_directory_next(directory: *Directory, entry: *DirectoryEntry) isize {
     kind := directory.storage[directory.offset + 18]
     directory.offset += record_length
     name := directory.storage[name_start..name_end]
-    dot := #len(name) == 1 && name[0] == '.'
-    dot_dot := #len(name) == 2 && name[0] == '.' && name[1] == '.'
+    dot := name.len == 1 && name[0] == '.'
+    dot_dot := name.len == 2 && name[0] == '.' && name[1] == '.'
     if !dot && !dot_dot {
       entry.* = DirectoryEntry{ name: name, kind: kind }
       return 0
@@ -80,7 +80,7 @@ pub fn close_directory(directory: *Directory) {
 pub fn copy_file(status: *fail.Status, source: []const u8, destination: []const u8, scratch: []u8) usize {
   if status == nil { return copy_file(&fail.Status{}, source, destination, scratch) }
   if status.failed { return 0 }
-  if #len(scratch) == 0 {
+  if scratch.len == 0 {
     fail.invalid(status, "copy", source, "scratch buffer is empty")
     return 0
   }
@@ -217,7 +217,7 @@ pub struct AtomicFile {
 pub fn atomic_begin(status: *fail.Status, destination: []const u8, temporary: []const u8) AtomicFile {
   if status == nil { return atomic_begin(&fail.Status{}, destination, temporary) }
   if status.failed { return AtomicFile{} }
-  if #len(destination) == 0 || #len(temporary) == 0 {
+  if destination.len == 0 || temporary.len == 0 {
     fail.invalid(status, "create", destination, "empty path")
     return AtomicFile{}
   }
@@ -286,7 +286,7 @@ fn app_directory_into(status: *fail.Status, kind: AppDirectory, destination: []u
       variable = "XDG_RUNTIME_DIR"
     }
     value := platform.environment_get(status, variable, destination)
-    if !status.failed && #len(value) == 0 {
+    if !status.failed && value.len == 0 {
       fail_kind(status, "read environment", variable, fail.Kind.NotFound, "empty")
     }
     return value
@@ -302,17 +302,17 @@ fn app_directory_into(status: *fail.Status, kind: AppDirectory, destination: []u
   }
   configured_status: fail.Status
   configured := platform.environment_get(&configured_status, variable, destination)
-  if !configured_status.failed && #len(configured) > 0 { return configured }
+  if !configured_status.failed && configured.len > 0 { return configured }
   home := platform.environment_get(status, "HOME", destination)
   if status.failed { return destination[..0] }
-  if #len(home) + #len(suffix) > #len(destination) {
+  if home.len + suffix.len > destination.len {
     fail_kind(status, "read environment", "HOME", fail.Kind.Capacity, "path too long")
     return destination[..0]
   }
-  for j in 0..#len(suffix) {
-    destination[#len(home) + j] = suffix[j]
+  for j in 0..suffix.len {
+    destination[home.len + j] = suffix[j]
   }
-  return destination[..#len(home) + #len(suffix)]
+  return destination[..home.len + suffix.len]
 }
 
 // Locks file with flock(2): operation is LOCK_SH (1), LOCK_EX (2), or either
@@ -356,7 +356,7 @@ fn kept(arena: *mem.Arena, status: *fail.Status, mark: usize, value: []u8) []u8 
     mem.arena_rewind(arena, mark)
     return value[..0]
   }
-  mem.arena_rewind(arena, mark + #len(value))
+  mem.arena_rewind(arena, mark + value.len)
   return value
 }
 
@@ -373,7 +373,7 @@ pub fn read_link(arena: *mem.Arena, status: *fail.Status, path: []const u8) []u8
   if raw == nil {
     fail_native(status, "read link", path, -36)
   } else {
-    count := #syscall(sys.Readlinkat, -100, raw, &destination[0], #len(destination))
+    count := #syscall(sys.Readlinkat, -100, raw, &destination[0], destination.len)
     check(status, "read link", path, count)
     if count > 0 {
       value = destination[..#cast(usize, count)]

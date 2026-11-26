@@ -7,17 +7,17 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/mem" mem
-use "std/strings" strings
-use "std/bytes" bytes
-use "std/encoding/json" json
-use "std/encoding/ini" ini
+SOURCE = r'''use mem "std/mem"
+use strings "std/strings"
+use bytes "std/bytes"
+use json "std/encoding/json"
+use ini "std/encoding/ini"
 use "std/fail"
-use "std/encoding/hex" hex
-use "std/unicode/utf8" utf8
-use "std/time" time
-use "std/rand" rand
-use "std/text/scanner" text
+use hex "std/encoding/hex"
+use utf8 "std/unicode/utf8"
+use time "std/time"
+use rand "std/rand"
+use text "std/text/scanner"
 fn check(ok: bool, message: []const u8) {
   if !ok {
     #panic(message)
@@ -31,21 +31,21 @@ fn parse(arena: *mem.Arena, source: []const u8) Parsed {
 }
 fn main() {
   arena := mem.arena_alloc(0)
-  check(strings.parse(u16, "8080") == 8080, "u16")
-  check(strings.parse(u8, "256") == 0 && !strings.valid(u8, "256"), "u8 overflow")
-  check(strings.parse(i8, "-128") == -128 && strings.parse(i8, "-129") == 0, "i8 range")
-  check(strings.parse(i64, "-9223372036854775808") == -9223372036854775807 - 1, "i64 minimum")
-  check(strings.parse(u64, "+7") == 7 && strings.parse(u64, "-7") == 0, "signs")
-  check(strings.parse(f64, "1.5e2") == 150.0 && strings.parse(f32, "0.5") == 0.5, "floats")
-  check(strings.parse(bool, "true") && !strings.parse(bool, "nope") && !strings.valid(bool, "nope"), "bool")
-  check(strings.parse(u32, "80o") == 0 && !strings.valid(u32, "80o") && strings.valid(u32, "80"), "garbage")
-  check(strings.parse_base(u32, "ff", 16) == 255 && strings.parse_base(u8, "777", 8) == 0, "bases")
-  check(strings.parse(isize, "-5") == -5 && strings.parse(usize, "5") == 5, "pointer-sized")
+  check(strings.parse<u16>("8080") == 8080, "u16")
+  check(strings.parse<u8>("256") == 0 && !strings.valid<u8>("256"), "u8 overflow")
+  check(strings.parse<i8>("-128") == -128 && strings.parse<i8>("-129") == 0, "i8 range")
+  check(strings.parse<i64>("-9223372036854775808") == -9223372036854775807 - 1, "i64 minimum")
+  check(strings.parse<u64>("+7") == 7 && strings.parse<u64>("-7") == 0, "signs")
+  check(strings.parse<f64>("1.5e2") == 150.0 && strings.parse<f32>("0.5") == 0.5, "floats")
+  check(strings.parse<bool>("true") && !strings.parse<bool>("nope") && !strings.valid<bool>("nope"), "bool")
+  check(strings.parse<u32>("80o") == 0 && !strings.valid<u32>("80o") && strings.valid<u32>("80"), "garbage")
+  check(strings.parse_base<u32>("ff", 16) == 255 && strings.parse_base<u8>("777", 8) == 0, "bases")
+  check(strings.parse<isize>("-5") == -5 && strings.parse<usize>("5") == 5, "pointer-sized")
   name := "config.json"
   dot := bytes.find(name, ".")
   check(dot == 6 && bytes.equal(name[..dot], "config"), "find")
   missing := bytes.find(name, "#")
-  check(missing == #len(name) && #len(name[missing..]) == 0, "length on a miss")
+  check(missing == name.len && name[missing..].len == 0, "length on a miss")
   check(bytes.find_last("a/b/c", "/") == 3 && bytes.find_last_byte("abc", 'z') == 3, "find_last")
   check(bytes.contains("abc", "") && !bytes.contains("abc", "d"), "contains")
   parts := bytes.splitter("a,,b", ",")
@@ -69,34 +69,34 @@ fn main() {
   doc := parse(arena, "{\"x\": 2.5, \"name\": \"boss\", \"hp\": 40, \"alive\": true, \"tags\": [1, 2]}")
   check(doc.failure.kind == fail.Kind.Ok, "json parse")
   reading: fail.Status
-  check(json.get(f32, &reading, doc.root, "x") == 2.5 && json.get(i32, &reading, doc.root, "hp") == 40, "json numbers")
-  check(bytes.equal(json.get([]const u8, &reading, doc.root, "name"), "boss") && json.get(bool, &reading, doc.root, "alive"), "json text")
-  tags := json.get(*const json.Value, &reading, doc.root, "tags")
-  check(json.array_length(tags) == 2 && json.as(u8, &reading, json.array_get(tags, 1)) == 2, "json nested")
+  check(json.get<f32>(&reading, doc.root, "x") == 2.5 && json.get<i32>(&reading, doc.root, "hp") == 40, "json numbers")
+  check(bytes.equal(json.get<[]const u8>(&reading, doc.root, "name"), "boss") && json.get<bool>(&reading, doc.root, "alive"), "json text")
+  tags := json.get<*const json.Value>(&reading, doc.root, "tags")
+  check(json.array_length(tags) == 2 && json.as<u8>(&reading, json.array_get(tags, 1)) == 2, "json nested")
   check(!reading.failed, "json reads")
   absent: fail.Status
-  check(json.get(i32, &absent, doc.root, "nope") == 0 && absent.failure.kind == fail.Kind.NotFound, "json missing member")
+  check(json.get<i32>(&absent, doc.root, "nope") == 0 && absent.failure.kind == fail.Kind.NotFound, "json missing member")
   wrong: fail.Status
-  check(#len(json.get([]const u8, &wrong, doc.root, "hp")) == 0 && wrong.failure.kind == fail.Kind.InvalidInput, "json wrong kind")
+  check(json.get<[]const u8>(&wrong, doc.root, "hp").len == 0 && wrong.failure.kind == fail.Kind.InvalidInput, "json wrong kind")
   fraction: fail.Status
-  check(json.get(i32, &fraction, doc.root, "x") == 0 && fraction.failure.kind == fail.Kind.InvalidInput, "json not whole")
+  check(json.get<i32>(&fraction, doc.root, "x") == 0 && fraction.failure.kind == fail.Kind.InvalidInput, "json not whole")
   chained: fail.Status
-  nothing := json.get(*const json.Value, &chained, json.get(*const json.Value, &chained, doc.root, "a"), "b")
+  nothing := json.get<*const json.Value>(&chained, json.get<*const json.Value>(&chained, doc.root, "a"), "b")
   check(nothing == &json.nil_value && json.is_missing(nothing) && chained.failure.kind == fail.Kind.NotFound, "json chained miss")
   broken := parse(arena, "{\"x\": ")
   failed_root: fail.Status
-  check(broken.failure.kind != fail.Kind.Ok && broken.root == &json.nil_value && json.get(i32, &failed_root, broken.root, "x") == 0, "json failed root")
+  check(broken.failure.kind != fail.Kind.Ok && broken.root == &json.nil_value && json.get<i32>(&failed_root, broken.root, "x") == 0, "json failed root")
   settings: fail.Status
   check(bytes.equal(ini.find(&settings, "[server]\nport = 80\n", "server", "port"), "80") && !settings.failed, "ini find")
   host: fail.Status
-  check(#len(ini.find(&host, "[server]\nport = 80\n", "server", "host")) == 0 && host.failure.kind == fail.Kind.NotFound, "ini missing")
+  check(ini.find(&host, "[server]\nport = 80\n", "server", "host").len == 0 && host.failure.kind == fail.Kind.NotFound, "ini missing")
   malformed: fail.Status
-  check(#len(ini.find(&malformed, "[server\nport = 80\n", "server", "port")) == 0 && malformed.failure.kind == fail.Kind.InvalidInput, "ini malformed")
+  check(ini.find(&malformed, "[server\nport = 80\n", "server", "port").len == 0 && malformed.failure.kind == fail.Kind.InvalidInput, "ini malformed")
   status: fail.Status
   decoded := hex.decode(arena, &status, "abcd")
   bad: fail.Status
   _ = hex.decode(arena, &bad, "abc")
-  check(!status.failed && #len(decoded) == 2 && decoded[0] == 171 && bad.failed, "hex decode")
+  check(!status.failed && decoded.len == 2 && decoded[0] == 171 && bad.failed, "hex decode")
   check(utf8.codepoint_count("h\xc3\xa9") == 2 && utf8.codepoint_count("a\xff") == 2, "codepoints")
   walker := utf8.iterator("\xc3\xa9\xff")
   check(utf8.next(&walker) == 233 && utf8.next(&walker) == 0xfffd && !walker.ended, "utf8 next")
@@ -123,7 +123,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-typed-reads-') as temporary:
     source.write_text(UNSIGNED)
     result = subprocess.run([DYN, 'check', str(project), '--no-cache'], capture_output=True, text=True, timeout=30)
     assert result.returncode == 1 and 'an unsigned value is never negative' in result.stderr, result.stderr
-    source.write_text('use "std/strings" strings\nstruct P { x: i32 }\nfn main() {\n  _ = strings.parse(P, "1")\n}\n')
+    source.write_text('use strings "std/strings"\nstruct P { x: i32 }\nfn main() {\n  _ = strings.parse<P>("1")\n}\n')
     subprocess.run([DYN, 'build', str(project), '--no-cache', '--quiet', '--output', str(output)], check=True, timeout=90)
     result = subprocess.run([str(output)], capture_output=True, text=True, timeout=10)
     assert result.returncode != 0 and 'strings.parse: unsupported type' in result.stderr, result.stderr

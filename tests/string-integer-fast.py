@@ -8,7 +8,7 @@ def digits(n,b):
  sign='-' if n<0 else '';n=abs(n);out=''
  while n:out='0123456789abcdefghijklmnopqrstuvwxyz'[n%b]+out;n//=b
  return sign+(out or '0')
-header='''use "std/io" io
+header='''use io "std/io"
 use "std/strings"
 use "std/fail"
 use "std/fs"
@@ -49,15 +49,15 @@ with tempfile.TemporaryDirectory(prefix='dyn-string-integers-') as tmp:
   fn='test_'+name
   functions.append(f'''fn {fn}(data: []const u8) {{
  at: usize
- for at < #len(data) {{
+ for at < data.len {{
   base := #cast(u8,word(data,&at))
   length := #cast(usize,word(data,&at))
   expected := #cast({name},word(data,&at))
   valid := word(data,&at) != 0
   text := data[at..at+length]
   at += length
-  require(strings.parse_base({name},text,base) == expected)
-  if base == 10 {{ require(strings.valid({name},text) == valid)\n   require(strings.parse({name},text) == expected) }}
+  require(strings.parse_base<{name}>(text, base) == expected)
+  if base == 10 {{ require(strings.valid<{name}>(text) == valid)\n   require(strings.parse<{name}>(text) == expected) }}
  }}
 }}
 ''')

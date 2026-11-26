@@ -1,8 +1,8 @@
 #target(kernel: windows)
 
-use "std/mem" mem
-use "std/c" cstrings
-use "std/sync" sync
+use mem "std/mem"
+use cstrings "std/c"
+use sync "std/sync"
 use "std/io"
 use "std/fail"
 
@@ -51,7 +51,7 @@ pub struct PollDescriptor { descriptor: usize, events: i16, returned: i16 }
 pub const has_native_threads: bool = true
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
-  if #len(path) == 0 { return nil }
+  if path.len == 0 { return nil }
   status: fail.Status
   return cstrings.string_into(&status, storage, path)
 }
@@ -126,12 +126,12 @@ pub fn socket_close(socket: usize) bool {
   return socket_close_raw(socket) == 0
 }
 pub fn socket_connect(socket: usize, address: []const u8) bool {
-  if #len(address) == 0 { return false }
-  return socket_connect_raw(socket, &address[0], #cast(i32, #len(address))) == 0
+  if address.len == 0 { return false }
+  return socket_connect_raw(socket, &address[0], #cast(i32, address.len)) == 0
 }
 pub fn event_poll(items: []PollDescriptor, milliseconds: i32) isize {
-  if #len(items) == 0 { return 0 }
-  value := socket_poll_raw(&items[0], #cast(u32, #len(items)), milliseconds)
+  if items.len == 0 { return 0 }
+  value := socket_poll_raw(&items[0], #cast(u32, items.len), milliseconds)
   if value < 0 { return 0 - #cast(isize, socket_error_raw()) }
   return value
 }

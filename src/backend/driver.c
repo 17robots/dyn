@@ -2676,7 +2676,6 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
         }
         if (!a->wildcard) pending_jump(ctx,-1,&next);
         if (!resolve_jumps(ctx,matches,ctx->text.n)) return false;
-        bool old_alias=false;
         if (a->local_id!=UINT32_MAX) {
           uint32_t offset; if (!a->pattern_count || !local_slot(ctx,f,a->local_id,&offset)) return false;
           const DynIrPattern *pattern=&ir->patterns[a->pattern_start];
@@ -2684,14 +2683,11 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
           if (!pattern->is_type && !pattern->is_enum) return false;
           isa_load(ctx, R_A, subject+8);
           if (payload) isa_add_immediate(ctx, payload_offset);
-          old_alias=ctx->local_alias[a->local_id-f->local_start];
-          ctx->local_alias[a->local_id-f->local_start]=a->pointer_binding;
           if (a->pointer_binding) isa_store(ctx, R_A, offset);
           else save_struct(ctx,offset,binding);
         }
         bool arm_falls;
         if (!block(ctx,ir,f,a->body_start,a->body_count,depth+1,&arm_falls)) return false;
-        if (a->local_id!=UINT32_MAX) ctx->local_alias[a->local_id-f->local_start]=old_alias;
         all_terminate &= !arm_falls;
         /* An arm that returns or panics has no path to the end of the case; a
            jump there would be dead and, when every arm ends that way, would

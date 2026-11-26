@@ -1,7 +1,7 @@
 use "std/enums"
-use "std/mem" mem
+use mem "std/mem"
 use "std/fail"
-use "std/unicode/utf8" utf8
+use utf8 "std/unicode/utf8"
 // RFC 8949: https://www.rfc-editor.org/rfc/rfc8949.html
 // Borrowed preorder tokens, with End only for indefinite containers/strings.
 // Definite arrays/maps carry element/pair counts in value. Tag wraps one item.
@@ -40,7 +40,7 @@ fn accept(state: *Reader, token: Token) fail.Kind {
     return fail.Kind.InvalidInput
   }
   if token.kind == Kind.Text && !utf8.valid(token.bytes) { return fail.Kind.InvalidInput }
-  if token.indefinite && (token.kind == Kind.Text || token.kind == Kind.Bytes) && #len(token.bytes) != 0 {
+  if token.indefinite && (token.kind == Kind.Text || token.kind == Kind.Bytes) && token.bytes.len != 0 {
     return fail.Kind.InvalidInput
   }
   if state.depth > 0 {
@@ -66,7 +66,7 @@ fn accept(state: *Reader, token: Token) fail.Kind {
       count *= 2
     }
     if token.indefinite || count != 0 {
-      if state.depth == #len(state.frames) { return fail.Kind.Capacity }
+      if state.depth == state.frames.len { return fail.Kind.Capacity }
       state.frames[state.depth] = Frame{ kind: token.kind, remaining: count, indefinite: token.indefinite }
       state.depth += 1
     }
@@ -110,7 +110,7 @@ pub fn next(status: *fail.Status, state: *Reader) Token {
   if status.failed { return ended(state, state.offset) }
   if state.failed { return failed(status, state, state.error_offset, state.error_kind) }
   start := state.offset
-  if start == #len(state.source) {
+  if start == state.source.len {
     trim(state)
     if state.depth != 0 { return failed(status, state, start, fail.Kind.InvalidInput) }
     return ended(state, start)
@@ -121,7 +121,7 @@ pub fn next(status: *fail.Status, state: *Reader) Token {
   at := start + 1
   token := Token{}
   if major <= 6 {
-    token.kind = enums.from_int(Kind, #cast(u64, major))
+    token.kind = enums.from_int<Kind>(#cast(u64, major))
   }
   value := #cast(u64, info)
   if info >= 28 && info <= 30 { return failed(status, state, start, fail.Kind.InvalidInput) }
@@ -136,7 +136,7 @@ pub fn next(status: *fail.Status, state: *Reader) Token {
     value = 0
   } else if info >= 24 {
     count := #cast(usize, 1) << #cast(usize, info - 24)
-    if count > #len(state.source) - at { return failed(status, state, at, fail.Kind.InvalidInput) }
+    if count > state.source.len - at { return failed(status, state, at, fail.Kind.InvalidInput) }
     value = 0
     for byte in state.source[at..at+count] {
       value = (value << 8) | byte
@@ -170,14 +170,14 @@ pub fn next(status: *fail.Status, state: *Reader) Token {
     }
   }
   if !token.indefinite && (token.kind == Kind.Bytes || token.kind == Kind.Text) {
-    if value > (#len(state.source) - at) { return failed(status, state, at, fail.Kind.InvalidInput) }
+    if value > (state.source.len - at) { return failed(status, state, at, fail.Kind.InvalidInput) }
     count := #cast(usize, value)
     token.bytes = state.source[at..at+count]
     token.value = 0
     at += count
   }
   if !token.indefinite && (token.kind == Kind.Array || token.kind == Kind.Map) {
-    available := #cast(u64, #len(state.source) - at)
+    available := #cast(u64, state.source.len - at)
     if token.kind == Kind.Map {
       available /= 2
     }
@@ -197,7 +197,7 @@ fn extra(value: u64) usize {
   return 8
 }
 fn argument(token: Token) u64 {
-  if token.kind == Kind.Bytes || token.kind == Kind.Text { return #len(token.bytes) }
+  if token.kind == Kind.Bytes || token.kind == Kind.Text { return token.bytes.len }
   return token.value
 }
 fn size(token: Token) usize {
@@ -224,23 +224,21 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, tokens: []const Token) []
   if status.failed { return empty }
   state := Reader{}
   total: usize = 0
-  for i in 0..#len(tokens) {
+  for i in 0..tokens.len {
     token := tokens[i]
     kind := accept(&state, token)
     if kind != fail.Kind.Ok { return unencodable(status, kind, i) }
     count := size(token)
     if token.kind == Kind.Bytes || token.kind == Kind.Text {
-      if #len(token.bytes) > #max(usize) - count {
-        return unencodable(status, fail.Kind.Overflow, i)
-      }
-      count += #len(token.bytes)
+      if token.bytes.len > #max(usize) - count { return unencodable(status, fail.Kind.Overflow, i) }
+      count += token.bytes.len
     }
     if count > #max(usize) - total { return unencodable(status, fail.Kind.Overflow, i) }
     total += count
   }
   trim(&state)
-  if state.depth != 0 { return unencodable(status, fail.Kind.InvalidInput, #len(tokens)) }
-  output := mem.push_array(u8, arena, total)
+  if state.depth != 0 { return unencodable(status, fail.Kind.InvalidInput, tokens.len) }
+  output := mem.push_array<u8>(arena, total)
   at: usize = 0
   for token in tokens {
     tag: u8 = 0

@@ -1,9 +1,9 @@
-use "std/io" io
+use io "std/io"
 use "std/fail"
-use "std/text/edit" surrounding_edit
+use surrounding_edit "std/text/edit"
 #target(kernel: linux)
-use "vendor/window/x11" x11
-use "std/ui/box" box
+use x11 "vendor/window/x11"
+use box "std/ui/box"
 // Linux default currently uses X11/GLX, including XWayland. Explicit native
 // Wayland is a separate backend; availability never silently selects SDL.
 pub type Window = x11.Window

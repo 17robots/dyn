@@ -1,5 +1,5 @@
-use "std/sync" sync
-use "std/time" clock
+use sync "std/sync"
+use clock "std/time"
 
 // Token buckets keyed by a 64-bit client key (see ip_key), for rate limits
 // such as "5 logins per minute per address". Each key may spend burst
@@ -23,7 +23,7 @@ const SetSize: usize = 8
 // A limiter over storage (a multiple of 8 buckets; extra are unused):
 // burst requests at once, refilled at rate per period_milliseconds.
 pub fn limiter(storage: []Bucket, burst: u32, rate: u32, period_milliseconds: i64) Limiter {
-  count := #len(storage) / SetSize * SetSize
+  count := storage.len / SetSize * SetSize
   for i in 0..count {
     storage[i] = Bucket{}
   }
@@ -44,9 +44,9 @@ pub fn allow(limiter: *Limiter, key: u64) bool {
 
 // allow with an explicit monotonic time in milliseconds, for tests.
 pub fn allow_at(limiter: *Limiter, key: u64, now: i64) bool {
-  if #len(limiter.buckets) == 0 || limiter.period_milliseconds <= 0 { return true }
+  if limiter.buckets.len == 0 || limiter.period_milliseconds <= 0 { return true }
   mixed := #wrapping(key * 0x9e3779b97f4a7c15)
-  set := #cast(usize, (mixed >> 32) % (#len(limiter.buckets) / SetSize)) * SetSize
+  set := #cast(usize, (mixed >> 32) % (limiter.buckets.len / SetSize)) * SetSize
   sync.lock(&limiter.lock)
   defer sync.unlock(&limiter.lock)
   chosen := set

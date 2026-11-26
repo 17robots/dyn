@@ -4,6 +4,6 @@
 extern fn native_find_byte "dyn_find_byte"(data: *const u8, length: usize, byte: u8) usize
 
 fn find_byte_target(value: []const u8, byte: u8) usize {
-  if #len(value) == 0 { return 0 }
-  return native_find_byte(&value[0], #len(value), byte)
+  if value.len == 0 { return 0 }
+  return native_find_byte(&value[0], value.len, byte)
 }

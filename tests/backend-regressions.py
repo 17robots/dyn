@@ -77,9 +77,9 @@ empty := ""
 fn main() {
   local := "b\0é"
   blank := ""
-  if #len(stored) != 4 || stored[0] != 97 || stored[1] != 0 || stored[2] != 195 || stored[3] != 169 { #panic("STATIC STRING BYTES") }
-  if #len(local) != 4 || local[0] != 98 || local[1] != 0 || local[2] != 195 || local[3] != 169 { #panic("LOCAL STRING BYTES") }
-  if #len(empty) != 0 || #len(blank) != 0 { #panic("EMPTY STRING") }
+  if stored.len != 4 || stored[0] != 97 || stored[1] != 0 || stored[2] != 195 || stored[3] != 169 { #panic("STATIC STRING BYTES") }
+  if local.len != 4 || local[0] != 98 || local[1] != 0 || local[2] != 195 || local[3] != 169 { #panic("LOCAL STRING BYTES") }
+  if empty.len != 0 || blank.len != 0 { #panic("EMPTY STRING") }
 }
 ''', None),
 }

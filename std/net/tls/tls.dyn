@@ -1,7 +1,7 @@
-use "vendor/openssl/tls" provider
-use "std/mem" memory
+use provider "vendor/openssl/tls"
+use memory "std/mem"
 use "std/fail"
-use "std/io" io
+use io "std/io"
 pub type Context = provider.Context
 pub type Connection = provider.Connection
 pub type Certificate = provider.Certificate
@@ -100,7 +100,7 @@ pub fn error_string(arena: *memory.Arena, code: u64) []u8 {
   mark := memory.arena_mark(arena)
   space := memory.push_bytes(arena, 256)
   output := provider.error_string(space, code)
-  memory.arena_rewind(arena, mark + #len(output))
+  memory.arena_rewind(arena, mark + output.len)
   return output
 }
 
@@ -160,7 +160,7 @@ fn reader_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
 fn writer_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
   connection := #cast(*Connection, data)
   total: usize = 0
-  for total < #len(source) && !status.failed {
+  for total < source.len && !status.failed {
     result := write(status, connection.*, source[total..])
     if result.want != Want.Nothing {
       blocked(status, "write")

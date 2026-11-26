@@ -1,12 +1,12 @@
 // Central-directory reader for complete ZIP32 archives. All slices borrow source.
 // Stored and DEFLATE payloads, with signed or unsigned ZIP32 data descriptors.
 // ZIP64, encryption, multi-disk and self-extracting offset correction are unsupported.
-use "std/bytes" bytes
+use bytes "std/bytes"
 use "std/fail"
 
 struct Central { entry: Entry, next: usize, error: fail.Kind, ok: bool }
 fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize) Central {
-  if data_limit > limit || at < data_limit || at > limit || limit > #len(source) || limit - at < 46 || u32le(source, at) != 33639248 {
+  if data_limit > limit || at < data_limit || at > limit || limit > source.len || limit - at < 46 || u32le(source, at) != 33639248 {
     return Central{ error: fail.Kind.InvalidInput }
   }
   flags := u16le(source, at + 8)
@@ -59,22 +59,22 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
 pub fn open_checked(status: *fail.Status, source: []const u8) ArchiveReader {
   if status == nil { return open_checked(&fail.Status{}, source) }
   if status.failed { return ArchiveReader{} }
-  if #len(source) > (#max(usize) >> 1) {
+  if source.len > (#max(usize) >> 1) {
     fail.set(status, fail.make(fail.Kind.Overflow, "read ZIP", "", "the archive is too large"))
     return ArchiveReader{}
   }
-  if #len(source) < 22 {
-    fail.set(status, located(fail.Kind.InvalidInput, #len(source)))
+  if source.len < 22 {
+    fail.set(status, located(fail.Kind.InvalidInput, source.len))
     return ArchiveReader{}
   }
-  end := #len(source) - 22
+  end := source.len - 22
   floor: usize = 0
   if end > 65535 {
     floor = end - 65535
   }
   found: bool = false
   for {
-    if u32le(source, end) == 101010256 && u16le(source, end + 20) == #len(source) - end - 22 {
+    if u32le(source, end) == 101010256 && u16le(source, end + 20) == source.len - end - 22 {
       found = true
       break
     }

@@ -9,11 +9,11 @@ import threading
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
-SOURCE = r'''use "std/fs/watch" watch
+SOURCE = r'''use watch "std/fs/watch"
 use "std/fail"
-use "std/io" io
-use "std/bytes" bytes
-use "std/time" time
+use io "std/io"
+use bytes "std/bytes"
+use time "std/time"
 fn require(value: bool) { if !value { #panic("Windows watch contract") } }
 fn added(state: *watch.Watcher, path: []const u8, mask: u32) i32 {
   status: fail.Status

@@ -8,7 +8,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
-source = ['use "std/crypto/sha2" sha\nuse "std/bytes" bytes']
+source = ['use sha "std/crypto/sha2"\nuse bytes "std/bytes"']
 for length in (0, 1, 3, 55, 56, 63, 64, 65, 1000):
     data = bytes((i * 37 + 11) % 256 for i in range(length))
     text = ''.join('\\x%02x' % byte for byte in data)
@@ -19,7 +19,7 @@ for length in (0, 1, 3, 55, 56, 63, 64, 65, 1000):
   zero:sha.Sha256
   explicit:sha.Sha256
   sha.init(&explicit)
-  middle:=#len(input)/2
+  middle:=input.len/2
   sha.update(&zero,input[..middle])
   sha.update(&zero,input[middle..])
   sha.update(&explicit,input)
@@ -45,7 +45,7 @@ source.append('''fn main() {
   sha.update(&context,"")
   if context.length!=saved { #panic("sticky failure") }
   for i in 0..32 { digest[i]=165 }
-  if #len(sha.finish(&context,digest[..]))!=0 { #panic("failed finish") }
+  if sha.finish(&context,digest[..]).len!=0 { #panic("failed finish") }
   for byte in digest { if byte!=165 { #panic("failed output write") } }
   sha.init(&context)
   sha.update(&context,"")

@@ -7,11 +7,11 @@ import subprocess
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
-SOURCE = r'''use "std/ui/box" box
-use "std/mem" mem
+SOURCE = r'''use box "std/ui/box"
+use mem "std/mem"
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
 fn measure(data: *u8, text: []const u8) f32 { _ = data
-  return #cast(f32, #len(text)) * 8.0 }
+  return #cast(f32, text.len) * 8.0 }
 fn start(state: *box.State, frame: *mem.Arena) {
   mem.arena_reset(frame)
   box.begin(state, frame, box.Input{}, 100.0, 100.0, 0.02)

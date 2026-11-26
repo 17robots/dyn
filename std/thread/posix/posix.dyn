@@ -6,11 +6,11 @@
 #target(kernel: linux)
 #link("c")
 
-use "std/io" io
+use io "std/io"
 use "std/fail"
-use "std/mem" mem
+use mem "std/mem"
 use "std/os/linux/sys"
-use "std/thread" threading
+use threading "std/thread"
 
 // Large enough for pthread_attr_t on every supported glibc and musl target.
 struct Attributes { storage: [8]u64 }
@@ -46,7 +46,7 @@ fn trampoline(context: rawptr) rawptr {
 // context must stay alive and unmoved until join succeeds. Arena exhaustion
 // panics; a native failure restores the arena mark.
 // Starts entry(context) on a POSIX thread; context stays alive until join.
-pub fn spawn(arena: *mem.Arena, status: *fail.Status, stack_size: usize, entry: fn(*$C) isize, context: *$C) *Thread {
+pub fn spawn<C>(arena: *mem.Arena, status: *fail.Status, stack_size: usize, entry: fn(*C) isize, context: *C) *Thread {
   if status == nil { return spawn(arena, &fail.Status{}, stack_size, entry, context) }
   if status.failed { return nil }
   return spawn_untyped(arena, status, stack_size, #cast(fn(rawptr) isize, entry), context)
@@ -71,7 +71,7 @@ fn spawn_untyped(arena: *mem.Arena, status: *fail.Status, stack_size: usize, ent
   error = attr_stack_size(&attributes, (stack_size + 4095) & ~#cast(usize, 4095))
   if error != 0 { return spawn_failed(status, error) }
   mark := mem.arena_mark(arena)
-  thread := mem.push(Thread, arena)
+  thread := mem.push<Thread>(arena)
   thread.entry = entry
   thread.context = context
   signals := block_quit_signals()

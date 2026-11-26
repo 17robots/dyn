@@ -1,10 +1,10 @@
-use "std/os/windows" native_windows
+use native_windows "std/os/windows"
 #target(kernel: windows)
 
-use "std/io" io
+use io "std/io"
 use "std/fail"
-use "std/unicode/utf8" utf8
-use "std/unicode/utf16" utf16
+use utf8 "std/unicode/utf8"
+use utf16 "std/unicode/utf16"
 
 extern fn zone_information "dyn_time_zone_information"(information: *u8) u32
 

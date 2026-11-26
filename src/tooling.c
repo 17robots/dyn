@@ -101,7 +101,7 @@ static bool format_join_guard(FormatEdits *edits, const FormatTree *t, uint32_t 
   uint32_t only = nodes[block].first;
   if (only == UINT32_MAX || nodes[only].next != UINT32_MAX) return false;
   unsigned kind = nodes[only].kind;
-  if (kind != SRC_RETURN && kind != SRC_BREAK && kind != SRC_CONTINUE) return false;
+  if (kind != SRC_RETURN && kind != SRC_FAIL && kind != SRC_BREAK && kind != SRC_CONTINUE) return false;
   if (format_holds_block(nodes, only)) return false;
   const char *text = edits->text;
   size_t open = nodes[block].start, close = nodes[block].end - 1;
@@ -187,6 +187,8 @@ static void format_commas(FormatEdits *edits, size_t length) {
     } else if (c == '"') {
       for (++i; i < length && text[i] != '"'; ++i)
         if (text[i] == '\\') ++i;
+    } else if (c == '`') {
+      for (++i; i < length && text[i] != '`'; ++i) {}
     } else if (c == '\'') {
       /* A character literal, or the quote of a type parameter. */
       size_t end = i + 1;
@@ -244,6 +246,11 @@ static bool format_continues(const char *code, size_t length) {
                                       "+", "-", "*", "/", "%", "|", "&", "^", "<", ">", "="};
   if (length >= 2 && code[length - 2] == '.' && code[length - 1] == '*')
     return false;
+  /* A closing generic angle bracket (`foo<T>`, `Map<str, Array<u8>>`) is not a
+     line-continuing `>` comparison operator. */
+  if (length >= 2 && code[length - 1] == '>' &&
+      code[length - 2] != ' ' && code[length - 2] != '\t')
+    return false;
   for (size_t i = 0; i < sizeof(tails) / sizeof(*tails); ++i) {
     size_t n = strlen(tails[i]);
     if (length >= n && !memcmp(code + length - n, tails[i], n))
@@ -270,7 +277,7 @@ static char *format_reindent(const char *text, size_t length, size_t *result_len
   }
   size_t depth = 0, at = 0;
   unsigned previous_statement = 0;
-  bool in_block = false, continued = false, balanced = true;
+  bool in_block = false, in_raw = false, continued = false, balanced = true;
   for (size_t start = 0; start < length;) {
     size_t end = start;
     while (end < length && text[end] != '\n')
@@ -278,7 +285,43 @@ static char *format_reindent(const char *text, size_t length, size_t *result_len
     size_t first = start;
     while (first < end && (text[first] == ' ' || text[first] == '\t'))
       ++first;
-    if (in_block || first == end) {
+    if (in_raw) {
+      memcpy(out + at, text + start, end - start);
+      at += end - start;
+      size_t resume = start;
+      while (resume < end && text[resume] != '`') ++resume;
+      if (resume < end) {
+        in_raw = false;
+        size_t code_length = 0;
+        code[code_length++] = '`';
+        for (size_t i = resume + 1; i < end; ++i) {
+          char c = text[i];
+          if (c == '/' && i + 1 < end && text[i + 1] == '/') break;
+          if (c == '/' && i + 1 < end && text[i + 1] == '*') {
+            size_t close = i + 2;
+            while (close + 1 < end && !(text[close] == '*' && text[close + 1] == '/')) ++close;
+            if (close + 1 >= end) { in_block = true; break; }
+            i = close + 1; continue;
+          }
+          if (c == '"') { for (++i; i < end && text[i] != '"'; ++i) if (text[i] == '\\') ++i; code[code_length++] = '"'; continue; }
+          if (c == '`') {
+            size_t close = i + 1;
+            while (close < end && text[close] != '`') ++close;
+            if (close >= end) { in_raw = true; break; }
+            i = close; code[code_length++] = '`'; continue;
+          }
+          if (c == '(' || c == '[' || c == '{')
+            stack[depth++] = (FormatBracket){previous_statement, c};
+          else if (c == ')' || c == ']' || c == '}') {
+            if (!depth || stack[depth - 1].kind != (c == ')' ? '(' : c == ']' ? '[' : '{')) balanced = false;
+            else --depth;
+          }
+          code[code_length++] = c;
+        }
+        while (code_length && (code[code_length - 1] == ' ' || code[code_length - 1] == '\t')) --code_length;
+        continued = !in_raw && format_continues(code, code_length);
+      }
+    } else if (in_block || first == end) {
       size_t from = in_block ? start : end;
       memcpy(out + at, text + from, end - from);
       at += end - from;
@@ -328,6 +371,18 @@ static char *format_reindent(const char *text, size_t length, size_t *result_len
           code[code_length++] = '"';
           continue;
         }
+        if (c == '`') {
+          size_t close = i + 1;
+          while (close < end && text[close] != '`')
+            ++close;
+          if (close >= end) {
+            in_raw = true;
+            break;
+          }
+          i = close;
+          code[code_length++] = '`';
+          continue;
+        }
         if (c == '\'') {
           size_t close = i + 1;
           if (close < end && text[close] == '\\')
@@ -367,7 +422,7 @@ static char *format_reindent(const char *text, size_t length, size_t *result_len
   }
   free(stack);
   free(code);
-  if (!balanced || depth || in_block) {
+  if (!balanced || depth || in_block || in_raw) {
     free(out);
     return NULL;
   }
@@ -394,6 +449,7 @@ static bool format_pass(const DynSource *s, bool join, char **result, size_t *le
   if (edits.count)
     qsort(edits.items, edits.count, sizeof(*edits.items), format_insert_order);
   size_t at = 0, line = 0, next = 0;
+  bool in_raw = false, in_string = false, in_line_comment = false, in_block_comment = false;
   for (size_t i = 0; i <= s->length; ++i) {
     size_t skip = i;
     for (; next < edits.count && edits.items[next].offset == i; ++next) {
@@ -418,9 +474,36 @@ static bool format_pass(const DynSource *s, bool join, char **result, size_t *le
       continue;
     }
     unsigned char c = (unsigned char)s->text[i];
-    if (c == '\r' && i + 1 < s->length && s->text[i + 1] == '\n')
-      continue;
-    if (c == '\n') {
+    if (!in_raw) {
+      if (c == '\r' && i + 1 < s->length && s->text[i + 1] == '\n')
+        continue;
+      if (in_line_comment) {
+        if (c == '\n') in_line_comment = false;
+      } else if (in_block_comment) {
+        if (c == '*' && i + 1 < s->length && s->text[i + 1] == '/') {
+          in_block_comment = false;
+          out[at++] = '*';
+          out[at++] = '/';
+          ++i;
+          continue;
+        }
+      } else if (in_string) {
+        if (c == '\\' && i + 1 < s->length) {
+          out[at++] = (char)c;
+          out[at++] = s->text[++i];
+          continue;
+        }
+        if (c == '"' || c == '\n') in_string = false;
+      } else {
+        if (c == '/' && i + 1 < s->length && s->text[i + 1] == '/') in_line_comment = true;
+        else if (c == '/' && i + 1 < s->length && s->text[i + 1] == '*') in_block_comment = true;
+        else if (c == '"') in_string = true;
+        else if (c == '`') in_raw = true;
+      }
+    } else if (c == '`') {
+      in_raw = false;
+    }
+    if (c == '\n' && !in_raw) {
       while (at > line && (out[at - 1] == ' ' || out[at - 1] == '\t'))
         --at;
       out[at++] = '\n';

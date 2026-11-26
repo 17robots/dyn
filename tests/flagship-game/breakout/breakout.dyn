@@ -151,7 +151,7 @@ pub fn step(game: *Game, input: Input) {
 // list is the only thing pushed on the frame arena while it grows.
 // pixels holds Width * Height RGBA values.
 pub fn render(game: *const Game, frame: *mem.Arena, pixels: []u32) {
-  rects: array.Array(Rect)
+  rects: array.Array<Rect>
   array.init(&rects, frame)
   array.push(&rects, Rect{ width: Width, height: Height, color: 0xFF201810 })
   row: i32 = 0

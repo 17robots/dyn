@@ -59,33 +59,33 @@ language decision, not an extension of this design.
 
 ```dyn
 // Explicit type argument: the type is the first thing a reader sees.
-pub fn push(T: type, arena: *Arena) *T {
+pub fn push<T>(arena: *Arena) *T {
   return #cast(*T, arena_push_or_panic(arena, #sizeof(T), #alignof(T)))
 }
 
-pub fn push_array(T: type, arena: *Arena, count: usize) []T {
+pub fn push_array<T>(arena: *Arena, count: usize) []T {
   bytes := arena_push_or_panic(arena, count * #sizeof(T), #alignof(T))
   return (#cast(*T, bytes))[..count]
 }
 
 // Inferred type argument: T comes from the arguments.
-pub fn min(a, b: $T) T {
+pub fn min<T>(a, b: T) T {
   if a < b { return a }
   return b
 }
 
-pub fn swap(a, b: *$T) {
+pub fn swap<T>(a, b: *T) {
   t := a.*
   a.* = b.*
   b.* = t
 }
 
-pub fn clear(value: *$T) {
+pub fn clear<T>(value: *T) {
   zero((#cast(*u8, value))[..#sizeof(T)])
 }
 
-pub fn copy(destination: []$T, source: []const $T) usize {
-  count := min(#len(destination), #len(source))
+pub fn copy<T>(destination: []T, source: []const T) usize {
+  count := min(destination.len, source.len)
   for i in 0..count {
     destination[i] = source[i]
   }
@@ -96,8 +96,8 @@ pub fn copy(destination: []$T, source: []const $T) usize {
 Calls:
 
 ```dyn
-node := mem.push(Node, &arena)
-cells := mem.push_array(Cell, &arena, rows * cols)
+node := mem.push<Node>(&arena)
+cells := mem.push_array<Cell>(&arena, rows * cols)
 low := min(width, height)
 swap(&left, &right)
 clear(&state.diagnostics)
@@ -140,7 +140,7 @@ This design first ruled out generic types. That was reversed on 2026-11-06:
 `Box(i32)` names one concrete instance. Type arguments are always written.
 
 ```dyn
-pub fn sll_stack_push(first: **$T, node: *$T) {
+pub fn sll_stack_push<T>(first: **T, node: *T) {
   node.next = first.*
   first.* = node
 }

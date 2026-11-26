@@ -53,7 +53,7 @@ for n, (raw, expected) in enumerate(valid):
     result := parse(arena, data[..])
     require(result.failure.kind == fail.Kind.Ok, "valid {n}")
     member := result.root.first
-    for i in 0..#len(data) {{ data[i] = 255 }}
+    for i in 0..data.len {{ data[i] = 255 }}
     require(mem.equal(member.key, expected[..]) && mem.equal(member.text, expected[..]), "owned key/value {n}")
     mem.arena_reset(arena)
   }}''')
@@ -66,8 +66,8 @@ for n, raw in enumerate(invalid):
     require(mem.arena_mark(arena) == mark, "rollback {n}")
   }}''')
 source = '''use "std/fail"
-use "std/encoding/json" json
-use "std/mem" mem
+use json "std/encoding/json"
+use mem "std/mem"
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 struct Parsed { root: *const json.Value, offset: usize, failure: fail.Failure }
 fn parse(arena: *mem.Arena, source: []const u8) Parsed {
@@ -90,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-json-string-') as directory:
     (project / 'main.dyn').write_text(source)
     capacity = work / 'capacity'
     capacity.mkdir()
-    (capacity / 'main.dyn').write_text('use "std/encoding/json" json\nuse "std/fail"\nuse "std/mem" mem\nfn main() {\n  backing: [2+mem.ArenaBufferOverhead]u8\n  pad := (16-(#cast(usize,&backing[0])&15))&15\n  arena := mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+2])\n  status: fail.Status\n  _ = json.parse(arena, &status, "\\"plain\\"")\n}\n')
+    (capacity / 'main.dyn').write_text('use json "std/encoding/json"\nuse "std/fail"\nuse mem "std/mem"\nfn main() {\n  backing: [2+mem.ArenaBufferOverhead]u8\n  pad := (16-(#cast(usize,&backing[0])&15))&15\n  arena := mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+2])\n  status: fail.Status\n  _ = json.parse(arena, &status, "\\"plain\\"")\n}\n')
     for mode in ('--debug', '--release'):
         output = work / 'out'
         subprocess.run([str(DYN), 'build', str(project), '--no-cache', '--quiet', '--output', str(output), mode], cwd=ROOT, check=True, timeout=120)

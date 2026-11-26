@@ -24,11 +24,11 @@ fn numeric(root: *const json.Value, key: []const u8) Number {
   if node.kind != json.KindNumber { return Number{} }
   // Integer fields normally use the integer reader. Fraction/exponent spellings
   // retain the same binary64 validation semantics as the other DOM ports.
-  if strings.valid(u64, node.text) {
-    integer := json.as(u64, node)
+  if strings.valid<u64>(node.text) {
+    integer := json.as<u64>(node)
     return Number{ value: integer, ok: integer <= Maximum }
   }
-  value := json.as(f64, node)
+  value := json.as<f64>(node)
   if !(value >= 0.0 && value <= 9007199254740991.0) { return Number{} }
   integer := #cast(u64, value)
   return Number{ value: integer, ok: #cast(f64, integer) == value }
@@ -103,7 +103,7 @@ fn report(file: []const u8) {
   defer mem.arena_release(scratch)
   summary: Summary
   at: usize
-  for at < #len(read) {
+  for at < read.len {
     rest := read[at..]
     length := bytes.find_byte(rest, '\n')
     if length != 0 {
@@ -114,7 +114,7 @@ fn report(file: []const u8) {
       mem.arena_reset(scratch)
     }
     at += length
-    if at < #len(read) {
+    if at < read.len {
       at += 1
     }
   }
@@ -141,10 +141,10 @@ fn search_walk(status: *fail.Status, directory: []const u8, result: *Search) {
     } else if bytes.ends_with(entry.name, ".txt") {
       read := fs.read_all(scratch, status, joined, 1024 * mem.MiB)
       result.files += 1
-      result.bytes += #cast(u64, #len(read))
+      result.bytes += #cast(u64, read.len)
       at: usize
       matching: bool
-      for at < #len(read) {
+      for at < read.len {
         rest := read[at..]
         length := bytes.find_byte(rest, '\n')
         result.lines += 1
@@ -153,7 +153,7 @@ fn search_walk(status: *fail.Status, directory: []const u8, result: *Search) {
           matching = true
         }
         at += length
-        if at < #len(read) {
+        if at < read.len {
           at += 1
         }
       }
@@ -196,7 +196,7 @@ fn handle(status: *fail.Status, response: *http.Response, request: *const http.R
   }
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  if #len(request.body) > mem.MiB {
+  if request.body.len > mem.MiB {
     http.respond(status, response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
     return
   }
@@ -225,8 +225,8 @@ fn serve() {
   config.connections_per_worker = 64
   arena := mem.arena_alloc(evented.storage_size(config, 4) + mem.MiB)
   defer mem.arena_release(arena)
-  state := mem.push(App, arena)
-  workers := mem.push_array(evented.Worker, arena, 4)
+  state := mem.push<App>(arena)
+  workers := mem.push_array<evented.Worker>(arena, 4)
   status := fail.Status{ on_failure: fail.panic_on_failure }
   _ = evented.start_shared(arena, &status, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, handle, state)
   io.println("port {}", evented.local_port(workers))
@@ -245,11 +245,11 @@ fn main() {
     #panic("arguments")
   }
   args := arguments
-  if #len(args) == 2 && bytes.equal(args[1], "serve") {
+  if args.len == 2 && bytes.equal(args[1], "serve") {
     serve()
     return
   }
-  if #len(args) != 3 {
+  if args.len != 3 {
     #panic("usage: report FILE | search DIRECTORY | serve")
   }
   if bytes.equal(args[1], "report") {

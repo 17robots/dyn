@@ -10,9 +10,9 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 def literal(data): return '"'+''.join('\\x%02x'%b for b in data)+'"'
 source='''use "std/fail"
-use "std/encoding/base32" codec
-use "std/mem" mem
-use "std/bytes" bytes
+use codec "std/encoding/base32"
+use mem "std/mem"
+use bytes "std/bytes"
 fn good(raw,encoded:[]const u8) {
   backing:[2048 + mem.ArenaBufferOverhead]u8
   mem.fill(backing[..],99)
@@ -20,7 +20,7 @@ fn good(raw,encoded:[]const u8) {
   _=mem.push_bytes(arena,7)
   status:fail.Status
   decoded:=codec.decode(arena,&status,encoded)
-  if status.failed || !bytes.equal(decoded,raw) || mem.arena_mark(arena)!=mem.ArenaHeader+7+#len(raw) { #panic("base32 oracle") }
+  if status.failed || !bytes.equal(decoded,raw) || mem.arena_mark(arena)!=mem.ArenaHeader+7+raw.len { #panic("base32 oracle") }
   if !bytes.equal(codec.encode(arena,raw),encoded) { #panic("base32 encode") }
 }
 fn bad(encoded:[]const u8,offset:usize) {
@@ -32,7 +32,7 @@ fn bad(encoded:[]const u8,offset:usize) {
   arena.poison_on_rewind=true
   status:fail.Status
   decoded:=codec.decode(arena,&status,encoded)
-  if status.failure.offset!=offset || status.failure.kind != fail.Kind.InvalidInput || #len(decoded)!=0 || mem.arena_mark(arena)!=mem.ArenaHeader+7 || prefix[0]!=91 || arena.data[mem.ArenaHeader+7]!=99 { #panic("base32 failure preflight") }
+  if status.failure.offset!=offset || status.failure.kind != fail.Kind.InvalidInput || decoded.len!=0 || mem.arena_mark(arena)!=mem.ArenaHeader+7 || prefix[0]!=91 || arena.data[mem.ArenaHeader+7]!=99 { #panic("base32 failure preflight") }
 }
 fn main() {
 '''

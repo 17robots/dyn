@@ -1,6 +1,6 @@
 #target(kernel: linux)
 
-use "std/io" io
+use io "std/io"
 use "std/fail"
 use "std/sync"
 use "std/os/linux/sys"
@@ -26,6 +26,8 @@ fn restore_signals(previous: u64) {
   _ = #syscall(sys.RtSigprocmask, 2, &saved, 0, 8)
 }
 
+extern fn race_sync "dyn_race_sync"()
+
 extern fn spawn_raw "dyn_thread_spawn"(
   stack: *u8,
   size: usize,
@@ -43,11 +45,12 @@ extern fn spawn_raw "dyn_thread_spawn"(
 // Thread safety: caller synchronizes arena access and shared context; one caller
 // controls each returned Thread's lifecycle.
 fn spawn_untyped(arena: *mem.Arena, status: *fail.Status, stack: []u8, entry: fn(rawptr) isize, context: rawptr) *Thread {
-  if #len(stack) < 256 || entry == nil { return spawn_invalid(status, "a thread needs an entry and a stack of at least 256 bytes") }
+  if stack.len < 256 || entry == nil { return spawn_invalid(status, "a thread needs an entry and a stack of at least 256 bytes") }
   mark := mem.arena_mark(arena)
-  thread := mem.push(Thread, arena)
+  thread := mem.push<Thread>(arena)
+  race_sync()
   signals := block_quit_signals()
-  value := spawn_raw(&stack[0], #len(stack), entry, context, &thread.tid)
+  value := spawn_raw(&stack[0], stack.len, entry, context, &thread.tid)
   restore_signals(signals)
   if value < 0 {
     mem.arena_rewind(arena, mark)
@@ -64,7 +67,7 @@ fn spawn_with_size_untyped(arena: *mem.Arena, status: *fail.Status, size: usize,
     return spawn_invalid(status, "a thread needs an entry and a stack of 256 bytes to the address space")
   }
   mark := mem.arena_mark(arena)
-  thread := mem.push(Thread, arena)
+  thread := mem.push<Thread>(arena)
   // Private, anonymous, reserved lazily; the guard is the lowest 64 KiB.
   total := stack_guard + (size + 4095) / 4096 * 4096
   address := #syscall(sys.Mmap, 0, total, 3, 16418, -1, 0)
@@ -76,6 +79,7 @@ fn spawn_with_size_untyped(arena: *mem.Arena, status: *fail.Status, size: usize,
   base := #cast(*u8, address)
   _ = #syscall(sys.Mprotect, base, stack_guard, 0)
   thread.stack = #slice(base, total)
+  race_sync()
   signals := block_quit_signals()
   value := spawn_raw(&thread.stack[stack_guard], total - stack_guard, entry, context, &thread.tid)
   restore_signals(signals)
@@ -101,8 +105,9 @@ pub fn join(status: *fail.Status, thread: *Thread) {
   for true {
     tid := sync.load_u32(&thread.tid)
     if tid == 0 {
-      if #len(thread.stack) != 0 {
-        _ = #syscall(sys.Munmap, &thread.stack[0], #len(thread.stack))
+      race_sync()
+      if thread.stack.len != 0 {
+        _ = #syscall(sys.Munmap, &thread.stack[0], thread.stack.len)
         thread.stack = thread.stack[..0]
       }
       return
@@ -126,7 +131,7 @@ pub fn yield_now() {
 // worker pools; it can change while the process runs.
 pub fn cpu_count() usize {
   mask: [128]u8
-  written := #syscall(sys.SchedGetaffinity, 0, #len(mask), &mask[0])
+  written := #syscall(sys.SchedGetaffinity, 0, mask.len, &mask[0])
   if written <= 0 { return 1 }
   count: usize = 0
   for byte in mask[..#cast(usize, written)] {

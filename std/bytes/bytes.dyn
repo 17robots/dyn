@@ -3,30 +3,30 @@ use "std/encoding/binary"
 // Allocation-free byte-slice operations. Returned slices borrow input or caller storage.
 
 pub fn equal(left: []const u8, right: []const u8) bool {
-  if #len(left) != #len(right) { return false }
+  if left.len != right.len { return false }
   return compare(left, right) == 0
 }
 
 pub fn compare(left: []const u8, right: []const u8) i32 {
-  shared := #len(left)
-  if #len(right) < shared {
-    shared = #len(right)
+  shared := left.len
+  if right.len < shared {
+    shared = right.len
   }
   for i in 0..shared {
     if left[i] < right[i] { return -1 }
     if left[i] > right[i] { return 1 }
   }
-  if #len(left) < #len(right) { return -1 }
-  if #len(left) > #len(right) { return 1 }
+  if left.len < right.len { return -1 }
+  if left.len > right.len { return 1 }
   return 0
 }
 
 pub fn starts_with(value: []const u8, prefix: []const u8) bool {
-  return #len(prefix) <= #len(value) && equal(value[..#len(prefix)], prefix)
+  return prefix.len <= value.len && equal(value[..prefix.len], prefix)
 }
 
 pub fn ends_with(value: []const u8, suffix: []const u8) bool {
-  return #len(suffix) <= #len(value) && equal(value[#len(value) - #len(suffix)..], suffix)
+  return suffix.len <= value.len && equal(value[value.len - suffix.len..], suffix)
 }
 
 // Positions are usize. A miss returns #len(value), which is always a safe
@@ -41,12 +41,12 @@ pub fn find_byte(value: []const u8, byte: u8) usize {
 fn find_byte_words(value: []const u8, byte: u8) usize {
   pattern := #cast(u64, byte) * 0x0101010101010101
   at: usize = 0
-  for #len(value) - at >= 8 {
+  for value.len - at >= 8 {
     word := binary.load_u64_le(value[at..at + 8]) ^ pattern
     if (#wrapping(word - 0x0101010101010101) & ~word & 0x8080808080808080) != 0 { break }
     at += 8
   }
-  for at < #len(value) {
+  for at < value.len {
     if value[at] == byte { return at }
     at += 1
   }
@@ -54,58 +54,58 @@ fn find_byte_words(value: []const u8, byte: u8) usize {
 }
 
 pub fn find_last_byte(value: []const u8, byte: u8) usize {
-  i := #len(value)
+  i := value.len
   for i > 0 {
     i -= 1
     if value[i] == byte { return i }
   }
-  return #len(value)
+  return value.len
 }
 
 // An empty needle matches at zero.
 pub fn find(value: []const u8, needle: []const u8) usize {
-  if #len(needle) == 0 { return 0 }
-  if #len(needle) > #len(value) { return #len(value) }
-  if #len(needle) == 1 { return find_byte(value, needle[0]) }
-  last := #len(needle) - 1
+  if needle.len == 0 { return 0 }
+  if needle.len > value.len { return value.len }
+  if needle.len == 1 { return find_byte(value, needle[0]) }
+  last := needle.len - 1
   final_byte := needle[last]
-  candidates := #len(value) - #len(needle) + 1
+  candidates := value.len - needle.len + 1
   i: usize = 0
   for i < candidates {
     remaining := value[i + last..]
     skipped := find_byte(remaining, final_byte)
-    if skipped == #len(remaining) { return #len(value) }
+    if skipped == remaining.len { return value.len }
     i += skipped
-    if equal(value[i..i + #len(needle)], needle) { return i }
+    if equal(value[i..i + needle.len], needle) { return i }
     i += 1
   }
-  return #len(value)
+  return value.len
 }
 
 // An empty needle matches at the end.
 pub fn find_last(value: []const u8, needle: []const u8) usize {
-  if #len(needle) == 0 || #len(needle) > #len(value) { return #len(value) }
-  if #len(needle) == 1 { return find_last_byte(value, needle[0]) }
-  i := #len(value) - #len(needle) + 1
+  if needle.len == 0 || needle.len > value.len { return value.len }
+  if needle.len == 1 { return find_last_byte(value, needle[0]) }
+  i := value.len - needle.len + 1
   for i > 0 {
     i -= 1
-    if equal(value[i..i + #len(needle)], needle) { return i }
+    if equal(value[i..i + needle.len], needle) { return i }
   }
-  return #len(value)
+  return value.len
 }
 
 pub fn contains(value: []const u8, needle: []const u8) bool {
-  return #len(needle) == 0 || find(value, needle) < #len(value)
+  return needle.len == 0 || find(value, needle) < value.len
 }
 
 pub fn count_occurrences(value: []const u8, needle: []const u8) usize {
-  if #len(needle) == 0 { return #len(value) + 1 }
+  if needle.len == 0 { return value.len + 1 }
   found_count: usize = 0
   offset: usize = 0
-  for offset + #len(needle) <= #len(value) {
-    if equal(value[offset..offset + #len(needle)], needle) {
+  for offset + needle.len <= value.len {
+    if equal(value[offset..offset + needle.len], needle) {
       found_count += 1
-      offset += #len(needle)
+      offset += needle.len
     } else {
       offset += 1
     }
@@ -124,7 +124,7 @@ pub struct Splitter {
 }
 
 pub fn splitter(value: []const u8, separator: []const u8) Splitter {
-  if #len(separator) == 0 {
+  if separator.len == 0 {
     #panic("split separator must not be empty")
   }
   return Splitter{ value: value, separator: separator, offset: 0, done: false, ended: false }
@@ -140,14 +140,14 @@ pub fn split_next(state: *Splitter) []const u8 {
   }
   rest := state.value[state.offset..]
   found := find(rest, state.separator)
-  if found == #len(rest) {
-    state.offset = #len(state.value)
+  if found == rest.len {
+    state.offset = state.value.len
     state.done = true
     return rest
   }
   end := state.offset + found
   piece := state.value[state.offset..end]
-  state.offset = end + #len(state.separator)
+  state.offset = end + state.separator.len
   return piece
 }
 
@@ -160,7 +160,7 @@ pub fn cursor(data: []const u8) Cursor {
   return Cursor{ data: data, offset: 0 }
 }
 pub fn cursor_remaining(state: *const Cursor) usize {
-  return #len(state.data) - state.offset
+  return state.data.len - state.offset
 }
 pub fn cursor_rest(state: *const Cursor) []const u8 {
   return state.data[state.offset..]
@@ -168,8 +168,8 @@ pub fn cursor_rest(state: *const Cursor) []const u8 {
 
 pub fn cursor_read(state: *Cursor, destination: []u8) usize {
   take := cursor_remaining(state)
-  if #len(destination) < take {
-    take = #len(destination)
+  if destination.len < take {
+    take = destination.len
   }
   for i in 0..take {
     destination[i] = state.data[state.offset + i]
@@ -186,9 +186,9 @@ pub fn cursor_skip(state: *Cursor, amount: usize) bool {
 
 // Empty slices never overlap. Uses differences so address addition cannot overflow.
 pub fn overlaps(left: []const u8, right: []const u8) bool {
-  if #len(left) == 0 || #len(right) == 0 { return false }
+  if left.len == 0 || right.len == 0 { return false }
   a := #cast(usize, &left[0])
   b := #cast(usize, &right[0])
-  if a <= b { return b - a < #len(left) }
-  return a - b < #len(right)
+  if a <= b { return b - a < left.len }
+  return a - b < right.len
 }

@@ -30,7 +30,7 @@ fn wide(f: f64) u64 {
 // Two f64 fields and a running sum.
 fn drift(ps: []P, vs: []P, k: f64) f64 {
   e: f64 = 0.25
-  for i in 0..#len(ps) {
+  for i in 0..ps.len {
     ps[i] = P{ x: ps[i].x + vs[i].x * k, y: ps[i].y / (vs[i].y + 2.0) }
     e += ps[i].x * vs[i].y - ps[i].y
   }
@@ -40,7 +40,7 @@ fn drift(ps: []P, vs: []P, k: f64) f64 {
 // Three f64 fields.
 fn twist(qs: []Q, rs: []Q) f64 {
   e: f64 = 0.0
-  for i in 0..#len(qs) {
+  for i in 0..qs.len {
     qs[i] = Q{ x: qs[i].y * rs[i].z, y: qs[i].z - rs[i].x, z: qs[i].x + rs[i].y }
     e -= qs[i].x * rs[i].x + qs[i].y * rs[i].y + qs[i].z * rs[i].z
   }
@@ -50,7 +50,7 @@ fn twist(qs: []Q, rs: []Q) f64 {
 // One f64 per element.
 fn scale(a: []f64, b: []f64, k: f64) f64 {
   t: f64 = 0.0
-  for i in 0..#len(a) {
+  for i in 0..a.len {
     a[i] = a[i] * k + b[i]
     t += a[i]
   }
@@ -60,7 +60,7 @@ fn scale(a: []f64, b: []f64, k: f64) f64 {
 // Wrapping i32 lanes without a multiply, and a subtracted sum.
 fn blend(a: []i32, b: []i32, k: i32) i32 {
   t: i32 = 7
-  for i in 0..#len(a) {
+  for i in 0..a.len {
     a[i] = (a[i] + k) ^ (b[i] - 3) | 1
     t -= a[i] & 255
   }
@@ -69,7 +69,7 @@ fn blend(a: []i32, b: []i32, k: i32) i32 {
 
 // 64-bit integer lanes: bitwise operations, a wrapping add and subtract.
 fn knead(a: []u64, b: []u64, c: []u64) {
-  for i in 0..#len(a) {
+  for i in 0..a.len {
     a[i] = #wrapping(((a[i] ^ b[i]) | (c[i] & 0xff00ff00ff00ff00)) + c[i] - b[i])
   }
 }
@@ -77,7 +77,7 @@ fn knead(a: []u64, b: []u64, c: []u64) {
 // A multiply, and a u32 sum that wraps.
 fn churn(a: []u32, b: []u32) u32 {
   t: u32 = 4000000000
-  for i in 0..#len(a) {
+  for i in 0..a.len {
     a[i] = a[i] * 2654435761 + b[i]
     t += a[i]
   }
@@ -111,7 +111,7 @@ fn flat(a: []f32, b: []f32, n: usize, k: f32) f32 {
 // Three fields per element.
 fn spin(ws: []W, us: []W, k: f32) f32 {
   e: f32 = 0.0
-  for i in 0..#len(ws) {
+  for i in 0..ws.len {
     ws[i] = W{ x: ws[i].x + us[i].z * k, y: ws[i].y - us[i].x, z: ws[i].z * us[i].y }
     e += ws[i].x * us[i].x + ws[i].y * us[i].y + ws[i].z * us[i].z
   }
@@ -120,8 +120,8 @@ fn spin(ws: []W, us: []W, k: f32) f32 {
 
 fn main() {
   arena := mem.arena_alloc(0)
-  buffer := mem.push_array(V, arena, 64)
-  other := mem.push_array(V, arena, 64)
+  buffer := mem.push_array<V>(arena, 64)
+  other := mem.push_array<V>(arena, 64)
   for i in 0..64 {
     f := #cast(f32, i)
     buffer[i] = V{ x: f * 0.37, y: 1.0 / (f + 1.0) }
@@ -141,8 +141,8 @@ fn main() {
   // Overlapping arrays take the scalar loop.
   e := step(buffer[1..], buffer[..63], 0, 63, 1.5)
   io.println("overlap {} {} {}", bits(e), bits(buffer[30].x), bits(buffer[62].y))
-  floats := mem.push_array(f32, arena, 41)
-  more := mem.push_array(f32, arena, 41)
+  floats := mem.push_array<f32>(arena, 41)
+  more := mem.push_array<f32>(arena, 41)
   for i in 0..41 {
     floats[i] = #cast(f32, i) * 1.1
     more[i] = 0.3 * #cast(f32, i)
@@ -154,8 +154,8 @@ fn main() {
   }
   t := flat(floats[2..], floats, 39, 0.5)
   io.println("flat overlap {} {}", bits(t), bits(floats[20]))
-  ws := mem.push_array(W, arena, 40)
-  us := mem.push_array(W, arena, 40)
+  ws := mem.push_array<W>(arena, 40)
+  us := mem.push_array<W>(arena, 40)
   sizes: [6]usize = [0, 1, 4, 6, 9, 40]
   for n in sizes {
     for i in 0..40 {
@@ -168,12 +168,12 @@ fn main() {
   }
   s := spin(ws[1..], ws[..39], 2.0)
   io.println("spin overlap {} {}", bits(s), bits(ws[20].x))
-  ps := mem.push_array(P, arena, 33)
-  pv := mem.push_array(P, arena, 33)
-  qs := mem.push_array(Q, arena, 33)
-  qr := mem.push_array(Q, arena, 33)
-  ds := mem.push_array(f64, arena, 33)
-  dr := mem.push_array(f64, arena, 33)
+  ps := mem.push_array<P>(arena, 33)
+  pv := mem.push_array<P>(arena, 33)
+  qs := mem.push_array<Q>(arena, 33)
+  qr := mem.push_array<Q>(arena, 33)
+  ds := mem.push_array<f64>(arena, 33)
+  dr := mem.push_array<f64>(arena, 33)
   wides: [6]usize = [0, 1, 2, 3, 8, 33]
   for n in wides {
     for i in 0..33 {
@@ -192,10 +192,10 @@ fn main() {
     io.println("f64 {} {} {} {} {} {}", n, wide(a), wide(b), wide(c), wide(ps[n / 2].y), wide(qs[n / 2].z))
   }
   io.println("f64 overlap {} {}", wide(scale(ds[1..], ds[..32], 0.5)), wide(drift(ps[1..], ps[..32], 2.0)))
-  ia := mem.push_array(i32, arena, 37)
-  ib := mem.push_array(i32, arena, 37)
-  ua := mem.push_array(u32, arena, 37)
-  ub := mem.push_array(u32, arena, 37)
+  ia := mem.push_array<i32>(arena, 37)
+  ib := mem.push_array<i32>(arena, 37)
+  ua := mem.push_array<u32>(arena, 37)
+  ub := mem.push_array<u32>(arena, 37)
   for n in wides {
     for i in 0..37 {
       ia[i] = #cast(i32, i) * 1000003 - 2147483000
@@ -206,9 +206,9 @@ fn main() {
     io.println("int {} {} {} {} {}", n, blend(ia[..n], ib[..n], 2147483647), churn(ua[..n], ub[..n]), ia[n / 2], ua[n / 2])
   }
   io.println("int overlap {} {}", blend(ia[1..], ia[..36], 5), churn(ua[2..], ua[..35]))
-  la := mem.push_array(u64, arena, 37)
-  lb := mem.push_array(u64, arena, 37)
-  lc := mem.push_array(u64, arena, 37)
+  la := mem.push_array<u64>(arena, 37)
+  lb := mem.push_array<u64>(arena, 37)
+  lc := mem.push_array<u64>(arena, 37)
   for i in 0..37 {
     la[i] = #wrapping(i * 0x9e3779b97f4a7c15)
     lb[i] = #wrapping(i * 0xc2b2ae3d27d4eb4f + 7)

@@ -102,6 +102,9 @@ static bool compact_local_name(CompactNode use, const DynSource *s) {
         CompactNode binding = compact_kind(name) == SRC_TYPE_PATTERN ? compact_last(name) : name;
         if (compact_same_name(binding, use, s)) return true;
       }
+    } else if (kind == EXP_CATCH && compact_kind(child) == SRC_BLOCK) {
+      CompactNode err_name = compact_child(scope, 1);
+      if (compact_kind(err_name) == EXP_NAME && compact_same_name(err_name, use, s)) return true;
     }
   }
   return false;
@@ -192,26 +195,8 @@ static DynType compact_instance(CompactNode path, CompactNode argument, const Dy
 static DynType compact_type(CompactNode n, const DynSource *s, DynAstProgram *a) {
   if (!dyn_work_step(&s->context, 1)) return DYN_TYPE_ERROR;
   n = compact_unwrap(n);
-  if (compact_kind(n) == EXP_TYPE || compact_kind(n) == EXP_TYPE_ARGUMENT) n = compact_first(n);
+  while (compact_kind(n) == EXP_TYPE || compact_kind(n) == EXP_TYPE_ARGUMENT) n = compact_first(n);
   uint16_t kind = compact_kind(n);
-  if (kind == EXP_TYPE_PARAMETER) {
-    DynSpan name = compact_span(n); ++name.start_byte;
-    if (!a->binding_params) {
-      a->type_param_error = "`$T` only marks a function parameter that supplies T; write `T` here";
-      return DYN_TYPE_ERROR;
-    }
-    DynType found = scope_type(a, name, s, false);
-    if (found != DYN_TYPE_ERROR) {
-      if (a->scope_explicit[found - DYN_TYPE_PARAM_BASE]) {
-        a->type_param_error = "this type is passed with `T: type`; a type an argument supplies is inferred, so drop `T: type`";
-        return DYN_TYPE_ERROR;
-      }
-      return found;
-    }
-    found = scope_type(a, name, s, true);
-    if (found == DYN_TYPE_ERROR) a->type_param_error = "too many type parameters";
-    return found;
-  }
   if (kind == EXP_FN_TYPE) {
     uint32_t named = compact_count(n), count = 0;
     DynType *params = calloc(named, sizeof(*params));
@@ -245,9 +230,37 @@ static DynType compact_type(CompactNode n, const DynSource *s, DynAstProgram *a)
     CompactNode path = compact_first(n);
     return compact_instance(path, compact_next(path), s, a);
   }
-  /* Box(Box(i32)) as a call argument parses its inner type as a call. */
-  if (kind == EXP_CALL && compact_template(a, compact_span(compact_first(n)), s, NULL, NULL))
-    return compact_instance(compact_first(n), compact_next(compact_first(n)), s, a);
+  if (kind == EXP_UNION_TYPE) {
+    DynType members[64];
+    uint32_t mcount = 0;
+    for (CompactNode c = compact_first(n); !compact_null(c); c = compact_next(c)) {
+      if (mcount >= 64) { a->type_param_error = "error union has too many member enums"; return DYN_TYPE_ERROR; }
+      DynType mt = compact_type(c, s, a);
+      if (mt == DYN_TYPE_ERROR) return DYN_TYPE_ERROR;
+      members[mcount++] = mt;
+    }
+    return dyn_ast_intern_error_union(a, members, mcount);
+  }
+  if (kind == EXP_FALLIBLE_TYPE) {
+    DynType ok_t = DYN_TYPE_VOID, err_t = DYN_TYPE_VOID;
+    if (compact_flag(n, EXP_FALLIBLE_VOID)) {
+      CompactNode ec = compact_first(n);
+      if (!compact_null(ec)) {
+        err_t = compact_type(ec, s, a);
+        if (err_t == DYN_TYPE_ERROR) return DYN_TYPE_ERROR;
+      }
+    } else {
+      CompactNode oc = compact_first(n);
+      ok_t = compact_type(oc, s, a);
+      if (ok_t == DYN_TYPE_ERROR) return DYN_TYPE_ERROR;
+      CompactNode ec = compact_next(oc);
+      if (!compact_null(ec)) {
+        err_t = compact_type(ec, s, a);
+        if (err_t == DYN_TYPE_ERROR) return DYN_TYPE_ERROR;
+      }
+    }
+    return dyn_ast_intern_fallible(a, ok_t, err_t);
+  }
   DynType named = parse_type_name(compact_span(n), s, a);
   /* A template names no type until it has arguments. */
   if (dyn_type_is_struct(named) && a->structs[named - DYN_TYPE_STRUCT_BASE].is_template)
@@ -256,13 +269,13 @@ static DynType compact_type(CompactNode n, const DynSource *s, DynAstProgram *a)
     return DYN_TYPE_ERROR;
   return named;
 }
-/* Slot(i32) before a variant name is the enum instance, not a call. */
+/* Slot<i32> before a variant name is the enum instance, not a call. */
 static DynExprId compact_enum_owner(CompactNode n, const DynSource *s, DynAstProgram *a, unsigned *errors) {
-  CompactNode call = compact_unwrap(n);
+  CompactNode owner = compact_unwrap(n);
   bool enumeration = false;
-  if (compact_kind(call) == EXP_CALL && compact_kind(compact_first(call)) != EXP_FIELD &&
-      compact_template(a, compact_span(compact_first(call)), s, NULL, &enumeration) && enumeration) {
-    DynType type = compact_instance(compact_first(call), compact_next(compact_first(call)), s, a);
+  if (compact_kind(owner) == EXP_GENERIC_TYPE &&
+      compact_template(a, compact_span(compact_first(owner)), s, NULL, &enumeration) && enumeration) {
+    DynType type = compact_instance(compact_first(owner), compact_next(compact_first(owner)), s, a);
     if (type != DYN_TYPE_ERROR) {
       if (!reserve_expr(a)) { compact_diagnostic(n, s, errors, "out of memory"); return DYN_NO_EXPR; }
       a->expressions[a->expression_count] = (DynAstExpr){.kind = DYN_EXPR_TYPE, .type = type,
@@ -272,35 +285,25 @@ static DynExprId compact_enum_owner(CompactNode n, const DynSource *s, DynAstPro
   }
   return compact_expr(n, s, a, errors);
 }
-/* A case pattern spelled as a name is a type when the name resolves to one. */
+/* A case pattern spelled as a name or Box<i32> is a type when it resolves to one. */
 static DynType compact_case_type(CompactNode n, const DynSource *s, DynAstProgram *a) {
   uint16_t kind = compact_kind(n);
-  if (kind == EXP_CALL) {
+  if (kind == EXP_GENERIC_TYPE) {
     if (!compact_template(a, compact_span(compact_first(n)), s, NULL, NULL)) return DYN_TYPE_ERROR;
     return compact_instance(compact_first(n), compact_next(compact_first(n)), s, a);
   }
   return parse_type_name(compact_span(n), s, a);
 }
-static DynExprId compact_argument(CompactNode n, const DynSource *s, DynAstProgram *a, unsigned *errors) {
-  bool type = compact_kind(n) == EXP_TYPE_ARGUMENT;
-  if (!type && a->scope_count) {
-    n = compact_unwrap(n);
-    type = compact_kind(n) == EXP_NAME && scope_type(a, compact_span(n), s, false) != DYN_TYPE_ERROR;
-  }
-  /* Box(i32) in an argument parses as a call; a template callee makes it a type. */
-  CompactNode unwrapped = compact_unwrap(n);
-  bool instance = !type && compact_kind(unwrapped) == EXP_CALL;
-  if (instance) instance = compact_template(a, compact_span(compact_first(unwrapped)), s, NULL, NULL);
-  if (!type && !instance) return compact_expr(n, s, a, errors);
-  DynType parsed = instance
-      ? compact_instance(compact_first(unwrapped), compact_next(compact_first(unwrapped)), s, a)
-      : compact_type(n, s, a);
+static DynExprId compact_type_expr(CompactNode n, const DynSource *s, DynAstProgram *a, unsigned *errors) {
+  DynType parsed = compact_type(n, s, a);
   if (parsed == DYN_TYPE_ERROR) { compact_diagnostic(n, s, errors, "unknown type"); return DYN_NO_EXPR; }
   if (!reserve_expr(a)) { compact_diagnostic(n, s, errors, "out of memory"); return DYN_NO_EXPR; }
   a->expressions[a->expression_count] = (DynAstExpr){.kind = DYN_EXPR_TYPE, .type = parsed,
     .span = compact_span(n), .left = DYN_NO_EXPR, .right = DYN_NO_EXPR};
   return (DynExprId)a->expression_count++;
 }
+static bool compact_block(CompactNode, const DynSource *, DynAstProgram *, unsigned *,
+                        uint32_t, uint32_t *, uint32_t *);
 static DynExprId compact_expr_node(CompactNode node, const DynSource *s, DynAstProgram *a,
                                  unsigned *errors);
 /* Marks the integer arithmetic of a #wrapping(...) operand to wrap. Calls
@@ -389,14 +392,50 @@ static DynExprId compact_expr_node(CompactNode node, const DynSource *s, DynAstP
   } else if (!(k != EXP_NAME)) {
     e.kind = DYN_EXPR_NAME;
     e.type = DYN_TYPE_INFER;
+  } else if (k == EXP_DOT_NAME) {
+    e.kind = DYN_EXPR_ENUM;
+    e.type = DYN_TYPE_INFER;
+    e.boolean = false;
+    e.left = DYN_NO_EXPR;
+    e.right = DYN_NO_EXPR;
+    e.span = compact_span(compact_child(node, 0));
   } else if (!(k != EXP_FIELD)) {
     e.kind = DYN_EXPR_FIELD;
     e.type = DYN_TYPE_INFER;
     e.left = compact_enum_owner(compact_child(node, 0), s, a, errors);
     e.span = compact_span(compact_child(node, 1));
+  } else if (k == EXP_GENERIC_TYPE) {
+    /* Standalone `key_hash<u32>` or `mem.push<Node>`: names a generic function value. */
+    CompactNode target = compact_first(node);
+    e.kind = DYN_EXPR_CALL;
+    e.type = DYN_TYPE_INFER;
+    e.instance = true;
+    e.span = compact_span(target);
+    uint32_t total = compact_count(node);
+    uint32_t type_count = total ? total - 1 : 0;
+    e.item_start = (uint32_t)a->item_count;
+    if (!reserve_items(a, type_count)) {
+      compact_diagnostic(node, s, errors, "out of memory");
+      return DYN_NO_EXPR;
+    }
+    a->item_count += type_count;
+    e.item_count = type_count;
+    e.type_arg_count = type_count;
+    uint32_t idx = 0;
+    for (CompactNode ta = compact_next(target); !compact_null(ta); ta = compact_next(ta)) {
+      DynExprId te = compact_type_expr(ta, s, a, errors);
+      a->items[e.item_start + idx++] = (DynAstItem){.expression = te, .field_index = UINT32_MAX};
+    }
   } else if (!(k != EXP_CALL)) {
     CompactNode callee = compact_unwrap(compact_child(node, 0));
-    e.instance = compact_flag(node, EXP_INSTANCE);
+    CompactNode type_args_first = compact_none();
+    uint32_t type_arg_count = 0;
+    if (compact_kind(callee) == EXP_GENERIC_TYPE) {
+      CompactNode base = compact_unwrap(compact_first(callee));
+      type_args_first = compact_next(compact_first(callee));
+      for (CompactNode ta = type_args_first; !compact_null(ta); ta = compact_next(ta)) ++type_arg_count;
+      callee = base;
+    }
     if (!(compact_kind(callee) != EXP_FIELD)) {
       e.kind = DYN_EXPR_ENUM;
       e.type = DYN_TYPE_INFER;
@@ -404,6 +443,13 @@ static DynExprId compact_expr_node(CompactNode node, const DynSource *s, DynAstP
       e.left = compact_enum_owner(compact_child(callee, 0), s, a, errors);
       e.right = compact_expr(callee, s, a, errors);
       e.span = compact_span(compact_child(callee, 1));
+    } else if (compact_kind(callee) == EXP_DOT_NAME) {
+      e.kind = DYN_EXPR_ENUM;
+      e.type = DYN_TYPE_INFER;
+      e.boolean = true;
+      e.left = DYN_NO_EXPR;
+      e.right = DYN_NO_EXPR;
+      e.span = compact_span(compact_child(callee, 0));
     } else if (!(compact_kind(callee) != EXP_NAME)) {
       e.kind = DYN_EXPR_CALL;
       e.type = DYN_TYPE_INFER;
@@ -417,21 +463,28 @@ static DynExprId compact_expr_node(CompactNode node, const DynSource *s, DynAstP
     e.item_start = (uint32_t)a->item_count;
     uint32_t operand_count = compact_count(node);
     uint32_t argument_count = operand_count ? operand_count - 1 : 0;
-    if (!reserve_items(a, argument_count)) {
+    uint32_t total_items = type_arg_count + argument_count;
+    if (!reserve_items(a, total_items)) {
       compact_diagnostic(node, s, errors, "out of memory");
       return DYN_NO_EXPR;
     }
-    a->item_count += argument_count;
-    e.item_count = argument_count;
-    uint32_t argument_index = 0;
+    a->item_count += total_items;
+    e.item_count = total_items;
+    e.type_arg_count = type_arg_count;
+    uint32_t item_index = 0;
+    for (CompactNode ta = type_args_first; !compact_null(ta); ta = compact_next(ta)) {
+      DynExprId te = compact_type_expr(ta, s, a, errors);
+      a->items[e.item_start + item_index++] =
+          (DynAstItem){.expression = te, .field_index = UINT32_MAX};
+    }
     bool seen_callee = false;
     for (CompactNode arg = compact_first(node); !compact_null(arg); arg = compact_next(arg)) {
       if (!seen_callee) {
         seen_callee = true;
         continue;
       }
-      DynExprId expression = compact_argument(arg, s, a, errors);
-      a->items[e.item_start + argument_index++] =
+      DynExprId expression = compact_expr(arg, s, a, errors);
+      a->items[e.item_start + item_index++] =
           (DynAstItem){.expression = expression, .field_index = UINT32_MAX};
     }
   } else if (!(k != EXP_STRUCT)) {
@@ -635,6 +688,38 @@ static DynExprId compact_expr_node(CompactNode node, const DynSource *s, DynAstP
     }
     e.left = compact_expr(lhs, s, a, errors);
     e.right = compact_expr(rhs, s, a, errors);
+  } else if (k == EXP_TAKE) {
+    e.kind = DYN_EXPR_TAKE;
+    e.type = DYN_TYPE_INFER;
+    e.left = compact_expr(compact_child(node, 0), s, a, errors);
+  } else if (k == EXP_TRY) {
+    e.kind = DYN_EXPR_TRY;
+    e.type = DYN_TYPE_INFER;
+    e.left = compact_expr(compact_child(node, 0), s, a, errors);
+  } else if (k == EXP_CATCH) {
+    e.kind = DYN_EXPR_CATCH;
+    e.type = DYN_TYPE_INFER;
+    e.catch_local = UINT32_MAX;
+    e.left = compact_expr(compact_child(node, 0), s, a, errors);
+    CompactNode c1 = compact_child(node, 1);
+    CompactNode c2 = compact_child(node, 2);
+    if (compact_kind(c1) == SRC_BLOCK) {
+      e.boolean = true;
+      uint32_t start = 0, count = 0;
+      compact_block(c1, s, a, errors, a->current_loop_depth, &start, &count);
+      e.item_start = start;
+      e.item_count = count;
+    } else if (!compact_null(c2) && compact_kind(c2) == SRC_BLOCK) {
+      e.boolean = true;
+      e.catch_name = compact_span(c1);
+      uint32_t start = 0, count = 0;
+      compact_block(c2, s, a, errors, a->current_loop_depth, &start, &count);
+      e.item_start = start;
+      e.item_count = count;
+    } else {
+      e.boolean = false;
+      e.right = compact_expr(c1, s, a, errors);
+    }
   } else {
     compact_diagnostic(node, s, errors,
                "expression is not implemented in bootstrap compiler");
@@ -651,24 +736,68 @@ static DynExprId compact_expr_node(CompactNode node, const DynSource *s, DynAstP
 static bool compact_block(CompactNode, const DynSource *, DynAstProgram *, unsigned *,
                         uint32_t, uint32_t *, uint32_t *);
 
-static bool compact_pointer_pattern(CompactNode pattern, DynAstCaseArm *arm,
-                                 CompactNode *value, const DynSource *s) {
-  CompactNode p = compact_unwrap(compact_child(pattern, 0));
-  if ((compact_kind(p) != EXP_BINARY) || compact_operator(p, s) != DYN_OP_MUL) {
-    return false;
-  }
-  CompactNode right = compact_unwrap(compact_child(p, 1));
-  if ((compact_kind(right) != EXP_NAME)) {
-    return false;
-  }
-  arm->binding = compact_span(right);
-  arm->pointer_binding = true;
-  *value = compact_unwrap(compact_child(p, 0));
-  return true;
-}
 static void compact_case(CompactNode n, const DynSource *s, DynAstProgram *a,
                             unsigned *errors, uint32_t loop_depth,
                             DynAstStmt *st) {
+  /* Compile-time `case T` inside a generic function: evaluate which arm matches
+     the concrete type T and lower ONLY that arm as a bare block. */
+  CompactNode subject = compact_unwrap(compact_child(n, 0));
+  if (a->scope_count && compact_kind(subject) == EXP_NAME && !compact_local_name(subject, s)) {
+    DynType actual = scope_type(a, compact_span(subject), s, false);
+    if (actual != DYN_TYPE_ERROR) {
+      CompactNode matched_block = compact_none();
+      for (CompactNode an = compact_child(n, 1); !compact_null(an); an = compact_next(an)) {
+        if (compact_kind(an) != SRC_CASE_ARM) continue;
+        bool arm_matches = compact_flag(an, EXP_WILDCARD);
+        CompactNode block = compact_none();
+        for (CompactNode c = compact_first(an); !compact_null(c); c = compact_next(c)) {
+          uint16_t ck = compact_kind(c);
+          if (ck == SRC_BLOCK) {
+            block = c;
+          } else if (ck == EXP_NAME) {
+            compact_diagnostic(c, s, errors, "compile-time case on a type cannot bind a value");
+          } else if (ck == SRC_TYPE_PATTERN) {
+            CompactNode tn = compact_none();
+            for (CompactNode x = compact_first(c); !compact_null(x); x = compact_next(x)) {
+              if (compact_kind(x) == EXP_TYPE) tn = x;
+              else if (compact_kind(x) == EXP_NAME)
+                compact_diagnostic(x, s, errors, "compile-time case on a type cannot bind a value");
+            }
+            DynType pat_type = compact_type(tn, s, a);
+            if (pat_type == DYN_TYPE_ERROR)
+              compact_diagnostic(c, s, errors, "unknown type in compile-time case pattern");
+            else if (pat_type == actual)
+              arm_matches = true;
+          } else if (ck == SRC_CASE_PATTERN) {
+            CompactNode p = compact_unwrap(compact_child(c, 0));
+            DynType pat_type = compact_type(p, s, a);
+            if (pat_type == DYN_TYPE_ERROR)
+              compact_diagnostic(p, s, errors, "compile-time case on a type requires type patterns or '_'");
+            else if (pat_type == actual)
+              arm_matches = true;
+          }
+        }
+        if (arm_matches && compact_null(matched_block)) matched_block = block;
+      }
+      st->kind = DYN_STMT_IF;
+      st->bare_block = true;
+      if (!reserve_expr(a)) {
+        compact_diagnostic(n, s, errors, "out of memory");
+        return;
+      }
+      DynSpan open = st->span;
+      open.end_byte = open.start_byte + 4;
+      a->expressions[a->expression_count] = (DynAstExpr){.kind = DYN_EXPR_BOOL, .type = DYN_TYPE_BOOL,
+        .boolean = true, .span = open, .left = DYN_NO_EXPR, .right = DYN_NO_EXPR};
+      st->expression = (DynExprId)a->expression_count++;
+      if (compact_null(matched_block)) {
+        compact_diagnostic(subject, s, errors, "compile-time case does not match this type; add a '_' arm or handle the type");
+        return;
+      }
+      compact_block(matched_block, s, a, errors, loop_depth, &st->body_start, &st->body_count);
+      return;
+    }
+  }
   st->kind = DYN_STMT_CASE;
   st->expression = compact_expr(compact_child(n, 0), s, a, errors);
   st->case_arm_start = (uint32_t)a->case_arm_count;
@@ -697,13 +826,10 @@ static void compact_case(CompactNode n, const DynSource *s, DynAstProgram *a,
                          .pattern_start = (uint32_t)a->pattern_count,
                          .local_id = UINT32_MAX};
     arm.wildcard = compact_flag(an, EXP_WILDCARD);
+    arm.pointer_binding = compact_flag(an, EXP_POINTER_BINDING);
     for (CompactNode c = compact_first(an); !compact_null(c); c = compact_next(c)) {
       if (!(compact_kind(c) != SRC_CASE_PATTERN)) {
-        CompactNode p = {0};
-        bool pointer = compact_pointer_pattern(c, &arm, &p, s);
-        if (!pointer) {
-          p = compact_unwrap(compact_child(c, 0));
-        }
+        CompactNode p = compact_unwrap(compact_child(c, 0));
         if (!reserve_pattern(a)) {
           compact_diagnostic(p, s, errors, "out of memory");
           continue;
@@ -712,15 +838,16 @@ static void compact_case(CompactNode n, const DynSource *s, DynAstProgram *a,
             .span = compact_span(p), .first = DYN_NO_EXPR, .last = DYN_NO_EXPR};
         uint16_t pk = compact_kind(p);
         DynType named = DYN_TYPE_ERROR;
-        if (!pointer && arm.pattern_count == 0 &&
-            (pk == EXP_NAME || pk == EXP_FIELD || pk == EXP_CALL))
+        if (pk == EXP_NAME || pk == EXP_GENERIC_TYPE)
+          named = compact_case_type(p, s, a);
+        else if (!arm.pointer_binding && arm.pattern_count == 0 && pk == EXP_FIELD)
           named = compact_case_type(p, s, a);
         if (named != DYN_TYPE_ERROR) {
-          /* A named type is a type pattern: Point p => on an any subject. */
+          /* A named type is a type pattern: Point(p) => on any, or FsErr(e) => on A | B. */
           pat.type = named;
           pat.is_type = true;
           a->patterns[a->pattern_count++] = pat;
-          arm.pattern_count = 1;
+          ++arm.pattern_count;
           continue;
         }
         if (!(pk != SRC_RANGE)) {
@@ -750,7 +877,7 @@ static void compact_case(CompactNode n, const DynSource *s, DynAstProgram *a,
                             .last = DYN_NO_EXPR,
                             .type = compact_type(tn, s, a),
                             .is_type = true};
-        arm.pattern_count = 1;
+        ++arm.pattern_count;
       } else if (!(compact_kind(c) != EXP_NAME)) {
         arm.binding = compact_span(c);
       } else if (!(compact_kind(c) != SRC_BLOCK)) {
@@ -878,6 +1005,10 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
     CompactNode last = compact_last(n);
     for (uint32_t z = 0; z + 1 < count; ++z) {
       CompactNode c = compact_child(n, z);
+      if (compact_kind(c) == EXP_NAME) {
+        st.label = compact_span(c);
+        continue;
+      }
       if (!(compact_kind(c) != SRC_FOR_CONDITION)) {
         uint32_t cc = compact_count(c);
         if (cc == 1)
@@ -925,10 +1056,14 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
                 &st.body_count);
   } else if (!(k != SRC_BREAK)) {
     st.kind = DYN_STMT_BREAK;
+    if (compact_count(n))
+      st.control_label = compact_span(compact_child(n, 0));
   } else if (!(k != SRC_CONTINUE)) {
     st.kind = DYN_STMT_CONTINUE;
-  } else if (!(k != SRC_DEFER)) {
-    st.kind = DYN_STMT_DEFER;
+    if (compact_count(n))
+      st.control_label = compact_span(compact_child(n, 0));
+  } else if (!(k != SRC_DEFER) || k == SRC_ERRDEFER) {
+    st.kind = k == SRC_ERRDEFER ? DYN_STMT_ERRDEFER : DYN_STMT_DEFER;
     CompactNode action = compact_child(n, 0);
     if (!(compact_kind(action) != SRC_BLOCK)) {
       st.defer_block = true;
@@ -941,6 +1076,10 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
         a->children[a->child_count++] = deferred;
       st.body_count = 1;
     }
+  } else if (k == SRC_FAIL) {
+    st.kind = DYN_STMT_FAIL;
+    if (compact_count(n))
+      st.expression = compact_expr(compact_child(n, 0), s, a, errors);
   } else if (k == SRC_ASSERT) {
     st.kind = DYN_STMT_ASSERT;
     if (compact_count(n))
@@ -954,8 +1093,8 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
   } else if (!(k != EXP_SYSCALL)) {
     st.kind = DYN_STMT_EXPR;
     st.expression = compact_expr(n, s, a, errors);
-  } else if (!(k != EXP_CALL) || k == EXP_LEN) {
-    /* A call, or #init(pointer), which the parser admits as a statement. */
+  } else if (!(k != EXP_CALL) || k == EXP_LEN || k == EXP_TRY || k == EXP_CATCH) {
+    /* A call, try/catch expression, or #init(pointer), which the parser admits as a statement. */
     st.kind = DYN_STMT_EXPR;
     st.expression = compact_expr(n, s, a, errors);
   } else if (!(k != SRC_ALIAS)) {
@@ -985,12 +1124,15 @@ static bool compact_block(CompactNode block, const DynSource *s, DynAstProgram *
     compact_diagnostic(block, s, errors, "out of memory");
     return false;
   }
+  uint32_t prev_loop_depth = a->current_loop_depth;
+  a->current_loop_depth = loop_depth;
   for (CompactNode c = compact_first(block); !compact_null(c); c = compact_next(c)) {
-    if (!dyn_work_step(&s->context, 1)) { if (ids != local) free(ids); *count = 0; return false; }
+    if (!dyn_work_step(&s->context, 1)) { a->current_loop_depth = prev_loop_depth; if (ids != local) free(ids); *count = 0; return false; }
     uint32_t id = compact_stmt(c, s, a, errors, loop_depth);
-    if (id == UINT32_MAX) { if (ids != local) free(ids); *count = 0; return false; }
+    if (id == UINT32_MAX) { a->current_loop_depth = prev_loop_depth; if (ids != local) free(ids); *count = 0; return false; }
     ids[(*count)++] = id;
   }
+  a->current_loop_depth = prev_loop_depth;
   *start = (uint32_t)a->child_count;
   for (uint32_t i = 0; i < *count; ++i) {
     if (!reserve_child(a)) {
@@ -1016,6 +1158,10 @@ static bool compact_comments(const DynSource *s, DynSpan span) {
         if (!(i % 1024) && !dyn_work_step(&s->context, 1)) return true;
         if (s->text[i] == '\\' && i + 1 < span.end_byte) ++i;
         else if ((unsigned char)s->text[i] == quote) break;
+      }
+    } else if (c == '`') {
+      while (++i < span.end_byte && s->text[i] != '`') {
+        if (!(i % 1024) && !dyn_work_step(&s->context, 1)) return true;
       }
     } else if (c == '/' && i + 1 < span.end_byte &&
                (s->text[i + 1] == '/' || s->text[i + 1] == '*')) return true;

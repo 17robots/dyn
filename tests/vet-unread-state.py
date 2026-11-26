@@ -35,17 +35,17 @@ fn main() {
   status: fail.Status
   text := fs.read_all(arena, &status, "in.txt", 1024)
   if status.failed { return }
-  io.println("{}", #len(text))
+  io.println("{}", text.len)
   other: fail.Status
   data := fs.read_all(arena, &other, "in.txt", 1024)
-  if #len(data) == 0 {
+  if data.len == 0 {
     io.println("missing")
   }
   _ = other
   third: fail.Status
   more := fs.read_all(arena, &third, "in.txt", 1024)
   if third.failed { return }
-  if #len(more) == 0 {
+  if more.len == 0 {
     io.println("empty file")
   }
   cleanup: fail.Status

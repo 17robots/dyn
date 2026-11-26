@@ -1,8 +1,8 @@
 #target(kernel: darwin)
 #link("System")
 // Native Darwin adapter. libSystem handles OS calls; buffers use the caller arena.
-use "std/io" io
-use "std/c" c
+use io "std/io"
+use c "std/c"
 extern fn native_chdir "chdir"(path: *const u8) i32
 extern fn native_fork "fork"() i32
 extern fn native_pipe "pipe"(descriptors: *i32) i32
@@ -31,9 +31,9 @@ fn c_string(arena: *mem.Arena, value: []const u8) *const u8 {
   return c.string_from_bytes(arena, &status, value)
 }
 fn c_vector(arena: *mem.Arena, values: [][]const u8) *CString {
-  if #len(values) > 2305843009213693950 { return nil }
-  slots := mem.push_array(CString, arena, #len(values)+1)
-  for at in 0..#len(values) {
+  if values.len > 2305843009213693950 { return nil }
+  slots := mem.push_array<CString>(arena, values.len+1)
+  for at in 0..values.len {
     slots[at].value = c_string(arena, values[at])
     if slots[at].value == nil { return nil }
   }
@@ -47,7 +47,7 @@ fn spawn_native(arena: *mem.Arena, status: *fail.Status, path: []const u8, argum
   env := c_vector(arena, configuration.environment)
   if executable == nil || argv == nil || env == nil { return spawn_failed(status, -28) }
   directory: *const u8 = nil
-  if #len(configuration.directory) > 0 {
+  if configuration.directory.len > 0 {
     directory = c_string(arena, configuration.directory)
     if directory == nil { return spawn_failed(status, -28) }
   }
@@ -187,9 +187,9 @@ fn pipe_native(status: *fail.Status) Pipe {
 }
 // A pipe with nothing to read yet is no failure: count 0, not ended.
 fn read_native(status: *fail.Status, handle: isize, destination: []u8) Read {
-  amount := native_read(#cast(i32, handle), &destination[0], #len(destination))
+  amount := native_read(#cast(i32, handle), &destination[0], destination.len)
   for amount < 0 && native_errno().* == 4 {
-    amount = native_read(#cast(i32, handle), &destination[0], #len(destination))
+    amount = native_read(#cast(i32, handle), &destination[0], destination.len)
   }
   if amount < 0 {
     if native_errno().* != 35 {
@@ -225,10 +225,10 @@ fn environment_native(status: *fail.Status, name: []const u8, destination: []u8)
     return destination[..0]
   }
   limited: fail.Status
-  parsed := c.bytes_from_string(&limited, value, #len(destination)+1)
-  if limited.failed || #len(parsed) > #len(destination) { return environment_too_long(status, name) }
+  parsed := c.bytes_from_string(&limited, value, destination.len+1)
+  if limited.failed || parsed.len > destination.len { return environment_too_long(status, name) }
   i: usize = 0
-  for i < #len(parsed) {
+  for i < parsed.len {
     destination[i] = parsed[i]
     i += 1
   }

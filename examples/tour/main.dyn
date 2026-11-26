@@ -18,7 +18,7 @@ use "std/mem"
 use "std/container/array"
 use "std/container/map"
 use "std/fail"
-use "std/fs" files       // an import can be renamed
+use files "std/fs"       // an import can be renamed
 use "std/panic"
 
 // --------------------------------------------------- Constants and globals ---
@@ -147,8 +147,8 @@ enum(i32) Errno {
 // A variant may carry one value. The first variant carries nothing.
 enum Shape {
   Null,
-  Circle: f32,          // radius
-  Rect: Vec2,           // width, height
+  Circle(f32),          // radius
+  Rect(Vec2),           // width, height
 }
 
 // case must be exhaustive, or end with _. Arms are blocks, no commas; a
@@ -156,16 +156,16 @@ enum Shape {
 fn area(s: Shape) f32 {
   case s {
     Shape.Null => { return 0.0 }
-    Shape.Circle r => { return 3.14159 * r * r }
-    Shape.Rect size => { return size.x * size.y }
+    Shape.Circle(r) => { return 3.14159 * r * r }
+    Shape.Rect(size) => { return size.x * size.y }
   }
 }
 
-// `Variant *name` aliases the payload so the arm can change it in place.
+// `Variant(*name)` binds a pointer to the payload so the arm can change it in place.
 fn grow(s: *Shape) {
   case s.* {
-    Shape.Circle *r => {
-      r += 1.0
+    Shape.Circle(*r) => {
+      r.* += 1.0
     }
     _ => {}
   }
@@ -173,7 +173,7 @@ fn grow(s: *Shape) {
 
 fn enums() {
   c := Color.Green
-  op := enums.from_int(Op, 2)                // an integer becomes an enum only here
+  op := enums.from_int<Op>(2)                // an integer becomes an enum only here
   io.println("color tag {} op is Sub {} errno {}", #cast(u32, c), op == Op.Sub, #cast(i32, Errno.Io))
   circle := Shape.Circle(2.0)
   grow(&circle)
@@ -274,7 +274,7 @@ fn index_of(values: []const i32, wanted: i32) usize {
   for v, i in values {
     if v == wanted { return i }
   }
-  return #len(values)         // the miss value: one past the end
+  return values.len         // the miss value: one past the end
 }
 
 fn arrays() {
@@ -284,7 +284,7 @@ fn arrays() {
     p.* *= 2
   }
   // middle sees the doubled values: a slice shares the array's storage.
-  io.println("len {} sum {} middle {} index {}", #len(primes), sum(primes[..]), sum(middle),
+  io.println("len {} sum {} middle {} index {}", primes.len, sum(primes[..]), sum(middle),
     index_of(primes[..], 14))
   // Indexing is bounds-checked: primes[9] panics with index.ok.
 }
@@ -296,9 +296,9 @@ fn arrays() {
 fn memory() {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)      // runs when this block exits
-  p := mem.push(Player, arena)        // a *Player with health 100
+  p := mem.push<Player>(arena)        // a *Player with health 100
   p.name = "bob"
-  scores := mem.push_array(u32, arena, 8)
+  scores := mem.push_array<u32>(arena, 8)
   scores[0] = 99
   bytes := mem.push_bytes(arena, 4)   // uninitialized: write before reading
   bytes[3] = 7
@@ -325,7 +325,7 @@ fn read_config(arena: *mem.Arena) {
     io.println("config unreadable: {}", fail.describe(storage[..], status.failure))
     return
   }
-  io.println("config {} bytes", #len(text))
+  io.println("config {} bytes", text.len)
 }
 
 // ---------------------------------------------------------------- Defer ---
@@ -347,7 +347,7 @@ fn cleanup() {
 // ------------------------------------------------------------- Generics ---
 // $T declares a type parameter, inferred from the argument. No constraints:
 // each instance is checked as ordinary code.
-fn largest(values: []const $T) T {
+fn largest<T>(values: []const T) T {
   best := values[0]
   for v in values {
     if v > best {
@@ -358,25 +358,25 @@ fn largest(values: []const $T) T {
 }
 
 // A type parameter can also be passed explicitly.
-fn zeroed(T: type) T {
+fn zeroed<T>() T {
   value: T
   return value
 }
 
 // Generic structs and enums write their type arguments everywhere, including
 // literals: Pair(u8){ first: 1, second: 2 }.
-struct Pair(T) {
+struct Pair<T> {
   first: T,
   second: T,
 }
 
-enum Slot(T) {
+enum Slot<T> {
   Empty,
-  Full: T,
+  Full(T),
 }
 
-fn swap(p: Pair($T)) Pair(T) {
-  result: Pair(T)
+fn swap<T>(p: Pair<T>) Pair<T> {
+  result: Pair<T>
   result.first = p.second
   result.second = p.first
   return result
@@ -385,18 +385,18 @@ fn swap(p: Pair($T)) Pair(T) {
 fn generics() {
   ints: [3]i32 = [4, 9, 2]
   floats: [2]f64 = [1.5, -2.0]
-  pair := Pair(u8){ first: 1, second: 2 }
+  pair := Pair<u8>{ first: 1, second: 2 }
   flipped := swap(pair)
-  slot := Slot(i32).Full(7)
+  slot := Slot<i32>.Full(7)
   inside: i32 = 0
   case slot {
-    Slot(i32).Empty => {}
-    Slot(i32).Full value => {
+    Slot<i32>.Empty => {}
+    Slot<i32>.Full(value) => {
       inside = value
     }
   }
   io.println("generics {} {} {} {} {}", largest(ints[..]), largest(floats[..]),
-    zeroed(u16), flipped.first, inside)
+    zeroed<u16>(), flipped.first, inside)
 }
 
 // ------------------------------------------------------ Function values ---
@@ -432,9 +432,9 @@ fn total(values: ...i32) i32 {
 // arm names a type. It always needs _, since any type can arrive.
 fn kind_of(value: any) []const u8 {
   case value {
-    i32 n => { return "an i32" }
-    []const u8 text => { return "text" }
-    Vec2 v => { return "a Vec2" }
+    i32(n) => { return "an i32" }
+    []const u8(text) => { return "text" }
+    Vec2(v) => { return "a Vec2" }
     _ => { return "something else" }
   }
 }
@@ -450,13 +450,13 @@ fn collections() {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   // A growing array that keeps its arena.
-  names: array.Array([]const u8)
+  names: array.Array<[]const u8>
   array.init(&names, arena)
   array.push(&names, "ada")
   array.push(&names, "grace")
   array.push(&names, "ada")
   // A hash map: you pass the arena and the hash and equality functions.
-  counts: map.Map([]const u8, u32)
+  counts: map.Map<[]const u8, u32>
   map.init(&counts, arena)
   for name in names.items {
     map.upsert(&counts, name, 0).* += 1   // one lookup, adds when missing

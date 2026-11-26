@@ -1,5 +1,5 @@
 use "std/fail"
-use "std/io" stream
+use stream "std/io"
 
 pub enum Level { Debug, Info, Warning, Error }
 pub struct Field { name: []const u8, value: []const u8 }
@@ -40,7 +40,7 @@ pub fn write(status: *fail.Status, target: *Logger, level: Level, message: []con
     length = put(line[..], length, field.value)
   }
   length = put(line[..], length, "\n")
-  if length <= #len(line) {
+  if length <= line.len {
     stream.write(status, target.output, line[..length])
     return
   }
@@ -58,9 +58,9 @@ pub fn write(status: *fail.Status, target: *Logger, level: Level, message: []con
 
 // Appends text at length, or returns more than #len(line) once it no longer fits.
 fn put(line: []u8, length: usize, text: []const u8) usize {
-  if length > #len(line) || #len(text) > #len(line) - length { return #len(line) + 1 }
-  for i in 0..#len(text) {
+  if length > line.len || text.len > line.len - length { return line.len + 1 }
+  for i in 0..text.len {
     line[length + i] = text[i]
   }
-  return length + #len(text)
+  return length + text.len
 }

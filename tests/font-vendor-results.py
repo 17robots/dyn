@@ -9,16 +9,16 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "vendor/freetype" ft
-use "vendor/harfbuzz" hb
-use "std/dynlib" dynlib
+SOURCE=r'''use ft "vendor/freetype"
+use hb "vendor/harfbuzz"
+use dynlib "std/dynlib"
 use "std/fail"
-use "std/fs" fs
-use "std/mem" mem
-use "std/encoding/binary" binary
-use "std/ui" ui
-use "std/ui/software" software
-use "std/io" errors
+use fs "std/fs"
+use mem "std/mem"
+use binary "std/encoding/binary"
+use ui "std/ui"
+use software "std/ui/software"
+use errors "std/io"
 struct ft_face_metrics_Outcome { value: ft.FaceMetrics, failure: fail.Failure, kind: fail.Kind }
 fn ft_face_metrics(p0: rawptr) ft_face_metrics_Outcome {
   status: fail.Status
@@ -102,9 +102,9 @@ fn failed(failure: fail.Failure) bool {
 
 fn check(ok: bool){if !ok {#panic("font vendor contract")}}
 fn save(arena: *mem.Arena, glyphs: []const hb.Glyph, path: []const u8){
- output := mem.push_array(u8,arena,4+#len(glyphs)*24)
- binary.store_u32_le(output[..4],#cast(u32,#len(glyphs)))
- for i in 0..#len(glyphs){glyph := glyphs[i]
+ output := mem.push_array<u8>(arena, 4+glyphs.len*24)
+ binary.store_u32_le(output[..4],#cast(u32,glyphs.len))
+ for i in 0..glyphs.len{glyph := glyphs[i]
  values: [6]u32 = [glyph.index,glyph.cluster,#cast(u32,glyph.x_advance),#cast(u32,glyph.y_advance),#cast(u32,glyph.x_offset),#cast(u32,glyph.y_offset)]
  for j in 0..6 {binary.store_u32_le(output[4+i*24+j*4..8+i*24+j*4],values[j])}}
  check(fs_write_file(path,output))
@@ -150,7 +150,7 @@ fn main(){
  bitmap := ft_bitmap(font.face)
  check(!failed(bitmap.failure) && bitmap.value.width > 0 && bitmap.value.height > 0)
  value := bitmap.value
- output := mem.push_array(u8,arena,24+#cast(usize,value.width)*#cast(usize,value.height))
+ output := mem.push_array<u8>(arena, 24+#cast(usize,value.width)*#cast(usize,value.height))
  fields: [6]u32 = [#cast(u32,value.width),#cast(u32,value.height),#cast(u32,value.left),#cast(u32,value.top),#cast(u32,value.advance_x),#cast(u32,value.advance_y)]
  for i in 0..6 {binary.store_u32_le(output[i*4..i*4+4],fields[i])}
  for row in 0..value.height {for x in 0..value.width {output[24+#cast(usize,row*value.width+x)] = value.pixels[#cast(usize,row)*value.stride+#cast(usize,x)]}}
@@ -190,8 +190,8 @@ fn main(){
  features: []const hb.Feature
  latin := hb_shape(arena,&loaded.api,created.value,"office AV",0,features)
  arabic := hb_shape(arena,&loaded.api,created.value,"السلام",0,features)
- check(!failed(latin.failure) && #len(latin.value) < 9 && !failed(arabic.failure) && #len(arabic.value) <= 6)
- check(arabic.value[0].cluster > arabic.value[#len(arabic.value)-1].cluster)
+ check(!failed(latin.failure) && latin.value.len < 9 && !failed(arabic.failure) && arabic.value.len <= 6)
+ check(arabic.value[0].cluster > arabic.value[arabic.value.len-1].cluster)
  for glyph in latin.value {check(glyph.index != 0)}
  for glyph in arabic.value {check(glyph.index != 0)}
  save(arena,latin.value,"latin-actual.bin")
@@ -200,7 +200,7 @@ fn main(){
  check(!failed(run.failure))
  save(arena,run.value,"run-actual.bin")
  context_run:=hb_shape_run(arena,&loaded.api,created.value,"بجح",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:1,item_offset:2,has_item_length:true,item_length:2},features)
- check(!failed(context_run.failure) && #len(context_run.value)>0 && context_run.value[0].cluster==2)
+ check(!failed(context_run.failure) && context_run.value.len>0 && context_run.value[0].cluster==2)
  save(arena,context_run.value,"context-actual.bin")
  unicode := loaded.api.unicode_get_default()
  check(unicode!=nil && loaded.api.unicode_script(unicode,65)==1281455214 && loaded.api.script_horizontal_direction(1098015074)==hb.RightToLeft)
@@ -221,7 +221,7 @@ fn main(){
  for glyph in arabic.value {ui.glyph(&context,viewport,glyph.index,(pen+#cast(i64,glyph.x_offset))/64,40-#cast(i64,glyph.y_offset)/64,ui.Color{r:255,g:255,b:255,a:255})
  pen += #cast(i64,glyph.x_advance)}
  ui.end(&context)
- pixels := mem.push_array(u8,arena,#cast(usize,256*64*4))
+ pixels := mem.push_array<u8>(arena, #cast(usize,256*64*4))
  surface := software.Surface{pixels:pixels,width:256,height:64,stride:256*4}
  check(!failed(software_render(&surface,ui.first(&context),ft.renderer(&adapter)).failure))
  ink: usize = 0

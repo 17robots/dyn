@@ -1,5 +1,5 @@
-use "std/encoding/binary" binary
-use "std/crypto/core" core
+use binary "std/encoding/binary"
+use core "std/crypto/core"
 use "std/fail"
 // Portable AES-256-GCM. FIPS197 / SP800-38D. Table-free S-box inversion and
 // fixed-iteration GHASH avoid secret indexes/branches. This favors portability
@@ -122,14 +122,14 @@ fn product(left: Block, right: Block) Block {
 fn hash(state: Block, h: Block, source: []const u8) Block {
   result := state
   at: usize = 0
-  for #len(source) - at >= 16 {
+  for source.len - at >= 16 {
     part := Block{ high: binary.load_u64_be(source[at..at+8]), low: binary.load_u64_be(source[at+8..at+16]) }
     result = product(xor(result, part), h)
     at += 16
   }
-  if at < #len(source) {
+  if at < source.len {
     buffer: [16]u8
-    for i in 0..#len(source)-at {
+    for i in 0..source.len-at {
       buffer[i] = source[at+i]
     }
     part := Block{ high: binary.load_u64_be(buffer[..8]), low: binary.load_u64_be(buffer[8..]) }
@@ -138,28 +138,28 @@ fn hash(state: Block, h: Block, source: []const u8) Block {
   return result
 }
 fn initial(h: Block, nonce: []const u8) Block {
-  if #len(nonce) == 12 {
+  if nonce.len == 12 {
     return Block{ high: binary.load_u64_be(nonce[..8]), low: (#cast(u64, binary.load_u32_be(nonce[8..])) << 32) | 1 }
   }
   result := hash(Block{}, h, nonce)
-  return product(xor(result, Block{ low: #cast(u64, #len(nonce))*8 }), h)
+  return product(xor(result, Block{ low: #cast(u64, nonce.len)*8 }), h)
 }
 fn tag(key: *const Key, h: Block, j0: Block, cipher: []const u8, aad: []const u8) Block {
   result := hash(hash(Block{}, h, aad), h, cipher)
-  result = product(xor(result, Block{ high: #cast(u64, #len(aad))*8, low: #cast(u64, #len(cipher))*8 }), h)
+  result = product(xor(result, Block{ high: #cast(u64, aad.len)*8, low: #cast(u64, cipher.len)*8 }), h)
   return xor(result, encrypt(key, j0))
 }
 fn transform(key: *const Key, j0: Block, output: []u8, input: []const u8) {
   counter := j0
   at: usize = 0
-  for at < #len(input) {
+  for at < input.len {
     low := #cast(u32, counter.low) + 1
     counter.low = (counter.low & 0xffffffff00000000) | low
     stream := encrypt(key, counter)
     buffer: [16]u8
     binary.store_u64_be(buffer[..8], stream.high)
     binary.store_u64_be(buffer[8..], stream.low)
-    take := #len(input) - at
+    take := input.len - at
     if take > 16 {
       take = 16
     }
@@ -170,14 +170,14 @@ fn transform(key: *const Key, j0: Block, output: []u8, input: []const u8) {
   }
 }
 fn overlaps(left: []const u8, right: []const u8) bool {
-  if #len(left) == 0 || #len(right) == 0 { return false }
+  if left.len == 0 || right.len == 0 { return false }
   a := #cast(usize, &left[0])
   b := #cast(usize, &right[0])
-  if a <= b { return b-a < #len(left) }
-  return a-b < #len(right)
+  if a <= b { return b-a < left.len }
+  return a-b < right.len
 }
 fn valid(output: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool {
-  if #len(key) != 32 || #len(nonce) == 0 || #len(nonce) > 128 || #len(output) != #len(input) || #cast(u64, #len(input)) > 68719476704 || #cast(u64, #len(aad)) > 0x1fffffffffffffff {
+  if key.len != 32 || nonce.len == 0 || nonce.len > 128 || output.len != input.len || #cast(u64, input.len) > 68719476704 || #cast(u64, aad.len) > 0x1fffffffffffffff {
     return false
   }
   if overlaps(output, key) || overlaps(output, nonce) || overlaps(output, aad) { return false }
@@ -195,7 +195,7 @@ pub fn seal(status: *fail.Status, output: []u8, authentication: []u8, input: []c
     return
   }
   if status.failed { return }
-  if !valid(output, input, aad, source_key, nonce) || #len(authentication) != 16 || overlaps(authentication, output) || overlaps(authentication, input) || overlaps(authentication, aad) || overlaps(authentication, source_key) || overlaps(authentication, nonce) {
+  if !valid(output, input, aad, source_key, nonce) || authentication.len != 16 || overlaps(authentication, output) || overlaps(authentication, input) || overlaps(authentication, aad) || overlaps(authentication, source_key) || overlaps(authentication, nonce) {
     fail.invalid(status, "AES-GCM seal", "", "bad key, nonce, tag or output size, or overlapping buffers")
     return
   }
@@ -213,7 +213,7 @@ pub fn open(status: *fail.Status, output: []u8, input: []const u8, authenticatio
     return
   }
   if status.failed { return }
-  if !valid(output, input, aad, source_key, nonce) || #len(authentication) != 16 || overlaps(output, authentication) {
+  if !valid(output, input, aad, source_key, nonce) || authentication.len != 16 || overlaps(output, authentication) {
     fail.invalid(status, "AES-GCM open", "", "bad key, nonce, tag or output size, or overlapping buffers")
     return
   }

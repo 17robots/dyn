@@ -26,12 +26,12 @@ fn commit(raw: rawptr, status: *fail.Status, head: []const u8, size: usize) usiz
     fail.set(status, failure)
     return 0
   }
-  return #len(head) + size
+  return head.len + size
 }
 fn write(raw: rawptr, status: *fail.Status, source: []const u8) usize {
   sink := #cast(*Sink, raw)
   sink.writes += 1
-  return #len(source)
+  return source.len
 }
 fn response(sink: *Sink) http.Response {
   return http.Response{ output: io.Writer{ data: sink, write: write }, reserve_body: reserve, commit_body: commit }
@@ -44,18 +44,18 @@ fn rejected(r: *http.Response, length: usize, options: http.ResponseOptions, kin
 }
 fn main() {
   plain := http.Response{}
-  if #len(http.body_buffer(&plain, 8)) != 0 { #panic("unsupported backend") }
+  if http.body_buffer(&plain, 8).len != 0 { #panic("unsupported backend") }
   sink := Sink{}
   r := response(&sink)
-  if #len(http.body_buffer(&r, 33)) != 0 { #panic("capacity") }
+  if http.body_buffer(&r, 33).len != 0 { #panic("capacity") }
   storage := http.body_buffer(&r, 8)
-  if #len(storage) != 8 { #panic("reserve") }
+  if storage.len != 8 { #panic("reserve") }
   storage[0] = 'x'
-  if #len(http.body_buffer(&r, 8)) != 0 || sink.reserves != 2 { #panic("repeat reserve") }
+  if http.body_buffer(&r, 8).len != 0 || sink.reserves != 2 { #panic("repeat reserve") }
   if !rejected(&r, 9, http.ResponseOptions{}, fail.Kind.InvalidInput) { #panic("length") }
   if !rejected(&r, 1, http.ResponseOptions{ content_type: "bad\r\n" }, fail.Kind.InvalidInput) { #panic("header injection") }
   huge: [9000]u8
-  for i in 0..#len(huge) { huge[i] = 'a' }
+  for i in 0..huge.len { huge[i] = 'a' }
   if !rejected(&r, 1, http.ResponseOptions{ reason: huge[..] }, fail.Kind.Capacity) { #panic("head capacity") }
   if sink.commits != 0 || r.started { #panic("published invalid head") }
   status: fail.Status
@@ -79,7 +79,7 @@ fn main() {
   _ = http.body_buffer(&fallback, 8)
   plain_status: fail.Status
   http.respond(&plain_status, &fallback, "fallback", http.ResponseOptions{})
-  if plain_status.failed || #len(fallback.reserved) != 0 { #panic("cancel reservation") }
+  if plain_status.failed || fallback.reserved.len != 0 { #panic("cancel reservation") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-http-buffered-') as tmp:

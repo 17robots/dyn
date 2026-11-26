@@ -10,7 +10,7 @@ DYN = str(Path(os.environ.get('DYN', ROOT/'build'/('dyn-release.exe' if os.name 
 SOURCE = r'''use "std/sync"
 use "std/thread"
 use "std/fail"
-use "std/mem" mem
+use mem "std/mem"
 struct Shared {
   mutex: sync.Mutex, condition: sync.Condition, gate: sync.Semaphore,
   once: sync.Once, arrived: u32, completed: u32, total: u64, value: u64

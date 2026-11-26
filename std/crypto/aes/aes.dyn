@@ -1,5 +1,5 @@
-use "std/crypto/aead" aead
-use "std/mem" mem
+use aead "std/crypto/aead"
+use mem "std/mem"
 use "std/fail"
 
 // AES-256-GCM: arena-owned ciphertext and 16-byte tag. Inputs are borrowed for

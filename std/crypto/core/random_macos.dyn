@@ -9,8 +9,8 @@ pub fn secure_random(status: *fail.Status, destination: []u8) {
   }
   if status.failed { return }
   at: usize = 0
-  for at < #len(destination) {
-    count := #len(destination) - at
+  for at < destination.len {
+    count := destination.len - at
     if count > 256 {
       count = 256
     }

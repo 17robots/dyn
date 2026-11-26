@@ -42,7 +42,7 @@ struct Journal {
 
 fn add_note(journal: *Journal, text: []const u8) {
   mark := mem.arena_mark(journal.permanent)
-  note := mem.push(Note, journal.permanent)
+  note := mem.push<Note>(journal.permanent)
   // text points into the line buffer, which the next line overwrites. Keep
   // a copy in the arena that lives as long as the note.
   note.text = strings.clone(journal.permanent, text)
@@ -116,7 +116,7 @@ struct Command {
 fn split_command(line: []const u8) Command {
   text := strings.trim(line)
   space := bytes.find_byte(text, ' ')   // #len(text) when there is no space
-  if space == #len(text) { return Command{ name: text } }
+  if space == text.len { return Command{ name: text } }
   return Command{ name: text[..space], rest: strings.trim(text[space + 1..]) }
 }
 

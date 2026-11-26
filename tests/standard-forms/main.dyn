@@ -8,7 +8,7 @@ struct Pair { a: i32, b: i32 }
 struct Player { health: i32 = 100, armor: i32 }
 
 // A callback and its context: C is inferred through the function's type.
-fn run(entry: fn(*$C) i32, context: *$C) i32 {
+fn run<C>(entry: fn(*C) i32, context: *C) i32 {
   if context == nil {
     return -1
   }
@@ -20,7 +20,7 @@ fn armor_of(player: *Player) i32 {
 }
 
 // T{} in a generic body is the instance's own struct literal.
-fn fresh(T: type) T {
+fn fresh<T>() T {
   return T{}
 }
 enum(u8) Op { Nop, Add, Sub }
@@ -81,14 +81,14 @@ fn main() {
     _ => { io.println("bad") }
   }
   io.println("calls {}", calls)
-  player := fresh(Player)
+  player := fresh<Player>()
   io.println("fresh {} {}", player.health, player.armor)
   player.armor = 4
   io.println("run {} {}", run(armor_of, &player), run(armor_of, nil))
   unit := Unit{name: "ada", at: Vec2{x: 1.5, y: 2}, op: Op.Sub}
   // A struct or enum in a literal template prints its contents.
   io.println("unit {} at {} op {} errno {}", unit, unit.at, unit.op, Errno.NoEnt)
-  io.println("op {} {}", enums.from_int(Op, 2) == Op.Sub, enums.from_int(Op, 9) == Op.Nop)
+  io.println("op {} {}", enums.from_int<Op>(2) == Op.Sub, enums.from_int<Op>(9) == Op.Nop)
   // Any struct or enum expression prints; each argument is evaluated once, in order.
   arena := mem.arena_alloc(0)
   made: i32 = 0

@@ -1,7 +1,7 @@
 use "std/enums"
-use "std/mem" mem
+use mem "std/mem"
 use "std/fail"
-use "std/encoding/binary" binary
+use binary "std/encoding/binary"
 pub enum Wire { Varint, Fixed64, Bytes, StartGroup, EndGroup, Fixed32 }
 pub struct Field { number: u32, wire: Wire, value: u64, bytes: []const u8 }
 // Input and field bytes are borrowed. Groups are emitted as explicit start/end
@@ -35,7 +35,7 @@ pub fn next(status: *fail.Status, state: *Reader) Field {
   if status == nil { return next(&fail.Status{}, state) }
   if status.failed { return ended(state, state.offset) }
   if state.failed { return failed(status, state, state.error_offset, state.kind) }
-  if state.offset == #len(state.source) {
+  if state.offset == state.source.len {
     if state.depth != 0 { return failed(status, state, state.offset, fail.Kind.InvalidInput) }
     return ended(state, state.offset)
   }
@@ -46,30 +46,30 @@ pub fn next(status: *fail.Status, state: *Reader) Field {
   }
   at := start + key.consumed
   wire := #cast(u8, key.value & 7)
-  field := Field{ number: #cast(u32, key.value >> 3), wire: enums.from_int(Wire, #cast(u64, wire)) }
+  field := Field{ number: #cast(u32, key.value >> 3), wire: enums.from_int<Wire>(#cast(u64, wire)) }
   if field.wire == Wire.Varint {
     value := binary.uleb128_decode(state.source[at..])
     if !value.valid { return failed(status, state, at, fail.Kind.InvalidInput) }
     field.value = value.value
     at += value.consumed
   } else if field.wire == Wire.Fixed64 {
-    if #len(state.source) - at < 8 { return failed(status, state, at, fail.Kind.InvalidInput) }
+    if state.source.len - at < 8 { return failed(status, state, at, fail.Kind.InvalidInput) }
     field.value = binary.load_u64_le(state.source[at..at+8])
     at += 8
   } else if field.wire == Wire.Fixed32 {
-    if #len(state.source) - at < 4 { return failed(status, state, at, fail.Kind.InvalidInput) }
+    if state.source.len - at < 4 { return failed(status, state, at, fail.Kind.InvalidInput) }
     field.value = binary.load_u32_le(state.source[at..at+4])
     at += 4
   } else if field.wire == Wire.Bytes {
     length := binary.uleb128_decode(state.source[at..])
     if !length.valid { return failed(status, state, at, fail.Kind.InvalidInput) }
     at += length.consumed
-    if length.value > (#len(state.source) - at) { return failed(status, state, at, fail.Kind.InvalidInput) }
+    if length.value > (state.source.len - at) { return failed(status, state, at, fail.Kind.InvalidInput) }
     count := #cast(usize, length.value)
     field.bytes = state.source[at..at+count]
     at += count
   } else if field.wire == Wire.StartGroup {
-    if state.depth == #len(state.groups) { return failed(status, state, start, fail.Kind.Capacity) }
+    if state.depth == state.groups.len { return failed(status, state, start, fail.Kind.Capacity) }
     state.groups[state.depth] = field.number
     state.depth += 1
   } else {
@@ -102,7 +102,7 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, fields: []const Field) []
   size: usize = 0
   groups: [64]u32
   depth: usize = 0
-  for i in 0..#len(fields) {
+  for i in 0..fields.len {
     field := fields[i]
     if field.number == 0 || field.number > 536870911 {
       return unencodable(status, fail.Kind.InvalidInput, i)
@@ -116,13 +116,13 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, fields: []const Field) []
     } else if field.wire == Wire.Fixed64 {
       extra += 8
     } else if field.wire == Wire.Bytes {
-      length_size := binary.uleb128_size(#len(field.bytes))
-      if #len(field.bytes) > #max(usize) - extra - length_size {
+      length_size := binary.uleb128_size(field.bytes.len)
+      if field.bytes.len > #max(usize) - extra - length_size {
         return unencodable(status, fail.Kind.Overflow, i)
       }
-      extra += length_size + #len(field.bytes)
+      extra += length_size + field.bytes.len
     } else if field.wire == Wire.StartGroup {
-      if depth == #len(groups) { return unencodable(status, fail.Kind.Capacity, i) }
+      if depth == groups.len { return unencodable(status, fail.Kind.Capacity, i) }
       groups[depth] = field.number
       depth += 1
     } else if field.wire == Wire.EndGroup {
@@ -136,13 +136,13 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, fields: []const Field) []
     if extra > #max(usize) - size { return unencodable(status, fail.Kind.Overflow, i) }
     size += extra
   }
-  if depth != 0 { return unencodable(status, fail.Kind.InvalidInput, #len(fields)) }
-  output := mem.push_array(u8, arena, size)
+  if depth != 0 { return unencodable(status, fail.Kind.InvalidInput, fields.len) }
+  output := mem.push_array<u8>(arena, size)
   at: usize = 0
   for field in fields {
-    at += #len(binary.uleb128_encode(output[at..], key(field)))
+    at += binary.uleb128_encode(output[at..], key(field)).len
     if field.wire == Wire.Varint {
-      at += #len(binary.uleb128_encode(output[at..], field.value))
+      at += binary.uleb128_encode(output[at..], field.value).len
     } else if field.wire == Wire.Fixed32 {
       binary.store_u32_le(output[at..at+4], #cast(u32, field.value))
       at += 4
@@ -150,9 +150,9 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, fields: []const Field) []
       binary.store_u64_le(output[at..at+8], field.value)
       at += 8
     } else if field.wire == Wire.Bytes {
-      at += #len(binary.uleb128_encode(output[at..], #len(field.bytes)))
-      _ = mem.copy(output[at..at+#len(field.bytes)], field.bytes)
-      at += #len(field.bytes)
+      at += binary.uleb128_encode(output[at..], field.bytes.len).len
+      _ = mem.copy(output[at..at+field.bytes.len], field.bytes)
+      at += field.bytes.len
     }
   }
   return output

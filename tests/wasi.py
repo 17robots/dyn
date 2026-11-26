@@ -6,19 +6,19 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=os.environ.get('DYN',str(ROOT/'build/dyn'))
 source=r'''
 use "std/fail"
-use "std/io" io
-use "std/mem" mem
-use "std/os/wasi" wasi
-use "std/terminal" terminal
+use io "std/io"
+use mem "std/mem"
+use wasi "std/os/wasi"
+use terminal "std/terminal"
 fn main() {
   arena := mem.arena_alloc(65536)
   defer { mem.arena_release(arena) }
   status := fail.Status{ on_failure: fail.panic_on_failure }
   arguments := wasi.arguments(arena, &status)
-  if #len(arguments) != 3 || #len(arguments[2]) != 5 { #panic("args") }
+  if arguments.len != 3 || arguments[2].len != 5 { #panic("args") }
   opening: fail.Status
   fd := wasi.open_read(&opening, 3, "input.txt")
-  if #len(arguments[1]) == 4 {
+  if arguments[1].len == 4 {
     if !opening.failed { #panic("unexpected preopen") }
     io.println("denied")
     return

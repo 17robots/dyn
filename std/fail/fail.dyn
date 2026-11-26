@@ -73,10 +73,10 @@ pub struct Status {
 pub fn make(kind: Kind, operation: []const u8, path: []const u8, message: []const u8) Failure {
   result := Failure{ kind: kind }
   // Operation and message are short and say the most; the path gets the rest.
-  operation_kept := smaller(#len(operation), MaxText)
-  message_kept := smaller(#len(message), MaxText - operation_kept)
+  operation_kept := smaller(operation.len, MaxText)
+  message_kept := smaller(message.len, MaxText - operation_kept)
   room := MaxText - operation_kept - message_kept
-  path_kept := #len(path)
+  path_kept := path.len
   cut := path_kept > room
   if cut {
     path_kept = room
@@ -94,7 +94,7 @@ pub fn make(kind: Kind, operation: []const u8, path: []const u8, message: []cons
   path_start := operation_kept + message_kept
   if cut && path_kept > 0 {
     _ = keep(text[path_start..], "...")
-    _ = keep(text[path_start + 3..], path[#len(path) - (path_kept - 3)..])
+    _ = keep(text[path_start + 3..], path[path.len - (path_kept - 3)..])
   } else {
     _ = keep(text[path_start..], path[..path_kept])
   }
@@ -111,9 +111,9 @@ fn smaller(a: usize, b: usize) usize {
 
 // Copies as much of text as fits into storage; the count copied.
 fn keep(storage: []u8, text: []const u8) usize {
-  count := #len(text)
-  if count > #len(storage) {
-    count = #len(storage)
+  count := text.len
+  if count > storage.len {
+    count = storage.len
   }
   for i in 0..count {
     storage[i] = text[i]
@@ -138,18 +138,18 @@ fn text_kept(failure: *const Failure) bool {
 // newer failures are recorded, or copy it. "" once the text is gone.
 pub fn operation_text(failure: *const Failure) []const u8 {
   text := text_of(failure)
-  if #len(text) == 0 { return text }
+  if text.len == 0 { return text }
   return text[..failure.operation_length]
 }
 pub fn message_text(failure: *const Failure) []const u8 {
   text := text_of(failure)
-  if #len(text) == 0 { return text }
+  if text.len == 0 { return text }
   start: usize = failure.operation_length
   return text[start..start + failure.message_length]
 }
 pub fn path_text(failure: *const Failure) []const u8 {
   text := text_of(failure)
-  if #len(text) == 0 { return text }
+  if text.len == 0 { return text }
   start: usize = #cast(usize, failure.operation_length) + failure.message_length
   return text[start..start + failure.path_length]
 }
@@ -274,7 +274,7 @@ fn describe_bare(storage: []u8, failure: Failure) []u8 {
 fn put(storage: []u8, at: usize, text: []const u8) usize {
   used := at
   for byte in text {
-    if used == #len(storage) { return used }
+    if used == storage.len { return used }
     storage[used] = byte
     used += 1
   }
@@ -293,7 +293,7 @@ fn put_number(storage: []u8, at: usize, value: usize) usize {
   }
   used := at
   for i in #reverse(0..count) {
-    if used == #len(storage) { return used }
+    if used == storage.len { return used }
     storage[used] = digits[i]
     used += 1
   }

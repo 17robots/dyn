@@ -14,7 +14,7 @@ fn report(failure: fail.Failure) {
 
 fn main() i32 {
   program := process.start()
-  if #len(program.args) != 3 {
+  if program.args.len != 3 {
     io.eprintln("summary: usage: summary SOURCE OUTPUT")
     return 1
   }

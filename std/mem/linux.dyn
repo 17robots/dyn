@@ -17,7 +17,7 @@ fn mapping_allocate(size: usize) Mapping {
   return Mapping{ bytes: #slice(#cast(*u8, address), size), committed: size, ok: true, zeroed: true }
 }
 fn mapping_release(bytes: []u8) isize {
-  return #syscall(sys.Munmap, &bytes[0], #len(bytes))
+  return #syscall(sys.Munmap, &bytes[0], bytes.len)
 }
 // The whole mapping is committed at creation.
 fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {
@@ -26,10 +26,41 @@ fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {
 
 // Huge pages off for the whole pages inside bytes (MADV_NOHUGEPAGE).
 fn mapping_sparse(bytes: []u8) {
-  if #len(bytes) == 0 { return }
+  if bytes.len == 0 { return }
   start := (#cast(usize, &bytes[0]) + 4095) & ~#cast(usize, 4095)
-  end := (#cast(usize, &bytes[0]) + #len(bytes)) & ~#cast(usize, 4095)
+  end := (#cast(usize, &bytes[0]) + bytes.len) & ~#cast(usize, 4095)
   if end > start {
     _ = #syscall(sys.Madvise, start, end - start, 15)
   }
+}
+
+extern fn rt_lifetime_checks "dyn_lifetime_checks_enabled"() bool
+
+fn mapping_protect(bytes: []u8, from: usize, to: usize, accessible: bool) bool {
+  if bytes.len == 0 || to <= from || to > bytes.len { return true }
+  base := #cast(usize, &bytes[0])
+  start := base + from
+  end := base + to
+  if accessible {
+    pstart := start & ~#cast(usize, 4095)
+    pend := (end + 4095) & ~#cast(usize, 4095)
+    limit := base + bytes.len
+    if pend > limit { pend = limit }
+    if pend <= pstart { return true }
+    return #syscall(sys.Mprotect, pstart, pend - pstart, 3) == 0
+  }
+  pstart := (start + 4095) & ~#cast(usize, 4095)
+  pend := (end + 4095) & ~#cast(usize, 4095)
+  limit := base + bytes.len
+  if pend > limit { pend = limit }
+  if pend <= pstart { return true }
+  return #syscall(sys.Mprotect, pstart, pend - pstart, 0) == 0
+}
+
+fn mapping_thread_id() u64 {
+  return #cast(u64, #syscall(sys.Gettid))
+}
+
+fn mapping_check_lifetimes() bool {
+  return rt_lifetime_checks()
 }

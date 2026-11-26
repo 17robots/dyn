@@ -7,8 +7,8 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE='''use "std/embedded/uart" uart
-use "std/embedded/timer" timer
+SOURCE='''use uart "std/embedded/uart"
+use timer "std/embedded/timer"
 use "std/fail"
 fn check(ok: bool) { if !ok { #panic("embedded helper") } }
 fn start(tick: *timer.SysTick, period: u32, interrupt: bool, clock: bool) fail.Kind {
@@ -53,7 +53,7 @@ fn main() {
   check(registers[2] == 0xffffffff && registers[3] == 0xffffffff)
 }
 '''
-PRIVILEGED='''use "std/embedded/interrupt" irq
+PRIVILEGED='''use irq "std/embedded/interrupt"
 fn main() {
   a := irq.disable()
   b := irq.disable()

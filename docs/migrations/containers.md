@@ -35,8 +35,8 @@ found := maps.get(&index, "name")
 struct Entry { key: []const u8, hash: u64, hash_next: *Entry, value: usize }
 const nil_entry: Entry = Entry{}
 
-table := hash.slots(Entry, &arena, 256)
-entry := mem.push(Entry, &arena)
+table := hash.slots<Entry>(&arena, 256)
+entry := mem.push<Entry>(&arena)
 entry.key = strings.clone(&arena, "name")
 entry.hash = hash.hash_bytes(seed, entry.key)
 entry.value = 42
@@ -59,7 +59,7 @@ mem.release(&pool, spark)
 // After: Particle gains free_next
 spark := list.free_pop(&state.first_free, &nil_particle)
 if spark == &nil_particle {
-  spark = mem.push(Particle, &arena)
+  spark = mem.push<Particle>(&arena)
 } else {
   mem.clear(spark)
 }
@@ -78,7 +78,7 @@ handle := slots.insert_value(&table, &node)
 found := slots.get_value(Node, &table, handle)
 
 // After
-nodes := mem.push_array(Node, &arena, 64)
+nodes := mem.push_array<Node>(&arena, 64)
 slot := &nodes[0]
 slots.reset(slot)
 handle := slots.handle_of(nodes, slot)

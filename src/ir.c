@@ -717,7 +717,8 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   for (size_t i = 0; i < a->struct_count; ++i)
     name_bytes += a->structs[i].template_of ? IR_INSTANCE_NAME : span_bytes(a->structs[i].name);
   for (size_t i = 0; i < a->enum_count; ++i)
-    name_bytes += a->enums[i].template_of ? IR_INSTANCE_NAME : span_bytes(a->enums[i].name);
+    name_bytes += (a->enums[i].template_of || a->enums[i].is_fallible || a->enums[i].is_error_union)
+                      ? IR_INSTANCE_NAME : span_bytes(a->enums[i].name);
   for (size_t i = 0; i < a->variant_count; ++i) name_bytes += span_bytes(a->variants[i].name);
   for (size_t i = 0; i < a->param_count; ++i) name_bytes += span_bytes(a->params[i].name);
   for (size_t i = 0; i < a->local_count; ++i) name_bytes += span_bytes(a->locals[i].name);
@@ -768,8 +769,9 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   }
   for (size_t i = 0; i < a->enum_count; ++i) {
     ir->enums[i] =
-        (DynIrEnum){.name = a->enums[i].template_of ? copy_instance_name(a, DYN_TYPE_ENUM_BASE + (DynType)i, source, &cursor)
-                                                    : copy_span(a->enums[i].name, source, &cursor),
+        (DynIrEnum){.name = (a->enums[i].template_of || a->enums[i].is_fallible || a->enums[i].is_error_union)
+                                ? copy_instance_name(a, DYN_TYPE_ENUM_BASE + (DynType)i, source, &cursor)
+                                : copy_span(a->enums[i].name, source, &cursor),
                     .span = a->enums[i].span,
                     .tag_type = a->enums[i].tag_type,
                     .variant_start = a->enums[i].variant_start,

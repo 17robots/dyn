@@ -28,9 +28,9 @@ def array(values):
     return ',\n'.join('  ' + ', '.join(map(str, values[i:i+8])) for i in range(0, len(values), 8))
 
 SOURCE = f'''use "std/fail"
-use "std/fmt" fmt
-use "std/io" io
-use "std/mem" mem
+use fmt "std/fmt"
+use io "std/io"
+use mem "std/mem"
 const unsigned: [{len(unsigned)}]u64 = [
 {array(unsigned)}
 ]
@@ -46,7 +46,7 @@ fn check_unsigned(value: u64) {{
   io.println("{{}}", fmt.bytes(&reference))
   bounded: [24]u8
   for capacity in 0..22 {{
-    for i in 0..#len(bounded) {{ bounded[i] = '!' }}
+    for i in 0..bounded.len {{ bounded[i] = '!' }}
     state_status: fail.Status
     state := fmt.buffer(&state_status, bounded[..capacity])
     enough := capacity >= reference.length
@@ -71,7 +71,7 @@ fn check_signed(bits: u64) {{
   io.println("{{}}", fmt.bytes(&reference))
   bounded: [24]u8
   for capacity in 0..22 {{
-    for i in 0..#len(bounded) {{ bounded[i] = '!' }}
+    for i in 0..bounded.len {{ bounded[i] = '!' }}
     state_status: fail.Status
     state := fmt.buffer(&state_status, bounded[..capacity])
     enough := capacity >= reference.length

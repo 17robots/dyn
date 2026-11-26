@@ -150,6 +150,37 @@ Layer: std
 - `fn stale(copy: *const Copy, shared: *Shared) u64`: Zero when copy is current;
 - `fn rebuilt(copy: *Copy, version: u64)`: Stamps copy with the version stale returned before the rebuild.
 
+## std/collections
+
+Layer: heap
+
+- `struct Array<T> { items: []T, storage: []T, arena: *mem.Arena, }`: Growing array on an arena.
+- `fn array<T>(arena: *mem.Arena) Array<T>`: Creates an empty arena-backed array.
+- `fn push<T>(a: *Array<T>, value: T)`: Appends `value` to the end of `a`.
+- `fn push_ref<T>(a: *Array<T>, value: T) *T`: Appends `value` to `a` and returns a pointer to the stored slot (valid until the next growth).
+- `fn push_all<T>(a: *Array<T>, values: []const T)`: Appends every element of `values` to `a`.
+- `fn get<T>(a: *const Array<T>, index: usize) *T`: Returns a pointer to element `index`, or `nil` when out of bounds.
+- `fn pop<T>(a: *Array<T>) T`: Removes and returns the last element, or the zero value if empty.
+- `fn clear<T>(a: *Array<T>)`: Clears all elements while keeping the backing slice in the arena.
+- `struct Entry<K, V> { key: K, value: V, }`: Hash map entry.
+- `struct Map<K, V> { tags: []u8, entries: []Entry<K, V>, count: usize, arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool, }`: Open-addressed hash map on an arena with 1-byte tag probes.
+- `struct Walk<K, V> { map: *const Map<K, V>, at: usize, entry: Entry<K, V>, }`: Map iterator.
+- `fn map<K, V>(arena: *mem.Arena) Map<K, V>`: Creates an empty arena-backed map using the default hash/equality for `K`.
+- `fn map_seeded<K, V>(arena: *mem.Arena, seed: u64) Map<K, V>`: Creates an empty arena-backed map with a caller-chosen hash seed.
+- `fn map_with<K, V>(arena: *mem.Arena, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) Map<K, V>`: Creates an empty arena-backed map with custom hash and equality functions.
+- `fn map_seeded_with<K, V>(arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) Map<K, V>`: Creates an empty arena-backed map with a custom seed, hash, and equality.
+- `fn map_insert<K, V>(m: *Map<K, V>, key: K, value: V)`: Inserts or overwrites `key` with `value`.
+- `fn map_get<K, V>(m: *const Map<K, V>, key: K) *V`: Returns a pointer to the value for `key`, or `nil` when absent.
+- `fn map_upsert<K, V>(m: *Map<K, V>, key: K, initial: V) *V`: Inserts `initial` if `key` is absent and returns a pointer to its value slot.
+- `fn map_contains<K, V>(m: *const Map<K, V>, key: K) bool`: Returns true when `key` is in `m`.
+- `fn map_remove<K, V>(m: *Map<K, V>, key: K) bool`: Removes `key` from `m`.
+- `fn map_walk<K, V>(m: *const Map<K, V>) Walk<K, V>`: Starts an iteration over `m`.
+- `fn map_next<K, V>(it: *Walk<K, V>) bool`: Advances `it` to the next live entry.
+- `struct Ring<T> { data: []T, read: usize, count: usize, }`: Fixed-capacity generic ring buffer backed by an arena slice.
+- `fn ring<T>(arena: *mem.Arena, capacity: usize) Ring<T>`: Creates a ring buffer with `capacity` slots in `arena`.
+- `fn ring_push<T>(r: *Ring<T>, value: T) bool`: Pushes `value` into `r`.
+- `fn ring_pop<T>(r: *Ring<T>) T`: Pops the oldest element from `r`, or the zero value when empty.
+
 ## std/compress/deflate
 
 Layer: heap
@@ -210,14 +241,14 @@ Layer: std
 
 Layer: heap
 
-- `struct Array(T) { items: []T, storage: []T, arena: *mem.Arena, }`: items is the used front of storage.
-- `fn init(a: *Array($T), arena: *mem.Arena)`: Sets up an empty array.
-- `fn push(a: *Array($T), value: $T)`: Adds value at the end.
-- `fn push_ref(a: *Array($T), value: $T) *T`: Adds value at the end and returns its address, which goes stale at the next push.
-- `fn push_all(a: *Array($T), values: []const $T)`: Adds every value at the end.
-- `fn get(a: *const Array($T), index: usize) *T`: The element at index, or nil past the end.
-- `fn pop(a: *Array($T)) T`: The last element, removed, or the zero value when the array is empty.
-- `fn clear(a: *Array($T))`: Empties the array.
+- `struct Array<T> { items: []T, storage: []T, arena: *mem.Arena, }`: items is the used front of storage.
+- `fn init<T>(a: *Array<T>, arena: *mem.Arena)`: Sets up an empty array.
+- `fn push<T>(a: *Array<T>, value: T)`: Adds value at the end.
+- `fn push_ref<T>(a: *Array<T>, value: T) *T`: Adds value at the end and returns its address, which goes stale at the next push.
+- `fn push_all<T>(a: *Array<T>, values: []const T)`: Adds every value at the end.
+- `fn get<T>(a: *const Array<T>, index: usize) *T`: The element at index, or nil past the end.
+- `fn pop<T>(a: *Array<T>) T`: The last element, removed, or the zero value when the array is empty.
+- `fn clear<T>(a: *Array<T>)`: Empties the array.
 
 ## std/container/bit_set
 
@@ -231,61 +262,61 @@ Layer: core
 
 Layer: heap
 
-- `struct Chunk(T) { next: *Chunk(T), count: usize, items: [64]T }`
-- `struct List(T) { first: *Chunk(T), last: *Chunk(T), total: usize }`
-- `fn push(arena: *mem.Arena, list: *$L, value: $E) *E`: Appends value and returns its stable address.
-- `fn at(list: *const $L, index: usize, nil_node: *const $E) *E`: Element number index, or nil_node when index is past the end.
-- `fn to_slice(T: type, arena: *mem.Arena, list: *const $L) []T`: Copies every element, in order, into one new contiguous slice from arena.
+- `struct Chunk<T> { next: *Chunk<T>, count: usize, items: [64]T }`
+- `struct List<T> { first: *Chunk<T>, last: *Chunk<T>, total: usize }`
+- `fn push<L, E>(arena: *mem.Arena, list: *L, value: E) *E`: Appends value and returns its stable address.
+- `fn at<L, E>(list: *const L, index: usize, nil_node: *const E) *E`: Element number index, or nil_node when index is past the end.
+- `fn to_slice<T, L>(arena: *mem.Arena, list: *const L) []T`: Copies every element, in order, into one new contiguous slice from arena.
 
 ## std/container/hash
 
 Layer: heap
 
-- `fn slots(T: type, arena: *mem.Arena, count: usize) []*T`: Returns count empty slots from arena.
-- `fn find(slots: []*$T, hash: u64, key: []const u8, nil_node: *const $T) *T`: Finds the node with this hash and key, or returns nil_node.
-- `fn insert(slots: []*$T, node: *$T)`: Adds node at the front of its chain.
-- `fn remove(slots: []*$T, node: *$T) bool`: Unlinks node from its chain.
+- `fn slots<T>(arena: *mem.Arena, count: usize) []*T`: Returns count empty slots from arena.
+- `fn find<T>(slots: []*T, hash: u64, key: []const u8, nil_node: *const T) *T`: Finds the node with this hash and key, or returns nil_node.
+- `fn insert<T>(slots: []*T, node: *T)`: Adds node at the front of its chain.
+- `fn remove<T>(slots: []*T, node: *T) bool`: Unlinks node from its chain.
 - `fn hash_bytes(seed: u64, key: []const u8) u64`: SipHash-1-3 keyed by seed.
 
 ## std/container/list
 
 Layer: core
 
-- `fn sll_stack_push(first: **$T, node: *$T)`: Singly linked stack through next.
-- `fn sll_stack_pop(first: **$T, nil_node: *const $T) *T`: Pops the top node, or returns nil_node when the stack is empty.
-- `fn sll_queue_push(first, last: **$T, node: *$T)`: Singly linked queue through next: push at the back, pop from the front.
-- `fn sll_queue_push_front(first, last: **$T, node: *$T)`
-- `fn sll_queue_pop(first, last: **$T, nil_node: *const $T) *T`: Pops the front node, or returns nil_node when the queue is empty.
-- `fn dll_push_back(first, last: **$T, node: *$T)`: Doubly linked list through next and prev.
-- `fn dll_push_front(first, last: **$T, node: *$T)`
-- `fn dll_insert_after(first, last: **$T, after: *$T, node: *$T)`: Inserts node directly after after, which must already be in the list.
-- `fn dll_remove(first, last: **$T, node: *$T)`: Unlinks node, which must be in the list, and clears its links.
-- `fn tree_push_child(parent: *$T, node: *$T)`: Trees: each node has parent, first, last, next and prev.
-- `fn tree_remove(node: *$T)`: Detaches node from its parent.
-- `fn free_push(first_free: **$T, node: *$T)`: Free lists through free_next, a link separate from next so that freeing a node cannot corrupt another list it is still in.
-- `fn free_pop(first_free: **$T, nil_node: *const $T) *T`: Takes a node back from the free list, or returns nil_node when it is empty.
+- `fn sll_stack_push<T>(first: **T, node: *T)`: Singly linked stack through next.
+- `fn sll_stack_pop<T>(first: **T, nil_node: *const T) *T`: Pops the top node, or returns nil_node when the stack is empty.
+- `fn sll_queue_push<T>(first, last: **T, node: *T)`: Singly linked queue through next: push at the back, pop from the front.
+- `fn sll_queue_push_front<T>(first, last: **T, node: *T)`
+- `fn sll_queue_pop<T>(first, last: **T, nil_node: *const T) *T`: Pops the front node, or returns nil_node when the queue is empty.
+- `fn dll_push_back<T>(first, last: **T, node: *T)`: Doubly linked list through next and prev.
+- `fn dll_push_front<T>(first, last: **T, node: *T)`
+- `fn dll_insert_after<T>(first, last: **T, after: *T, node: *T)`: Inserts node directly after after, which must already be in the list.
+- `fn dll_remove<T>(first, last: **T, node: *T)`: Unlinks node, which must be in the list, and clears its links.
+- `fn tree_push_child<T>(parent: *T, node: *T)`: Trees: each node has parent, first, last, next and prev.
+- `fn tree_remove<T>(node: *T)`: Detaches node from its parent.
+- `fn free_push<T>(first_free: **T, node: *T)`: Free lists through free_next, a link separate from next so that freeing a node cannot corrupt another list it is still in.
+- `fn free_pop<T>(first_free: **T, nil_node: *const T) *T`: Takes a node back from the free list, or returns nil_node when it is empty.
 
 ## std/container/map
 
 Layer: heap
 
-- `struct Entry(K, V) { key: K, value: V }`
-- `struct Map(K, V) { tags: []u8, entries: []Entry(K, V), count: usize, arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool, }`: Two parallel arrays.
-- `fn init(m: *Map($K, $V), arena: *mem.Arena)`: Sets up an empty map.
-- `fn init_seeded(m: *Map($K, $V), arena: *mem.Arena, seed: u64)`: init with a chosen seed, for keys an attacker may choose.
-- `fn init_with(m: *Map($K, $V), arena: *mem.Arena, hash_key: fn(u64, $K) u64, equal_key: fn($K, $K) bool)`: init with the key's hash and equality: fn(seed, key) u64 and fn(a, b) bool.
-- `fn init_seeded_with(m: *Map($K, $V), arena: *mem.Arena, seed: u64, hash_key: fn(u64, $K) u64, equal_key: fn($K, $K) bool)`: init_with and a chosen seed, passed to every hash_key call.
+- `struct Entry<K, V> { key: K, value: V }`
+- `struct Map<K, V> { tags: []u8, entries: []Entry<K, V>, count: usize, arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool, }`: Two parallel arrays.
+- `fn init<K, V>(m: *Map<K, V>, arena: *mem.Arena)`: Sets up an empty map.
+- `fn init_seeded<K, V>(m: *Map<K, V>, arena: *mem.Arena, seed: u64)`: init with a chosen seed, for keys an attacker may choose.
+- `fn init_with<K, V>(m: *Map<K, V>, arena: *mem.Arena, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool)`: init with the key's hash and equality: fn(seed, key) u64 and fn(a, b) bool.
+- `fn init_seeded_with<K, V>(m: *Map<K, V>, arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool)`: init_with and a chosen seed, passed to every hash_key call.
 - `fn text_hash(seed: u64, key: []const u8) u64`
 - `fn text_equal(left: []const u8, right: []const u8) bool`
 - `fn integer_hash(seed: u64, key: u64) u64`: Finalizer from MurmurHash3: sequential integers must not cluster.
 - `fn integer_equal(left: u64, right: u64) bool`
-- `fn insert(m: *Map($K, $V), key: $K, value: $V)`: Sets key to value, adding it when absent.
-- `fn upsert(m: *Map($K, $V), key: $K, initial: $V) *V`: The value for key, added as initial when absent: one lookup for counting, as in map.upsert(&counts, word, 0).* += 1.
-- `fn get(m: *const Map($K, $V), key: $K) *V`: The value for key, or nil when key is absent.
-- `fn remove(m: *Map($K, $V), key: $K) bool`: Removes key.
-- `struct Walk(K, V) { map: *const Map(K, V), at: usize, entry: *Entry(K, V) }`: A walk over a map's entries.
-- `fn walk(m: *const Map($K, $V)) Walk(K, V)`
-- `fn next(it: *Walk($K, $V)) bool`: Moves to the next entry and sets it.entry, or returns false at the end.
+- `fn insert<K, V>(m: *Map<K, V>, key: K, value: V)`: Sets key to value, adding it when absent.
+- `fn upsert<K, V>(m: *Map<K, V>, key: K, initial: V) *V`: The value for key, added as initial when absent: one lookup for counting, as in map.upsert(&counts, word, 0).* += 1.
+- `fn get<K, V>(m: *const Map<K, V>, key: K) *V`: The value for key, or nil when key is absent.
+- `fn remove<K, V>(m: *Map<K, V>, key: K) bool`: Removes key.
+- `struct Walk<K, V> { map: *const Map<K, V>, at: usize, entry: *Entry<K, V> }`: A walk over a map's entries.
+- `fn walk<K, V>(m: *const Map<K, V>) Walk<K, V>`
+- `fn next<K, V>(it: *Walk<K, V>) bool`: Moves to the next entry and sets it.entry, or returns false at the end.
 
 ## std/container/ring
 
@@ -302,11 +333,11 @@ Layer: core
 Layer: core
 
 - `struct Handle { index: u32, generation: u32 }`
-- `fn reset(node: *$T)`: Prepares a fresh or reused slot: zeroes every field except generation and marks the slot live.
-- `fn retire(node: *$T)`: Marks a live slot free.
-- `fn is_live(node: *const $T) bool`
-- `fn handle_of(slots: []$T, node: *const $T) Handle`: The handle for node, which must be an element of slots.
-- `fn resolve(slots: []$T, handle: Handle, nil_node: *const $T) *T`: The live slot the handle was made for, or nil_node when the handle is stale, zero, or out of range.
+- `fn reset<T>(node: *T)`: Prepares a fresh or reused slot: zeroes every field except generation and marks the slot live.
+- `fn retire<T>(node: *T)`: Marks a live slot free.
+- `fn is_live<T>(node: *const T) bool`
+- `fn handle_of<T>(slots: []T, node: *const T) Handle`: The handle for node, which must be an element of slots.
+- `fn resolve<T>(slots: []T, handle: Handle, nil_node: *const T) *T`: The live slot the handle was made for, or nil_node when the handle is stale, zero, or out of range.
 
 ## std/crypto/aead
 
@@ -716,8 +747,8 @@ Layer: heap
 - `fn add(parent: *Value, child: *Value) bool`
 - `fn add_member(parent: *Value, key: []const u8, child: *Value) bool`
 - `fn object_get(object: *const Value, key: []const u8) *const Value`: The member named key, or &nil_value.
-- `fn get(T: type, status: *fail.Status, object: *const Value, key: []const u8) T`: Reads member key of object as T: an integer type, f32, f64, bool, []const u8 (string text), or *const Value (the member itself).
-- `fn as(T: type, status: *fail.Status, value: *const Value) T`: Reads value itself as T, by the same rules as get.
+- `fn get<T>(status: *fail.Status, object: *const Value, key: []const u8) T`: Reads member key of object as T: an integer type, f32, f64, bool, []const u8 (string text), or *const Value (the member itself).
+- `fn as<T>(status: *fail.Status, value: *const Value) T`: Reads value itself as T, by the same rules as get.
 - `fn array_length(array: *const Value) usize`
 - `fn array_get(array: *const Value, index: usize) *const Value`: Element number index, or &nil_value.
 - `fn is_missing(value: *const Value) bool`
@@ -748,8 +779,8 @@ Layer: heap
 - `fn null(target: *Writer)`
 - `fn raw(target: *Writer, encoded: []const u8)`: Already-encoded JSON, written as is: output of another Writer or encode.
 - `fn field(target: *Writer, name: []const u8, value: any)`: An object member in one call: key, then value written as text ([]const u8 or []u8), integer (any width), unsigned, float or bool.
-- `fn object_of(target: *Writer, value: $T)`: Writes the struct value as a JSON object: each field by name, in declaration order.
-- `fn array_of(target: *Writer, values: []const $T)`: Writes the structs in values as a JSON array of objects (see object_of).
+- `fn object_of<T>(target: *Writer, value: T)`: Writes the struct value as a JSON object: each field by name, in declaration order.
+- `fn array_of<T>(target: *Writer, values: []const T)`: Writes the structs in values as a JSON array of objects (see object_of).
 
 ## std/encoding/json/read
 
@@ -885,9 +916,9 @@ Layer: heap
 
 Layer: core
 
-- `fn count(E: type) usize`
-- `fn from_int(E: type, value: u64) E`: The variant with this tag, or the first variant when no variant has it.
-- `fn name(value: $E) []const u8`: The variant's source name, or "" for a tag that is not a variant.
+- `fn count<E>() usize`
+- `fn from_int<E>(value: u64) E`: The variant with this tag, or the first variant when no variant has it.
+- `fn name<E>(value: E) []const u8`: The variant's source name, or "" for a tag that is not a variant.
 
 ## std/event
 
@@ -1024,6 +1055,11 @@ Layer: std
 - `struct File { descriptor: isize, active: bool, ended: bool, path: []const u8 }`: Files and directories.
 - `struct Metadata { size: u64, inode: u64, device: u64, mode: u16 }`: Size, inode, device and the POSIX mode (type and permission bits).
 - `struct DirectoryEntry { name: []const u8, kind: u8 }`: One directory entry.
+- `enum FsErr { NotFound, PermissionDenied, AlreadyExists, IsDirectory, NotDirectory, InvalidInput, Closed, TooLarge, Io(isize), }`: Structured filesystem error enum for T!FsErr APIs.
+- `fn open_file(path: str) File!FsErr`: Opens path for reading, returning File!FsErr.
+- `fn create_file(path: str) File!FsErr`: Creates path for writing (or truncates if existing), returning File!FsErr.
+- `fn read_file(arena: *memory.Arena, path: str, maximum: usize) []u8!FsErr`: Reads up to maximum bytes from path into arena storage, returning []u8!FsErr.
+- `fn write_file(path: str, source: str) !FsErr`: Writes source to a newly created or truncated file at path, returning !FsErr.
 - `fn is_open(file: *const File) bool`
 - `fn adopt_handle(handle: isize) File`: A File for a native handle opened elsewhere;
 - `fn open(status: *fail.Status, path: []const u8) File`: Opens path for reading.
@@ -1264,6 +1300,7 @@ Layer: heap
 - `fn wasi_text(code: isize) []const u8`
 - `struct Reader { data: rawptr, read: fn(rawptr, *fail.Status, []u8) usize, }`: Byte streams.
 - `struct Writer { data: rawptr, write: fn(rawptr, *fail.Status, []const u8) usize, }`: A write returns how many bytes of source it took, possibly fewer than all;
+- `enum IoErr { EndOfStream, InvalidState, InvalidInput, BrokenPipe, System(isize), }`: Structured I/O error enum for T!IoErr APIs.
 - `fn read(status: *fail.Status, reader: Reader, destination: []u8) usize`: Reads into destination;
 - `fn read_exact(status: *fail.Status, reader: Reader, destination: []u8) usize`: Fills destination.
 - `fn write(status: *fail.Status, writer: Writer, source: []const u8)`: Writes all of source.
@@ -1314,34 +1351,34 @@ Layer: core
 - `const epsilon32: f32 = 1.1920929e-07`
 - `fn inf() f64`
 - `fn nan() f64`
-- `fn is_nan(x: $T) bool`
-- `fn is_inf(x: $T) bool`
-- `fn is_finite(x: $T) bool`
-- `fn sqrt(x: $T) T`
-- `fn floor(x: $T) T`
-- `fn ceil(x: $T) T`
-- `fn trunc(x: $T) T`
-- `fn round(x: $T) T`: Rounds half away from zero.
-- `fn copysign(x, sign: $T) T`: x's magnitude with sign's sign.
-- `fn fma(x, y, z: $T) T`: x * y + z with one rounding.
-- `fn sin(x: $T) T`
-- `fn cos(x: $T) T`
-- `fn tan(x: $T) T`
-- `fn asin(x: $T) T`
-- `fn acos(x: $T) T`
-- `fn atan(x: $T) T`
-- `fn atan2(y, x: $T) T`
-- `fn exp(x: $T) T`
-- `fn exp2(x: $T) T`
-- `fn log(x: $T) T`
-- `fn log2(x: $T) T`
-- `fn log10(x: $T) T`
-- `fn pow(x, y: $T) T`
-- `fn hypot(x, y: $T) T`: sqrt(x * x + y * y) without intermediate overflow.
-- `fn lerp(a, b, t: $T) T`: a + (b - a) * t.
-- `fn unlerp(a, b, value: $T) T`: The t for which lerp(a, b, t) is value.
-- `fn smoothstep(edge0, edge1, x: $T) T`: Hermite step from 0 at edge0 to 1 at edge1.
-- `fn wrap(x, minimum, maximum: $T) T`: x wrapped into [minimum, maximum).
+- `fn is_nan<T>(x: T) bool`
+- `fn is_inf<T>(x: T) bool`
+- `fn is_finite<T>(x: T) bool`
+- `fn sqrt<T>(x: T) T`
+- `fn floor<T>(x: T) T`
+- `fn ceil<T>(x: T) T`
+- `fn trunc<T>(x: T) T`
+- `fn round<T>(x: T) T`: Rounds half away from zero.
+- `fn copysign<T>(x, sign: T) T`: x's magnitude with sign's sign.
+- `fn fma<T>(x, y, z: T) T`: x * y + z with one rounding.
+- `fn sin<T>(x: T) T`
+- `fn cos<T>(x: T) T`
+- `fn tan<T>(x: T) T`
+- `fn asin<T>(x: T) T`
+- `fn acos<T>(x: T) T`
+- `fn atan<T>(x: T) T`
+- `fn atan2<T>(y, x: T) T`
+- `fn exp<T>(x: T) T`
+- `fn exp2<T>(x: T) T`
+- `fn log<T>(x: T) T`
+- `fn log2<T>(x: T) T`
+- `fn log10<T>(x: T) T`
+- `fn pow<T>(x, y: T) T`
+- `fn hypot<T>(x, y: T) T`: sqrt(x * x + y * y) without intermediate overflow.
+- `fn lerp<T>(a, b, t: T) T`: a + (b - a) * t.
+- `fn unlerp<T>(a, b, value: T) T`: The t for which lerp(a, b, t) is value.
+- `fn smoothstep<T>(edge0, edge1, x: T) T`: Hermite step from 0 at edge0 to 1 at edge1.
+- `fn wrap<T>(x, minimum, maximum: T) T`: x wrapped into [minimum, maximum).
 - `fn copysign64(x, sign: f64) f64`
 - `fn trunc64(x: f64) f64`: #trunc, #floor, #ceil, #round, #sqrt and #fma are compiler builtins: one instruction where the target has it, a software routine elsewhere.
 - `fn floor64(x: f64) f64`
@@ -1363,39 +1400,39 @@ Layer: core
 - `fn asin64(x: f64) f64`
 - `fn acos64(x: f64) f64`
 - `fn pow64(x, y: f64) f64`: x^y, using a compensated logarithm/product for finite positive magnitudes.
-- `fn min(a, b: $T) T`: Operands must support <.
-- `fn max(a, b: $T) T`
-- `fn clamp(value, minimum, maximum: $T) T`
-- `fn abs(value: $T) T`: Integers and floats.
-- `fn sign(value: $T) T`: -1, 0 or 1 for signed integers;
-- `fn narrow(T: type, value: $U) T`: Converts value to T and panics if it does not fit;
-- `fn is_signed(T: type) bool`: Integer type facts.
-- `fn max_value(T: type) T`
-- `fn min_value(T: type) T`
-- `fn count_ones(value: $T) u32`
-- `fn leading_zeros(value: $T) u32`: Zero bits above the highest set bit, within T's width.
-- `fn trailing_zeros(value: $T) u32`: Zero bits below the lowest set bit;
-- `fn rotate_left(value: $T, amount: u32) T`
-- `fn rotate_right(value: $T, amount: u32) T`
-- `fn is_pow2(value: $T) bool`
-- `fn next_pow2(value: $T) T`: The smallest power of two at least value.
-- `fn align_up(value, alignment: $T) T`: value rounded up to a multiple of alignment, a power of two.
-- `fn align_down(value, alignment: $T) T`
-- `fn div_ceil(a, b: $T) T`: Division rounding up, for nonnegative operands.
-- `fn gcd(a, b: $T) T`: The nonnegative gcd;
-- `fn lcm(a, b: $T) T`: Panics when the nonnegative result does not fit in T.
-- `fn isqrt(value: $T) T`: The integer square root: the largest r with r * r <= value.
-- `fn add_overflows(a, b: $T) bool`: Whether a + b, a - b or a * b leaves T's range.
-- `fn sub_overflows(a, b: $T) bool`
-- `fn mul_overflows(a, b: $T) bool`
-- `fn wrapping_add(a, b: $T) T`: Arithmetic that wraps on overflow, even under --check-overflow, for code that means to wrap, such as hashes.
-- `fn wrapping_sub(a, b: $T) T`
-- `fn wrapping_mul(a, b: $T) T`
-- `fn saturating_add(a, b: $T) T`: Arithmetic that stops at T's limits instead of overflowing.
-- `fn saturating_sub(a, b: $T) T`
-- `fn saturating_mul(a, b: $T) T`
-- `fn div_or_zero(a, b: $T) T`: Division that treats a zero divisor as a value: returns 0.
-- `fn rem_or_zero(a, b: $T) T`
+- `fn min<T>(a, b: T) T`: Operands must support <.
+- `fn max<T>(a, b: T) T`
+- `fn clamp<T>(value, minimum, maximum: T) T`
+- `fn abs<T>(value: T) T`: Integers and floats.
+- `fn sign<T>(value: T) T`: -1, 0 or 1 for signed integers;
+- `fn narrow<T, U>(value: U) T`: Converts value to T and panics if it does not fit;
+- `fn is_signed<T>() bool`: Integer type facts.
+- `fn max_value<T>() T`
+- `fn min_value<T>() T`
+- `fn count_ones<T>(value: T) u32`
+- `fn leading_zeros<T>(value: T) u32`: Zero bits above the highest set bit, within T's width.
+- `fn trailing_zeros<T>(value: T) u32`: Zero bits below the lowest set bit;
+- `fn rotate_left<T>(value: T, amount: u32) T`
+- `fn rotate_right<T>(value: T, amount: u32) T`
+- `fn is_pow2<T>(value: T) bool`
+- `fn next_pow2<T>(value: T) T`: The smallest power of two at least value.
+- `fn align_up<T>(value, alignment: T) T`: value rounded up to a multiple of alignment, a power of two.
+- `fn align_down<T>(value, alignment: T) T`
+- `fn div_ceil<T>(a, b: T) T`: Division rounding up, for nonnegative operands.
+- `fn gcd<T>(a, b: T) T`: The nonnegative gcd;
+- `fn lcm<T>(a, b: T) T`: Panics when the nonnegative result does not fit in T.
+- `fn isqrt<T>(value: T) T`: The integer square root: the largest r with r * r <= value.
+- `fn add_overflows<T>(a, b: T) bool`: Whether a + b, a - b or a * b leaves T's range.
+- `fn sub_overflows<T>(a, b: T) bool`
+- `fn mul_overflows<T>(a, b: T) bool`
+- `fn wrapping_add<T>(a, b: T) T`: Arithmetic that wraps on overflow, even under --check-overflow, for code that means to wrap, such as hashes.
+- `fn wrapping_sub<T>(a, b: T) T`
+- `fn wrapping_mul<T>(a, b: T) T`
+- `fn saturating_add<T>(a, b: T) T`: Arithmetic that stops at T's limits instead of overflowing.
+- `fn saturating_sub<T>(a, b: T) T`
+- `fn saturating_mul<T>(a, b: T) T`
+- `fn div_or_zero<T>(a, b: T) T`: Division that treats a zero divisor as a value: returns 0.
+- `fn rem_or_zero<T>(a, b: T) T`
 - `struct Mat3 { c0: Vec3, c1: Vec3, c2: Vec3 }`
 - `struct Mat4 { c0: Vec4, c1: Vec4, c2: Vec4, c3: Vec4 }`
 - `struct Quat { x: f32, y: f32, z: f32, w: f32 }`
@@ -1553,10 +1590,13 @@ Layer: heap
 
 Layer: heap
 
-- `struct Arena { // First block only: the newest block, where pushes go. current: *Arena, // The block before this one; nil for the first block. previous: *Arena, // This block's bytes, header included. data: []u8, // Position of data[0]. base: usize, // Bytes used in this block, header included. offset: usize, // Bytes of this block ready to use: what the OS has committed of a // mapping (only Windows commits on demand), or a whole caller buffer. committed: usize, // From this offset on, the block was never handed out and still holds the // zeros the OS gave it, so zeroing pushes skip it and its pages stay // untouched. The block's length when its memory may hold old bytes. fresh: usize, // This block is an OS mapping that release returns. owns_memory: bool, // First block only. Never add blocks: set for arena_from_buffer. fixed_buffer: bool, // First block only: where new blocks come from. source: Source, // First block only: backing bytes across all blocks. backing: usize, // First block only. Opt-in diagnostic scribble; does not make expired pointers safe. poison_on_rewind: bool, }`: An arena is a chain of blocks.
+- `nocopy struct Arena { // First block only: the newest block, where pushes go. current: *Arena, // The block before this one; nil for the first block. previous: *Arena, // This block's bytes, header included. data: []u8, // Position of data[0]. base: usize, // Bytes used in this block, header included. offset: usize, // Bytes of this block ready to use: what the OS has committed of a // mapping (only Windows commits on demand), or a whole caller buffer. committed: usize, // From this offset on, the block was never handed out and still holds the // zeros the OS gave it, so zeroing pushes skip it and its pages stay // untouched. The block's length when its memory may hold old bytes. fresh: usize, // This block is an OS mapping that release returns. owns_memory: bool, // First block only. Never add blocks: set for arena_from_buffer. fixed_buffer: bool, // First block only. Opt-in diagnostic scribble; does not make expired pointers safe. poison_on_rewind: bool, // First block only. Opt-in PROT_NONE trapping on rewound/reset OS pages. protect_on_rewind: bool, // First block only. Opt-in thread-affinity check on push/rewind/release. check_thread: bool, // First block only: where new blocks come from. source: Source, // First block only: backing bytes across all blocks. backing: usize, // First block only: bumped on rewind, reset, and release (for mem.Ref<T>). generation: u64, // First block only: thread id owning this arena when check_thread is enabled. owner_thread: u64, // This block only: byte offset from which pages are currently PROT_NONE (0 = none). protected_from: usize, }`: An arena is a chain of blocks.
 - `struct Source { context: rawptr, take: fn(rawptr, usize) []u8, give: fn(rawptr, []u8), // Preferred size of each block; zero picks the default for the source. block_size: usize, // Cap on backing bytes across all blocks, headers included; zero means none. limit: usize, }`: Where an arena's blocks come from.
 - `const ArenaHeader: usize = 144`: Bytes the arena header takes at the start of each block, and of every arena_from_buffer buffer.
 - `const ArenaBufferOverhead: usize = ArenaHeader + 15`: Maximum bytes consumed by the header and aligning arbitrary caller storage.
+- `fn arena_enable_protect(arena: *Arena)`: Enables PROT_NONE trapping on rewound/reset OS pages for this arena.
+- `fn arena_enable_thread_check(arena: *Arena)`: Enables thread-affinity checks on this arena, binding it to the calling thread.
+- `fn arena_transfer(arena: *Arena)`: Transfers thread-affinity ownership of arena to the calling thread.
 - `fn pages(limit: usize) Source`: OS pages for an arena, at most limit bytes in all (zero: no cap).
 - `fn within(parent: *Arena, limit: usize) Source`: Blocks carved from parent, at most limit bytes in all (zero: no cap).
 - `fn arena_from_buffer(backing: []u8) *Arena`: Places an arena in caller storage.
@@ -1571,16 +1611,20 @@ Layer: heap
 - `fn arena_reset(arena: *Arena)`: Takes back everything pushed.
 - `fn arena_rewind(arena: *Arena, mark: usize)`: Takes back everything pushed after mark, and frees the blocks added since.
 - `fn advise_sparse(bytes: []u8)`: Tells the OS that bytes will be touched sparsely, such as one receive buffer per connection of which few are busy: on Linux the whole pages ...
-- `fn push(T: type, arena: *Arena) *T`: Pushes one fresh T: zeroed, then T's field defaults.
-- `fn push_array(T: type, arena: *Arena, count: usize) []T`: Pushes count zeroed elements.
+- `fn push<T>(arena: *Arena) *T`: Pushes one fresh T: zeroed, then T's field defaults.
+- `struct Ref<T> { ptr: *T, arena: *const Arena, generation: u64, }`: Generational arena reference.
+- `fn push_ref<T>(arena: *Arena) Ref<T>`: Pushes one fresh T and returns a generational Ref<T> bound to arena's current generation.
+- `fn deref<T>(ref: Ref<T>) *T`: Validates that ref's arena has not been rewound, reset, or released, and returns *T.
+- `fn ref_valid<T>(ref: Ref<T>) bool`: Reports whether ref still points into a live generation of its arena.
+- `fn push_array<T>(arena: *Arena, count: usize) []T`: Pushes count zeroed elements.
 - `fn push_bytes(arena: *Arena, count: usize) []u8`: Pushes count uninitialized bytes, for buffers that are written before they are read.
-- `fn copy(destination: []$T, source: []const $T) usize`: Copies source into the start of destination and returns the element count.
-- `fn move(destination: []$T, source: []const $T) usize`: Like copy, but source and destination may overlap.
-- `fn zero(items: []$T)`: Sets every element to its zero value.
-- `fn clear(value: *$T)`: Zeroes the value behind a pointer byte by byte, without a temporary copy, so it is safe for structs too large for the stack.
-- `fn fill(items: []$T, value: $T)`
-- `fn swap(a, b: *$T)`
-- `fn equal(left, right: []const $T) bool`: Elementwise ==.
+- `fn copy<T>(destination: []T, source: []const T) usize`: Copies source into the start of destination and returns the element count.
+- `fn move<T>(destination: []T, source: []const T) usize`: Like copy, but source and destination may overlap.
+- `fn zero<T>(items: []T)`: Sets every element to its zero value.
+- `fn clear<T>(value: *T)`: Zeroes the value behind a pointer byte by byte, without a temporary copy, so it is safe for structs too large for the stack.
+- `fn fill<T>(items: []T, value: T)`
+- `fn swap<T>(a, b: *T)`
+- `fn equal<T>(left, right: []const T) bool`: Elementwise ==.
 - `fn compare(left: []const u8, right: []const u8) i32`
 - `const KiB: usize = 1024`: Binary byte units.
 - `const MiB: usize = 1024 * KiB`
@@ -1644,6 +1688,7 @@ Layer: std
 - `struct Address { bytes: [128]u8, length: usize }`: Large enough for every supported sockaddr.
 - `struct Connection { descriptor: isize, active: bool }`: `active` makes zeroed storage a closed handle;
 - `struct Listener { descriptor: isize, active: bool }`
+- `enum NetErr { Refused, TimedOut, Reset, AddressInUse, Closed, InvalidAddress, System(isize), }`: Structured network error enum for T!NetErr APIs.
 - `fn connection_from_descriptor(descriptor: isize) Connection`: Wraps an open socket descriptor;
 - `fn listener_from_descriptor(descriptor: isize) Listener`
 - `fn socket(status: *fail.Status, family: usize, kind: usize, protocol: usize) isize`: A new socket descriptor, or -1 after a failure.
@@ -1786,15 +1831,15 @@ Layer: std
 - `struct Body { output: io.Writer, finished: bool, // A HEAD response: writes succeed and send nothing. discard: bool, // The response's staging, where small chunks are framed; empty: a stack // buffer, zeroed on each write. staging: []u8, }`: A streamed response body.
 - `type Handler = fn(*fail.Status, *Response, *const Request)`: Handles one request: writes the response, and records any failure in status.
 - `struct ClientResponse { raw: []u8, body: []u8, status: u16, }`
-- `struct Typed(T) { state: *T, handler: fn(*fail.Status, *Response, *const Request, *T), }`: Typed application state.
+- `struct Typed<T> { state: *T, handler: fn(*fail.Status, *Response, *const Request, *T), }`: Typed application state.
 - `struct Binding { handler: Handler, context: rawptr }`
-- `fn bind(typed: *Typed($T)) Binding`
-- `struct TypedRoute(T) { method: []const u8, pattern: []const u8, handler: fn(*fail.Status, *Response, *const Request, *T), }`: Typed router.
-- `struct Routes(T) { routes: []TypedRoute(T), count: usize, state: *T, fallback: fn(*fail.Status, *Response, *const Request, *T), }`
-- `fn typed_routes(storage: []TypedRoute($T), state: *$T) Routes(T)`: Route storage is caller-supplied;
-- `fn add(status: *fail.Status, router: *Routes($T), method: []const u8, pattern: []const u8, handler: fn(*fail.Status, *Response, *const Request, *$T))`: Adds a route.
-- `fn serve_routes(status: *fail.Status, router: *Routes($T), response: *Response, request: *const Request)`: Runs the matching route.
-- `fn bind_routes(router: *Routes($T)) Binding`: Binds a router for a server start, like bind.
+- `fn bind<T>(typed: *Typed<T>) Binding`
+- `struct TypedRoute<T> { method: []const u8, pattern: []const u8, handler: fn(*fail.Status, *Response, *const Request, *T), }`: Typed router.
+- `struct Routes<T> { routes: []TypedRoute<T>, count: usize, state: *T, fallback: fn(*fail.Status, *Response, *const Request, *T), }`
+- `fn typed_routes<T>(storage: []TypedRoute<T>, state: *T) Routes<T>`: Route storage is caller-supplied;
+- `fn add<T>(status: *fail.Status, router: *Routes<T>, method: []const u8, pattern: []const u8, handler: fn(*fail.Status, *Response, *const Request, *T))`: Adds a route.
+- `fn serve_routes<T>(status: *fail.Status, router: *Routes<T>, response: *Response, request: *const Request)`: Runs the matching route.
+- `fn bind_routes<T>(router: *Routes<T>) Binding`: Binds a router for a server start, like bind.
 - `fn match_path(pattern: []const u8, path: []const u8, request: *Request) bool`: Matches path against pattern segment by segment, capturing :name segments into request.params.
 - `fn param(status: *fail.Status, request: *const Request, name: []const u8) []const u8`: Path parameter captured by a Routes pattern, still percent-encoded;
 - `fn server(input: io.Reader, output: io.Writer, storage: []u8) Server`
@@ -1894,10 +1939,10 @@ Layer: std
 - `fn arena(response: *http.Response) *mem.Arena`: Scratch for the current handler, in the worker's request arena: allocate from it and never free.
 - `fn worker_index(response: *http.Response) usize`: Which of the started workers runs this handler, from 0: an index into per-worker state, such as one database connection each, which then ...
 - `fn serve(arena: *mem.Arena, status: *fail.Status, workers: []Worker, address: network.Ipv4Address, config: Config, handler: http.Handler, context: rawptr)`: Runs the server until SIGINT or SIGTERM: watches the signals first (before any thread starts, as std/process/signal requires), starts ...
-- `fn job(T: type, response: *http.Response) *T`: Job storage for run, zeroed, in the connection's job arena: copy what the work needs into it.
-- `fn run(status: *fail.Status, response: *http.Response, data: *$J, work: fn(*$J), finish: fn(*fail.Status, *http.Response, *const http.Request, *$J))`
-- `fn later(status: *fail.Status, response: *http.Response, data: *$J, finish: fn(*fail.Status, *http.Response, *const http.Request, *$J))`: Finishes the request on this worker once every connection that is ready now has had its turn: finish(response, request, data) runs after ...
-- `fn receive_body(status: *fail.Status, response: *http.Response, data: *$J, chunk: fn(*$J, []const u8) bool, finish: fn(*fail.Status, *http.Response, *const http.Request, *$J, BodyEnd))`: In Config.large_body: reads the request body as it arrives instead of buffering it.
+- `fn job<T>(response: *http.Response) *T`: Job storage for run, zeroed, in the connection's job arena: copy what the work needs into it.
+- `fn run<J>(status: *fail.Status, response: *http.Response, data: *J, work: fn(*J), finish: fn(*fail.Status, *http.Response, *const http.Request, *J))`
+- `fn later<J>(status: *fail.Status, response: *http.Response, data: *J, finish: fn(*fail.Status, *http.Response, *const http.Request, *J))`: Finishes the request on this worker once every connection that is ready now has had its turn: finish(response, request, data) runs after ...
+- `fn receive_body<J>(status: *fail.Status, response: *http.Response, data: *J, chunk: fn(*J, []const u8) bool, finish: fn(*fail.Status, *http.Response, *const http.Request, *J, BodyEnd))`: In Config.large_body: reads the request body as it arrives instead of buffering it.
 - `fn open_stream(status: *fail.Status, response: *http.Response, options: http.ResponseOptions, topic: u64) Peer`
 - `fn upgrade(status: *fail.Status, response: *http.Response, request: *const http.Request, topic: u64) Peer`: Answers a WebSocket upgrade request (RFC 6455 4.2) with 101 and switches the connection to WebSocket frames;
 - `const Http2Streams: usize = 100`
@@ -2190,6 +2235,7 @@ Layer: std
 - `const Ioctl: u64 = 54`
 - `const Readlink: u64 = 58`
 - `const Munmap: u64 = 73`
+- `const Mprotect: u64 = 74`
 - `const Fcntl: u64 = 92`
 - `const Fsync: u64 = 95`
 - `const Socket: u64 = 97`
@@ -2209,6 +2255,7 @@ Layer: std
 - `const Getdirentries64: u64 = 344`
 - `const Kqueue: u64 = 362`
 - `const Kevent: u64 = 363`
+- `const ThreadSelfid: u64 = 372`
 
 ## std/os/wasi
 
@@ -2264,6 +2311,9 @@ Layer: core
 
 - `fn u64_decimal(status: *fail.Status, text: []const u8) u64`: Whole text as a decimal u64: one or more ASCII digits, nothing else (no sign, space or underscore).
 - `fn i64_decimal(status: *fail.Status, text: []const u8) i64`: Whole text as a decimal i64 with an optional leading '-'.
+- `enum ParseErr { Empty, InvalidDigit(usize), Overflow(usize), }`: Structured error enum for T!ParseErr parsing APIs.
+- `fn parse_u64(text: str) u64!ParseErr`: Parses a decimal u64, returning u64!ParseErr.
+- `fn parse_i64(text: str) i64!ParseErr`: Parses a decimal i64 with an optional leading '-', returning i64!ParseErr.
 
 ## std/path
 
@@ -2493,14 +2543,25 @@ Layer: core
 - `fn f64x2_mul(a, b: F64x2) F64x2`
 - `fn f64x2_div(a, b: F64x2) F64x2`
 
+## std/slice
+
+Layer: core
+
+- `fn eql<T>(a: []const T, b: []const T) bool`: Returns true when `a` and `b` have the same length and equal elements.
+- `fn find<T>(items: []const T, target: T) usize`: Returns the first index where `items[i] == target`, or `items.len` if absent.
+- `fn contains<T>(items: []const T, target: T) bool`: Returns true when `target` appears in `items`.
+- `fn copy<T>(dst: []T, src: []const T) usize`: Copies `min(dst.len, src.len)` elements from `src` into `dst` and returns the number copied.
+- `fn fill<T>(dst: []T, value: T)`: Sets every element of `dst` to `value`.
+- `fn reverse<T>(items: []T)`: Reverses `items` in place.
+
 ## std/sort
 
 Layer: heap
 
-- `fn sort(values: []$T)`: Sorts in place without allocating.
-- `fn search(values: []const $T, target: $T) usize`: Binary search in sorted values: the index of target, or len(values) when it is missing (never an insertion point), as bytes.find does.
-- `fn sort_by(values: []$T, less: fn($T, $T) bool)`: Sorts in place by less without allocating, as sort does.
-- `fn stable_by(arena: *mem.Arena, values: []$T, less: fn($T, $T) bool)`: Sorts in place by less, keeping equal elements in their original order.
+- `fn sort<T>(values: []T)`: Sorts in place without allocating.
+- `fn search<T>(values: []const T, target: T) usize`: Binary search in sorted values: the index of target, or len(values) when it is missing (never an insertion point), as bytes.find does.
+- `fn sort_by<T>(values: []T, less: fn(T, T) bool)`: Sorts in place by less without allocating, as sort does.
+- `fn stable_by<T>(arena: *mem.Arena, values: []T, less: fn(T, T) bool)`: Sorts in place by less, keeping equal elements in their original order.
 
 ## std/strings
 
@@ -2522,9 +2583,9 @@ Layer: heap
 - `fn trim_left(text: []const u8) []const u8`
 - `fn trim_right(text: []const u8) []const u8`
 - `fn scan_line(state: *Scanner) []const u8`: The next line without its \n or \r\n.
-- `fn parse(T: type, text: []const u8) T`: Parses text as T: an integer type, f32, f64 or bool ("true" or "false").
-- `fn parse_base(T: type, text: []const u8, base: u8) T`: Like parse for integer types, in base 2 through 36.
-- `fn valid(T: type, text: []const u8) bool`: Whether text parses as T, by the same rules as parse.
+- `fn parse<T>(text: []const u8) T`: Parses text as T: an integer type, f32, f64 or bool ("true" or "false").
+- `fn parse_base<T>(text: []const u8, base: u8) T`: Like parse for integer types, in base 2 through 36.
+- `fn valid<T>(text: []const u8) bool`: Whether text parses as T, by the same rules as parse.
 - `fn clone(arena: *memory.Arena, source: []const u8) []u8`: Copies source into arena.
 - `fn join(arena: *memory.Arena, parts: [][]const u8, separator: []const u8) []u8`: Joins parts with separator between them.
 - `fn split(arena: *memory.Arena, source: []const u8, separator: []const u8) [][]const u8`: Splits source on separator.
@@ -2708,8 +2769,8 @@ Layer: heap
 Layer: std
 
 - `struct Spawner { data: rawptr, spawn: fn(rawptr, *mem.Arena, usize, fn(rawptr) isize, rawptr) rawptr, join: fn(rawptr, rawptr) bool, }`: A thread creator chosen by the caller, for code that starts threads on someone else's behalf (servers, pools).
-- `fn spawn(arena: *mem.Arena, status: *fail.Status, stack: []u8, entry: fn(*$C) isize, context: *$C) *Thread`: Starts entry(context) on a new thread with stack as its stack.
-- `fn spawn_with_size(arena: *mem.Arena, status: *fail.Status, size: usize, entry: fn(*$C) isize, context: *$C) *Thread`: As spawn, with a stack of size bytes that the thread owns until join.
+- `fn spawn<C>(arena: *mem.Arena, status: *fail.Status, stack: []u8, entry: fn(*C) isize, context: *C) *Thread`: Starts entry(context) on a new thread with stack as its stack.
+- `fn spawn_with_size<C>(arena: *mem.Arena, status: *fail.Status, size: usize, entry: fn(*C) isize, context: *C) *Thread`: As spawn, with a stack of size bytes that the thread owns until join.
 - `struct Thread { handle: rawptr, identifier: u32, entry: fn(rawptr) isize, context: rawptr, ready: sync.AtomicU32 }`
 - `fn join(status: *fail.Status, thread: *Thread)`: Ownership: success ends worker access and clears the native owner.
 - `fn id(thread: *const Thread) u32`: Mach thread identifier while unjoined;
@@ -2739,7 +2800,7 @@ Layer: std
 Layer: std
 
 - `struct Thread { handle: usize, entry: fn(rawptr) isize, context: rawptr, joined: bool }`
-- `fn spawn(arena: *mem.Arena, status: *fail.Status, stack_size: usize, entry: fn(*$C) isize, context: *$C) *Thread`: libc owns the stack;
+- `fn spawn<C>(arena: *mem.Arena, status: *fail.Status, stack_size: usize, entry: fn(*C) isize, context: *C) *Thread`: libc owns the stack;
 - `fn join(status: *fail.Status, thread: *Thread)`: Waits for the thread.
 - `fn spawner() threading.Spawner`
 
@@ -2856,7 +2917,7 @@ Layer: heap
 - `struct Input { x: f32, y: f32, down: bool, // Scroll in pixels this frame, positive scrolls content up and left. scroll_x: f32, scroll_y: f32, // UTF-8 text typed this frame, and editing keys pressed this frame. text: []const u8, backspace: bool, delete: bool, left: bool, right: bool, home: bool, end: bool, enter: bool, escape: bool, tab: bool, shift: bool, control: bool, select_all: bool, copy: bool, cut: bool, paste: bool, // The clipboard text offered for paste this frame. clipboard: []const u8, // The input method's in-progress composition (preedit), shown at the focused // text field's caret but not yet inserted. composition_cursor is a byte // offset into it, or -1. composition: []const u8, composition_cursor: i32, // Editing/navigation keys in this poll were consumed by the input method, // including the poll that clears preedit. Committed text still inserts. composition_handled: bool, // One complete correction as its own ordered input step. Do not combine it // with unrelated keyboard/text input. Stale or invalid corrections fail closed. correction: *const text_edits.Replacement, }`
 - `struct Signal { box: *Box, hovered: bool, pressed: bool, released: bool, clicked: bool, dragging: bool, // Pointer movement since the press while dragging. drag_x: f32, drag_y: f32, }`
 - `struct State { arena: *mem.Arena, frame: *mem.Arena, buckets: []*Box, free: *Box, frame_index: u64, root: *Box, parents: [parent_limit]*Box, depth: usize, input: Input, previous_down: bool, press_x: f32, press_y: f32, hot: u64, next_hot: u64, active: u64, dt: f32, // Text measurement in pixels, and the line height used for Text sizes. measure: fn(rawptr, []const u8) f32, measure_data: rawptr, line_height: f32, // Seconds for animations to close half their remaining distance. half_life: f32, // Keyboard focus, and text that a copy or cut this frame produced. focused: u64, focus_claimed: bool, // Snap animations instead of easing them, for users who ask for reduced // motion. reduced_motion: bool, // Display scale applied to pixel sizes and text padding. Pass a font // rasterized at the same scale. scale: f32, copied: []const u8, // Owned previous preedit for change-driven redraw; native snapshots cap256. composition_text: [256]u8, composition_length: usize, composition_cursor: i32, // Set during building when a focused text field wants text input: pass // text_input and text_input_rect (x, y, width, height in window pixels) to // the window so the input method places its candidates at the caret. text_input: bool, text_input_rect: [4]f32, text_input_anchor: *Box, // Publish this bounded context to a native input method before enabling the // focused field. Tracker lifetime must match one window, not one widget. text_context: text_edits.Context, text_context_error: fail.Kind, text_tracker: text_edits.Tracker, }`
-- `fn push_state(arena: *mem.Arena, measure: fn(*$C, []const u8) f32, measure_data: *$C, line_height: f32) *State`: A state in arena.
+- `fn push_state<C>(arena: *mem.Arena, measure: fn(*C, []const u8) f32, measure_data: *C, line_height: f32) *State`: A state in arena.
 - `fn display_text(label: []const u8) []const u8`: The visible part of a label: text before "##" is shown, the whole label is hashed.
 - `fn key(seed: u64, label: []const u8) u64`
 - `fn key_bytes(seed: u64, identity: []const u8) u64`: Hashes an explicit identity without interpreting label suffixes.

@@ -126,7 +126,7 @@ pub fn ret_isize(x:isize) i64 { return #cast(i64,cisize(x)) }
 pub fn castfn(p:rawptr,x:u64) u64 { return #cast(fn(u64) u64,p)(x) }
 extern fn cfarg(x:f64) u32
 extern fn cfret() f64
-fn cdesc(x:[]const u8) u32 { return #cast(u32,#len(x)) }
+fn cdesc(x:[]const u8) u32 { return #cast(u32,x.len) }
 pub fn deadfarg() { _=cfarg(1.0) }
 pub fn deadfret() { _=cfret() }
 pub fn deaddesc() { _=cdesc("") }

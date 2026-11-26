@@ -1,4 +1,4 @@
-use "std/io" io
+use io "std/io"
 use "std/os/linux/sys"
 #target(kernel: linux)
 
@@ -20,10 +20,10 @@ fn native_close(handle: isize) isize {
   return #syscall(sys.Close, handle)
 }
 fn native_read(handle: isize, destination: []u8) isize {
-  return #syscall(sys.Read, handle, &destination[0], #len(destination))
+  return #syscall(sys.Read, handle, &destination[0], destination.len)
 }
 fn native_write(handle: isize, source: []const u8) isize {
-  return #syscall(sys.Write, handle, &source[0], #len(source))
+  return #syscall(sys.Write, handle, &source[0], source.len)
 }
 fn native_seek(handle: isize, offset: isize, origin: usize) isize {
   return #syscall(sys.Lseek, handle, offset, origin)

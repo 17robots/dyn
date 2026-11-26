@@ -48,7 +48,7 @@ fn main() {
     // Copied text outlives the row.
     name := sqlite.text(arena, lookup, 1)
     sqlite.done(lookup)
-    io.println("first {} {} {}", id, name, #len(name))
+    io.println("first {} {} {}", id, name, name.len)
   }
   io.println("missing {}", sqlite.first(&status, lookup, "zed"))
   sqlite.done(lookup)

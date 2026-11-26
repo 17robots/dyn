@@ -15,7 +15,7 @@ fn main() {
     #panic("signed index")
   }
   view := values[wide..i]
-  if #len(view) != 1 || view[0] != 20 {
+  if view.len != 1 || view[0] != 20 {
     #panic("signed slice")
   }
   // Empty standard input makes this index -1, unknown to the compiler.

@@ -39,6 +39,6 @@ fn main() i32 {
   pool.stop(&status, raw)
   pool.stop(&status, libc)
   if status.failed { return 1 }
-  io.println("stopped {}", #len(workers))
+  io.println("stopped {}", workers.len)
   return 0
 }

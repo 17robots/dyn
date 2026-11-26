@@ -9,11 +9,11 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 import hashlib
 import hmac
-SOURCE=r'''use "std/crypto/hmac" hmac
-use "std/crypto/kdf" kdf
-use "std/crypto/password" password
-use "std/crypto/chacha20" chacha
-use "std/bytes" bytes
+SOURCE=r'''use hmac "std/crypto/hmac"
+use kdf "std/crypto/kdf"
+use password "std/crypto/password"
+use chacha "std/crypto/chacha20"
+use bytes "std/bytes"
 use "std/fail"
 fn check(ok: bool) { if !ok { #panic("KDF contract") } }
 fn hkdf_ok(destination: []u8, salt: []const u8, material: []const u8, info: []const u8, scratch: []u8) bool {
@@ -75,7 +75,7 @@ SOURCE+=r''' for i in 0..100 { output[i] = 165 }
  if #sizeof(usize) == 8 {
   size: u64 = 2305843009213693952
   huge_key := #slice(&key[0], #cast(usize,size))
-  check(#len(hmac.sha256(output[..],huge_key,"message")) == 0 && filled(output[..],165))
+  check(hmac.sha256(output[..],huge_key,"message").len == 0 && filled(output[..],165))
  }
 }
 '''

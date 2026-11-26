@@ -147,7 +147,7 @@ pub fn exercise() {
   r := recursive(4)
   if r != 7 { #panic("recursion") }
   s := text(next())
-  if #len(s) != 3 { #panic("descriptor") }
+  if s.len != 3 { #panic("descriptor") }
   answer = choose(4, 2)
   if answer != 2 || state != 214 { #panic("second expansion") }
   captures()
@@ -185,7 +185,7 @@ WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{}).then(({instance})=>
   instance.exports.dyn_initialize(); instance.exports.exercise();
 }).catch(e=>{console.error(e);process.exit(1)});''', wasm)
 
-    (module/'main.dyn').write_text('''use "std/io" io
+    (module/'main.dyn').write_text('''use io "std/io"
 fn fail() { defer { io.println("inner") }
 #panic("inline panic") }
 fn main() { defer { io.println("outer") }

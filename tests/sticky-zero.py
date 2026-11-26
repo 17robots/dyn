@@ -8,13 +8,13 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/mem" mem
+SOURCE = r'''use mem "std/mem"
 use "std/fail"
-use "std/fmt" fmt
-use "std/bytes/builder" builder
-use "std/process" process
-use "std/io" io
-use "std/fs/watch" watch
+use fmt "std/fmt"
+use builder "std/bytes/builder"
+use process "std/process"
+use io "std/io"
+use watch "std/fs/watch"
 fn check(ok: bool, message: []const u8) {
   if !ok {
     #panic(message)
@@ -54,7 +54,7 @@ fn main() {
   appended: fail.Status
   builder.append(&appended, &text, "abc")
   builder.append(&appended, &text, "x")
-  check(appended.failure.kind == fail.Kind.Capacity && #len(builder.bytes(&text)) == 0, "status keeps the first failure")
+  check(appended.failure.kind == fail.Kind.Capacity && builder.bytes(&text).len == 0, "status keeps the first failure")
   arena := mem.arena_alloc(0)
   builder.clear(&text)
   builder.append_grow(arena, &text, "grown")

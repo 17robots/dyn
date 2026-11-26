@@ -45,7 +45,7 @@ def function(i):
   pair := Pair{{left: total, right: #cast(i64, view.*[{i % size}])}}
   next := {value}
   _ = next
-{generic}  return pair.left + pair.right + #cast(i64, #len(numbers))
+{generic}  return pair.left + pair.right + #cast(i64, numbers.len)
 }}
 '''
 
@@ -55,7 +55,7 @@ use "std/mem"
 
 struct Pair { left: i64, right: i64 }
 
-fn same(x: $T) T {
+fn same<T>(x: T) T {
   return x
 }
 

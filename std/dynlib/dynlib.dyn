@@ -1,5 +1,5 @@
-use "std/mem" mem
-use "std/c" cabi
+use mem "std/mem"
+use cabi "std/c"
 use "std/fail"
 // Dynamic-loader adapter for Linux, macOS and Windows. Handles own loader
 // references; symbols borrow them. Symbols are invalid after the library is
@@ -18,7 +18,7 @@ pub fn open(status: *fail.Status, path: []const u8, flags: i32) Handle {
   if status == nil { return open(&fail.Status{}, path, flags) }
   if status.failed { return nil }
   storage: [4096 + mem.ArenaBufferOverhead]u8
-  if #len(path) >= #len(storage) {
+  if path.len >= storage.len {
     fail.invalid(status, "load library", path, "the path is too long")
     return nil
   }
@@ -37,7 +37,7 @@ pub fn symbol(status: *fail.Status, handle: Handle, name: []const u8) rawptr {
     return nil
   }
   storage: [4096 + mem.ArenaBufferOverhead]u8
-  if #len(name) >= #len(storage) {
+  if name.len >= storage.len {
     fail.invalid(status, "find symbol", name, "the name is too long")
     return nil
   }

@@ -76,10 +76,10 @@ pub fn send_channel(status: *fail.Status, peer: Peer, channel: u8, bytes: []cons
   }
   if status.failed { return }
   data: rawptr = nil
-  if #len(bytes) != 0 {
+  if bytes.len != 0 {
     data = #cast(rawptr, &bytes[0])
   }
-  if !native_send(peer, data, #len(bytes), channel) {
+  if !native_send(peer, data, bytes.len, channel) {
     fail.invalid(status, "send", "", "no peer, no such channel, or more than 1 MiB")
   }
 }

@@ -10,8 +10,8 @@ def run(args, **kw):
     if result.returncode: raise RuntimeError(shlex.join(map(str,args))+"\n"+result.stdout+result.stderr)
     return result
 source = r'''
-use "std/mem" mem
-use "std/container/list" list
+use mem "std/mem"
+use list "std/container/list"
 struct Slot { free_next: *Slot, value: u32 }
 const nil_slot: Slot = Slot{}
 extern fn host_add "host_add"(a: i32, b: i32) i32
@@ -31,7 +31,7 @@ pub fn increment() { counter += 1 }
 pub fn layout() usize { return #sizeof(usize)*100 + #sizeof(rawptr)*10 + #sizeof([]u8) }
 pub fn arithmetic(a: isize, b: isize) isize { return a / b }
 pub fn big(a: i64) i64 { return a + 1 }
-pub fn alloc(n: usize) rawptr { return &mem.push_array(u32, arena, (n + 3) / 4)[0] }
+pub fn alloc(n: usize) rawptr { return &mem.push_array<u32>(arena, (n + 3) / 4)[0] }
 pub fn reset() { mem.arena_reset(arena) }
 pub fn total(data: *u32, n: usize) u32 {
   values := #slice(data, n)
@@ -47,7 +47,7 @@ pub fn abi() bool {
 }
 pub fn pool_test() bool {
   mem.arena_reset(arena)
-  slots := mem.push_array(Slot, arena, 2)
+  slots := mem.push_array<Slot>(arena, 2)
   first_free: *Slot
   list.free_push(&first_free, &slots[1])
   list.free_push(&first_free, &slots[0])

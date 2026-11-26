@@ -11,37 +11,37 @@ DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 FUNCTIONS = '''use "std/io"
 pub fn loop_sum(s:[]const u8) u64 {
   sum:u64=0
-  for i in 0..#len(s) { sum=(sum+#cast(u64,s[i])) }
+  for i in 0..s.len { sum=(sum+#cast(u64,s[i])) }
   return sum
 }
 pub fn reversed(s:[]const u8,i:usize) u8 {
-  if #len(s)>i { return s[i] }
+  if s.len>i { return s[i] }
   return 0
 }
 pub fn false_edge(s:[]const u8,i:usize) u8 {
-  if i>=#len(s) { return 0 }
+  if i>=s.len { return 0 }
   return s[i]
 }
 pub fn joined(s:[]const u8,i:usize,choose:bool) u8 {
-  if choose { if i>=#len(s) { return 0 } }
+  if choose { if i>=s.len { return 0 } }
   return s[i]
 }
 pub fn equality(s:[]const u8,i:usize) u8 {
-  if i<=#len(s) { return s[i] }
+  if i<=s.len { return s[i] }
   return 0
 }
 pub fn signed(s:[]const u8,i:isize) u8 {
-  if i<#cast(isize,#len(s)) { return s[i] }
+  if i<#cast(isize,s.len) { return s[i] }
   return 0
 }
 pub fn changed(s:[]const u8,i:usize) u8 {
-  if i<#len(s) { return s[(i+1)] }
+  if i<s.len { return s[(i+1)] }
   return 0
 }
 pub fn phi(s:[]const u8,i:usize,choose:bool) u8 {
-  if i<#len(s) {
+  if i<s.len {
     at:=i
-    if choose { at=#len(s) }
+    if choose { at=s.len }
     return s[at]
   }
   return 0

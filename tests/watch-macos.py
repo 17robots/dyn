@@ -11,11 +11,11 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 NATIVE = platform.system() == 'Darwin' and platform.machine() == 'arm64'
-SOURCE = r'''use "./watch" watch
+SOURCE = r'''use watch "./watch"
 use "std/fail"
-use "std/io" io
-use "std/time" time
-use "std/bytes" bytes
+use io "std/io"
+use time "std/time"
+use bytes "std/bytes"
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn stage(name: []const u8) { io.println("{}",name) }
 fn await_event(state: *watch.Watcher, id: i32, name: []const u8, mask: u32, renamed: bool) {
@@ -125,15 +125,15 @@ fn audit_path(storage: []u8, text: []const u8) *const u8 {
 pub fn audit_callbacks() {
   allocation := mem.arena_alloc(mem.ArenaHeader + #alignof(State) + #sizeof(State))
   defer { mem.arena_release(allocation) }
-  state := mem.push(State, allocation)
+  state := mem.push<State>(allocation)
   slot := &state.slots[0]
   slot.owner = state
   slot.id = 7
   slot.mask = Changes
   slot.stream = #cast(rawptr, #cast(usize, 1))
   root := "/watched"
-  slot.length = #len(root)
-  for i in 0..#len(root) { slot.root[i] = root[i] }
+  slot.length = root.len
+  for i in 0..root.len { slot.root[i] = root[i] }
   output: [1024]u8
   watcher := Watcher{state:state,storage:output[..]}
   name_storage: [128]u8

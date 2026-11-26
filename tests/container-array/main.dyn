@@ -13,13 +13,13 @@ struct Enemy {
 
 fn main() {
   arena := mem.arena_alloc(0)
-  enemies: array.Array(Enemy)
+  enemies: array.Array<Enemy>
   array.init(&enemies, arena)
-  check(#len(enemies.items) == 0 && array.get(&enemies, 0) == nil)
+  check(enemies.items.len == 0 && array.get(&enemies, 0) == nil)
   for i in 0..1000 {
     array.push(&enemies, Enemy{ hp: #cast(i32, i) })
   }
-  check(#len(enemies.items) == 1000 && array.get(&enemies, 999).hp == 999)
+  check(enemies.items.len == 1000 && array.get(&enemies, 999).hp == 999)
   check(array.get(&enemies, 1000) == nil)
 
   /* push_ref: the new element, writable until the next push. */
@@ -28,7 +28,7 @@ fn main() {
   check(enemies.items[1000].hp == 250)
 
   /* Growth on a shared arena: other allocations between pushes. */
-  other: array.Array(u64)
+  other: array.Array<u64>
   array.init(&other, arena)
   for i in 0..500 {
     array.push(&other, #cast(u64, i))
@@ -37,16 +37,16 @@ fn main() {
   for i in 0..500 {
     check(other.items[i] == #cast(u64, i))
   }
-  check(enemies.items[999].hp == 999 && #len(enemies.items) == 1501)
+  check(enemies.items[999].hp == 999 && enemies.items.len == 1501)
 
   extra: [3]u64 = [7, 8, 9]
   array.push_all(&other, extra[..])
-  check(#len(other.items) == 503 && other.items[502] == 9)
+  check(other.items.len == 503 && other.items[502] == 9)
 
   last := array.pop(&other)
-  check(last == 9 && #len(other.items) == 502)
+  check(last == 9 && other.items.len == 502)
   array.clear(&other)
-  check(#len(other.items) == 0 && array.pop(&other) == 0)
+  check(other.items.len == 0 && array.pop(&other) == 0)
   array.push(&other, 42)
   check(other.items[0] == 42)
 }

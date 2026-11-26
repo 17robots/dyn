@@ -21,10 +21,10 @@ def literal(data):
 
 
 SOURCE = '''use "std/fail"
-use "std/encoding/base64" b
-use "std/encoding/hex" h
-use "std/mem" mem
-use "std/bytes" bytes
+use b "std/encoding/base64"
+use h "std/encoding/hex"
+use mem "std/mem"
+use bytes "std/bytes"
 struct Decoded { value: []u8, failure: fail.Failure }
 fn hd(a: *mem.Arena, input: []const u8) Decoded {
   status: fail.Status
@@ -48,7 +48,7 @@ fn good(raw: []const u8, hx: []const u8, upper: []const u8, b64: []const u8) {
   if x.failure.kind != fail.Kind.Ok || y.failure.kind != fail.Kind.Ok || z.failure.kind != fail.Kind.Ok || !bytes.equal(x.value, raw) || !bytes.equal(y.value, raw) || !bytes.equal(z.value, raw) { #panic("decode oracle") }
   if x.failure.offset != 0 || y.failure.offset != 0 || z.failure.offset != 0 ||
      x.failure.kind != fail.Kind.Ok || y.failure.kind != fail.Kind.Ok || z.failure.kind != fail.Kind.Ok { #panic("success diagnostics") }
-  if mem.arena_mark(a) != mem.ArenaHeader + 7 + 3 * #len(raw) { #panic("exact decode allocation") }
+  if mem.arena_mark(a) != mem.ArenaHeader + 7 + 3 * raw.len { #panic("exact decode allocation") }
   if !bytes.equal(h.encode(a, raw, false), hx) || !bytes.equal(h.encode(a, raw, true), upper) || !bytes.equal(b.encode(a, raw), b64) { #panic("encode oracle") }
   for c in prefix { if c != 99 { #panic("success changed prefix") } }
 }
@@ -60,10 +60,10 @@ fn bad(input: []const u8, off: usize, hex: bool) {
   a.poison_on_rewind = true
   if hex {
     r := hd(a, input)
-    if #len(r.value) != 0 || r.failure.offset != off || r.failure.kind != fail.Kind.InvalidInput { #panic("hex invalid diagnostics") }
+    if r.value.len != 0 || r.failure.offset != off || r.failure.kind != fail.Kind.InvalidInput { #panic("hex invalid diagnostics") }
   } else {
     r := bd(a, input)
-    if #len(r.value) != 0 || r.failure.offset != off || r.failure.kind != fail.Kind.InvalidInput { #panic("base64 invalid diagnostics") }
+    if r.value.len != 0 || r.failure.offset != off || r.failure.kind != fail.Kind.InvalidInput { #panic("base64 invalid diagnostics") }
   }
   if mem.arena_mark(a) != mem.ArenaHeader + 7 { #panic("invalid rollback") }
   for c in a.data[mem.ArenaHeader..] { if c != 99 { #panic("invalid touched dirty arena") } }
@@ -85,17 +85,17 @@ fn overlap(hex: bool, invalid: bool, start: usize) {
   if invalid { detail = fail.Kind.InvalidInput }
   if hex {
     r := hd(a, payload[start..start + 4])
-    if #len(r.value) != 0 || r.failure.offset != 0 || r.failure.kind != detail { #panic("hex overlap preflight") }
+    if r.value.len != 0 || r.failure.offset != 0 || r.failure.kind != detail { #panic("hex overlap preflight") }
   } else {
     r := bd(a, payload[start..start + 4])
-    if #len(r.value) != 0 || r.failure.offset != 0 || r.failure.kind != detail { #panic("base64 overlap preflight") }
+    if r.value.len != 0 || r.failure.offset != 0 || r.failure.kind != detail { #panic("base64 overlap preflight") }
   }
   if mem.arena_mark(a) != mem.ArenaHeader + 4 || !bytes.equal(payload, snapshot[..]) { #panic("overlap changed source or arena") }
 }
 fn main() {
   z := Decoded{}
   q := Decoded{}
-  if q.failure.kind != fail.Kind.Ok || #len(z.value) != 0 || #len(q.value) != 0 ||
+  if q.failure.kind != fail.Kind.Ok || z.value.len != 0 || q.value.len != 0 ||
      z.failure.offset != 0 || q.failure.offset != 0 || z.failure.kind != fail.Kind.Ok || q.failure.kind != fail.Kind.Ok { #panic("zero initialization") }
 '''
 
@@ -159,10 +159,10 @@ x := bd(a, "AAAA!!!!")
 y := hd(a, "6162!!")
 if x.failure.offset != 4 || y.failure.offset != 4 ||
    x.failure.kind != fail.Kind.InvalidInput || y.failure.kind != fail.Kind.InvalidInput ||
-   #len(x.value) != 0 || #len(y.value) != 0 || mem.arena_mark(a) != mem.ArenaHeader { #panic("validation before exhaustion") }
+   x.value.len != 0 || y.value.len != 0 || mem.arena_mark(a) != mem.ArenaHeader { #panic("validation before exhaustion") }
 x = bd(a, "")
 y = hd(a, "")
-if x.failure.kind != fail.Kind.Ok || y.failure.kind != fail.Kind.Ok || #len(x.value) != 0 || #len(y.value) != 0 ||
+if x.failure.kind != fail.Kind.Ok || y.failure.kind != fail.Kind.Ok || x.value.len != 0 || y.value.len != 0 ||
    x.failure.offset != 0 || y.failure.offset != 0 ||
    x.failure.kind != fail.Kind.Ok || y.failure.kind != fail.Kind.Ok || mem.arena_mark(a) != mem.ArenaHeader { #panic("empty at capacity") }
 }
@@ -185,9 +185,9 @@ def main():
             subprocess.run([str(work / 'program')], check=True, capture_output=True, timeout=15)
             print(f'PASS encoding edges {mode}: {count} oracle cases, invalid bytes/positions, tails, rollback, overlap', flush=True)
             for module, encoded in [('base64', 'AAAA'), ('hex', '6162'), ('base32', 'MZXQ====')]:
-                (work / 'main.dyn').write_text(f'''use "std/mem" mem
+                (work / 'main.dyn').write_text(f'''use mem "std/mem"
 use "std/fail"
-use "std/encoding/{module}" codec
+use codec "std/encoding/{module}"
 fn main() {{
   status: fail.Status
   backing: [mem.ArenaBufferOverhead]u8
@@ -202,8 +202,8 @@ fn main() {{
                 assert b'arena exhausted' in result.stderr, (module, mode, result.stderr)
                 print(f'PASS {module} exhaustion panic {mode}', flush=True)
                 arguments = 'arena, input, false' if module == 'hex' else 'arena, input'
-                (work / 'main.dyn').write_text(f'''use "std/mem" mem
-use "std/encoding/{module}" codec
+                (work / 'main.dyn').write_text(f'''use mem "std/mem"
+use codec "std/encoding/{module}"
 fn main() {{
   backing: [32 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(backing[..])

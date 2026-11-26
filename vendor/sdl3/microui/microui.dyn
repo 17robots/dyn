@@ -1,5 +1,5 @@
 use "vendor/sdl3"
-use "vendor/microui" ui
+use ui "vendor/microui"
 use "std/fail"
 #link("dyn_microui_sdl3")
 // Optional SDL renderer for microui's 8x16 byte-cell metrics. Built-in SDL debug

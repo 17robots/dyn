@@ -1,7 +1,7 @@
 #target(kernel: linux)
-use "vendor/window/native" native
+use native "vendor/window/native"
 use "std/fail"
-use "std/ui/box" box
+use box "std/ui/box"
 // Explicit native Wayland/EGL backend. Build native bridge with build.py.
 pub type Window = native.Window
 pub fn open(status: *fail.Status, window: *Window, title: []const u8, width, height: i32) {

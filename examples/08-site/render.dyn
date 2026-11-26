@@ -57,7 +57,7 @@ fn render_page(w: *html.Writer, text: []const u8) {
   for {
     line := strings.trim(strings.scan_line(&scan))
     if scan.ended { break }
-    if #len(line) == 0 {
+    if line.len == 0 {
       close_block(w, block)
       block = Block.Nothing
     } else if bytes.starts_with(line, "# ") {

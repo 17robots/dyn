@@ -120,7 +120,7 @@ fn trace_walk(pc: usize, fp: usize, exact: bool, frames: []usize) u64 {
   return total
 }
 fn write_string(text: []const u8) {
-  trace_write(&text[0], #len(text))
+  trace_write(&text[0], text.len)
 }
 // "  at function (path:line)".
 fn trace_frame(table: usize, address: usize) {

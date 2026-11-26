@@ -33,7 +33,7 @@ search for a word finds the function that does it.
 - **One place for byte search.** `std/bytes` owns `equal`, `find`,
   `find_byte`, `find_last`, `find_last_byte`, `contains`, `starts_with` and
   `ends_with`; `std/strings` holds text work (trim, split, join, format, parse)
-  and does not repeat them. Every `find*` returns `#len(text)` on a miss,
+  and does not repeat them. Every `find*` returns `text.len` on a miss,
   always a safe slice bound: `text[..bytes.find(text, ",")]` is the text up to
   the first comma, or all of it.
 - **Names say what happens to memory.** `push_*` allocates from an arena the

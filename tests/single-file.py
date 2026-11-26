@@ -33,15 +33,15 @@ with tempfile.TemporaryDirectory(prefix='dyn-single-') as directory:
     result = dyn('check', str(work / 'comma.dyn'))
     assert "expected ',' or '}', found 'tag': is a comma missing at the end of the line above" in result.stderr, result.stderr
     (work / 'maps.dyn').write_text('use "std/container/map"\nuse "std/io"\nuse "std/mem"\n\nfn main() {\n'
-        '  arena := mem.arena_alloc(0)\n  ids: map.Map(u64, u32)\n  map.init(&ids, arena)\n'
-        '  map.insert(&ids, 9, 4)\n  words: map.Map([]const u8, u32)\n  map.init(&words, arena)\n'
+        '  arena := mem.arena_alloc(0)\n  ids: map.Map<u64, u32>\n  map.init(&ids, arena)\n'
+        '  map.insert(&ids, 9, 4)\n  words: map.Map<[]const u8, u32>\n  map.init(&words, arena)\n'
         '  map.upsert(&words, "hi", 1).* += 2\n  io.println("{} {}", map.get(&ids, 9).*, map.get(&words, "hi").*)\n}\n')
     result = dyn('run', str(work / 'maps.dyn'))
     assert result.stdout.endswith('4 3\n'), result
     (work / 'entry.dyn').write_text('use "std/container/array"\nuse "std/io"\nuse "std/process"\n\n'
-        'fn main() i32 {\n  program := process.start()\n  words: array.Array([]const u8)\n  array.init(&words, program.arena)\n'
+        'fn main() i32 {\n  program := process.start()\n  words: array.Array<[]const u8>\n  array.init(&words, program.arena)\n'
         '  for arg in program.args[1..] {\n    array.push(&words, arg)\n  }\n'
-        '  io.println("{} {}", #len(words.items), words.items[0])\n  return #cast(i32, #len(program.args))\n}\n')
+        '  io.println("{} {}", words.items.len, words.items[0])\n  return #cast(i32, program.args.len)\n}\n')
     result = dyn('run', str(work / 'entry.dyn'), '--', 'alpha', 'beta')
     assert result.returncode == 3 and result.stdout.endswith('2 alpha\n'), result
     for flags in (['--release'], ['--release', '--opt-level', '3']):

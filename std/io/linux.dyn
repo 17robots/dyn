@@ -14,10 +14,10 @@ pub fn stderr() Writer {
 }
 
 fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
-  if status.failed || #len(destination) == 0 { return 0 }
-  value := #syscall(sys.Read, 0, &destination[0], #len(destination))
+  if status.failed || destination.len == 0 { return 0 }
+  value := #syscall(sys.Read, 0, &destination[0], destination.len)
   for value == -4 {
-    value = #syscall(sys.Read, 0, &destination[0], #len(destination))
+    value = #syscall(sys.Read, 0, &destination[0], destination.len)
   }
   if value < 0 {
     fail.set(status, from_linux("read", "standard input", value))
@@ -29,8 +29,8 @@ fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
 fn write_descriptor(status: *fail.Status, descriptor: isize, path: []const u8, source: []const u8) usize {
   if status.failed { return 0 }
   written: usize = 0
-  for written < #len(source) {
-    value := #syscall(sys.Write, descriptor, &source[written], #len(source) - written)
+  for written < source.len {
+    value := #syscall(sys.Write, descriptor, &source[written], source.len - written)
     if value == -4 { } else if value <= 0 {
       if value == 0 {
         value = -5

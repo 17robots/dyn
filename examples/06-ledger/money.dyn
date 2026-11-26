@@ -12,7 +12,7 @@ distinct type Cents = i64
 // "12", "12.5", "12.50" or "-3.25" as cents. Bad text fails with
 // InvalidInput, an amount too large to add up safely with Overflow.
 fn parse_cents(status: *fail.Status, text: []const u8) Cents {
-  negative := #len(text) > 0 && text[0] == '-'
+  negative := text.len > 0 && text[0] == '-'
   digits := text
   if negative {
     digits = text[1..]
@@ -20,14 +20,14 @@ fn parse_cents(status: *fail.Status, text: []const u8) Cents {
   dot := bytes.find_byte(digits, '.')       // #len(digits) when absent
   whole := parse.u64_decimal(status, digits[..dot])
   fraction: u64 = 0
-  if dot < #len(digits) {
+  if dot < digits.len {
     decimals := digits[dot + 1..]
-    if #len(decimals) > 2 {
+    if decimals.len > 2 {
       fail.at(status, fail.Kind.InvalidInput, "parse amount", "an amount has at most two decimals", dot + 1)
       return #cast(Cents, 0)
     }
     fraction = parse.u64_decimal(status, decimals)
-    if #len(decimals) == 1 {
+    if decimals.len == 1 {
       fraction *= 10
     }
   }

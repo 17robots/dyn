@@ -17,7 +17,7 @@ use "std/mem"
 struct Node { kind: u8, flag: bool, text: []const u8, first: *Node, next: *Node, count: u64, weight: u32 }
 
 fn make(arena: *mem.Arena, kind: u8) *Node {
-  node := mem.push(Node, arena)
+  node := mem.push<Node>(arena)
   node.kind = kind
   return node
 }
@@ -29,14 +29,14 @@ fn main() {
   mark := mem.arena_mark(arena)
   // Dirty the bytes, rewind, and push over them: every field reads zero.
   dirty := mem.push_bytes(arena, 4096)
-  for i in 0..#len(dirty) {
+  for i in 0..dirty.len {
     dirty[i] = 0xab
   }
   mem.arena_rewind(arena, mark)
   total: u64 = 0
   for i in 0..100 {
     node := keep_make(arena, #cast(u8, i))
-    total += #cast(u64, node.kind) + node.count + #cast(u64, node.weight) + #cast(u64, #len(node.text))
+    total += #cast(u64, node.kind) + node.count + #cast(u64, node.weight) + #cast(u64, node.text.len)
     if node.flag || node.first != nil || node.next != nil {
       total += 1000000
     }

@@ -25,7 +25,7 @@ class Contracts(unittest.TestCase):
             (root / 'kinds').mkdir()
             (root / 'kinds/main.dyn').write_text('enum Internal { WantRead } pub type ErrorKind = Internal\n')
             (root / 'main.dyn').write_text(
-                'use "std/reflect" reflection\nuse "./kinds" tls\n'
+                'use reflection "std/reflect"\nuse tls "./kinds"\n'
                 'fn main() {\nkind := tls.ErrorKind.WantRead\n'
                 'if kind != tls.ErrorKind.WantRead || reflection.category(#typeof(u8)) != reflection.Kind.Integer '
                 '{ #panic("alias and reflection") } }\n')
@@ -293,10 +293,10 @@ class Contracts(unittest.TestCase):
             root = Path(directory)
             (root / 'helper').mkdir()
             (root / 'helper/helper.dyn').write_text('pub fn answer() i32 { return 42 }\n')
-            for use in ['use /* path */ "./helper" h',
-                        'use "./helper" /* alias */ h',
-                        'use "./helper"\nh',
-                        'use\t"./helper" h']:
+            for use in ['use /* alias */ h "./helper"',
+                        'use h /* path */ "./helper"',
+                        'use h\n"./helper"',
+                        'use\th "./helper"']:
                 with self.subTest(use=use):
                     (root / 'main.dyn').write_text(use + '\nfn main() { if h.answer() != 42 { #panic("import") } }\n')
                     for command in ['check', 'build']:

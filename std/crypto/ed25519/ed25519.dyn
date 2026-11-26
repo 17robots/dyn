@@ -3,9 +3,9 @@ use "std/fail"
 // public-domain TweetNaCl (https://tweetnacl.cr.yp.to/20140427/tweetnacl.c).
 // Verification handles only public values. Machine constant-time qualification
 // of private operations remains target/compiler specific.
-use "std/crypto/curve25519" f
-use "std/crypto/sha512" sha
-use "std/bytes" bytes
+use f "std/crypto/curve25519"
+use sha "std/crypto/sha512"
+use bytes "std/bytes"
 struct Point { x: f.Field, y: f.Field, z: f.Field, t: f.Field }
 const D: f.Field = f.Field{limbs: [0x78a3, 0x1359, 0x4dca, 0x75eb, 0xd8ab, 0x4141, 0x0a4d, 0x0070, 0xe898, 0x7779, 0x4079, 0x8cc7, 0xfe73, 0x2b6f, 0x6cee, 0x5203]}
 const D2: f.Field = f.Field{limbs: [0xf159, 0x26b2, 0x9b94, 0xebd6, 0xb156, 0x8283, 0x149a, 0x00e0, 0xd130, 0xeef3, 0x80f2, 0x198e, 0xfce7, 0x56df, 0xd9dc, 0x2406]}
@@ -102,7 +102,7 @@ pub fn public_key(status: *fail.Status, output: []u8, key: []const u8) {
     return
   }
   if status.failed { return }
-  if #len(output)<32 || #len(key)!=32 || bytes.overlaps(output, key) {
+  if output.len<32 || key.len!=32 || bytes.overlaps(output, key) {
     fail.invalid(status, "Ed25519 public key", "", "needs a 32-byte key and 32 bytes of output that do not overlap it")
     return
   }
@@ -115,7 +115,7 @@ pub fn sign(status: *fail.Status, output: []u8, message: []const u8, key: []cons
     return
   }
   if status.failed { return }
-  if #len(output)<64 || #len(key)!=32 || bytes.overlaps(output, key) || bytes.overlaps(output, message) {
+  if output.len<64 || key.len!=32 || bytes.overlaps(output, key) || bytes.overlaps(output, message) {
     fail.invalid(status, "Ed25519 sign", "", "needs a 32-byte key and 64 bytes of output that overlap no input")
     return
   }
@@ -126,7 +126,7 @@ pub fn sign(status: *fail.Status, output: []u8, message: []const u8, key: []cons
   sha.update(&state, secret[32..])
   sha.update(&state, message)
   r: [64]u8
-  if #len(sha.finish(&state, r[..]))!=64 {
+  if sha.finish(&state, r[..]).len!=64 {
     fail.invalid(status, "Ed25519 sign", "", "needs a 32-byte key and 64 bytes of output that overlap no input")
     return
   }
@@ -138,7 +138,7 @@ pub fn sign(status: *fail.Status, output: []u8, message: []const u8, key: []cons
   sha.update(&state, public[..])
   sha.update(&state, message)
   h: [64]u8
-  if #len(sha.finish(&state, h[..]))!=64 {
+  if sha.finish(&state, h[..]).len!=64 {
     fail.invalid(status, "Ed25519 sign", "", "needs a 32-byte key and 64 bytes of output that overlap no input")
     return
   }
@@ -184,7 +184,7 @@ fn decode(input: []const u8) Decoded {
   return Decoded{point:Point{x:x, y:y, z:one, t:f.multiply(x, y)}, ok:true}
 }
 fn public_point(key: []const u8) Decoded {
-  if #len(key)!=32 { return Decoded{} }
+  if key.len!=32 { return Decoded{} }
   decoded:=decode(key)
   if !decoded.ok { return Decoded{} }
   // Reject identity and non-prime-subgroup public keys.
@@ -205,7 +205,7 @@ pub fn valid_public_key(key: []const u8) bool {
   return public_point(key).ok
 }
 pub fn verify(signature: []const u8, message: []const u8, key: []const u8) bool {
-  if #len(signature)!=64 || #len(key)!=32 { return false }
+  if signature.len!=64 || key.len!=32 { return false }
   // S must be strictly less than the prime subgroup order.
   less:=false
   for step in 0..32 {
@@ -226,7 +226,7 @@ pub fn verify(signature: []const u8, message: []const u8, key: []const u8) bool 
   sha.update(&state, key)
   sha.update(&state, message)
   h: [64]u8
-  if #len(sha.finish(&state, h[..]))!=64 { return false }
+  if sha.finish(&state, h[..]).len!=64 { return false }
   reduce(h[..])
   point:=add(scalar(decoded.point, h[..32]), base(signature[32..]))
   encode(encoded[..], point)

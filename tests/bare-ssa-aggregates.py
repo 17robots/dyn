@@ -57,15 +57,15 @@ d:=Descs{pre:101,text:"abcdef",mid:103,view:a[..],post:107}
 p:=&d
 p.text="zyxwvu"
 p.view=a[1..7]
-return verifydescs(p)+#cast(u32,p.text[i])+#cast(u32,p.view[i])+#cast(u32,#len(p.text)+#len(p.view))+p.pre+p.mid+p.post }
+return verifydescs(p)+#cast(u32,p.text[i])+#cast(u32,p.view[i])+#cast(u32,p.text.len+p.view.len)+p.pre+p.mid+p.post }
 pub fn substr(i:usize) u32 { s:="abcdef"
 t:=s[1..5]
-return #cast(u32,t[i])+#cast(u32,#len(t)) }
+return #cast(u32,t[i])+#cast(u32,t.len) }
 pub fn boxed(x:u64) u64 { a:=Box{pre:71,value:x,post:73}
 p:=&a
 check:=verifybox(p)
 b:=p.value
-case b { u64 y=>{ return y+a.pre+a.post+check } _=>{return 0} } }
+case b { u64(y)=>{ return y+a.pre+a.post+check } _=>{return 0} } }
 pub fn copybytes(dst:*[33]u8,src:*[33]u8) { dst.*=src.* }
 pub fn zerobytes(dst:*[33]u8) { dst.*=[] }
 pub fn zeroforward(dst:*[8]u8) { a:[8]u8
@@ -79,7 +79,7 @@ pub fn readptr(p:*u64) u64 { return p.* }
 pub fn indexfail(i:usize) u8 { a:[3]u8=[1,2,3]
 return a[i] }
 pub fn slicefail(a:usize,b:usize) usize { x:="abcdef"
-return #len(x[a..b]) }
+return x[a..b].len }
 extern fn oracle() i32
 fn main() { n:=oracle()
 if n!=0 { io.println("BAD {}",n)
@@ -147,7 +147,7 @@ return x }
 pub fn ordered(i:usize) u8 { a:[3]u8=[1,2,3]
 return a[mark(i)] }
 pub fn sliceorder(a:usize,b:usize) usize { x:="abcdef"
-return #len(x[mark(a)..mark(b)]) }
+return x[mark(a)..mark(b)].len }
 '''
 
 

@@ -5,5 +5,5 @@
 extern fn sha256_hardware "dyn_sha256_blocks"(state: *[8]u32, data: *const u8, count: usize) bool
 
 fn hardware_blocks(state: *[8]u32, data: []const u8) bool {
-  return sha256_hardware(state, &data[0], #len(data) / 64)
+  return sha256_hardware(state, &data[0], data.len / 64)
 }

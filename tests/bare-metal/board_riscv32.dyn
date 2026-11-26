@@ -1,6 +1,6 @@
 #target(arch: riscv32, kernel: none)
 // NS16550 UART on the QEMU virt board: transmit register and line status.
-use "std/embedded/uart" uart
+use uart "std/embedded/uart"
 
 fn uart_write(text: []const u8) {
   device := uart.ns16550(0x10000000)

@@ -35,9 +35,9 @@ for index, (pattern, text) in enumerate(cases):
       require(mem.arena_used(arena) == before, "match allocated")
     }}
   }}''')
-source = '''use "std/text/regex" regex
+source = '''use regex "std/text/regex"
 use "std/fail"
-use "std/mem" mem
+use mem "std/mem"
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn find(program: regex.Program, text: []const u8) regex.Match {
   status: fail.Status
@@ -48,7 +48,7 @@ fn find(program: regex.Program, text: []const u8) regex.Match {
 fn misses(program: regex.Program, text: []const u8) fail.Kind {
   status: fail.Status
   result := regex.find(&status, program, text)
-  require(result.start == 0 && result.end == 0 && #len(result.captures) == 0, "miss gives zero")
+  require(result.start == 0 && result.end == 0 && result.captures.len == 0, "miss gives zero")
   return status.failure.kind
 }
 struct Compiled { value: regex.Program, offset: usize, failure: fail.Failure }
@@ -80,13 +80,13 @@ fn main() {
   require(misses(captured.value, "zz") == fail.Kind.NotFound, "miss")
   require(captured.value.captures[1].end == 0, "capture clear")
   backing: [32768]u8
-  for i in 0..#len(backing) { backing[i] = 255 }
+  for i in 0..backing.len { backing[i] = 255 }
   fixed := mem.arena_from_buffer(backing[..])
   fixed_program := compile(fixed, "(a)*")
   require(fixed_program.failure.kind == fail.Kind.Ok && find(fixed_program.value, "aaa").captures[0].start == 2, "dirty backing zero initialization")
   long_program := compile(arena, "^(a)*$")
-  long_text := mem.push_array(u8, arena, 100000)
-  for i in 0..#len(long_text) { long_text[i] = 'a' }
+  long_text := mem.push_array<u8>(arena, 100000)
+  for i in 0..long_text.len { long_text[i] = 'a' }
   long_result := find(long_program.value, long_text)
   require(long_result.end == 100000 && long_result.captures[0].start == 99999, "long Thompson repetition")
   iter_program := compile(arena, "(a+)")
@@ -111,9 +111,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-regex-arena-') as temporary:
     (main / 'main.dyn').write_text(source)
     small = work / 'capacity'
     small.mkdir()
-    (small / 'main.dyn').write_text('''use "std/mem" mem
+    (small / 'main.dyn').write_text('''use mem "std/mem"
 use "std/fail"
-use "std/text/regex" regex
+use regex "std/text/regex"
 fn main() {
   status: fail.Status
   backing: [8+mem.ArenaBufferOverhead]u8

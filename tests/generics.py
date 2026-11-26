@@ -15,17 +15,17 @@ fn helper(x: usize) usize {
   return x * 2
 }
 
-pub fn double_size(T: type) usize {
+pub fn double_size<T>() usize {
   return helper(#sizeof(T))
 }
 
-pub fn fill(items: []$T, value: $T) {
+pub fn fill<T>(items: []T, value: T) {
   for *item in items {
     item.* = value
   }
 }
 
-pub fn largest(items: []const $T) T {
+pub fn largest<T>(items: []const T) T {
   best := items[0]
   for item in items {
     if item > best { best = item }
@@ -33,23 +33,23 @@ pub fn largest(items: []const $T) T {
   return best
 }
 
-pub fn min(a, b: $T) T {
+pub fn min<T>(a, b: T) T {
   if a < b { return a }
   return b
 }
 
-pub fn swap(a, b: *$T) {
+pub fn swap<T>(a, b: *T) {
   t := a.*
   a.* = b.*
   b.* = t
 }
 
-pub fn zero(value: *$T) {
+pub fn zero<T>(value: *T) {
   empty: T
   value.* = empty
 }
 
-pub fn total(items: []const $T) T {
+pub fn total<T>(items: []const T) T {
   sum: T = 0
   for item in items {
     sum += item
@@ -57,7 +57,7 @@ pub fn total(items: []const $T) T {
   return sum
 }
 
-pub fn count_down(n: $T) T {
+pub fn count_down<T>(n: T) T {
   if n == 0 { return 0 }
   return count_down(n - 1) + 1
 }
@@ -75,7 +75,7 @@ fn main() {
   cells: [3]Cell = [Cell{ch: 1}, Cell{ch: 2}, Cell{ch: 3}]
   util.fill(cells[..], Cell{ch: 9, fg: 1})
   io.println_to(&printed, out, "{} {}", cells[2].ch, cells[0].fg)
-  io.println_to(&printed, out, "{} {} {}", util.double_size(Cell), util.double_size(util.Pair), util.double_size(*Cell))
+  io.println_to(&printed, out, "{} {} {}", util.double_size<Cell>(), util.double_size<util.Pair>(), util.double_size<*Cell>())
   nums: [3]i32 = [4, -2, 11]
   io.println_to(&printed, out, "{} {}", util.largest(nums[..]), util.total(nums[..]))
   x: u32 = 7
@@ -103,13 +103,13 @@ fn main() {
   printed: fail.Status
   backing: [4096]u8
   arena := mem.arena_from_buffer(backing[..])
-  node := mem.push(Node, arena)
-  nodes := mem.push_array(Node, arena, 4)
+  node := mem.push<Node>(arena)
+  nodes := mem.push_array<Node>(arena, 4)
   nodes[3].value = 7
   node.value = 9
   mem.clear(node)
-  one := mem.push(i64, arena)
-  many := mem.push_array(u16, arena, 3)
+  one := mem.push<i64>(arena)
+  many := mem.push_array<u16>(arena, 3)
   bytes := mem.push_bytes(arena, 8)
   mem.fill(bytes, 5)
   io.println_to(&printed, out, "{} {} {} {} {}", node.value, nodes[3].value, one.*, many[2], bytes[7])
@@ -119,14 +119,14 @@ fn main() {
   mem.zero(nodes)
   io.println_to(&printed, out, "{} {} {} {}", xs[0], xs[3], mem.equal(xs[1..3], xs[2..4]), nodes[3].value)
   x: u32 = 7
-  io.println_to(&printed, out, "{} {} {} {} {}", math.min(x, 3), math.max(2.5, 4.0), math.clamp(15, 0, 10), math.abs(-4), math.narrow(u8, 200))
+  io.println_to(&printed, out, "{} {} {} {} {}", math.min(x, 3), math.max(2.5, 4.0), math.clamp(15, 0, 10), math.abs(-4), math.narrow<u8>(200))
   big: [40]i64
   for i in 0..40 { big[i] = #cast(i64, ((i * 37) % 40)) - 20 }
   sort.sort(big[..])
   small: [5]f32 = [3.0, 1.0, 2.0, 5.0, 4.0]
   sort.sort(small[..])
   io.println_to(&printed, out, "{} {} {} {} {}", big[0], big[39], small[4], sort.search(big[..], 7),
-    sort.search(big[..], 7) < #len(big))
+    sort.search(big[..], 7) < big.len)
 }
 '''
 STD_EXPECTED = '0 7 0 0 5\n3 1 false 0\n3 4 10 4 200\n-20 19 5 27 true'
@@ -135,15 +135,15 @@ STD_ERRORS = {
 }
 
 PRELUDE = '''struct Rect { w: i32 }
-fn min(a, b: $T) T {
+fn min<T>(a, b: T) T {
   if a < b { return a }
   return b
 }
-fn make(T: type) T {
+fn make<T>() T {
   v: T
   return v
 }
-fn deep(x: $T) {
+fn deep<T>(x: T) {
   deep(&x)
 }
 '''
@@ -151,11 +151,10 @@ ERRORS = {
     'aggregate values are not comparable': '  r := Rect{w: 1}\n  _ = min(r, r)',
     'in instance min(Rect) required here': '  r := Rect{w: 1}\n  _ = min(r, r)',
     'T is u64 from `x`, but this argument makes it i64': '  x: u64 = 1\n  y: i64 = 2\n  _ = min(x, y)',
-    'expected a type argument': '  _ = make(3)',
-    'a type is not a value': '  _ = min(Rect, 2)',
+    'function argument count mismatch': '  _ = make<i32>(3)',
+    'cannot infer T from the arguments': '  _ = make()',
     'a generic function used as a value needs a function type': '  f := min',
     'generic instances nest too deeply': '  deep(1)',
-    'function argument count mismatch': '  _ = make()',
 }
 
 
@@ -186,13 +185,12 @@ with tempfile.TemporaryDirectory(prefix='dyn-generics-') as temporary:
 
     case = root/'repeated'
     case.mkdir()
-    # `$T` marks every parameter that supplies T; a plain `T` there is an error.
-    (case/'main.dyn').write_text('fn same(a: $T, b: $T) T {\n  return a\n}\nfn main() {\n  _ = same(1, 2)\n}\n')
+    (case/'main.dyn').write_text('fn same<T>(a: T, b: T) T {\n  return a\n}\nfn main() {\n  _ = same(1, 2)\n}\n')
     checked = run('check', str(case))
     assert checked.returncode == 0, checked.stderr
     (case/'main.dyn').write_text('fn same(a: $T, b: T) T {\n  return a\n}\nfn main() {\n  _ = same(1, 2)\n}\n')
     checked = run('check', str(case))
-    assert checked.returncode != 0 and 'written `$T` in every parameter' in checked.stderr, checked.stderr
+    assert checked.returncode != 0 and '$T generics were removed' in checked.stderr, checked.stderr
 
     # A generic body edit changes the output; a new instance does too.
     env = dict(os.environ, DYN_CACHE_DIR=str(root/'cache'))
@@ -215,7 +213,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-generics-') as temporary:
     big.mkdir()
     def filler(prefix):
         return ''.join(f'fn {prefix}_{i}(x: i64) i64 {{\n  return x + {i}\n}}\n' for i in range(400))
-    (big/'part0.dyn').write_text('fn pick(a, b: $T) T {\n  return a + b\n}\n' + filler('p0'))
+    (big/'part0.dyn').write_text('fn pick<T>(a, b: T) T {\n  return a + b\n}\n' + filler('p0'))
     for n in range(1, 8):
         (big/f'part{n}.dyn').write_text(f'fn value{n}() i64 {{\n  return {n}\n}}\n' + filler(f'p{n}'))
     (big/'part3.dyn').write_text('fn value3() i64 {\n  return pick(1, 2)\n}\n' + filler('p3'))
@@ -253,7 +251,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-generics-') as temporary:
         (std/'main.dyn').write_text('use "std/mem"\nuse "std/math"\nstruct Node { value: i32 }\nfn main() {\n' + body + '\n}\n')
         checked = run('check', str(std))
         assert checked.returncode != 0 and message in checked.stderr, (message, checked.stderr)
-    (std/'main.dyn').write_text('use "std/math"\nfn main() {\n  _ = math.narrow(u8, 300)\n}\n')
+    (std/'main.dyn').write_text('use "std/math"\nfn main() {\n  _ = math.narrow<u8>(300)\n}\n')
     result = run('run', str(std))
     assert result.returncode != 0 and 'narrow(u8, i32)' in result.stderr, result.stderr
 

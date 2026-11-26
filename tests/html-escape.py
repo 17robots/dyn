@@ -45,9 +45,9 @@ for source in inputs:
     offset += len(source)
 size = max(max(len(oracle(source, 100000)[0]) + 2, 6 * len(source) + 2) for source in inputs) + 3
 SOURCE = f'''use "std/fail"
-use "std/fmt" fmt
-use "std/html" html
-use "std/io" io
+use fmt "std/fmt"
+use html "std/html"
+use io "std/io"
 struct Case {{ start: usize, length: usize, limit: usize }}
 const backing: [{len(backing)}]u8 = [{','.join(map(str, backing))}]
 const cases: [{len(cases)}]Case = [
@@ -55,9 +55,9 @@ const cases: [{len(cases)}]Case = [
 ]
 fn reference(buffer: *fmt.Buffer, source: []const u8) bool {{
   start: usize = 0
-  for i in 0..#len(source) {{
+  for i in 0..source.len {{
     replacement := html.entity(source[i])
-    if #len(replacement) != 0 {{
+    if replacement.len != 0 {{
       fmt.write(buffer, source[start..i])
       fmt.write(buffer, replacement)
       start = i + 1
@@ -81,8 +81,8 @@ fn overlap_cases() {{
     for destination_offset in [0, 8, 24, 100] {{
       for capacity in [12, 64] {{
         for prefix in 0..4 {{
-          for i in 0..#len(actual) {{
-            actual[i] = pattern[i % #len(pattern)]
+          for i in 0..actual.len {{
+            actual[i] = pattern[i % pattern.len]
             expected[i] = actual[i]
           }}
           left_status: fail.Status
@@ -94,7 +94,7 @@ fn overlap_cases() {{
           html.write_escaped(&left, actual[source_offset..source_offset + 8])
           _ = reference(&right, expected[source_offset..source_offset + 8])
           if left.length != right.length || left_status.failed != right_status.failed {{ #panic("overlap state") }}
-          for i in 0..#len(actual) {{ if actual[i] != expected[i] {{ #panic("overlap bytes") }} }}
+          for i in 0..actual.len {{ if actual[i] != expected[i] {{ #panic("overlap bytes") }} }}
         }}
       }}
     }}
@@ -103,18 +103,18 @@ fn overlap_cases() {{
 fn main() {{
   overlap_cases()
   storage: [{size}]u8
-  for index in 0..#len(cases) {{
+  for index in 0..cases.len {{
     item := cases[index]
     source := backing[item.start..item.start + item.length]
     for attempt in 0..item.limit + 2 {{
       capacity := attempt
       if attempt == item.limit {{ capacity = 6 * item.length }}
       else if attempt == item.limit + 1 {{ capacity = 6 * item.length + 1 }}
-      for i in 0..#len(storage) {{ storage[i] = 165 }}
+      for i in 0..storage.len {{ storage[i] = 165 }}
       buffer_status: fail.Status
       buffer := fmt.buffer(&buffer_status, storage[..capacity])
       html.write_escaped(&buffer, source)
-      for i in capacity..#len(storage) {{
+      for i in capacity..storage.len {{
         if storage[i] != 165 {{ #panic("past destination") }}
       }}
       io.println("{{}} {{}} {{}} {{}}", index, capacity, buffer.length, buffer_status.failed)
@@ -124,12 +124,12 @@ fn main() {{
         old_length := buffer.length
         html.write_escaped(&buffer, "x<&")
         if !buffer_status.failed || buffer.length != old_length {{ #panic("sticky length") }}
-        for i in old_length..#len(storage) {{
+        for i in old_length..storage.len {{
           if storage[i] != 165 {{ #panic("sticky bytes") }}
         }}
       }}
     }}
-    for i in 0..#len(storage) {{ storage[i] = 165 }}
+    for i in 0..storage.len {{ storage[i] = 165 }}
     failed_status: fail.Status
     failed := fmt.buffer(&failed_status, storage[..])
     failed_status.failed = true

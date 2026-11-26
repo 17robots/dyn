@@ -239,14 +239,14 @@ The public wrappers keep the reviewed call paths externally callable and prevent
 a constant-only main from being the sole emitted evidence.
 
 ```dyn
-use "std/crypto/aesgcm" aes
-use "std/crypto/chacha20" chacha
-use "std/crypto/poly1305" poly
-use "std/crypto/curve25519" field
-use "std/crypto/x25519" x
-use "std/crypto/ed25519" ed
-use "std/crypto/p256" p
-use "std/crypto/sha512" sha
+use aes "std/crypto/aesgcm"
+use chacha "std/crypto/chacha20"
+use poly "std/crypto/poly1305"
+use field "std/crypto/curve25519"
+use x "std/crypto/x25519"
+use ed "std/crypto/ed25519"
+use p "std/crypto/p256"
+use sha "std/crypto/sha512"
 use "std/fail"
 pub fn aes_seal(s: *fail.Status,o: []u8,t: []u8,m: []const u8,a: []const u8,k: []const u8,n: []const u8) { aes.seal(s,o,t,m,a,k,n) }
 pub fn aes_open(s: *fail.Status,o: []u8,m: []const u8,t: []const u8,a: []const u8,k: []const u8,n: []const u8) { aes.open(s,o,m,t,a,k,n) }
@@ -308,7 +308,7 @@ WASM32 in debug/release. This specifically exercises the ceiling division and
 counter bound without allocating or reading the forged payload:
 
 ```dyn
-use "std/crypto/chacha20" chacha
+use chacha "std/crypto/chacha20"
 use "std/fail"
 fn main() {
   key: [32]u8

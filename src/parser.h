@@ -13,7 +13,8 @@ typedef enum {
   EXP_TYPE, EXP_TYPE_ARGUMENT, EXP_PRIMITIVE, EXP_TYPE_PARAMETER,
   EXP_FIELD_TYPE, EXP_POINTER_TYPE, EXP_ARRAY_TYPE, EXP_FN_TYPE,
   EXP_CAST, EXP_SIZE, EXP_ALIGN, EXP_OFFSET, EXP_TYPEOF, EXP_LOAD,
-  EXP_SYSCALL, EXP_STRUCT, EXP_MEMBER, EXP_ARRAY, EXP_GENERIC_TYPE
+  EXP_SYSCALL, EXP_STRUCT, EXP_MEMBER, EXP_ARRAY, EXP_GENERIC_TYPE,
+  EXP_DOT_NAME, EXP_UNION_TYPE, EXP_FALLIBLE_TYPE, EXP_TRY, EXP_CATCH, EXP_TAKE
 } ExpKind;
 typedef enum {
   SRC_FILE = 1000, SRC_DECLARATION, SRC_TARGET, SRC_TARGET_CONDITION, SRC_LINK,
@@ -27,16 +28,20 @@ typedef enum {
   /* #step(range, n): child 0 is the range, its next the step. */
   SRC_STEP,
   /* Recovering parses replace a failed statement or declaration with this leaf. */
-  SRC_ERROR
+  SRC_ERROR,
+  SRC_FAIL,
+  SRC_ERRDEFER
 } ExpSourceKind;
 
 typedef enum {
   EXP_CONST = 1, EXP_PUBLIC = 2, EXP_PACKED = 4, EXP_DISTINCT = 8,
   EXP_POINTER_BINDING = 16, EXP_INCLUSIVE = 32, EXP_ITERATION = 64,
   EXP_PRIMARY = 128, EXP_BITCAST = 256, EXP_WILDCARD = 512,
-  EXP_INSTANCE = 2048, /* #instance(f, T): names a generic instance */
+  EXP_FALLIBLE_VOID = 1024, /* !E or ! return type: void ok payload */
+  EXP_INSTANCE = 2048, /* f<T>: names a generic instance */
   EXP_WRAPPING = 8192, /* #wrapping(expr): a group whose arithmetic wraps */
-  EXP_INDEXED = 4096 /* for x, i in xs: the condition holds an index name */
+  EXP_INDEXED = 4096, /* for x, i in xs: the condition holds an index name */
+  EXP_NOCOPY = 16384 /* nocopy struct: values cannot be implicitly copied */
 } ExpFlag;
 typedef enum {
   EXP_ROLE_NONE, EXP_ROLE_NAME, EXP_ROLE_LINK_NAME, EXP_ROLE_PATH,

@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 TYPES = [(f'{s}{w}', w, s == 'i') for w in (8, 16, 32, 64) for s in ('i', 'u')]
 TYPES += [('isize', struct.calcsize('P') * 8, True), ('usize', struct.calcsize('P') * 8, False)]
-HEADER = '''use "std/io" io
+HEADER = '''use io "std/io"
 use "std/math"
 use "std/fail"
 use "std/fs"
@@ -49,9 +49,9 @@ def generate(t, w, signed, path):
     with path.open('wb') as out:
         for a,b in pairs:
             checks = []
-            add('math.is_signed(T)', signed)
-            add('math.min_value(T)', lo)
-            add('math.max_value(T)', hi)
+            add('math.is_signed<T>()', signed)
+            add('math.min_value<T>()', lo)
+            add('math.max_value<T>()', hi)
             for op, symbol, result in [('add','+',a+b), ('sub','-',a-b), ('mul','*',a*b)]:
                 overflow = not lo <= result <= hi
                 add(f'math.{op}_overflows(a, b)', overflow)
@@ -95,7 +95,7 @@ def generate(t, w, signed, path):
     exprs = [x[0] for x in checks]
     replacements = {5:('a + b',0),8:('a - b',1),11:('a * b',2),22:('math.abs(a)',3),23:('math.isqrt(a)',4),24:('math.next_pow2(a)',5),26:('math.align_up(a, alignment)',6),27:('math.div_ceil(a, b)',7),28:('math.gcd(a, b)',8),29:('math.lcm(a, b)',9)}
     exprs[25] = 'math.align_down(a, alignment)'
-    body = f'fn test_{t}(data: []const u8) {{\n cursor: usize = 0\n for cursor < #len(data) {{\n a := #cast({t}, read(data, &cursor))\n b := #cast({t}, read(data, &cursor))\n'
+    body = f'fn test_{t}(data: []const u8) {{\n cursor: usize = 0\n for cursor < data.len {{\n a := #cast({t}, read(data, &cursor))\n b := #cast({t}, read(data, &cursor))\n'
     for i in range(len(exprs)): body += f' e{i} := read(data, &cursor)\n'
     for i in range(10): body += f' f{i} := read(data, &cursor) != 0\n'
     body += f' alignment := #cast({t}, read(data, &cursor))\n'
@@ -134,12 +134,12 @@ def extra_cases(work):
             fixture = work/f'narrow-{target}-{origin}.bin'
             fixture.write_bytes(b''.join(struct.pack('<Q', v & ((1<<64)-1)) for v in valid))
             name = f'narrow_{target}_{origin}'
-            narrow_source += f"fn {name}(data: []const u8) {{ cursor: usize = 0\n for cursor < #len(data) {{ raw := read(data, &cursor)\n value := #cast({origin}, raw)\n require(#cast(u64, math.narrow({target}, value)) == raw, \"{name}\") }} }}\n"
+            narrow_source += f"fn {name}(data: []const u8) {{ cursor: usize = 0\n for cursor < data.len {{ raw := read(data, &cursor)\n value := #cast({origin}, raw)\n require(#cast(u64, math.narrow<{target}>(value)) == raw, \"{name}\") }} }}\n"
             narrow_calls += f'if true {{ input_file: fail.Status\n input := fs.read_all(arena, &input_file, "{fixture}", 134217728)\n  require(!input_file.failed, "narrow input")\n {name}(input)\n mem.arena_reset(arena) }}\n'
             successes += len(valid)
             for value in values:
                 if not tl <= value <= th:
-                    panic_bodies.append((f'_ = math.narrow({target}, #cast({origin}, raw))', value, 0, 'narrow: value does not fit'))
+                    panic_bodies.append((f'_ = math.narrow<{target}>(#cast({origin}, raw))', value, 0, 'narrow: value does not fit'))
         for expr, a, b, message in [
             ('math.align_up(a, b)', 1, 0, 'alignment must be a power of two'),
             ('math.align_down(a, b)', 1, 3, 'alignment must be a power of two'),

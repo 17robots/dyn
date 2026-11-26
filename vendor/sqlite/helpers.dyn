@@ -72,7 +72,7 @@ pub fn bytes(statement: *const Statement, index: usize) []const u8 {
 }
 pub fn text(arena: *mem.Arena, statement: *const Statement, index: usize) []const u8 {
   value := bytes(statement, index)
-  copy := mem.push_bytes(arena, #len(value))
+  copy := mem.push_bytes(arena, value.len)
   _ = mem.copy(copy, value)
   return copy
 }
@@ -107,7 +107,7 @@ pub fn cached(status: *fail.Status, statements: *Cache, sql: []const u8) *Statem
   if status.failed { return nil }
   for i in 0..statements.count {
     entry := &statements.entries[i]
-    if #len(entry.sql) == #len(sql) && (#len(sql) == 0 || &entry.sql[0] == &sql[0] || equal(entry.sql, sql)) {
+    if entry.sql.len == sql.len && (sql.len == 0 || &entry.sql[0] == &sql[0] || equal(entry.sql, sql)) {
       return &entry.statement
     }
   }
@@ -140,7 +140,7 @@ pub fn cache_close(statements: *Cache) {
 }
 
 fn equal(left: []const u8, right: []const u8) bool {
-  for i in 0..#len(left) {
+  for i in 0..left.len {
     if left[i] != right[i] { return false }
   }
   return true
@@ -169,14 +169,14 @@ pub fn open_schema(status: *fail.Status, path: []const u8, schema: []const []con
 // Calls write for each of rows inside one IMMEDIATE transaction and commits.
 // When it cannot begin or commit, the transaction is rolled back; write
 // records each row's own outcome.
-pub fn transaction(status: *fail.Status, database: Database, rows: []$R, write: fn(*$R)) {
+pub fn transaction<R>(status: *fail.Status, database: Database, rows: []R, write: fn(*R)) {
   if status == nil {
     transaction(&fail.Status{}, database, rows, write)
     return
   }
   begin(status, database, TransactionMode.Immediate)
   if status.failed { return }
-  for i in 0..#len(rows) {
+  for i in 0..rows.len {
     write(&rows[i])
   }
   commit(status, database)

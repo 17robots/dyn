@@ -2556,7 +2556,7 @@ static void ssa_case_body(Ssa *s, const DynIrCaseArm *arm, int32_t pointer, uint
     const DynIrPattern *pattern = &ir->patterns[arm->pattern_start];
     if (!pattern->is_type && !pattern->is_enum) { SSA_GIVE_UP(s); return; }
     DynType bound = ir->locals[arm->local_id].type;
-    if (arm->pointer_binding) s->alias[binding] = pointer;
+    if (arm->pointer_binding) ssa_set_local(s, binding, pointer, -1);
     else if (value_type(ir, bound)) {
       int32_t second = -1, value = ssa_load_value(s, pointer, bound, &second);
       ssa_set_local(s, binding, value, second);
@@ -2566,7 +2566,6 @@ static void ssa_case_body(Ssa *s, const DynIrCaseArm *arm, int32_t pointer, uint
     }
   }
   ssa_statements(s, arm->body_start, arm->body_count, depth + 1);
-  if (arm->local_id != UINT32_MAX && arm->pointer_binding) s->alias[arm->local_id - s->f->local_start] = -1;
   ssa_jump(s, done);
 }
 /* Dense single-value cases dispatch through a jump table: at least four

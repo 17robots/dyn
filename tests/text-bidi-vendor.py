@@ -12,13 +12,13 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 CASES=[('',64),('plain Latin 123',64),('سلام',64),('אבג',64),('abc سلام 123 (xyz)',64),('אבג 123, abc!',64),('  123 - (45)  ',64),('abc אבג   xyz',273),('אבג abc   ',273),('a\u2067אב 12\u2069 z',64),('a\u202e123\u202c b',64),('שָׁלוֹם café 😀',64),('A\tאבג\tB',272),('A\0אבג',64)]
 def lit(data): return '"'+''.join(f'\\x{x:02x}' for x in data)+'"'
-SOURCE=r'''use "vendor/fribidi" bidi
-use "std/dynlib" dynlib
-use "std/mem" mem
+SOURCE=r'''use bidi "vendor/fribidi"
+use dynlib "std/dynlib"
+use mem "std/mem"
 use "std/fail"
-use "std/fs" fs
-use "std/encoding/binary" binary
-use "std/io" errors
+use fs "std/fs"
+use binary "std/encoding/binary"
+use errors "std/io"
 struct bidi_load_Outcome { api: bidi.Api, failure: fail.Failure, kind: fail.Kind }
 fn bidi_load(p0: dynlib.Handle) bidi_load_Outcome {
   status: fail.Status
@@ -67,7 +67,7 @@ fn save(arena:*mem.Arena,api:*const bidi.Api,text:[]const u8,base:u32,path:[]con
  result:=bidi_resolve(arena,api,text,base)
  check(!failed(result.failure))
  p:=result.value
- n:=#len(p.logical)
+ n:=p.logical.len
  out:=mem.push_bytes(arena,8+n*32+4*(4+n*8))
  at:usize=0
  append(out,&at,#cast(u32,n))
@@ -88,8 +88,8 @@ fn save(arena:*mem.Arena,api:*const bidi.Api,text:[]const u8,base:u32,path:[]con
  for k in 0..4 {
   line:=bidi_reorder(arena,api,&p,starts[k],ends[k])
   check(!failed(line.failure))
-  append(out,&at,#cast(u32,#len(line.value.levels)))
-  for i in 0..#len(line.value.levels) {
+  append(out,&at,#cast(u32,line.value.levels.len))
+  for i in 0..line.value.levels.len {
    append(out,&at,#cast(u32,line.value.visual_to_logical[i]))
    append(out,&at,#cast(u32,line.value.levels[i]))
   }

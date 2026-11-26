@@ -8,12 +8,12 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/fail"
-use "std/text/layout" layout
-use "std/ui" ui
-use "std/ui/text" ui_text
-use "std/ui/software" software
-use "std/mem" mem
-use "std/bytes" bytes
+use layout "std/text/layout"
+use ui "std/ui"
+use ui_text "std/ui/text"
+use software "std/ui/software"
+use mem "std/mem"
+use bytes "std/bytes"
 fn check(ok: bool) { if !ok { #panic("layout contract") } }
 struct Built { value: layout.Layout, offset: usize, failure: fail.Failure }
 fn build(arena: *mem.Arena, source: []const u8, font: layout.Font, options: layout.Options) Built {
@@ -54,7 +54,7 @@ fn main() {
   defer { mem.arena_release(arena) }
   font := layout.Font{ advance: advance, kerning: kern, line_height: 12 }
   result := build(arena, "AV AV", font, layout.Options{ width: 30 })
-  check(result.failure.kind == fail.Kind.Ok && #len(result.value.lines) == 2 && #len(result.value.glyphs) == 4)
+  check(result.failure.kind == fail.Kind.Ok && result.value.lines.len == 2 && result.value.glyphs.len == 4)
   check(result.value.lines[0].width == 18.0 && result.value.lines[1].width == 18.0 && result.value.height == 24.0)
   check(result.value.glyphs[1].x == 8.0 && result.value.glyphs[2].x == 0.0 && result.value.glyphs[2].y == 12.0)
   context := ui.Context{ style: ui.default_style }
@@ -72,19 +72,19 @@ fn main() {
   result = build(arena, "A\tV", font, layout.Options{})
   check(result.failure.kind == fail.Kind.Ok && result.value.width == 30.0 && result.value.glyphs[1].x == 20.0)
   result = build(arena, "A\r\n\nB\n", font, layout.Options{})
-  check(result.failure.kind == fail.Kind.Ok && #len(result.value.lines) == 4 && result.value.height == 48.0 && #len(result.value.glyphs) == 2)
+  check(result.failure.kind == fail.Kind.Ok && result.value.lines.len == 4 && result.value.height == 48.0 && result.value.glyphs.len == 2)
   result = build(arena, "A\xcc\x8a", font, layout.Options{})
-  check(result.failure.kind == fail.Kind.Ok && bytes.equal(result.value.text, "\xc3\x85") && #len(result.value.glyphs) == 1 && result.value.glyphs[0].end == 2)
+  check(result.failure.kind == fail.Kind.Ok && bytes.equal(result.value.text, "\xc3\x85") && result.value.glyphs.len == 1 && result.value.glyphs[0].end == 2)
   result = build(arena, "A\xcc\x8aV", font, layout.Options{ width: 12, no_normalize: true })
-  check(result.failure.kind == fail.Kind.Ok && #len(result.value.lines) == 2 && #len(result.value.glyphs) == 3)
+  check(result.failure.kind == fail.Kind.Ok && result.value.lines.len == 2 && result.value.glyphs.len == 3)
   check(result.value.glyphs[0].start == 0 && result.value.glyphs[0].end == 3 && result.value.glyphs[1].start == 0 && result.value.glyphs[1].end == 3)
   check(result.value.glyphs[1].y == 0.0 && result.value.glyphs[2].y == 12.0)
   result = build(arena, "abcde", font, layout.Options{ width: 21 })
-  check(result.failure.kind == fail.Kind.Ok && #len(result.value.lines) == 3 && result.value.lines[2].width == 10.0)
+  check(result.failure.kind == fail.Kind.Ok && result.value.lines.len == 3 && result.value.lines[2].width == 10.0)
   result = build(arena, "", font, layout.Options{})
-  check(result.failure.kind == fail.Kind.Ok && #len(result.value.lines) == 1 && #len(result.value.glyphs) == 0)
+  check(result.failure.kind == fail.Kind.Ok && result.value.lines.len == 1 && result.value.glyphs.len == 0)
   result = build(arena, "ab\xc2\xadc", font, layout.Options{})
-  check(result.failure.kind == fail.Kind.Ok && #len(result.value.glyphs) == 3 && result.value.width == 30.0)
+  check(result.failure.kind == fail.Kind.Ok && result.value.glyphs.len == 3 && result.value.width == 30.0)
   result = build(arena, "a\xc2\xadbcd", font, layout.Options{ width: 25 })
   check(result.failure.kind == fail.Kind.Ok && result.value.glyphs[1].codepoint == 45 && result.value.glyphs[1].y == 0.0 && result.value.glyphs[2].y == 12.0)
   result = build(arena, "a\xc2\xadbc", font, layout.Options{ width: 15 })
@@ -101,7 +101,7 @@ fn main() {
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 32, height: 32 })
   ui_text.label(&context, ui.Rect{ width: 32, height: 32 }, &result.value, ui.Color{ r: 255, a: 255 })
   ui.end(&context)
-  for i in 0..#len(pixels) { pixels[i] = 0 }
+  for i in 0..pixels.len { pixels[i] = 0 }
   check(renders(&surface, ui.first(&context), software.Font{ glyph: big_glyph, line_height: 1 }) && pixels[0] == 0)
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 32, height: 32 })
   ui.glyph(&context, ui.Rect{ width: 32, height: 32 }, 65, 2147483648, 0, ui.Color{ r: 255, a: 255 })

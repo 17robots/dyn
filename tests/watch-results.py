@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
-PORTABLE = '''use "std/fs/watch" watch
+PORTABLE = '''use watch "std/fs/watch"
 use "std/fail"
 fn require(ok: bool) { if !ok { #panic("watch result contract") } }
 fn next_failure(state: *watch.Watcher) fail.Failure {
@@ -29,7 +29,7 @@ fn main() {
  require(again.native == first.native && again.kind == first.kind)
 }
 '''
-LINUX = '''use "std/fs/watch" watch
+LINUX = '''use watch "std/fs/watch"
 use "std/fail"
 fn require(ok: bool) { if !ok { #panic("watch read after failure") } }
 fn next_failure(state: *watch.Watcher) fail.Failure {

@@ -8,10 +8,10 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/ui" ui
-use "std/ui/software" software
-use "std/mem" mem
-use "std/io" errors
+SOURCE = r'''use ui "std/ui"
+use software "std/ui/software"
+use mem "std/mem"
+use errors "std/io"
 use "std/fail"
 fn software_render(p0: *software.Surface, p1: *const ui.Command, p2: software.Font) fail.Failure {
   status: fail.Status
@@ -233,7 +233,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-ui-results-') as directory:
         'UI widget ID must be nonzero': 'ui.begin(&context, arena, ui.Input{}, bounds)\n _ = ui.button(&context, 0, bounds, "", true)',
     }
     for message, body in failures.items():
-        (work / 'main.dyn').write_text('use "std/ui" ui\nuse "std/mem" mem\nfn main() {\n arena := mem.arena_alloc(0)\n context := ui.Context{ style: ui.default_style }\n bounds := ui.Rect{ width: 10, height: 10 }\n '+body+'\n}')
+        (work / 'main.dyn').write_text('use ui "std/ui"\nuse mem "std/mem"\nfn main() {\n arena := mem.arena_alloc(0)\n context := ui.Context{ style: ui.default_style }\n bounds := ui.Rect{ width: 10, height: 10 }\n '+body+'\n}')
         for mode in ('--debug', '--release'):
             output = work / 'invalid'
             subprocess.run([DYN, 'build', str(work), mode, '--quiet', '--output', str(output)], check=True, timeout=300)

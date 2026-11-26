@@ -1,12 +1,12 @@
 use "std/fail"
 #target(kernel: darwin)
-use "std/io" io
-use "std/mem" mem
-use "std/c" cstrings
+use io "std/io"
+use mem "std/mem"
+use cstrings "std/c"
 use "std/os/macos/sys"
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
-  if #len(path) == 0 { return nil }
+  if path.len == 0 { return nil }
   status: fail.Status
   return cstrings.string_into(&status, storage, path)
 }
@@ -29,10 +29,10 @@ fn native_close(handle: isize) isize {
   return #syscall(sys.Close, handle)
 }
 fn native_read(handle: isize, destination: []u8) isize {
-  return #syscall(sys.Read, handle, &destination[0], #len(destination))
+  return #syscall(sys.Read, handle, &destination[0], destination.len)
 }
 fn native_write(handle: isize, source: []const u8) isize {
-  return #syscall(sys.Write, handle, &source[0], #len(source))
+  return #syscall(sys.Write, handle, &source[0], source.len)
 }
 fn native_seek(handle: isize, offset: isize, origin: usize) isize {
   return #syscall(sys.Lseek, handle, offset, origin)

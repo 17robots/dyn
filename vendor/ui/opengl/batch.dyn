@@ -164,8 +164,8 @@ fn cached(batch: *Batch, font: software.Font, codepoint: u32) Cached {
       if bitmap.width < 0 || bitmap.height < 0 || bitmap.advance < 0 {
         return Cached{ failed: true }
       }
-      if bitmap.width > 0 && (bitmap.stride < #cast(usize, bitmap.width) || #cast(usize, bitmap.width) > #len(bitmap.pixels) ||
-          bitmap.height > 0 && #cast(usize, bitmap.height - 1) > (#len(bitmap.pixels) - #cast(usize, bitmap.width)) / bitmap.stride) {
+      if bitmap.width > 0 && (bitmap.stride < #cast(usize, bitmap.width) || #cast(usize, bitmap.width) > bitmap.pixels.len ||
+          bitmap.height > 0 && #cast(usize, bitmap.height - 1) > (bitmap.pixels.len - #cast(usize, bitmap.width)) / bitmap.stride) {
         return Cached{ failed: true }
       }
       if bitmap.width >= atlas_size || bitmap.height >= atlas_size { return Cached{ failed: true } }
@@ -232,7 +232,7 @@ fn batch_glyph(batch: *Batch, stream: *Stream, font: software.Font, codepoint: u
   found := cached(batch, font, codepoint)
   if found.full { return Drawn{ full: true } }
   if found.failed { return Drawn{ failed: true } }
-  if stream.count + 6 > #len(stream.data) / vertex_floats {
+  if stream.count + 6 > stream.data.len / vertex_floats {
     flush(batch, stream)
   }
   glyph_quad(batch, stream, found.entry, x, y, tint, clip)
@@ -253,7 +253,7 @@ pub fn render_batch(status: *fail.Status, batch: *Batch, commands: *const ui.Com
     render_failed(status, fail.Kind.InvalidState, "render batch")
     return
   }
-  if width < 0 || height < 0 || #len(vertices) < 6 * vertex_floats || font.glyph == nil || font.line_height <= 0 {
+  if width < 0 || height < 0 || vertices.len < 6 * vertex_floats || font.glyph == nil || font.line_height <= 0 {
     render_failed(status, fail.Kind.InvalidInput, "render batch")
     return
   }
@@ -304,7 +304,7 @@ pub fn render_batch(status: *fail.Status, batch: *Batch, commands: *const ui.Com
         current = scissor
       }
       if command.kind == ui.Kind.Rectangle {
-        if stream.count + 6 > #len(stream.data) / vertex_floats {
+        if stream.count + 6 > stream.data.len / vertex_floats {
           flush(batch, &stream)
         }
         b := command.bounds
@@ -333,7 +333,7 @@ pub fn render_batch(status: *fail.Status, batch: *Batch, commands: *const ui.Com
         x := #cast(i64, command.bounds.x)
         y := #cast(i64, command.bounds.y)
         offset: usize = 0
-        for offset < #len(command.text) {
+        for offset < command.text.len {
           decoded := utf8.decode(command.text, offset)
           offset += decoded.width
           codepoint := decoded.codepoint

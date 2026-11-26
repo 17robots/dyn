@@ -1,4 +1,4 @@
-use "std/io" stream
+use stream "std/io"
 use "std/fail"
 pub struct Entry {
   name: []const u8,
@@ -43,13 +43,13 @@ pub fn stream_reader(input: stream.Reader, header_storage: []u8, metadata: []u8)
   if bytes.overlaps(header_storage, metadata) {
     return StreamReader{ failed: true, failure: fail.make(fail.Kind.InvalidInput, "read TAR", "", "the storages overlap") }
   }
-  half := #len(metadata) / 2
+  half := metadata.len / 2
   return StreamReader{ source_reader: input, header_storage: header_storage, metadata: metadata[..half], spare: metadata[half..half * 2] }
 }
 
 struct Header { entry: Entry, ended: bool, ok: bool }
 fn parse_header(header: []const u8) Header {
-  if #len(header) < 512 { return Header{} }
+  if header.len < 512 { return Header{} }
   all_zero := true
   for byte in header[..512] {
     if byte != 0 {
@@ -102,7 +102,7 @@ fn stream_failed(status: *fail.Status, state: *StreamReader, kind: fail.Kind) St
 // Fills destination; the count read, short only at the end of the stream.
 fn read_exact(state: *StreamReader, destination: []u8) usize {
   total: usize = 0
-  for !state.failed && total < #len(destination) {
+  for !state.failed && total < destination.len {
     reading: fail.Status
     count := stream.read(&reading, state.source_reader, destination[total..])
     if reading.failed {
@@ -123,7 +123,7 @@ fn read_exact(state: *StreamReader, destination: []u8) usize {
 // Reads all of destination; a short read is a truncated archive.
 fn read_all(state: *StreamReader, destination: []u8) bool {
   count := read_exact(state, destination)
-  if !state.failed && count != #len(destination) {
+  if !state.failed && count != destination.len {
     mark_failed(state, fail.Kind.InvalidInput)
   }
   return !state.failed
@@ -132,8 +132,8 @@ fn discard(state: *StreamReader, amount: usize) bool {
   left := amount
   for left > 0 {
     take := left
-    if take > #len(state.header_storage) {
-      take = #len(state.header_storage)
+    if take > state.header_storage.len {
+      take = state.header_storage.len
     }
     if !read_all(state, state.header_storage[..take]) { return false }
     left -= take
@@ -152,8 +152,8 @@ fn retain_name(destination: []u8, used: *usize, source: []const u8) []const u8 {
   return destination[start..used.*]
 }
 fn compact_metadata(state: *StreamReader, local: *Overrides) bool {
-  required := #len(state.defaults.path) + #len(state.defaults.link) + #len(local.path) + #len(local.link)
-  if required > #len(state.spare) {
+  required := state.defaults.path.len + state.defaults.link.len + local.path.len + local.link.len
+  if required > state.spare.len {
     mark_failed(state, fail.Kind.Capacity)
     return false
   }
@@ -181,7 +181,7 @@ pub fn next_stream(status: *fail.Status, state: *StreamReader) StreamEntry {
   }
   if state.failed { return stream_failed(status, state, fail.Kind.InvalidInput) }
   if state.ended { return StreamEntry{ offset: state.offset } }
-  if #len(state.header_storage) < 512 { return stream_failed(status, state, fail.Kind.Capacity) }
+  if state.header_storage.len < 512 { return stream_failed(status, state, fail.Kind.Capacity) }
   if state.active {
     if !discard(state, state.remaining + state.padding) {
       return stream_failed(status, state, fail.Kind.InvalidInput)
@@ -225,7 +225,7 @@ pub fn next_stream(status: *fail.Status, state: *StreamReader) StreamEntry {
         size: entry.size, typeflag: entry.kind, offset: state.offset }
     }
     pending = true
-    if state.remaining > #len(state.metadata) - state.metadata_used {
+    if state.remaining > state.metadata.len - state.metadata_used {
       return stream_failed(status, state, fail.Kind.Capacity)
     }
     payload := state.metadata[state.metadata_used..state.metadata_used + state.remaining]
@@ -242,10 +242,10 @@ pub fn next_stream(status: *fail.Status, state: *StreamReader) StreamEntry {
         return stream_failed(status, state, fail.Kind.InvalidInput)
       }
     } else {
-      if #len(payload) == 0 || payload[#len(payload) - 1] != 0 {
+      if payload.len == 0 || payload[payload.len - 1] != 0 {
         return stream_failed(status, state, fail.Kind.InvalidInput)
       }
-      value := payload[..#len(payload) - 1]
+      value := payload[..payload.len - 1]
       for byte in value {
         if byte == 0 { return stream_failed(status, state, fail.Kind.InvalidInput) }
       }
@@ -279,8 +279,8 @@ pub fn read_stream(status: *fail.Status, state: *StreamReader, destination: []u8
     return 0
   }
   take := state.remaining
-  if take > #len(destination) {
-    take = #len(destination)
+  if take > destination.len {
+    take = destination.len
   }
   if take == 0 { return 0 }
   if !read_all(state, destination[..take]) {
@@ -293,7 +293,7 @@ pub fn read_stream(status: *fail.Status, state: *StreamReader, destination: []u8
 
 fn string_end(data: []const u8) usize {
   i: usize = 0
-  for i < #len(data) && data[i] != 0 {
+  for i < data.len && data[i] != 0 {
     i += 1
   }
   return i

@@ -29,14 +29,14 @@ pub fn stderr() Writer {
 }
 
 fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
-  if status.failed || #len(destination) == 0 { return 0 }
+  if status.failed || destination.len == 0 { return 0 }
   handle := standard_handle(4294967286) // STD_INPUT_HANDLE (-10)
   if !valid_handle(handle) {
     stream_failed(status, "read", "standard input", 6)
     return 0
   }
   count: u32 = 0
-  if standard_read(handle, &destination[0], transfer_limit(#len(destination)), &count, nil) == 0 {
+  if standard_read(handle, &destination[0], transfer_limit(destination.len), &count, nil) == 0 {
     error := standard_error()
     // A closed pipe and a file at EOF both end the byte stream.
     if error == 109 || error == 38 { return count }
@@ -48,14 +48,14 @@ fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
   return count
 }
 fn write_standard(status: *fail.Status, kind: u32, path: []const u8, source: []const u8) usize {
-  if status.failed || #len(source) == 0 { return 0 }
+  if status.failed || source.len == 0 { return 0 }
   handle := standard_handle(kind)
   if !valid_handle(handle) {
     stream_failed(status, "write", path, 6)
     return 0
   }
   count: u32 = 0
-  if standard_write(handle, &source[0], transfer_limit(#len(source)), &count, nil) == 0 {
+  if standard_write(handle, &source[0], transfer_limit(source.len), &count, nil) == 0 {
     stream_failed(status, "write", path, standard_error())
     return count
   }

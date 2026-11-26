@@ -28,7 +28,7 @@ struct Largest {
 fn main() i32 {
   program := process.start()
   arena := program.arena
-  if #len(program.args) != 2 {
+  if program.args.len != 2 {
     io.eprintln("usage: ledger FILE.csv")
     return 2
   }
@@ -41,9 +41,9 @@ fn main() i32 {
     return 1
   }
 
-  categories: map.Map([]const u8, Total)
+  categories: map.Map<[]const u8, Total>
   map.init(&categories, arena)
-  months: map.Map([]const u8, Total)
+  months: map.Map<[]const u8, Total>
   map.init(&months, arena)
   largest: Largest
   skipped: u32 = 0
@@ -79,7 +79,7 @@ fn main() i32 {
       io.eprintln("ledger: {}:{}: not valid CSV", path, line)
       return 1
     }
-    if line == 1 || count == 0 || (count == 1 && #len(fields[0]) == 0) {
+    if line == 1 || count == 0 || (count == 1 && fields[0].len == 0) {
       continue                    // the header, or a blank line
     }
     if count != Columns {
@@ -95,7 +95,7 @@ fn main() i32 {
       continue
     }
     date := fields[0]
-    if #len(date) < 7 {
+    if date.len < 7 {
       io.eprintln("ledger: {}:{}: bad date {}", path, line, date)
       skipped += 1
       continue
@@ -105,7 +105,7 @@ fn main() i32 {
     if amount > largest.amount {
       largest.amount = amount
       // fields[2] is overwritten by the next row, so keep a copy, cut to fit.
-      length := math.min(#len(fields[2]), #len(largest.storage))
+      length := math.min(fields[2].len, largest.storage.len)
       kept := mem.copy(largest.storage[..], fields[2][..length])
       largest.description = largest.storage[..kept]
       largest.line = line

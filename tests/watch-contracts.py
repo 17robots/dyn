@@ -18,11 +18,11 @@ def bounded_descriptors():
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     resource.setrlimit(resource.RLIMIT_NOFILE, (64 if soft == resource.RLIM_INFINITY else min(64, soft), hard))
 
-SOURCE = r'''use "std/fs/watch" watch
+SOURCE = r'''use watch "std/fs/watch"
 use "std/fail"
-use "std/fs" fs
-use "std/io" io
-use "std/bytes" bytes
+use fs "std/fs"
+use io "std/io"
+use bytes "std/bytes"
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 struct Got { value: watch.Event, found: bool, failure: fail.Failure }
 fn next(state: *watch.Watcher) Got {

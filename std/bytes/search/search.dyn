@@ -9,12 +9,12 @@ pub struct Pattern { needle: []const u8, table: []const usize }
 pub fn prepare(status: *fail.Status, needle: []const u8, table: []usize) Pattern {
   if status == nil { return prepare(&fail.Status{}, needle, table) }
   if status.failed { return Pattern{} }
-  if #len(table) < #len(needle) {
+  if table.len < needle.len {
     fail.set(status, fail.make(fail.Kind.Capacity, "prepare search", "", "the table is shorter than the needle"))
     return Pattern{}
   }
   matched: usize = 0
-  for index in 0..#len(needle) {
+  for index in 0..needle.len {
     if index == 0 {
       table[index] = 0
     } else {
@@ -27,23 +27,23 @@ pub fn prepare(status: *fail.Status, needle: []const u8, table: []usize) Pattern
       table[index] = matched
     }
   }
-  return Pattern{ needle: needle, table: table[..#len(needle)] }
+  return Pattern{ needle: needle, table: table[..needle.len] }
 }
 
 // First byte offset, or #len(text) on a miss. Empty needle matches at zero.
 // No allocations.
 pub fn find(pattern: Pattern, text: []const u8) usize {
-  if #len(pattern.needle) == 0 { return 0 }
-  if #len(pattern.needle) > #len(text) { return #len(text) }
+  if pattern.needle.len == 0 { return 0 }
+  if pattern.needle.len > text.len { return text.len }
   matched: usize = 0
-  for index in 0..#len(text) {
+  for index in 0..text.len {
     for matched > 0 && text[index] != pattern.needle[matched] {
       matched = pattern.table[matched - 1]
     }
     if text[index] == pattern.needle[matched] {
       matched += 1
     }
-    if matched == #len(pattern.needle) { return index + 1 - matched }
+    if matched == pattern.needle.len { return index + 1 - matched }
   }
-  return #len(text)
+  return text.len
 }

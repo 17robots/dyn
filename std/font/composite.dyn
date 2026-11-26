@@ -85,8 +85,8 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
         offset = transformed(offset, matrix)
       }
     } else {
-      if #cast(usize, a) >= #len(result.points) || #cast(usize, b) >= #len(child.points) {
-        if #cast(usize, a) < #len(result.points) + 4 && #cast(usize, b) < #len(child.points) + 4 {
+      if #cast(usize, a) >= result.points.len || #cast(usize, b) >= child.points.len {
+        if #cast(usize, a) < result.points.len + 4 && #cast(usize, b) < child.points.len + 4 {
           return Outline{ kind: fail.Kind.Unsupported }
         }
         return Outline{ kind: fail.Kind.InvalidInput }
@@ -113,14 +113,14 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
         return Outline{ kind: fail.Kind.Capacity }
       }
     }
-    old_count := #len(result.points)
-    points := mem.push_array(Point, arena, old_count + #len(child.points))
+    old_count := result.points.len
+    points := mem.push_array<Point>(arena, old_count + child.points.len)
     _ = mem.copy(points[..old_count], result.points)
     _ = mem.copy(points[old_count..], child.points)
-    ends := mem.push_array(usize, arena, #len(result.ends) + #len(child.ends))
-    _ = mem.copy(ends[..#len(result.ends)], result.ends)
-    for i in 0..#len(child.ends) {
-      ends[#len(result.ends) + i] = old_count + child.ends[i]
+    ends := mem.push_array<usize>(arena, result.ends.len + child.ends.len)
+    _ = mem.copy(ends[..result.ends.len], result.ends)
+    for i in 0..child.ends.len {
+      ends[result.ends.len + i] = old_count + child.ends[i]
     }
     result.points = points
     result.ends = ends

@@ -1,6 +1,6 @@
 #target(kernel: linux)
 
-use "std/mem" memory
+use memory "std/mem"
 use "std/os/linux/sys"
 use "std/io"
 use "std/fail"
@@ -25,15 +25,15 @@ pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
   path: [19]u8
   source: []const u8 = "/proc/self/cmdline"
   i: usize = 0
-  for i < #len(source) {
+  for i < source.len {
     path[i] = source[i]
     i += 1
   }
   descriptor := #syscall(sys.Openat, -100, &path[0], 0, 0)
   if descriptor < 0 { return no_arguments() }
-  value := #syscall(sys.Read, descriptor, &temporary[0], #len(temporary))
+  value := #syscall(sys.Read, descriptor, &temporary[0], temporary.len)
   _ = #syscall(sys.Close, descriptor)
-  if value < 0 || #cast(usize, value) == #len(temporary) { return no_arguments() }
+  if value < 0 || #cast(usize, value) == temporary.len { return no_arguments() }
   used := #cast(usize, value)
   count: usize = 0
   i = 0
@@ -49,7 +49,7 @@ pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
 
   bytes := memory.push_bytes(arena, used)
   _ = memory.copy(bytes, temporary[..used])
-  arguments := memory.push_array([]const u8, arena, count)
+  arguments := memory.push_array<[]const u8>(arena, count)
   start: usize = 0
   at: usize = 0
   i = 0
@@ -130,18 +130,18 @@ pub fn fork_process(status: *fail.Status) isize {
 }
 
 fn terminate(arena: *memory.Arena, text: []const u8) *u8 {
-  bytes := memory.push_bytes(arena, #len(text) + 1)
-  for i in 0..#len(text) {
+  bytes := memory.push_bytes(arena, text.len + 1)
+  for i in 0..text.len {
     bytes[i] = text[i]
   }
-  bytes[#len(text)] = 0
+  bytes[text.len] = 0
   return &bytes[0]
 }
 
 pub fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) isize {
   mark := memory.arena_mark(arena)
   defer memory.arena_rewind(arena, mark)
-  if #len(path) == 0 { return -22 }
+  if path.len == 0 { return -22 }
   for byte in path {
     if byte == 0 { return -22 }
   }
@@ -152,8 +152,8 @@ pub fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) 
   }
   path_raw := terminate(arena, path)
   if path_raw == nil { return -28 }
-  length := #len(arguments)
-  pointers := memory.push_array(CStringPointer, arena, length + 1)
+  length := arguments.len
+  pointers := memory.push_array<CStringPointer>(arena, length + 1)
   for i in 0..length {
     pointers[i] = CStringPointer{ value: terminate(arena, arguments[i]) }
     if pointers[i].value == nil { return -28 }
@@ -175,7 +175,7 @@ pub fn spawn_environment(
   if status.failed { return -1 }
   mark := memory.arena_mark(arena)
   defer memory.arena_rewind(arena, mark)
-  if #len(path) == 0 { return spawn_failed(status, -22) }
+  if path.len == 0 { return spawn_failed(status, -22) }
   for byte in path {
     if byte == 0 { return spawn_failed(status, -22) }
   }
@@ -187,23 +187,23 @@ pub fn spawn_environment(
   path_raw := terminate(arena, path)
   if path_raw == nil { return spawn_failed(status, -28) }
   directory_raw: *const u8 = nil
-  if #len(options.directory) > 0 {
+  if options.directory.len > 0 {
     for directory_byte in options.directory {
       if directory_byte == 0 { return spawn_failed(status, -22) }
     }
     directory_raw = terminate(arena, options.directory)
     if directory_raw == nil { return spawn_failed(status, -28) }
   }
-  count := #len(arguments)
-  pointers := memory.push_array(CStringPointer, arena, count + 1)
+  count := arguments.len
+  pointers := memory.push_array<CStringPointer>(arena, count + 1)
   for index in 0..count {
     pointers[index].value = terminate(arena, arguments[index])
     if pointers[index].value == nil { return spawn_failed(status, -28) }
   }
   pointers[count].value = nil
-  environment_pointers := memory.push_array(CStringPointer, arena, #len(environment) + 1)
+  environment_pointers := memory.push_array<CStringPointer>(arena, environment.len + 1)
   env_index: usize = 0
-  for env_index < #len(environment) {
+  for env_index < environment.len {
     for env_byte in environment[env_index] {
       if env_byte == 0 { return spawn_failed(status, -22) }
     }
@@ -353,7 +353,7 @@ pub fn exit_process(status: u8) {
 pub fn environment_get(status: *fail.Status, name: []const u8, destination: []u8) []u8 {
   if status == nil { return environment_get(&fail.Status{}, name, destination) }
   if status.failed { return destination[..0] }
-  if #len(name) == 0 {
+  if name.len == 0 {
     fail.invalid(status, "read environment", name, "empty variable name")
     return destination[..0]
   }
@@ -377,7 +377,7 @@ pub fn environment_get(status: *fail.Status, name: []const u8, destination: []u8
   in_value := false
   selected := false
   for {
-    count := #syscall(sys.Read, descriptor, &scratch[0], #len(scratch))
+    count := #syscall(sys.Read, descriptor, &scratch[0], scratch.len)
     if count == -4 { continue }
     if count < 0 {
       fail.set(status, io.from_linux("read environment", "/proc/self/environ", count))
@@ -402,15 +402,15 @@ pub fn environment_get(status: *fail.Status, name: []const u8, destination: []u8
       } else if !in_value {
         if byte == '=' {
           in_value = true
-          selected = matching && position == #len(name)
+          selected = matching && position == name.len
         } else {
-          if position >= #len(name) || byte != name[position] {
+          if position >= name.len || byte != name[position] {
             matching = false
           }
           position += 1
         }
       } else if selected {
-        if used == #len(destination) {
+        if used == destination.len {
           failure := fail.make(fail.Kind.Capacity, "read environment", name, "the value does not fit the storage")
           failure.native = -28
           fail.set(status, failure)
@@ -428,11 +428,11 @@ pub fn environment_get(status: *fail.Status, name: []const u8, destination: []u8
 pub fn current_directory(status: *fail.Status, destination: []u8) []u8 {
   if status == nil { return current_directory(&fail.Status{}, destination) }
   if status.failed { return destination[..0] }
-  if #len(destination) == 0 {
+  if destination.len == 0 {
     fail.set(status, io.from_linux("current directory", "", -34))
     return destination[..0]
   }
-  count := #syscall(sys.Getcwd, &destination[0], #len(destination))
+  count := #syscall(sys.Getcwd, &destination[0], destination.len)
   if check(status, "current directory", count) < 0 { return destination[..0] }
   if count == 0 {
     fail.set(status, io.from_linux("current directory", "", -5))

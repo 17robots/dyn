@@ -9,7 +9,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-source = ['use "std/simd" simd\nfn check(ok: bool) { if !ok { #panic("SIMD lanes") } }\nfn main() {']
+source = ['use simd "std/simd"\nfn check(ok: bool) { if !ok { #panic("SIMD lanes") } }\nfn main() {']
 for t, n in [('u8',16), ('i8',16), ('u16',8), ('i16',8), ('u32',4), ('i32',4), ('u64',2), ('i64',2), ('f32',4), ('f64',2)]:
     prefix = t+'x'+str(n)
     typename = t[0].upper()+t[1:]+'x'+str(n)
@@ -53,7 +53,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-simd-lanes-') as directory:
     # Short loads/stores must fail in debug and release before writing anything.
     for operation in ('load', 'store'):
         body = '_ = simd.u32x4_load(buffer[..])' if operation == 'load' else 'simd.u32x4_store(buffer[..], simd.u32x4_splat(1))'
-        (work / 'main.dyn').write_text('use "std/simd" simd\nfn main() {\n buffer: [3]u32\n '+body+'\n}')
+        (work / 'main.dyn').write_text('use simd "std/simd"\nfn main() {\n buffer: [3]u32\n '+body+'\n}')
         for mode in ('--debug', '--release'):
             subprocess.run([DYN, 'build', str(work), mode, '--quiet', '--output', str(work / 'program')], check=True, timeout=300)
             ran = subprocess.run([str(work / 'program')], capture_output=True, text=True, timeout=30)

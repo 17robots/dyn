@@ -1,9 +1,9 @@
 #target(kernel: linux)
-use "std/mem" mem
-use "std/io" io
+use mem "std/mem"
+use io "std/io"
 use "std/fail"
-use "std/fs" fs
-use "std/c" c
+use fs "std/fs"
+use c "std/c"
 use "std/os/linux/sys"
 
 pub const Modify: u32 = 2
@@ -39,7 +39,7 @@ pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan:
 pub fn open(status: *fail.Status, storage: []u8) Watcher {
   if status == nil { return open(&fail.Status{}, storage) }
   if status.failed { return Watcher{} }
-  if #len(storage) < 272 {
+  if storage.len < 272 {
     _ = failure(status, "watch", "", -28)
     return Watcher{}
   }
@@ -54,7 +54,7 @@ pub fn open(status: *fail.Status, storage: []u8) Watcher {
 pub fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i32 {
   if status == nil { return add(&fail.Status{}, state, path, mask) }
   if status.failed { return -1 }
-  if #len(path) == 0 || !state.active { return failure(status, "watch", path, -22) }
+  if path.len == 0 || !state.active { return failure(status, "watch", path, -22) }
   storage: [4096 + mem.ArenaBufferOverhead]u8
   name := c.string_into(status, storage[..], path)
   if status.failed { return -1 }
@@ -108,7 +108,7 @@ pub fn next(status: *fail.Status, state: *Watcher) Event {
     fail.set(status, state.failure)
     return idle(state)
   }
-  if state.used > #len(state.storage) || state.offset > state.used { return next_failed(status, state, -74) }
+  if state.used > state.storage.len || state.offset > state.used { return next_failed(status, state, -74) }
   if state.offset == state.used {
     if !state.active { return next_failed(status, state, -9) }
     file := fs.adopt_handle(state.descriptor)

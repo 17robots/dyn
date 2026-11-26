@@ -38,7 +38,7 @@ for index, raw in enumerate(valid):
       require(mem.equal(result.root.text, raw), "numeric exact token %d")
       state := json.tokenizer(raw)
       token := json.token_next(&state)
-      require(token.kind == json.TokenKind.Number && token.offset == 0 && mem.equal(token.text, raw) && state.offset == #len(raw), "numeric tokenizer %d")
+      require(token.kind == json.TokenKind.Number && token.offset == 0 && mem.equal(token.text, raw) && state.offset == raw.len, "numeric tokenizer %d")
       require(json.token_next(&state).kind == json.TokenKind.End, "numeric end")
       mem.arena_rewind(arena, mark)
     }''' % (quote(raw), index, index, index))
@@ -55,11 +55,11 @@ for raw in [b'-', b'1.', b'1e', b'1e+', b'1e-', b'1.e2', b'1e.2']:
     checks.append('''if true {
       state := json.tokenizer(%s)
       token := json.token_next(&state)
-      require(token.kind == json.TokenKind.Invalid && token.offset == 0 && state.offset == 1 && #len(token.text) == 1, "invalid tokenizer progress")
+      require(token.kind == json.TokenKind.Invalid && token.offset == 0 && state.offset == 1 && token.text.len == 1, "invalid tokenizer progress")
     }''' % quote(raw))
 source = '''use "std/fail"
-use "std/encoding/json" json
-use "std/mem" mem
+use json "std/encoding/json"
+use mem "std/mem"
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 struct Parsed { root: *const json.Value, offset: usize, failure: fail.Failure }
 fn parse(arena: *mem.Arena, source: []const u8) Parsed {
@@ -99,14 +99,14 @@ fn main() {
     if result.failure.kind == fail.Kind.Ok {
       expected_width: usize = 1
       if decimal { expected_width = 2 }
-      require(#len(result.root.text) == expected_width, "numeric continuation width")
+      require(result.root.text.len == expected_width, "numeric continuation width")
     }
     mem.arena_rewind(arena, mark)
   }
 ''' + '\n'.join(checks) + '''
   if true {
     whitespace := mem.push_bytes(arena, 262144)
-    for i in 0..#len(whitespace) { whitespace[i] = 32 }
+    for i in 0..whitespace.len { whitespace[i] = 32 }
     whitespace[131071] = '0'
     hold := mem.arena_mark(arena)
     result := parse(arena, whitespace)
@@ -114,19 +114,19 @@ fn main() {
     mem.arena_rewind(arena, hold)
     whitespace[131071] = 32
     result = parse(arena, whitespace)
-    require(result.failure.kind != fail.Kind.Ok && result.offset == #len(whitespace) && mem.arena_mark(arena) == hold, "all whitespace EOF bounds")
+    require(result.failure.kind != fail.Kind.Ok && result.offset == whitespace.len && mem.arena_mark(arena) == hold, "all whitespace EOF bounds")
     mem.arena_rewind(arena, mark)
   }
   if true {
     digits := mem.push_bytes(arena, 65536)
-    for i in 0..#len(digits) { digits[i] = '9' }
+    for i in 0..digits.len { digits[i] = '9' }
     hold := mem.arena_mark(arena)
     result := parse(arena, digits)
-    require(result.failure.kind == fail.Kind.Ok && #len(result.root.text) == #len(digits) && mem.equal(result.root.text, digits), "large number bounds")
+    require(result.failure.kind == fail.Kind.Ok && result.root.text.len == digits.len && mem.equal(result.root.text, digits), "large number bounds")
     mem.arena_rewind(arena, hold)
-    digits[#len(digits)-1] = '.'
+    digits[digits.len-1] = '.'
     result = parse(arena, digits)
-    require(result.failure.kind != fail.Kind.Ok && result.offset == #len(digits) && mem.arena_mark(arena) == hold, "large fraction EOF bounds")
+    require(result.failure.kind != fail.Kind.Ok && result.offset == digits.len && mem.arena_mark(arena) == hold, "large fraction EOF bounds")
     mem.arena_rewind(arena, mark)
   }
 }

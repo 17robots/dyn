@@ -25,7 +25,7 @@ if libc_query == 'libc.so.6' or not libc.is_file():
     raise RuntimeError('C compiler did not resolve libc.so.6: ' + libc_query)
 
 HELPERS = r'''use "std/fail"
-use "std/dynlib" dl
+use dl "std/dynlib"
 #link("c")
 struct Opened { value: dl.Handle, failure: fail.Failure }
 fn open(path: []const u8, flags: i32) Opened {
@@ -45,7 +45,7 @@ fn close(handle: *dl.Handle) fail.Failure {
   return status.failure
 }
 fn described(failure: *const fail.Failure) bool {
-  return #len(fail.message_text(failure)) > 0
+  return fail.message_text(failure).len > 0
 }
 '''
 SOURCE = HELPERS + r'''fn check(ok: bool) { if !ok { #panic("dynlib results") } }

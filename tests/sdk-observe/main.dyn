@@ -1,5 +1,5 @@
 use "std/observe"
-use "std/container/slot_map" slots
+use slots "std/container/slot_map"
 struct Record { generation: u32, name: []const u8 }
 const nil_record: Record = Record{}
 fn expect(ok: bool) { if !ok { #panic("observe contract") } }
@@ -9,7 +9,7 @@ fn main() {
   observe.record(&log,observe.Event{kind:observe.Kind.Allocated,resource:42,value:16})
   observe.record(&log,observe.Event{kind:observe.Kind.Released,resource:42})
   observed:=observe.recorded(&log)
-  expect(#len(observed)==2 && observed[0].kind==observe.Kind.Allocated)
+  expect(observed.len==2 && observed[0].kind==observe.Kind.Allocated)
   expect(observed[0].resource==42 && observed[0].value==16)
   expect(observed[1].kind==observe.Kind.Released)
   observe.record(&log,observe.Event{kind:observe.Kind.Checkpoint})

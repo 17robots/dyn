@@ -48,12 +48,12 @@ def fixture(long_loca=False, cmap12=False):
         body += data; offset += len(data)
     return u32(0x10000)+u16(len(tables))+b'\0'*6+directory+body,positions
 
-SOURCE = r'''use "std/font" font
-use "std/font/ui" font_ui
-use "std/ui" ui
-use "std/ui/software" software
+SOURCE = r'''use font "std/font"
+use font_ui "std/font/ui"
+use ui "std/ui"
+use software "std/ui/software"
 use "std/fail"
-use "std/mem" mem
+use mem "std/mem"
 fn check(ok: bool) { if !ok { #panic("font contract") } }
 fn opens(bytes: []const u8) bool {
   status: fail.Status
@@ -79,7 +79,7 @@ fn main() {
   face := font.open(&status, data[..])
   check(font.glyph_index(&face, 65) == 1 && font.glyph_index(&face, 68) == 4 && font.glyph_index(&face, 69) == 0)
   check(font.glyph_index(&face, 0xd800) == 0 && font.glyph_index(&face, 0x110000) == 0)
-  for length in 0..#len(data) { check(!opens(data[..length])) }
+  for length in 0..data.len { check(!opens(data[..length])) }
   solid := font.raster(arena, &status, &face, 1, 16)
   check(solid.width == 16 && solid.height == 16 && solid.y_offset == -16 && solid.advance == 11)
   for pixel in solid.pixels { check(pixel == 255) }
@@ -115,7 +115,7 @@ fn main() {
   // survive bounded rasterization without a language bounds/overflow trap.
   work := data
   for iteration in 0..2000 {
-    index := (iteration * 37) % #len(work)
+    index := (iteration * 37) % work.len
     work[index] ^= #cast(u8, (1 << (iteration % 8)))
     opening: fail.Status
     parsed := font.open(&opening, work[..])
@@ -149,11 +149,11 @@ fn main() {
   adapter := font_ui.Adapter{ face: &face, arena: arena, pixels_per_em: 16 }
   check(renders(&surface, ui.first(&context), font_ui.renderer(&adapter)) && !adapter.failed && pixels[3] == 255)
   expected := pixels
-  for i in 0..#len(pixels) { pixels[i] = 0 }
+  for i in 0..pixels.len { pixels[i] = 0 }
   before = mem.arena_mark(arena)
   check(renders(&surface, ui.first(&context), font_ui.atlas_renderer(&cached)))
   check(mem.arena_mark(arena) == before)
-  for i in 0..#len(pixels) { check(pixels[i] == expected[i]) }
+  for i in 0..pixels.len { check(pixels[i] == expected[i]) }
   ui.begin(&context, frame, ui.Input{}, ui.Rect{ width: 64, height: 32 })
   ui.label(&context, ui.Rect{ width: 64, height: 32 }, "D", ui.Color{ a: 255 })
   ui.end(&context)

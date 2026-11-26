@@ -32,9 +32,9 @@ for key, suffix in [('PKG_CONFIG_PATH', 'lib/pkgconfig'), ('DYN_LIBRARY_PATH', '
     env[key] = str(local/suffix) + (os.pathsep + env[key] if env.get(key) else '')
 dyn = str(Path(env.get('DYN', BUILD/'dyn-release')).resolve())
 FIXTURES = {
-    'tree-sitter-example': r'''use "vendor/tree_sitter" ts
+    'tree-sitter-example': r'''use ts "vendor/tree_sitter"
 use "std/fail"
-use "std/io" io
+use io "std/io"
 use "std/strings"
 use "std/bytes"
 // Grammar is separate from runtime. This example uses the packaged C grammar.
@@ -77,9 +77,9 @@ fn main() {
   io.println("Tree-sitter: parsed, traversed, copied and incrementally reparsed C")
 }
 ''',
-    'regex-example': r'''use "vendor/pcre2" regex
+    'regex-example': r'''use regex "vendor/pcre2"
 use "std/fail"
-use "std/io" io
+use io "std/io"
 use "std/bytes"
 fn rejected(pattern: regex.Pattern, data: regex.MatchData, subject: []const u8, start: usize) bool {
   status: fail.Status
@@ -139,7 +139,7 @@ fn main() {
 ''',
     'lua-example': r'''use "vendor/lua"
 use "std/fail"
-use "std/io" io
+use io "std/io"
 use "std/bytes"
 fn executes(state: lua.State, source: []const u8) bool {
   status: fail.Status
@@ -200,7 +200,7 @@ fn main() {
     mem.arena_release(storage)
   }
   args := linux.process_arguments(storage)
-  if #len(args) != 2 {
+  if args.len != 2 {
     io.println("usage: archive-example ARCHIVE")
     return
   }
@@ -236,7 +236,7 @@ fn main() {
   storage: [65536]u8
   arena := mem.arena_from_buffer(storage[..])
   args := linux.process_arguments(arena)
-  if #len(args) != 2 {
+  if args.len != 2 {
     io.println("usage: curl-example URL")
     return
   }
@@ -251,7 +251,7 @@ fn main() {
 }
 ''',
     'sdl3-image-example': r'''use "vendor/sdl3"
-use "vendor/sdl3/image" image
+use image "vendor/sdl3/image"
 use "std/mem"
 use "std/fs"
 use "std/os/linux"
@@ -263,7 +263,7 @@ fn main() {
     mem.arena_release(storage)
   }
   args := linux.process_arguments(storage)
-  if #len(args) != 2 {
+  if args.len != 2 {
     io.println("usage: sdl3-image-example IMAGE")
     return
   }
@@ -283,7 +283,7 @@ fn main() {
 }
 ''',
     'sdl3-font-example': r'''use "vendor/sdl3"
-use "vendor/sdl3/ttf" ttf
+use ttf "vendor/sdl3/ttf"
 use "std/fail"
 use "std/mem"
 use "std/os/linux"
@@ -292,7 +292,7 @@ fn main() {
   storage: [65536]u8
   arena := mem.arena_from_buffer(storage[..])
   args := linux.process_arguments(arena)
-  if #len(args) != 2 {
+  if args.len != 2 {
     io.println("usage: sdl3-font-example FONT.ttf")
     return
   }
@@ -320,13 +320,13 @@ fn main() {
 }
 ''',
     'opengl-example': r'''use "vendor/sdl3"
-use "vendor/opengl" gl
+use gl "vendor/opengl"
 use "std/mem"
 use "std/os/linux"
-use "std/io" io
+use io "std/io"
 use "std/strings"
 use "std/bytes"
-use "std/c" c
+use c "std/c"
 use "std/fail"
 fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
   value := api.create_shader(kind)
@@ -334,7 +334,7 @@ fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
     #panic("create shader")
   }
   pointer := &source[0]
-  length := #cast(i32, #len(source))
+  length := #cast(i32, source.len)
   api.shader_source(value, 1, &pointer, &length)
   api.compile_shader(value)
   compiled: i32 = 0
@@ -458,7 +458,7 @@ fn main() {
   backing: [65536]u8
   arena := mem.arena_from_buffer(backing[..])
   args := linux.process_arguments(arena)
-  smoke := #len(args) == 2 && bytes.equal(args[1], "--smoke")
+  smoke := args.len == 2 && bytes.equal(args[1], "--smoke")
   status := fail.Status{ on_failure: fail.panic_on_failure }
   sdl3.init_video(&status)
   defer sdl3.quit()
@@ -492,7 +492,7 @@ fn main() {
     }
     bad_source := "this is not GLSL"
     bad_pointer := &bad_source[0]
-    bad_length := #cast(i32, #len(bad_source))
+    bad_length := #cast(i32, bad_source.len)
     api.shader_source(invalid, 1, &bad_pointer, &bad_length)
     api.compile_shader(invalid)
     compiled: i32 = 0
@@ -592,7 +592,7 @@ fn main() {
   backing: [65536]u8
   arena := mem.arena_from_buffer(backing[..])
   args := linux.process_arguments(arena)
-  if #len(args) != 3 { #panic("URL required") }
+  if args.len != 3 { #panic("URL required") }
   status := fail.Status{ on_failure: fail.panic_on_failure }
   curl.init(&status)
   defer curl.cleanup()
@@ -613,10 +613,10 @@ fn main() {
 }
 ''',
     'provider-abi': r'''use "std/fail"
-use "vendor/tree_sitter" ts
+use ts "vendor/tree_sitter"
 use "vendor/sdl3"
-use "vendor/sdl3/image" image
-use "vendor/sdl3/ttf" ttf
+use image "vendor/sdl3/image"
+use ttf "vendor/sdl3/ttf"
 use "std/mem"
 use "std/os/linux"
 extern fn node_size "oracle_node_size"() usize
@@ -629,7 +629,7 @@ fn main() {
   backing: [65536]u8
   arena := mem.arena_from_buffer(backing[..])
   args := linux.process_arguments(arena)
-  if #len(args) != 3 { #panic("image and font paths required") }
+  if args.len != 3 { #panic("image and font paths required") }
   buffer: [4096]u8
   status := fail.Status{ on_failure: fail.panic_on_failure }
   surface := image.load_owned(&status, args[1], buffer[..])

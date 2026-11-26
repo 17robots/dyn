@@ -1,7 +1,7 @@
 #target(kernel: darwin)
-use "vendor/window/native" native
+use native "vendor/window/native"
 use "std/fail"
-use "std/ui/box" box
+use box "std/ui/box"
 pub type Window = native.Window
 pub fn open(status: *fail.Status, window: *Window, title: []const u8, width, height: i32) {
   if status == nil {

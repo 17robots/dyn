@@ -14,7 +14,7 @@ extern fn native_error_message "pcre2_get_error_message_8"(code: i32, buffer: *u
 // Records PCRE2's message for code, keeping the code in native.
 fn provider_failed(status: *fail.Status, kind: fail.Kind, operation: []const u8, code: i32, offset: usize, located: bool) {
   text: [120]u8
-  length := native_error_message(code, &text[0], #len(text))
+  length := native_error_message(code, &text[0], text.len)
   message: []const u8 = "PCRE2 failed"
   if length > 0 {
     message = text[..#cast(usize, length)]
@@ -31,12 +31,12 @@ pub fn compile_owned(status: *fail.Status, pattern: []const u8, options: u32) Pa
   if status.failed { return nil }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
-  if #len(pattern) > 0 {
+  if pattern.len > 0 {
     pointer = &pattern[0]
   }
   code: i32 = 0
   offset: usize = 0
-  value := native_compile(pointer, #len(pattern), options, &code, &offset, nil)
+  value := native_compile(pointer, pattern.len, options, &code, &offset, nil)
   if value == nil {
     provider_failed(status, fail.Kind.InvalidInput, "compile pattern", code, offset, true)
   }
@@ -62,16 +62,16 @@ pub fn match_data_destroy_owned(data: MatchData) {
 pub fn match(status: *fail.Status, pattern: Pattern, data: MatchData, subject: []const u8, start: usize) bool {
   if status == nil { return match(&fail.Status{}, pattern, data, subject, start) }
   if status.failed { return false }
-  if pattern == nil || data == nil || start > #len(subject) {
+  if pattern == nil || data == nil || start > subject.len {
     provider_failed(status, fail.Kind.InvalidInput, "match", -33, 0, false)
     return false
   }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
-  if #len(subject) > 0 {
+  if subject.len > 0 {
     pointer = &subject[0]
   }
-  code := native_match(pattern, pointer, #len(subject), start, 0, data, nil)
+  code := native_match(pattern, pointer, subject.len, start, 0, data, nil)
   if code < 0 && code != NoMatch {
     provider_failed(status, fail.Kind.System, "match", code, 0, false)
     return false

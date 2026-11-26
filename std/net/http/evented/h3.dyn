@@ -11,13 +11,13 @@
 // field sections decode independently and need no encoder stream), and flow
 // control inside QUIC. Server push and WebSockets over HTTP/3 (RFC 9220) are
 // not offered; browsers use HTTP/1.1 or HTTP/2 for WebSockets.
-use "std/bytes" bytes
-use "std/event" event
-use "std/io" io
-use "std/mem" mem
-use "std/net" network
-use "std/net/http" http
-use "std/net/http/qpack" qpack
+use bytes "std/bytes"
+use event "std/event"
+use io "std/io"
+use mem "std/mem"
+use network "std/net"
+use http "std/net/http"
+use qpack "std/net/http/qpack"
 
 pub enum QuicStatus { Ok, WouldBlock, End, Failed }
 pub struct QuicIo { count: usize, status: QuicStatus }
@@ -96,9 +96,9 @@ struct Varint { value: u64, length: usize }
 
 // A QUIC variable-length integer (RFC 9000 16); length 0 while incomplete.
 fn read_varint(source: []const u8) Varint {
-  if #len(source) == 0 { return Varint{} }
+  if source.len == 0 { return Varint{} }
   length := #cast(usize, 1) << #cast(usize, source[0] >> 6)
-  if #len(source) < length { return Varint{} }
+  if source.len < length { return Varint{} }
   value := #cast(u64, source[0] & 0x3f)
   for i in 1..length {
     value = (value << 8) | source[i]
@@ -169,7 +169,7 @@ fn h3_start(arena: *mem.Arena, status: *fail.Status, worker: *Worker) {
   config := worker.config
   if status.failed { return }
   worker.h2.read = mem.push_bytes(arena, MaxFrame + 1024)
-  worker.h3_connections = mem.push_array(usize, arena, config.http2_connections)
+  worker.h3_connections = mem.push_array<usize>(arena, config.http2_connections)
   address := network.Address{}
   network.local_address(status, worker.listener.descriptor, &address)
   family := #cast(usize, address.bytes[0]) | (#cast(usize, address.bytes[1]) << 8)
@@ -197,14 +197,14 @@ fn h3_start(arena: *mem.Arena, status: *fail.Status, worker: *Worker) {
   text: [16]u8
   digits := decimal_text(text[..], port)
   at := append_text(worker.alt_svc[..], 0, "h3=\":")
-  at = append_text(worker.alt_svc[..], #len(at), digits)
-  at = append_text(worker.alt_svc[..], #len(at), "\"; ma=86400")
-  worker.alt_svc_length = #len(at)
+  at = append_text(worker.alt_svc[..], at.len, digits)
+  at = append_text(worker.alt_svc[..], at.len, "\"; ma=86400")
+  worker.alt_svc_length = at.len
   event.add(status, &worker.queue, descriptor, event.Readable, QuicToken)
 }
 
 fn decimal_text(destination: []u8, value: u64) []const u8 {
-  at := #len(destination)
+  at := destination.len
   number := value
   for {
     at -= 1
@@ -257,7 +257,7 @@ fn h3_poll(worker: *Worker) {
 fn h3_accept(worker: *Worker, handle: rawptr) {
   quic := worker.config.quic
   if worker.free_count == 0 || worker.serving >= worker.config.connections_per_worker || worker.h2.free_count == 0 ||
-    worker.h3_count == #len(worker.h3_connections) {
+    worker.h3_count == worker.h3_connections.len {
     quic.close(handle, H3ExcessiveLoad)
     return
   }
@@ -450,12 +450,12 @@ fn h3_read_stream(worker: *Worker, index: usize, stream_index: usize) {
 fn h3_frames(worker: *Worker, index: usize, stream_index: usize, input: []const u8) {
   connection := &worker.connections[index]
   at: usize = 0
-  for at < #len(input) {
+  for at < input.len {
     stream := &connection.h2.streams[stream_index]
     if stream.phase != Phase.Receiving && stream.phase != Phase.Large { return }
     if !stream.in_frame {
-      room := #len(stream.frame_head) - stream.frame_head_used
-      count := #len(input) - at
+      room := stream.frame_head.len - stream.frame_head_used
+      count := input.len - at
       if count > room {
         count = room
       }
@@ -468,7 +468,7 @@ fn h3_frames(worker: *Worker, index: usize, stream_index: usize, input: []const 
         length = read_varint(stream.frame_head[kind.length..stream.frame_head_used])
       }
       if kind.length == 0 || length.length == 0 {
-        if stream.frame_head_used == #len(stream.frame_head) {
+        if stream.frame_head_used == stream.frame_head.len {
           h3_fail(connection, H3FrameError)
           return
         }
@@ -489,7 +489,7 @@ fn h3_frames(worker: *Worker, index: usize, stream_index: usize, input: []const 
       }
       continue
     }
-    count := #len(input) - at
+    count := input.len - at
     if count > stream.frame_left {
       count = #cast(usize, stream.frame_left)
     }
@@ -528,7 +528,7 @@ fn h3_frame_start(worker: *Worker, index: usize, stream_index: usize) bool {
     h3_fail(connection, H3FrameUnexpected)
     return false
   }
-  if kind == FrameH3Headers && !stream.headers_seen && stream.frame_left > #len(stream.storage) {
+  if kind == FrameH3Headers && !stream.headers_seen && stream.frame_left > stream.storage.len {
     // Larger than SETTINGS_MAX_FIELD_SECTION_SIZE.
     reset_stream(worker, connection, stream_index, ErrorCalm)
     return false
@@ -566,7 +566,7 @@ fn h3_frame_end(worker: *Worker, index: usize, stream_index: usize) bool {
   stream.headers_seen = true
   stream.head_length = head.length
   stream.declared = head.declared
-  if head.declared > #cast(i64, #len(stream.storage) - head.length) {
+  if head.declared > #cast(i64, stream.storage.len - head.length) {
     grow_stream(worker, index, stream_index, #cast(usize, head.declared))
   }
   return true
@@ -580,16 +580,16 @@ fn h3_decode(worker: *Worker, block: []const u8) usize {
   used: usize = 0
   at := prefix.consumed
   decoding: fail.Status
-  for at < #len(block) {
+  for at < block.len {
     field := qpack.decode_field(&decoding, block[at..], pool.head)
     if decoding.failed { return 0xffffffffffffffff }
     at += field.consumed
-    need := 4 + #len(field.name) + #len(field.value)
-    if need > #len(pool.fields) - used { return 0xfffffffffffffffe }
-    pool.fields[used] = #cast(u8, #len(field.name) >> 8)
-    pool.fields[used + 1] = #cast(u8, #len(field.name))
-    pool.fields[used + 2] = #cast(u8, #len(field.value) >> 8)
-    pool.fields[used + 3] = #cast(u8, #len(field.value))
+    need := 4 + field.name.len + field.value.len
+    if need > pool.fields.len - used { return 0xfffffffffffffffe }
+    pool.fields[used] = #cast(u8, field.name.len >> 8)
+    pool.fields[used + 1] = #cast(u8, field.name.len)
+    pool.fields[used + 2] = #cast(u8, field.value.len >> 8)
+    pool.fields[used + 3] = #cast(u8, field.value.len)
     used += 4
     used += mem.copy(pool.fields[used..], field.name)
     used += mem.copy(pool.fields[used..], field.value)
@@ -602,20 +602,20 @@ fn h3_body(worker: *Worker, index: usize, stream_index: usize, data: []const u8)
   connection := &worker.connections[index]
   h2 := connection.h2
   stream := &h2.streams[stream_index]
-  if stream.phase == Phase.Receiving && stream.head_length + stream.body_length + #len(data) > #len(stream.storage) {
-    grow_stream(worker, index, stream_index, stream.body_length + #len(data))
+  if stream.phase == Phase.Receiving && stream.head_length + stream.body_length + data.len > stream.storage.len {
+    grow_stream(worker, index, stream_index, stream.body_length + data.len)
     stream = &h2.streams[stream_index]
     if stream.phase != Phase.Receiving && stream.phase != Phase.Large { return }
   }
   if stream.phase == Phase.Large {
     slot := &worker.h2.slots[stream.slot - 1]
-    if #len(data) > 0 && !slot.body_chunk(slot.body_data, data) {
+    if data.len > 0 && !slot.body_chunk(slot.body_data, data) {
       large_end(worker, connection, stream_index, BodyEnd.Stopped)
     }
     return
   }
   at := stream.head_length + stream.body_length
-  stream.body_length += mem.copy(stream.storage[at..at + #len(data)], data)
+  stream.body_length += mem.copy(stream.storage[at..at + data.len], data)
   if stream.declared >= 0 && stream.body_length > #cast(usize, stream.declared) {
     reset_stream(worker, connection, stream_index, ErrorProtocol)
   }
@@ -683,11 +683,11 @@ fn h3_write(worker: *Worker, connection: *Connection, stream_index: usize, sourc
   stream := &connection.h2.streams[stream_index]
   handle := stream.handle
   if handle == nil || stream.reset { return true }
-  if !blocking && quic.writable(handle) < #len(source) { return false }
+  if !blocking && quic.writable(handle) < source.len { return false }
   at: usize = 0
   started := now_milliseconds()
-  for at < #len(source) || conclude {
-    last := conclude && at == #len(source)
+  for at < source.len || conclude {
+    last := conclude && at == source.len
     written := quic.write(handle, source[at..], false)
     if last {
       written = quic.write(handle, source[at..at], true)
@@ -714,7 +714,7 @@ fn h3_write(worker: *Worker, connection: *Connection, stream_index: usize, sourc
 fn h3_send_headers(worker: *Worker, connection: *Connection, stream_index: usize, block: []const u8, end: bool, blocking: bool) bool {
   head: [16]u8
   used := write_varint(head[..], FrameH3Headers)
-  used += write_varint(head[used..], #len(block))
+  used += write_varint(head[used..], block.len)
   if !h3_write(worker, connection, stream_index, head[..used], false, blocking) { return false }
   return h3_write(worker, connection, stream_index, block, end, blocking)
 }
@@ -725,19 +725,19 @@ fn h3_send_data(worker: *Worker, connection: *Connection, stream_index: usize, d
   if !blocking {
     // A push must fit whole, framing included.
     stream := &connection.h2.streams[stream_index]
-    if stream.handle != nil && worker.config.quic.writable(stream.handle) < #len(data) + 16 * (#len(data) / MaxFrame + 1) {
+    if stream.handle != nil && worker.config.quic.writable(stream.handle) < data.len + 16 * (data.len / MaxFrame + 1) {
       return false
     }
   }
-  for #len(rest) > 0 {
-    count := #len(rest)
+  for rest.len > 0 {
+    count := rest.len
     if count > MaxFrame {
       count = MaxFrame
     }
     head: [16]u8
     used := write_varint(head[..], FrameH3Data)
     used += write_varint(head[used..], count)
-    last := end && count == #len(rest)
+    last := end && count == rest.len
     if !h3_write(worker, connection, stream_index, head[..used], false, blocking) ||
       !h3_write(worker, connection, stream_index, rest[..count], last, blocking) {
       return false

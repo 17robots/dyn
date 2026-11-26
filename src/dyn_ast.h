@@ -91,7 +91,12 @@ typedef enum {
   /* #init(pointer): a statement sema rewrites before lowering. */
   DYN_EXPR_INIT,
   /* #max(T) (op DYN_OP_GT) and #min(T) (op DYN_OP_LT): sema folds them. */
-  DYN_EXPR_LIMIT
+  DYN_EXPR_LIMIT,
+  /* Phase 3 error handling: lowered to payload enum checks before IR. */
+  DYN_EXPR_TRY,
+  DYN_EXPR_CATCH,
+  /* Phase 4 #take(&x): moves value out and resets source in place before IR. */
+  DYN_EXPR_TAKE
 } DynExprKind;
 static inline bool dyn_type_is_param(DynType t) {
   return t >= DYN_TYPE_PARAM_BASE && t < DYN_TYPE_PARAM_BASE + DYN_MAX_TYPE_PARAMS;
@@ -134,8 +139,11 @@ typedef struct {
   double floating;
   bool boolean;
   bool boolean_reflection; /* a #typeof(T) result: its fields are compile-time values */
-  bool instance; /* #instance(f, T): the call names an instance instead of running it */
-  uint32_t item_start, item_count;
+  bool instance; /* f<T>: names a generic instance as a function value */
+  uint32_t item_start, item_count, type_arg_count;
+  /* For DYN_EXPR_CATCH block form: optional error binding name and local id. */
+  DynSpan catch_name;
+  uint32_t catch_local;
   /* Set during lowering for integer +, -, *, unary - and <<. */
   bool wrap;
 } DynAstExpr;
@@ -156,6 +164,7 @@ typedef struct {
 typedef struct {
   DynSpan span, name;
   bool packed;
+  bool nocopy;
   bool is_public;
   uint64_t module_owner;
   uint32_t field_start, field_count;
@@ -189,6 +198,11 @@ typedef struct {
   bool is_template, open_instance;
   uint32_t template_of, type_param_count;
   DynType type_args[DYN_MAX_TYPE_PARAMS];
+  /* Synthetic closed enum union `A | B` (variants are sorted constituent enums). */
+  bool is_error_union;
+  /* Synthetic return-only `T!E` (variant 0 = Ok(T), variant 1 = Err(E)). */
+  bool is_fallible;
+  DynType ok_type, err_type;
 } DynAstEnum;
 typedef struct {
   DynSpan name;
@@ -284,11 +298,13 @@ typedef enum {
   DYN_STMT_CASE,
   DYN_STMT_DEFER,
   DYN_STMT_PANIC,
-  DYN_STMT_ASSERT /* #assert in a body; sema checks it per instance and leaves a no-op */
+  DYN_STMT_ASSERT, /* #assert in a body; sema checks it per instance and leaves a no-op */
+  DYN_STMT_FAIL,
+  DYN_STMT_ERRDEFER
 } DynStmtKind;
 typedef struct {
   DynStmtKind kind;
-  DynSpan span, name, label;
+  DynSpan span, name, label, control_label;
   DynType declared_type;
   DynExprId expression, target;
   DynOperator assignment_op;
@@ -401,6 +417,7 @@ typedef struct {
   struct DynAstExpansion { DynExprId expression; uint32_t target; bool global; } *expansions;
   size_t expansion_count, expansion_capacity;
   uint32_t loop_count;
+  uint32_t current_loop_depth;
   DynNameIndex struct_names, enum_names, alias_names;
   /* Generic nodes borrow the syntax trees, which outlive semantic analysis. */
   DynAstGeneric *generics;
@@ -438,6 +455,8 @@ void dyn_ast_program_free(DynAstProgram *ast);
 /* The struct type for a template and arguments, created on first use. */
 DynType dyn_ast_struct_instance(DynAstProgram *, uint32_t template_id, const DynType *args);
 DynType dyn_ast_enum_instance(DynAstProgram *, uint32_t template_id, const DynType *args);
+DynType dyn_ast_intern_error_union(DynAstProgram *, const DynType *members, uint32_t count);
+DynType dyn_ast_intern_fallible(DynAstProgram *, DynType ok_type, DynType err_type);
 /* Whether a type still names a type parameter. */
 bool dyn_ast_type_is_open(DynAstProgram *, DynType);
 /* Add an instance of a generic with concrete type arguments. The body is lowered later by dyn_ast_lower_instance. Returns the function id. */

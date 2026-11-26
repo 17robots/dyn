@@ -1,7 +1,7 @@
-use "std/font" font
-use "std/ui/software" software
-use "std/mem" mem
-use "std/math" math
+use font "std/font"
+use software "std/ui/software"
+use mem "std/mem"
+use math "std/math"
 use "std/fail"
 // Keep this state at a stable address while rendering. Face and its bytes outlive
 // the adapter; arena stores bitmaps until reset. A failure is sticky until reset
@@ -57,7 +57,7 @@ pub fn atlas_renderer(atlas: *font.Atlas) software.Font {
   return software.Font{ data: atlas, glyph: atlas_glyph, line_height: atlas.line_height }
 }
 
-use "std/text/layout" layout
+use layout "std/text/layout"
 pub struct LayoutAdapter { atlas: *const font.Atlas, face: *const font.Face, pixels_per_em: u16 }
 fn layout_advance(raw: rawptr, codepoint: u32) f64 {
   adapter := #cast(*const LayoutAdapter, raw)

@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-no-llvm-') as directory:
     app = root / 'app'
     app.mkdir()
     (app / 'main.dyn').write_text('''use "std/io"
-fn identity(value:$T) T { return value }
+fn identity<T>(value:T) T { return value }
 fn initial() u64 { return 19 }
 first:u64=initial()
 struct Pair { first:u64, second:u64 }

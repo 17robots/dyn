@@ -100,9 +100,9 @@ def fixture():
     offset=12+16*len(tables);directory=b'';body=b''
     for tag,data in tables.items(): directory+=tag.encode()+u32(0)+u32(offset)+u32(len(data));body+=data;offset+=len(data)
     return u32(0x10000)+u16(len(tables))+b'\0'*6+directory+body
-SOURCE='''use "std/font" font
+SOURCE='''use font "std/font"
 use "std/fail"
-use "std/mem" mem
+use mem "std/mem"
 fn check(ok: bool) { if !ok { #panic("composite contract") } }
 fn same(arena: *mem.Arena, face: *const font.Face, a, b: u16, size: u16) {
   mark := mem.arena_mark(arena)
@@ -112,8 +112,8 @@ fn same(arena: *mem.Arena, face: *const font.Face, a, b: u16, size: u16) {
   check(!status.failed)
   check(left.width == right.width && left.height == right.height)
   check(left.x_offset == right.x_offset && left.y_offset == right.y_offset && left.advance == right.advance)
-  check(#len(left.pixels) == #len(right.pixels))
-  for i in 0..#len(left.pixels) { check(left.pixels[i] == right.pixels[i]) }
+  check(left.pixels.len == right.pixels.len)
+  for i in 0..left.pixels.len { check(left.pixels[i] == right.pixels[i]) }
   mem.arena_rewind(arena, mark)
 }
 fn raster_kind(arena: *mem.Arena, face: *const font.Face, glyph: u16) fail.Kind {

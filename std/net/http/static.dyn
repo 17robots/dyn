@@ -1,10 +1,10 @@
-use "std/bytes" bytes
-use "std/compress/gzip" gzip
+use bytes "std/bytes"
+use gzip "std/compress/gzip"
 use "std/fail"
-use "std/fs" files
-use "std/hash" hash
-use "std/io" io
-use "std/mem" memory
+use files "std/fs"
+use hash "std/hash"
+use io "std/io"
+use memory "std/mem"
 
 // Static files served from memory: each Asset carries its bytes, a gzip
 // copy when that is smaller, a strong ETag and its content type. serve_asset
@@ -76,7 +76,7 @@ const MimeTypes: [36]MimeType = [
 pub fn content_type(name: []const u8) []const u8 {
   dot := bytes.find_last_byte(name, '.')
   slash := bytes.find_last_byte(name, '/')
-  if dot == #len(name) || (slash != #len(name) && slash > dot) { return "application/octet-stream" }
+  if dot == name.len || (slash != name.len && slash > dot) { return "application/octet-stream" }
   extension := name[dot + 1..]
   for item in MimeTypes {
     if ascii_equal(item.extension, extension) { return item.content_type }
@@ -105,10 +105,10 @@ pub fn make_asset(arena: *memory.Arena, path: []const u8, body: []const u8) Asse
   }
   tag[17] = '"'
   item.etag = tag
-  if compressible(item.content_type) && #len(body) > 256 {
+  if compressible(item.content_type) && body.len > 256 {
     mark := memory.arena_mark(arena)
     encoded := gzip.compress(arena, body, 9)
-    if #len(encoded) > 0 && #len(encoded) < #len(body) {
+    if encoded.len > 0 && encoded.len < body.len {
       item.gzip = encoded
     } else {
       memory.arena_rewind(arena, mark)
@@ -118,14 +118,14 @@ pub fn make_asset(arena: *memory.Arena, path: []const u8, body: []const u8) Asse
 }
 
 fn asset_less(left: []const u8, right: []const u8) bool {
-  shared := #len(left)
-  if #len(right) < shared {
-    shared = #len(right)
+  shared := left.len
+  if right.len < shared {
+    shared = right.len
   }
   for i in 0..shared {
     if left[i] != right[i] { return left[i] < right[i] }
   }
-  return #len(left) < #len(right)
+  return left.len < right.len
 }
 
 // Orders assets by path so find_asset can search them. load_directory
@@ -133,8 +133,8 @@ fn asset_less(left: []const u8, right: []const u8) bool {
 // Assets from path, body pairs, such as ("app.js", #load("static/app.js")),
 // sorted for find_asset. A last path without a body is left out.
 pub fn assets_of(arena: *memory.Arena, pairs: ...[]const u8) Assets {
-  count := #len(pairs) / 2
-  items := memory.push_array(Asset, arena, count)
+  count := pairs.len / 2
+  items := memory.push_array<Asset>(arena, count)
   for i in 0..count {
     items[i] = make_asset(arena, pairs[2 * i], pairs[2 * i + 1])
   }
@@ -186,15 +186,15 @@ pub fn load_directory(arena: *memory.Arena, status: *fail.Status, root: []const 
 }
 
 fn join_path(arena: *memory.Arena, left: []const u8, right: []const u8) []u8 {
-  if #len(left) == 0 {
-    joined := memory.push_bytes(arena, #len(right))
+  if left.len == 0 {
+    joined := memory.push_bytes(arena, right.len)
     _ = memory.copy(joined, right)
     return joined
   }
-  joined := memory.push_bytes(arena, #len(left) + 1 + #len(right))
-  _ = memory.copy(joined[..#len(left)], left)
-  joined[#len(left)] = '/'
-  _ = memory.copy(joined[#len(left) + 1..], right)
+  joined := memory.push_bytes(arena, left.len + 1 + right.len)
+  _ = memory.copy(joined[..left.len], left)
+  joined[left.len] = '/'
+  _ = memory.copy(joined[left.len + 1..], right)
   return joined
 }
 
@@ -205,7 +205,7 @@ fn load_tree(arena: *memory.Arena, status: *fail.Status, root: []const u8, relat
     return
   }
   directory_path := root
-  if #len(relative) > 0 {
+  if relative.len > 0 {
     directory_path = join_path(arena, root, relative)
   }
   listing: [4096]u8
@@ -214,14 +214,14 @@ fn load_tree(arena: *memory.Arena, status: *fail.Status, root: []const u8, relat
   for {
     entry := files.directory_next(status, &directory)
     if directory.ended { return }
-    if #len(entry.name) == 0 || entry.name[0] == '.' { continue }
+    if entry.name.len == 0 || entry.name[0] == '.' { continue }
     child := join_path(arena, relative, entry.name)
     if entry.kind == 4 {
       load_tree(arena, status, root, child, assets, maximum, depth + 1)
       continue
     }
     if entry.kind != 8 { continue }
-    if assets.count == #len(assets.items) {
+    if assets.count == assets.items.len {
       fail.set(status, fail.make(fail.Kind.Capacity, "load", root, "more files than asset storage"))
       return
     }
@@ -240,15 +240,15 @@ pub fn accepts_encoding(request: *const Request, coding: []const u8) bool {
   if !header.found { return false }
   rest := header.value
   wildcard := false
-  for #len(rest) > 0 {
+  for rest.len > 0 {
     end := bytes.find_byte(rest, ',')
     item := trim_ows(rest[..end])
     semicolon := bytes.find_byte(item, ';')
     name := trim_ows(item[..semicolon])
     allowed := true
-    if semicolon < #len(item) {
+    if semicolon < item.len {
       parameters := trim_ows(item[semicolon + 1..])
-      if #len(parameters) >= 3 && ascii_lower(parameters[0]) == 'q' && parameters[1] == '=' {
+      if parameters.len >= 3 && ascii_lower(parameters[0]) == 'q' && parameters[1] == '=' {
         value := parameters[2..]
         allowed = false
         for byte in value {
@@ -262,7 +262,7 @@ pub fn accepts_encoding(request: *const Request, coding: []const u8) bool {
     if bytes.equal(name, "*") {
       wildcard = allowed
     }
-    if end >= #len(rest) { break }
+    if end >= rest.len { break }
     rest = rest[end + 1..]
   }
   return wildcard
@@ -279,14 +279,14 @@ pub fn etag_matches(request: *const Request, etag: []const u8) bool {
     wanted = wanted[2..]
   }
   rest := header.value
-  for #len(rest) > 0 {
+  for rest.len > 0 {
     end := bytes.find_byte(rest, ',')
     item := trim_ows(rest[..end])
     if bytes.starts_with(item, "W/") {
       item = item[2..]
     }
     if bytes.equal(item, wanted) { return true }
-    if end >= #len(rest) { break }
+    if end >= rest.len { break }
     rest = rest[end + 1..]
   }
   return false
@@ -296,7 +296,7 @@ pub fn etag_matches(request: *const Request, etag: []const u8) bool {
 pub struct ByteRange { start: usize, end: usize }
 
 fn decimal_value(text: []const u8) Decimal {
-  if #len(text) == 0 || #len(text) > 19 { return Decimal{} }
+  if text.len == 0 || text.len > 19 { return Decimal{} }
   value: usize = 0
   for byte in text {
     if byte < '0' || byte > '9' { return Decimal{} }
@@ -316,15 +316,15 @@ pub fn byte_range(status: *fail.Status, request: *const Request, length: usize) 
   header := find_header(request, "Range")
   if !header.found { return no_range(status, "no Range header") }
   value := trim_ows(header.value)
-  if #len(value) < 7 || !ascii_equal(value[..6], "bytes=") || bytes.find_byte(value, ',') != #len(value) {
+  if value.len < 7 || !ascii_equal(value[..6], "bytes=") || bytes.find_byte(value, ',') != value.len {
     return no_range(status, "not a single bytes range")
   }
   spec := trim_ows(value[6..])
   dash := bytes.find_byte(spec, '-')
-  if dash == #len(spec) { return no_range(status, "bad range syntax") }
+  if dash == spec.len { return no_range(status, "bad range syntax") }
   first_text := trim_ows(spec[..dash])
   last_text := trim_ows(spec[dash + 1..])
-  if #len(first_text) == 0 {
+  if first_text.len == 0 {
     suffix := decimal_value(last_text)
     if !suffix.ok { return no_range(status, "bad range syntax") }
     if suffix.value == 0 || length == 0 { return past_end(status) }
@@ -337,7 +337,7 @@ pub fn byte_range(status: *fail.Status, request: *const Request, length: usize) 
   first := decimal_value(first_text)
   if !first.ok { return no_range(status, "bad range syntax") }
   end := length
-  if #len(last_text) > 0 {
+  if last_text.len > 0 {
     last := decimal_value(last_text)
     if !last.ok || last.value < first.value { return no_range(status, "bad range syntax") }
     if last.value < length {
@@ -364,7 +364,7 @@ fn range_current(request: *const Request, asset: *const Asset) bool {
   header := find_header(request, "If-Range")
   if !header.found { return true }
   value := trim_ows(header.value)
-  if #len(value) > 0 && value[0] == '"' { return bytes.equal(value, asset.etag) }
+  if value.len > 0 && value[0] == '"' { return bytes.equal(value, asset.etag) }
   date: fail.Status
   parsed := parse_date(&date, value)
   return asset.modified != 0 && !date.failed && parsed == asset.modified
@@ -390,7 +390,7 @@ pub fn serve_asset(status: *fail.Status, response: *Response, request: *const Re
   count: usize = 0
   headers[count] = Header{ name: "ETag", value: asset.etag }
   count += 1
-  if #len(cache_control) > 0 {
+  if cache_control.len > 0 {
     headers[count] = Header{ name: "Cache-Control", value: cache_control }
     count += 1
   }
@@ -399,7 +399,7 @@ pub fn serve_asset(status: *fail.Status, response: *Response, request: *const Re
     headers[count] = Header{ name: "Last-Modified", value: format_date(modified_storage[..], asset.modified) }
     count += 1
   }
-  if #len(asset.gzip) > 0 {
+  if asset.gzip.len > 0 {
     headers[count] = Header{ name: "Vary", value: "Accept-Encoding" }
     count += 1
   }
@@ -423,7 +423,7 @@ pub fn serve_asset(status: *fail.Status, response: *Response, request: *const Re
   ranged: fail.Status
   wanted := ByteRange{}
   if bytes.equal(request.method, "GET") || bytes.equal(request.method, "HEAD") {
-    wanted = byte_range(&ranged, request, #len(asset.body))
+    wanted = byte_range(&ranged, request, asset.body.len)
   } else {
     _ = no_range(&ranged, "not GET or HEAD")
   }
@@ -432,7 +432,7 @@ pub fn serve_asset(status: *fail.Status, response: *Response, request: *const Re
     at := append_bytes(range_storage[..], 0, "bytes ")
     if ranged.failed {
       at = append_bytes(range_storage[..], at, "*/")
-      at = put_decimal(range_storage[..], at, #len(asset.body))
+      at = put_decimal(range_storage[..], at, asset.body.len)
       headers[count] = Header{ name: "Content-Range", value: range_storage[..at] }
       count += 1
       respond(status, response, "", ResponseOptions{ status: StatusRangeNotSatisfiable, content_type: asset.content_type,
@@ -443,14 +443,14 @@ pub fn serve_asset(status: *fail.Status, response: *Response, request: *const Re
     at = append_bytes(range_storage[..], at, "-")
     at = put_decimal(range_storage[..], at, wanted.end - 1)
     at = append_bytes(range_storage[..], at, "/")
-    at = put_decimal(range_storage[..], at, #len(asset.body))
+    at = put_decimal(range_storage[..], at, asset.body.len)
     headers[count] = Header{ name: "Content-Range", value: range_storage[..at] }
     count += 1
     respond(status, response, asset.body[wanted.start..wanted.end], ResponseOptions{ status: StatusPartialContent,
       content_type: asset.content_type, headers: headers[..count] })
     return
   }
-  if #len(asset.gzip) > 0 && accepts_encoding(request, "gzip") {
+  if asset.gzip.len > 0 && accepts_encoding(request, "gzip") {
     headers[count] = Header{ name: "Content-Encoding", value: "gzip" }
     count += 1
     respond(status, response, asset.gzip, ResponseOptions{ content_type: asset.content_type, headers: headers[..count] })

@@ -8,9 +8,9 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/fail"
-use "std/encoding/protobuf" pb
-use "std/mem" mem
-use "std/bytes" bytes
+use pb "std/encoding/protobuf"
+use mem "std/mem"
+use bytes "std/bytes"
 struct Got { value: pb.Field, offset: usize, found: bool, failure: fail.Failure }
 fn next(state: *pb.Reader) Got {
  status: fail.Status
@@ -81,7 +81,7 @@ fn main() {
   result := next(&state)
   check(encoded.failure.kind == fail.Kind.Ok && result.found && result.value.number == 536870911 && result.value.value == 0xffffffffffffffff)
   // Every cut is either a complete shorter message or a structured failure.
-  for length in 0..#len(golden) {
+  for length in 0..golden.len {
     state = pb.reader(golden[..length])
     item := next(&state)
     for item.found { item = next(&state) }

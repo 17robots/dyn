@@ -1,9 +1,9 @@
 use "std/fail"
 #target(kernel: linux)
-use "std/mem" mem
-use "std/c" c
-use "std/io" io
-use "std/ui" ui
+use mem "std/mem"
+use c "std/c"
+use io "std/io"
+use ui "std/ui"
 #link("X11")
 #link("GL")
 // Xlib and GLX are thread-affine. Keep this owner alive until close; do not
@@ -71,7 +71,7 @@ pub fn open(status: *fail.Status, window: *Window, title: []const u8, width, hei
     window_failed(status, fail.Kind.InvalidState, "open")
     return
   }
-  if width <= 0 || height <= 0 || width > 65535 || height > 65535 || #len(title) > 4095 {
+  if width <= 0 || height <= 0 || width > 65535 || height > 65535 || title.len > 4095 {
     window_failed(status, fail.Kind.InvalidInput, "open")
     return
   }

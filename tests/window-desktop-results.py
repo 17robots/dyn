@@ -9,9 +9,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/io" io
-use "vendor/window" window
-use "std/bytes" bytes
+SOURCE = r'''use io "std/io"
+use window "vendor/window"
+use bytes "std/bytes"
 use "std/fail"
 fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
   status: fail.Status
@@ -67,7 +67,7 @@ fn main() {
   window.set_cursor(&host, window.Cursor.Text)
   window.set_cursor(&host, window.Cursor.Arrow)
   quiet := window.box_input(&host)
-  check(#len(quiet.text) == 0 && !quiet.paste, "no input yet")
+  check(quiet.text.len == 0 && !quiet.paste, "no input yet")
   window.listen_events(&host, true)
   check(window_try_set_clipboard(&host, "clip ✓ text").kind == fail.Kind.Ok, "clipboard publication")
   window.request_paste(&host)
@@ -111,7 +111,7 @@ fn main() {
   // No input method composes during the test: the composition stays empty.
   window.set_text_input(&host, true, 10, 12, 1, 16)
   _ = window_poll(&host)
-  check(#len(window.box_input(&host).composition) == 0 && window.box_input(&host).composition_cursor == -1, "no composition")
+  check(window.box_input(&host).composition.len == 0 && window.box_input(&host).composition_cursor == -1, "no composition")
   window.set_text_input(&host, false, 0, 0, 0, 0)
   window.wait(&host, 20)
 }
@@ -131,7 +131,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-desktop-') as directory:
         project.mkdir()
         # A Wayland selection requires a real input serial. Supply input only
         # inside the private compositor, never through the user's desktop.
-        source = SOURCE.replace('use "vendor/window" window', 'use "vendor/window/wayland" window')
+        source = SOURCE.replace('use window "vendor/window"', 'use window "vendor/window/wayland"')
         source = source.replace('  _ = window_poll(&host)', '  mapping: fail.Status\n  window.swap(&mapping, &host)\n  check(!mapping.failed, "map window")\n  _ = window_poll(&host)', 1)
         source = source.replace(
             '  check(window_try_set_clipboard(&host, "clip ✓ text").kind == fail.Kind.Ok, "clipboard publication")',

@@ -12,7 +12,7 @@ fn fnote(a: f64, b: u64) u64 {
 // function; inside the loop it lives in one, and both exits store it.
 fn scan(text: []const u8, a: u64, b: u64, c: u64, d: u64, e: u64) u64 {
   end: usize = 0
-  for end < #len(text) && text[end] != '"' {
+  for end < text.len && text[end] != '"' {
     end += 1
   }
   x := note(a, b, c, d, e, #cast(u64, end), 1)
@@ -31,7 +31,7 @@ fn scan(text: []const u8, a: u64, b: u64, c: u64, d: u64, e: u64) u64 {
 // test and from each break.
 fn breaks(text: []const u8, a: u64, b: u64, c: u64, d: u64, e: u64) u64 {
   end: usize = 0
-  for end < #len(text) {
+  for end < text.len {
     if text[end] == '!' {
       break
     }
@@ -56,12 +56,12 @@ fn breaks(text: []const u8, a: u64, b: u64, c: u64, d: u64, e: u64) u64 {
 fn nested(text: []const u8, a: u64, b: u64, c: u64, d: u64) u64 {
   row: usize = 0
   total: u64 = 0
-  for row < #len(text) {
+  for row < text.len {
     if text[row] == '!' {
       break
     }
     column: usize = row
-    for column < #len(text) && text[column] != ' ' {
+    for column < text.len && text[column] != ' ' {
       total += #cast(u64, column - row)
       column += 1
     }

@@ -17,22 +17,22 @@ fn name_failure(status: *fail.Status, kind: fail.Kind, message: []const u8) Expa
   return ExpandedName{}
 }
 fn qualified(status: *fail.Status, name: []const u8) ExpandedName {
-  colon := #len(name)
+  colon := name.len
   i: usize = 0
-  if #len(name) == 0 || name_end(name, 0) != #len(name) {
+  if name.len == 0 || name_end(name, 0) != name.len {
     return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")
   }
-  for i < #len(name) {
+  for i < name.len {
     if name[i] == ':' {
-      if colon != #len(name) {
+      if colon != name.len {
         return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")
       }
       colon = i
     }
     i += 1
   }
-  if colon == #len(name) { return ExpandedName{ local: name } }
-  if colon == 0 || colon + 1 == #len(name) || name_end(name, colon + 1) != #len(name) {
+  if colon == name.len { return ExpandedName{ local: name } }
+  if colon == 0 || colon + 1 == name.len || name_end(name, colon + 1) != name.len {
     return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")
   }
   return ExpandedName{ prefix: name[..colon], local: name[colon + 1..] }
@@ -52,7 +52,7 @@ pub fn namespace_resolve(status: *fail.Status, state: *const Namespaces, name: [
     result.uri = XmlNamespace
     return result
   }
-  if attribute && #len(result.prefix) == 0 { return result }
+  if attribute && result.prefix.len == 0 { return result }
   i := state.count
   for i > 0 {
     i -= 1
@@ -61,7 +61,7 @@ pub fn namespace_resolve(status: *fail.Status, state: *const Namespaces, name: [
       return result
     }
   }
-  if #len(result.prefix) != 0 {
+  if result.prefix.len != 0 {
     return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")
   }
   return result
@@ -79,11 +79,11 @@ fn namespace_copy(state: *Namespaces, source: []const u8) []const u8 {
 fn namespace_uri(state: *Namespaces, source: []const u8) []const u8 {
   start := state.used
   at: usize = 0
-  for at < #len(source) {
+  for at < source.len {
     byte := source[at]
     if byte != '&' {
       if byte == '\r' {
-        if at + 1 < #len(source) && source[at + 1] == '\n' {
+        if at + 1 < source.len && source[at + 1] == '\n' {
           at += 1
         }
         byte = ' '
@@ -117,7 +117,7 @@ fn namespace_uri(state: *Namespaces, source: []const u8) []const u8 {
           base = 16
           index += 1
         }
-        for index < #len(entity) {
+        for index < entity.len {
           digit := #cast(u32, entity[index])
           if digit >= 48 && digit <= 57 {
             digit -= 48
@@ -140,7 +140,7 @@ fn namespace_enter_impl(status: *fail.Status, state: *Namespaces, event: Event) 
   if event.kind != Kind.Start || !valid_attributes(event) {
     return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")
   }
-  if state.depth == #len(state.frames) || #len(event.name) > #len(state.storage) - state.used {
+  if state.depth == state.frames.len || event.name.len > state.storage.len - state.used {
     return name_failure(status, fail.Kind.Capacity, "the namespace storage is full")
   }
   previous_count := state.count
@@ -155,15 +155,15 @@ fn namespace_enter_impl(status: *fail.Status, state: *Namespaces, event: Event) 
     declaration := bytes.equal(item.name, "xmlns") || bytes.equal(split.prefix, "xmlns")
     if declaration {
       prefix := split.local
-      if #len(split.prefix) == 0 {
+      if split.prefix.len == 0 {
         prefix = ""
       }
-      if state.count == #len(state.bindings) || #len(prefix) + #len(item.value) > #len(state.storage) - state.used {
+      if state.count == state.bindings.len || prefix.len + item.value.len > state.storage.len - state.used {
         return name_failure(status, fail.Kind.Capacity, "the namespace storage is full")
       }
       owned_prefix := namespace_copy(state, prefix)
       uri := namespace_uri(state, item.value)
-      if bytes.equal(prefix, "xmlns") || bytes.equal(uri, XmlnsNamespace) || (bytes.equal(prefix, "xml") != bytes.equal(uri, XmlNamespace)) || (#len(prefix) > 0 && #len(uri) == 0) {
+      if bytes.equal(prefix, "xmlns") || bytes.equal(uri, XmlnsNamespace) || (bytes.equal(prefix, "xml") != bytes.equal(uri, XmlNamespace)) || (prefix.len > 0 && uri.len == 0) {
         return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")
       }
       state.bindings[state.count] = NamespaceBinding{ prefix: owned_prefix, uri: uri }

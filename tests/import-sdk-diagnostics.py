@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-sdk-diagnostic-') as temporary:
     env = dict(os.environ, DYN_SDK=str(sdk), DYN_CACHE_DIR=str(work/'cache'))
     source = project/'main.dyn'
     def check(path, sdk_import):
-        source.write_text(f'use "{path}" missing\nfn main() {{}}\n')
+        source.write_text(f'use missing "{path}"\nfn main() {{}}\n')
         result = subprocess.run([str(installed), 'check', str(project), '--quiet'], env=env,
                                 text=True, capture_output=True, timeout=30)
         assert result.returncode == 1, result.stderr
@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-sdk-diagnostic-') as temporary:
         module = sdk/path
         module.mkdir(parents=True)
         (module/'example.dyn').write_text('pub fn value() i32 { return 7 }\n')
-        source.write_text(f'use "{path}" example\nfn main() {{ if example.value()!=7 {{ #panic("SDK") }} }}\n')
+        source.write_text(f'use example "{path}"\nfn main() {{ if example.value()!=7 {{ #panic("SDK") }} }}\n')
         result = subprocess.run([str(installed), 'check', str(project), '--quiet'], env=env,
                                 text=True, capture_output=True, timeout=30)
         assert result.returncode == 0, result.stderr

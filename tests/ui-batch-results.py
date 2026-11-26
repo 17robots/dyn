@@ -8,14 +8,14 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "vendor/window" window
-use "vendor/opengl" gl
-use "vendor/ui/opengl" gpu
-use "std/ui" ui
-use "std/ui/box" box
-use "std/ui/software" software
-use "std/mem" mem
-use "std/io" errors
+SOURCE = r'''use window "vendor/window"
+use gl "vendor/opengl"
+use gpu "vendor/ui/opengl"
+use ui "std/ui"
+use box "std/ui/box"
+use software "std/ui/software"
+use mem "std/mem"
+use errors "std/io"
 use "std/fail"
 fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
   status: fail.Status
@@ -75,7 +75,7 @@ fn bitmap(data: rawptr, codepoint: u32) software.Glyph {
 
 fn measure(data: *u8, text: []const u8) f32 {
   _ = data
-  return 7.0 * #cast(f32, #len(text))
+  return 7.0 * #cast(f32, text.len)
 }
 
 fn build(state: *box.State, context: *ui.Context, arena: *mem.Arena) {
@@ -117,7 +117,7 @@ fn main() {
   loading: fail.Status
   api := gl.load(&loading, window.gl_proc)
   check(!loading.failed, "gl")
-  batch := mem.push(gpu.Batch, persistent_arena)
+  batch := mem.push<gpu.Batch>(persistent_arena)
   check(!failed(gpu_open_batch(batch, api)), "open batch")
   defer {
     gpu.close_batch(batch)
@@ -131,14 +131,14 @@ fn main() {
   build(state, &context, arena)
   build(state, &context, arena)
   font := software.Font{ glyph: bitmap, line_height: 12 }
-  pixels := mem.push_array(u8, persistent_arena, #cast(usize, 61440))
+  pixels := mem.push_array<u8>(persistent_arena, #cast(usize, 61440))
   surface := software.Surface{ pixels: pixels, width: 160, height: 96, stride: 640 }
   check(!failed(software_render(&surface, ui.first(&context), font)), "software")
-  vertices := mem.push_array(f32, persistent_arena, #cast(usize, 86016))
+  vertices := mem.push_array<f32>(persistent_arena, #cast(usize, 86016))
   api.clear_color(0.0, 0.0, 0.0, 0.0)
   api.clear(gl.ColorBufferBit)
   check(!failed(gpu_render_batch(batch, ui.first(&context), 160, 96, font, vertices)), "batch render")
-  actual := mem.push_array(u8, persistent_arena, #cast(usize, 61440))
+  actual := mem.push_array<u8>(persistent_arena, #cast(usize, 61440))
   api.read_pixels(0, 0, 160, 96, gl.Rgba, gl.UnsignedByte, &actual[0])
   worst: i32 = 0
   for y in 0..96 {
@@ -172,10 +172,10 @@ fn main() {
 
 persistent_arena: *mem.Arena
 '''
-CLIPBOARD = r'''use "std/io" errors
-use "vendor/window" window
-use "std/bytes" bytes
-use "std/time" time
+CLIPBOARD = r'''use errors "std/io"
+use window "vendor/window"
+use bytes "std/bytes"
+use time "std/time"
 use "std/fail"
 fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
   status: fail.Status

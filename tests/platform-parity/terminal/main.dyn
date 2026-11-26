@@ -1,4 +1,4 @@
-use "std/terminal" terminal
+use terminal "std/terminal"
 use "std/fail"
 fn check(ok: bool) {
   if !ok {

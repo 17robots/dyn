@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 ENV = dict(os.environ, DYN_SDK=str(ROOT))
 REQUIRE = 'fn require(ok: bool) { if !ok { #panic("time result contract") } }\n'
-REAL = '''use "std/time" time
+REAL = '''use time "std/time"
 ''' + REQUIRE + '''fn main() {
   start := time.monotonic_now()
   wall := time.realtime_now()
@@ -34,7 +34,7 @@ REAL = '''use "std/time" time
 }
 '''
 # A clock the kernel refuses reads zero: nothing fails, deadlines expire.
-DENIED = '''use "std/time" time
+DENIED = '''use time "std/time"
 ''' + REQUIRE + '''struct Filter { code: u16, jt: u8, jf: u8, k: u32 }
 struct Program { length: u16, filter: *Filter }
 fn main() {

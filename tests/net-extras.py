@@ -8,7 +8,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/net" net
+SOURCE = r'''use net "std/net"
 use "std/fail"
 fn check(ok: bool) {
   if !ok { #panic("network extras") }

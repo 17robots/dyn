@@ -9,7 +9,7 @@ pub struct Decode {
 }
 
 pub fn decode(text: []const u8, offset: usize) Decode {
-  if offset >= #len(text) { return Decode{ codepoint: 0, width: 0, valid: false } }
+  if offset >= text.len { return Decode{ codepoint: 0, width: 0, valid: false } }
   first := text[offset]
   if first < 128 { return Decode{ codepoint: first, width: 1, valid: true } }
   width: usize = 0
@@ -30,7 +30,7 @@ pub fn decode(text: []const u8, offset: usize) Decode {
   } else {
     return Decode{ codepoint: 0, width: 1, valid: false }
   }
-  if width > #len(text) - offset { return Decode{ codepoint: 0, width: 1, valid: false } }
+  if width > text.len - offset { return Decode{ codepoint: 0, width: 1, valid: false } }
   for i in 1..width {
     byte := text[offset + i]
     if byte < 128 || byte > 191 { return Decode{ codepoint: 0, width: 1, valid: false } }
@@ -44,9 +44,9 @@ pub fn decode(text: []const u8, offset: usize) Decode {
 
 pub fn valid(text: []const u8) bool {
   offset: usize = 0
-  for offset < #len(text) {
+  for offset < text.len {
     // Eight ASCII bytes at a time: none has its high bit set.
-    if #len(text) - offset >= 8 && (binary.load_u64_le(text[offset..offset + 8]) & 0x8080808080808080) == 0 {
+    if text.len - offset >= 8 && (binary.load_u64_le(text[offset..offset + 8]) & 0x8080808080808080) == 0 {
       offset += 8
       continue
     }
@@ -67,7 +67,7 @@ pub fn valid(text: []const u8) bool {
 pub fn codepoint_count(text: []const u8) usize {
   offset: usize = 0
   total: usize = 0
-  for offset < #len(text) {
+  for offset < text.len {
     decoded := decode(text, offset)
     if decoded.valid {
       offset += decoded.width
@@ -90,7 +90,7 @@ pub fn encoded_width(codepoint: u32) usize {
 
 pub fn encode(destination: []u8, codepoint: u32) usize {
   width := encoded_width(codepoint)
-  if width == 0 || #len(destination) < width { return 0 }
+  if width == 0 || destination.len < width { return 0 }
   continuation: u32 = 128
   mask: u32 = 63
   lead2: u32 = 192
@@ -128,7 +128,7 @@ pub fn iterator(text: []const u8) Iterator {
 // The next code point; sets state.ended at the end. A byte of invalid UTF-8
 // gives U+FFFD and is skipped. Use valid to reject invalid text.
 pub fn next(state: *Iterator) u32 {
-  if state.offset >= #len(state.text) {
+  if state.offset >= state.text.len {
     state.ended = true
     return 0
   }

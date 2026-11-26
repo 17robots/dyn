@@ -1,4 +1,4 @@
-use "std/mem" mem
+use mem "std/mem"
 use "std/enums"
 use "std/fail"
 pub const Nanosecond: i64 = 1
@@ -126,7 +126,7 @@ fn write_two(destination: []u8, at: usize, value: u8) {
   destination[at + 1] = '0' + value % 10
 }
 fn format_iso8601_into(destination: []u8, value: *const DateTime) []u8 {
-  if #len(destination) < 20 || !valid(value) || value.year < 0 || value.year > 9999 {
+  if destination.len < 20 || !valid(value) || value.year < 0 || value.year > 9999 {
     return destination[..0]
   }
   year := #cast(u32, value.year)
@@ -167,12 +167,12 @@ pub fn parse_iso8601(status: *fail.Status, input: []const u8) DateTime {
 }
 
 fn parse_iso8601_into(input: []const u8, output: *DateTime) bool {
-  if #len(input) != 20 || input[4] != '-' || input[7] != '-' || input[10] != 'T' ||
+  if input.len != 20 || input[4] != '-' || input[7] != '-' || input[10] != 'T' ||
     input[13] != ':' || input[16] != ':' || input[19] != 'Z' {
     return false
   }
   positions: [14]u8 = [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18]
-  for i in 0..#len(positions) {
+  for i in 0..positions.len {
     if !decimal(input[positions[i]]) { return false }
   }
   output.* = DateTime{
@@ -189,7 +189,7 @@ pub fn format_iso8601(arena: *mem.Arena, value: *const DateTime) []u8 {
   mark := mem.arena_mark(arena)
   space := mem.push_bytes(arena, 20)
   text := format_iso8601_into(space, value)
-  mem.arena_rewind(arena, mark + #len(text))
+  mem.arena_rewind(arena, mark + text.len)
   return text
 }
 
@@ -272,7 +272,7 @@ pub fn instant_of(value: *const DateTime, offset: i64) Instant {
 pub fn weekday(value: *const DateTime) Weekday {
   days := days_from_civil(value.year, value.month, value.day)
   index := floor_divide(days + 4, 7)
-  return enums.from_int(Weekday, #cast(u64, days + 4 - index * 7))
+  return enums.from_int<Weekday>(#cast(u64, days + 4 - index * 7))
 }
 
 // Day of the year, from 1 for January 1.

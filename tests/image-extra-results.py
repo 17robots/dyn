@@ -9,20 +9,20 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-CLI='''use "std/image/FORMAT" codec
-use "std/io" io
-use "std/mem" mem
+CLI='''use codec "std/image/FORMAT"
+use io "std/io"
+use mem "std/mem"
 use "std/fail"
-use "std/fs" fs
-use "std/process" process
-use "std/strings" strings
+use fs "std/fs"
+use process "std/process"
+use strings "std/strings"
 use "std/bytes"
 fn main() {
   arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   args_status: fail.Status
   args := process.arguments(arena, &args_status)
-  if args_status.failed || #len(args) != 4 { #panic("image arguments") }
+  if args_status.failed || args.len != 4 { #panic("image arguments") }
   ENCODER
   source_file: fail.Status
   source := fs.read_all(arena, &source_file, args[2], 64000000)
@@ -47,7 +47,7 @@ fn fs_write_file(path: []const u8, data: []const u8) bool {
 }
 '''
 ENCODER='''if bytes.starts_with(args[1], "encode") {
-  channels := strings.parse(u8, args[1][6..])
+  channels := strings.parse<u8>(args[1][6..])
   pixels: [16]u8
   for i in 0..4 { for j in 0..#cast(usize, channels) { pixels[i * #cast(usize, channels) + j] = #cast(u8, (i * 51 + j * 37)) } }
   encoding := fail.Status{ on_failure: fail.panic_on_failure }
@@ -202,7 +202,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-image-extra-') as directory:
     if shutil.which('cjpeg'):fixture_data['jpeg']=data
     for kind,fixture in fixture_data.items():
         project=work/(kind+'-portable');project.mkdir()
-        source='use "std/image/'+kind+'" codec\nuse "std/fail"\nuse "std/mem" mem\nfn main() { arena := mem.arena_alloc(0); defer { mem.arena_release(arena) }; source: ['+str(len(fixture))+']u8 = ['+','.join(map(str,fixture))+']; status: fail.Status; result := codec.decode(arena,&status,source[..])'+('.image' if kind=='gif' else '')+'; if status.failed || result.info.width == 0 { #panic("portable image") } }'
+        source='use codec "std/image/'+kind+'"\nuse "std/fail"\nuse mem "std/mem"\nfn main() { arena := mem.arena_alloc(0); defer { mem.arena_release(arena) }; source: ['+str(len(fixture))+']u8 = ['+','.join(map(str,fixture))+']; status: fail.Status; result := codec.decode(arena,&status,source[..])'+('.image' if kind=='gif' else '')+'; if status.failed || result.info.width == 0 { #panic("portable image") } }'
         (project/'main.dyn').write_text(source.replace('; ', '\n'))
         for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
             subprocess.run([DYN,'build',str(project),'--release','--target',target,'--quiet','--output',str(work/(kind+'-'+target))],check=True,timeout=300)

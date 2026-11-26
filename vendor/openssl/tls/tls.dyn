@@ -156,12 +156,12 @@ pub fn set_alpn_protocols(status: *fail.Status, connection: Connection, protocol
     return
   }
   if status.failed { return }
-  valid := connection != nil && #len(protocols) != 0 && #len(protocols) <= 4294967295
+  valid := connection != nil && protocols.len != 0 && protocols.len <= 4294967295
   index: usize = 0
-  for valid && index < #len(protocols) {
+  for valid && index < protocols.len {
     length := #cast(usize, protocols[index])
     index += 1
-    if length == 0 || length > #len(protocols) - index {
+    if length == 0 || length > protocols.len - index {
       valid = false
     }
     index += length
@@ -171,7 +171,7 @@ pub fn set_alpn_protocols(status: *fail.Status, connection: Connection, protocol
     return
   }
   provider_clear_error()
-  if ssl_set_alpn(connection, &protocols[0], #cast(u32, #len(protocols))) != 0 {
+  if ssl_set_alpn(connection, &protocols[0], #cast(u32, protocols.len)) != 0 {
     provider_failed(status, "set ALPN")
   }
 }
@@ -186,7 +186,7 @@ pub fn set_server_alpn(status: *fail.Status, context: Context, preference: *cons
     return
   }
   if status.failed { return }
-  if context == nil || preference == nil || #len(preference.*) == 0 {
+  if context == nil || preference == nil || preference.*.len == 0 {
     fail.invalid(status, "set server ALPN", "", "no context or no protocols")
     return
   }
@@ -201,15 +201,15 @@ fn alpn_select(connection: rawptr, out: *rawptr, out_length: *u8, offered: *cons
   if offered == nil || offered_length == 0 { return 3 }
   client := #slice(offered, offered_length)
   at: usize = 0
-  for at < #len(preference) {
+  for at < preference.len {
     length := #cast(usize, preference[at])
-    if length == 0 || length > #len(preference) - at - 1 { return 3 }
+    if length == 0 || length > preference.len - at - 1 { return 3 }
     wanted := preference[at + 1..at + 1 + length]
     at += 1 + length
     index: usize = 0
-    for index < #len(client) {
+    for index < client.len {
       size := #cast(usize, client[index])
-      if size > #len(client) - index - 1 { break }
+      if size > client.len - index - 1 { break }
       candidate := client[index + 1..index + 1 + size]
       if size == length && bytes_equal(candidate, wanted) {
         out.* = #cast(rawptr, &client[index + 1])
@@ -223,7 +223,7 @@ fn alpn_select(connection: rawptr, out: *rawptr, out_length: *u8, offered: *cons
 }
 
 fn bytes_equal(left: []const u8, right: []const u8) bool {
-  for i in 0..#len(left) {
+  for i in 0..left.len {
     if left[i] != right[i] { return false }
   }
   return true
@@ -257,13 +257,13 @@ pub fn certificate_free_owned(certificate: Certificate) {
 pub fn connection_create_owned(status: *fail.Status, context: Context, descriptor: i32, hostname: []const u8, name_buffer: []u8) Connection {
   if status == nil { return connection_create_owned(&fail.Status{}, context, descriptor, hostname, name_buffer) }
   if status.failed { return nil }
-  if context == nil || descriptor < 0 || #len(hostname) == 0 {
+  if context == nil || descriptor < 0 || hostname.len == 0 {
     fail.invalid(status, "create TLS connection", hostname, "no context or hostname, or a negative descriptor")
     return nil
   }
   name := c.string_into(status, name_buffer, hostname)
   if status.failed { return nil }
-  return connection_from_name(status, context, descriptor, name, #len(hostname))
+  return connection_from_name(status, context, descriptor, name, hostname.len)
 }
 
 fn connection_from_name(status: *fail.Status, context: Context, descriptor: i32, name: *const u8, length: usize) Connection {
@@ -292,7 +292,7 @@ fn connection_from_name(status: *fail.Status, context: Context, descriptor: i32,
 pub fn connection_create(arena: *mem.Arena, status: *fail.Status, context: Context, descriptor: i32, hostname: []const u8) Connection {
   if status == nil { return connection_create(arena, &fail.Status{}, context, descriptor, hostname) }
   if status.failed { return nil }
-  if context == nil || descriptor < 0 || #len(hostname) == 0 {
+  if context == nil || descriptor < 0 || hostname.len == 0 {
     fail.invalid(status, "create TLS connection", hostname, "no context or hostname, or a negative descriptor")
     return nil
   }
@@ -300,7 +300,7 @@ pub fn connection_create(arena: *mem.Arena, status: *fail.Status, context: Conte
   defer mem.arena_rewind(arena, mark)
   name := c.string_from_bytes(arena, status, hostname)
   if status.failed { return nil }
-  return connection_from_name(status, context, descriptor, name, #len(hostname))
+  return connection_from_name(status, context, descriptor, name, hostname.len)
 }
 
 pub fn connection_free_owned(connection: Connection) {
@@ -359,10 +359,10 @@ pub fn read(status: *fail.Status, connection: Connection, destination: []u8) Att
     no_connection(status, "read")
     return Attempt{}
   }
-  if #len(destination) == 0 { return Attempt{} }
+  if destination.len == 0 { return Attempt{} }
   count: usize = 0
   provider_clear_error()
-  result := ssl_read(connection, #cast(rawptr, &destination[0]), #len(destination), &count)
+  result := ssl_read(connection, #cast(rawptr, &destination[0]), destination.len, &count)
   if result != 1 {
     // SSL_ERROR_ZERO_RETURN is an authenticated close, not a truncation.
     if ssl_error(connection, result) == ErrorZeroReturn { return Attempt{} }
@@ -378,10 +378,10 @@ pub fn write(status: *fail.Status, connection: Connection, source: []const u8) A
     no_connection(status, "write")
     return Attempt{}
   }
-  if #len(source) == 0 { return Attempt{} }
+  if source.len == 0 { return Attempt{} }
   count: usize = 0
   provider_clear_error()
-  result := ssl_write(connection, #cast(rawptr, &source[0]), #len(source), &count)
+  result := ssl_write(connection, #cast(rawptr, &source[0]), source.len, &count)
   if result != 1 { return Attempt{ want: stalled(status, "write", connection, result) } }
   return Attempt{ count: count }
 }
@@ -405,10 +405,10 @@ pub fn shutdown(status: *fail.Status, connection: Connection) Want {
 
 // Writes provider message into caller buffer. Returned slice excludes NUL.
 pub fn error_string(destination: []u8, code: u64) []u8 {
-  if #len(destination) == 0 { return destination[..0] }
-  provider_error_string(code, &destination[0], #len(destination))
+  if destination.len == 0 { return destination[..0] }
+  provider_error_string(code, &destination[0], destination.len)
   length: usize = 0
-  for length < #len(destination) && destination[length] != 0 {
+  for length < destination.len && destination[length] != 0 {
     length += 1
   }
   return destination[..length]

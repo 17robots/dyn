@@ -16,12 +16,12 @@ fn dyn_builtin_type_of(dyn_builtin_value: any) TypeInfo {
   dyn_builtin_id := #cast(*const u64, &dyn_builtin_value).*
   dyn_builtin_table := dyn_builtin_types[..]
   dyn_builtin_low: usize = 0
-  dyn_builtin_high := #len(dyn_builtin_table)
+  dyn_builtin_high := dyn_builtin_table.len
   for dyn_builtin_low < dyn_builtin_high {
     dyn_builtin_middle := dyn_builtin_low + (dyn_builtin_high - dyn_builtin_low) / 2
     if dyn_builtin_table[dyn_builtin_middle].id < dyn_builtin_id { dyn_builtin_low = dyn_builtin_middle + 1 } else { dyn_builtin_high = dyn_builtin_middle }
   }
-  if dyn_builtin_low < #len(dyn_builtin_table) && dyn_builtin_table[dyn_builtin_low].id == dyn_builtin_id { return dyn_builtin_table[dyn_builtin_low] }
+  if dyn_builtin_low < dyn_builtin_table.len && dyn_builtin_table[dyn_builtin_low].id == dyn_builtin_id { return dyn_builtin_table[dyn_builtin_low] }
   return TypeInfo{}
 }
 
@@ -144,7 +144,7 @@ fn dyn_builtin_sqrt(dyn_builtin_x: f64) f64 {
 }
 
 // x * y + z with one rounding, to f32 or f64.
-fn dyn_builtin_fma(dyn_builtin_x, dyn_builtin_y, dyn_builtin_z: $T) T {
+fn dyn_builtin_fma<T>(dyn_builtin_x, dyn_builtin_y, dyn_builtin_z: T) T {
   if #sizeof(T) == 4 {
     return #cast(T, dyn_builtin_fused(#cast(f64, dyn_builtin_x), #cast(f64, dyn_builtin_y), #cast(f64, dyn_builtin_z), 24, -149))
   }

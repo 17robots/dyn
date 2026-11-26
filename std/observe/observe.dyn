@@ -9,7 +9,7 @@ pub fn log(events: []Event) Log {
 // Full logs drop new events and count them in dropped; they never overwrite
 // earlier events or allocate.
 pub fn record(destination: *Log, event: Event) {
-  if destination.count >= #len(destination.events) {
+  if destination.count >= destination.events.len {
     if destination.dropped < #cast(usize, -1) {
       destination.dropped += 1
     }

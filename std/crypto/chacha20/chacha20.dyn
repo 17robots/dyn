@@ -35,7 +35,7 @@ pub fn block(status: *fail.Status, destination: []u8, key: []const u8, nonce: []
     return
   }
   if status.failed { return }
-  if #len(destination) < 64 || #len(key) != 32 || #len(nonce) != 12 {
+  if destination.len < 64 || key.len != 32 || nonce.len != 12 {
     fail.invalid(status, "ChaCha20 block", "", "needs a 32-byte key, 12-byte nonce and 64 bytes of output")
     return
   }
@@ -44,7 +44,7 @@ pub fn block(status: *fail.Status, destination: []u8, key: []const u8, nonce: []
 fn keystream(destination: []u8, key: []const u8, nonce: []const u8, counter: u32) {
   // Callers checked these; repeating them lets the compiler drop the bounds
   // checks in the loops below.
-  if #len(destination) < 64 || #len(key) != 32 || #len(nonce) != 12 { return }
+  if destination.len < 64 || key.len != 32 || nonce.len != 12 { return }
   initial: [16]u32
   initial[0] = 1634760805
   initial[1] = 857760878
@@ -86,12 +86,12 @@ pub fn xor(status: *fail.Status, destination: []u8, input: []const u8, key: []co
     return
   }
   if status.failed { return }
-  if #len(destination) < #len(input) || #len(key) != 32 || #len(nonce) != 12 {
+  if destination.len < input.len || key.len != 32 || nonce.len != 12 {
     fail.invalid(status, "ChaCha20", "", "needs a 32-byte key, 12-byte nonce and room for the input")
     return
   }
-  blocks := #len(input) / 64
-  if #len(input) % 64 != 0 {
+  blocks := input.len / 64
+  if input.len % 64 != 0 {
     blocks += 1
   }
   if #cast(u64, blocks) > 4294967296 - #cast(u64, counter) {
@@ -101,9 +101,9 @@ pub fn xor(status: *fail.Status, destination: []u8, input: []const u8, key: []co
   stream: [64]u8
   at: usize = 0
   block_counter := counter
-  for at < #len(input) {
+  for at < input.len {
     keystream(stream[..], key, nonce, block_counter)
-    take := #len(input) - at
+    take := input.len - at
     if take > 64 {
       take = 64
     }
@@ -111,7 +111,7 @@ pub fn xor(status: *fail.Status, destination: []u8, input: []const u8, key: []co
       destination[at + i] = input[at + i] ^ stream[i]
     }
     at += take
-    if at < #len(input) {
+    if at < input.len {
       block_counter += 1
     }
   }

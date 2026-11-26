@@ -1,8 +1,8 @@
 use "std/io"
 
 struct Pair { a: i32, b: i32 }
-enum Shape { Dot, Circle: f64, Box: Pair, Count: i64 }
-enum Wide { Empty, Text: []const u8, Value: i64 }
+enum Shape { Dot, Circle(f64), Box(Pair), Count(i64) }
+enum Wide { Empty, Text([]const u8), Value(i64) }
 
 fn make(kind: i64, x: f64) Shape {
   case kind {
@@ -16,9 +16,9 @@ fn make(kind: i64, x: f64) Shape {
 fn measure(s: Shape) f64 {
   case s {
     Shape.Dot => { return 0.5 }
-    Shape.Circle r => { return r * 2.0 }
-    Shape.Box p => { return #cast(f64, p.a * p.b) }
-    Shape.Count n => { return #cast(f64, n) }
+    Shape.Circle(r) => { return r * 2.0 }
+    Shape.Box(p) => { return #cast(f64, p.a * p.b) }
+    Shape.Count(n) => { return #cast(f64, n) }
   }
 }
 
@@ -26,15 +26,15 @@ fn measure(s: Shape) f64 {
 fn widen(w: Wide, s: Shape) Wide {
   case w {
     Wide.Empty => { return Wide.Value(#cast(i64, measure(s))) }
-    Wide.Text t => { return Wide.Value(#cast(i64, #len(t)) + #cast(i64, measure(s))) }
-    Wide.Value v => { return Wide.Value(v + 1) }
+    Wide.Text(t) => { return Wide.Value(#cast(i64, t.len) + #cast(i64, measure(s))) }
+    Wide.Value(v) => { return Wide.Value(v + 1) }
   }
 }
 
 fn wide_value(w: Wide) i64 {
   case w {
-    Wide.Value v => { return v }
-    Wide.Text t => { return #cast(i64, #len(t)) }
+    Wide.Value(v) => { return v }
+    Wide.Text(t) => { return #cast(i64, t.len) }
     _ => { return -1 }
   }
 }

@@ -1,4 +1,4 @@
-use "std/io" io
+use io "std/io"
 #target(kernel: windows)
 extern fn argument_command "dyn_arguments_command"() *const u16
 struct ArgumentToken { next: usize, length: usize, ok: bool }
@@ -12,16 +12,16 @@ fn argument_token(command: []const u16, start: usize, first: bool, destination: 
   at := start
   used: usize = 0
   quoted: bool = false
-  for at < #len(command) {
+  for at < command.len {
     byte := command[at]
     if !quoted && (byte == 32 || byte == 9) { break }
     if !first && byte == 92 {
       slashes: usize = 0
-      for at < #len(command) && command[at] == 92 {
+      for at < command.len && command[at] == 92 {
         slashes += 1
         at += 1
       }
-      if at < #len(command) && command[at] == 34 {
+      if at < command.len && command[at] == 34 {
         pairs := slashes / 2
         for pairs > 0 {
           used += argument_emit(destination, used, 92, writing)
@@ -41,7 +41,7 @@ fn argument_token(command: []const u16, start: usize, first: bool, destination: 
       }
     }
     if command[at] == 34 {
-      if !first && quoted && at + 1 < #len(command) && command[at + 1] == 34 {
+      if !first && quoted && at + 1 < command.len && command[at + 1] == 34 {
         used += argument_emit(destination, used, 34, writing)
         at += 2
       } else {
@@ -61,7 +61,7 @@ fn argument_token(command: []const u16, start: usize, first: bool, destination: 
 }
 fn argument_skip(command: []const u16, at: usize) usize {
   value := at
-  for value < #len(command) && (command[value] == 32 || command[value] == 9) {
+  for value < command.len && (command[value] == 32 || command[value] == 9) {
     value += 1
   }
   return value

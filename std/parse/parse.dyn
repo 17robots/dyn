@@ -9,12 +9,12 @@ use "std/fail"
 pub fn u64_decimal(status: *fail.Status, text: []const u8) u64 {
   if status == nil { return u64_decimal(&fail.Status{}, text) }
   if status.failed { return 0 }
-  if #len(text) == 0 {
+  if text.len == 0 {
     fail.at(status, fail.Kind.InvalidInput, "parse number", "expected digits", 0)
     return 0
   }
   value: u64 = 0
-  for i in 0..#len(text) {
+  for i in 0..text.len {
     byte := text[i]
     if byte < '0' || byte > '9' {
       fail.at(status, fail.Kind.InvalidInput, "parse number", "expected a digit", i)
@@ -34,7 +34,7 @@ pub fn u64_decimal(status: *fail.Status, text: []const u8) u64 {
 pub fn i64_decimal(status: *fail.Status, text: []const u8) i64 {
   if status == nil { return i64_decimal(&fail.Status{}, text) }
   if status.failed { return 0 }
-  negative := #len(text) > 0 && text[0] == '-'
+  negative := text.len > 0 && text[0] == '-'
   start: usize = 0
   if negative {
     start = 1
@@ -58,5 +58,47 @@ pub fn i64_decimal(status: *fail.Status, text: []const u8) i64 {
     fail.at(status, fail.Kind.Overflow, "parse number", "number exceeds i64", start)
     return 0
   }
+  return #cast(i64, magnitude)
+}
+
+// Structured error enum for T!ParseErr parsing APIs.
+pub enum ParseErr {
+  Empty,
+  InvalidDigit(usize),
+  Overflow(usize),
+}
+
+// Parses a decimal u64, returning u64!ParseErr.
+pub fn parse_u64(text: str) u64!ParseErr {
+  if text.len == 0 { fail ParseErr.Empty }
+  value: u64 = 0
+  for i in 0..text.len {
+    byte := text[i]
+    if byte < '0' || byte > '9' { fail ParseErr.InvalidDigit(i) }
+    digit := #cast(u64, byte - '0')
+    if value > (18446744073709551615 - digit) / 10 { fail ParseErr.Overflow(i) }
+    value = value * 10 + digit
+  }
+  return value
+}
+
+// Parses a decimal i64 with an optional leading '-', returning i64!ParseErr.
+pub fn parse_i64(text: str) i64!ParseErr {
+  if text.len == 0 { fail ParseErr.Empty }
+  negative := text[0] == '-'
+  start: usize = 0
+  if negative { start = 1 }
+  magnitude := parse_u64(text[start..]) catch err {
+    case err {
+      .Empty => { fail ParseErr.Empty }
+      .InvalidDigit(at) => { fail ParseErr.InvalidDigit(at + start) }
+      .Overflow(at) => { fail ParseErr.Overflow(at + start) }
+    }
+  }
+  if negative {
+    if magnitude > 9223372036854775808 { fail ParseErr.Overflow(start) }
+    return #cast(i64, #wrapping(0 - magnitude))
+  }
+  if magnitude > 9223372036854775807 { fail ParseErr.Overflow(start) }
   return #cast(i64, magnitude)
 }

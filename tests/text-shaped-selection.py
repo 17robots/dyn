@@ -13,16 +13,16 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 CASES=['office AV','abc אבג123def','abc אבג xyz','אבג 123, abc!','abc سلام 123 (xyz)','e\u0301 שָׁלוֹם','A\tאבג\tB','a\u2067אב 12\u2069 z']
 def lit(text): return '"'+''.join(f'\\x{x:02x}' for x in text.encode())+'"'
-SOURCE=r'''use "vendor/text/layout" layout
-use "vendor/harfbuzz" hb
-use "vendor/fribidi" bidi
-use "std/mem" mem
+SOURCE=r'''use layout "vendor/text/layout"
+use hb "vendor/harfbuzz"
+use bidi "vendor/fribidi"
+use mem "std/mem"
 use "std/io"
 use "std/fail"
-use "std/fs" fs
-use "std/dynlib" dynlib
-use "std/io" errors
-use "std/encoding/binary" binary
+use fs "std/fs"
+use dynlib "std/dynlib"
+use errors "std/io"
+use binary "std/encoding/binary"
 struct layout_build_Outcome { value: layout.Layout, failure: fail.Failure, kind: fail.Kind }
 fn layout_build(a0: *mem.Arena, p0:[]const u8, p1:layout.Font, p2:*const hb.Api, p3:*const bidi.Api, p4:layout.Options) layout_build_Outcome {
   status: fail.Status
@@ -80,9 +80,9 @@ fn check(ok:bool) {if !ok {#panic("shaped selection")}}
 fn select(data:rawptr,text:[]const u8) layout.Face {return layout.Face{font:data,data:data}}
 struct Range {start:usize,end:usize,path:[]const u8}
 fn save(arena:*mem.Arena,rects:[]const layout.SelectionRect,path:[]const u8) {
- output:=mem.push_bytes(arena,4+#len(rects)*28)
- binary.store_u32_le(output[..4],#cast(u32,#len(rects)))
- for i in 0..#len(rects) {
+ output:=mem.push_bytes(arena,4+rects.len*28)
+ binary.store_u32_le(output[..4],#cast(u32,rects.len))
+ for i in 0..rects.len {
   r:=rects[i]
   fields:[7]u32=[#cast(u32,r.line),#cast(u32,r.start),#cast(u32,r.end),#cast(u32,#cast(i32,r.x*64.0)),#cast(u32,#cast(i32,r.y*64.0)),#cast(u32,#cast(i32,r.width*64.0)),#cast(u32,#cast(i32,r.height*64.0))]
   for j in 0..7 {binary.store_u32_le(output[4+i*28+j*4..8+i*28+j*4],fields[j])}
@@ -115,7 +115,7 @@ fn main() {
  owned_layout:=layout_build(owner,"alias",descriptor,&h.api,&b.api,layout.Options{})
  check(!failed(owned_layout.failure))
  aliased:=layout_selection(owner,&owned_layout.value,0,5)
- check(!failed(aliased.failure) && #len(aliased.value)==1 && aliased.value[0].x==0.0 && aliased.value[0].width==owned_layout.value.width)
+ check(!failed(aliased.failure) && aliased.value.len==1 && aliased.value[0].x==0.0 && aliased.value[0].width==owned_layout.value.width)
  retained:=aliased.value[0]
  owned_layout.value.glyphs[0].x=123.0
  check(aliased.value[0].x==retained.x && aliased.value[0].width==retained.width && aliased.value[0].start==0 && aliased.value[0].end==5)
@@ -131,7 +131,7 @@ fn main() {
  check(failed(layout_selection(nil,&source.value,0,1).failure))
  check(mem.arena_mark(scratch)==mark)
  empty:=layout_selection(scratch,&source.value,1,1)
- check(!failed(empty.failure) && #len(empty.value)==0 && mem.arena_mark(scratch)==mark)
+ check(!failed(empty.failure) && empty.value.len==0 && mem.arena_mark(scratch)==mark)
  broken:=source.value
  broken.lines[0].glyph_count+=1
  check(layout_selection(scratch,&broken,0,1).kind==fail.Kind.InvalidInput && mem.arena_mark(scratch)==mark)
@@ -140,33 +140,33 @@ fn main() {
  multiline:=layout_build(owner,"ab\n\nאב",descriptor,&h.api,&b.api,layout.Options{})
  check(!failed(multiline.failure))
  newline:=layout_selection(scratch,&multiline.value,2,4)
- check(!failed(newline.failure) && #len(newline.value)==0 && mem.arena_mark(scratch)==mark)
- whole:=layout_selection(scratch,&multiline.value,0,#len(multiline.value.text))
- check(!failed(whole.failure) && #len(whole.value)==2 && whole.value[0].line==0 && whole.value[1].line==2 && whole.value[1].y==80.0)
+ check(!failed(newline.failure) && newline.value.len==0 && mem.arena_mark(scratch)==mark)
+ whole:=layout_selection(scratch,&multiline.value,0,multiline.value.text.len)
+ check(!failed(whole.failure) && whole.value.len==2 && whole.value[0].line==0 && whole.value[1].line==2 && whole.value[1].y==80.0)
  mem.arena_reset(scratch)
  // Source cluster expansion includes ligature bytes and combining marks.
  ligature:=layout_build(owner,"office",descriptor,&h.api,&b.api,layout.Options{})
  check(!failed(ligature.failure))
  inside:=layout_selection(scratch,&ligature.value,2,3)
- check(!failed(inside.failure) && #len(inside.value)==1 && inside.value[0].start==1 && inside.value[0].end==4)
+ check(!failed(inside.failure) && inside.value.len==1 && inside.value[0].start==1 && inside.value[0].end==4)
  mem.arena_reset(scratch)
  marked:=layout_build(owner,"e\xcc\x81",descriptor,&h.api,&b.api,layout.Options{})
  check(!failed(marked.failure))
  accent:=layout_selection(scratch,&marked.value,1,3)
- check(!failed(accent.failure) && #len(accent.value)==1 && accent.value[0].start==0 && accent.value[0].end==3)
+ check(!failed(accent.failure) && accent.value.len==1 && accent.value[0].start==0 && accent.value[0].end==3)
  mem.arena_reset(scratch)
  // Non-contiguous visual cells retain their unselected bidi gap.
  mixed:=layout_build(owner,"abc אבג xyz",descriptor,&h.api,&b.api,layout.Options{})
  check(!failed(mixed.failure))
  split:=layout_selection(scratch,&mixed.value,2,6)
- check(!failed(split.failure) && #len(split.value)==2 && split.value[0].x+split.value[0].width<split.value[1].x)
+ check(!failed(split.failure) && split.value.len==2 && split.value[0].x+split.value[0].width<split.value[1].x)
  mem.arena_reset(scratch)
  // Equal RTL parity does not imply visual adjacency: digits have level 2,
  // letters level 0, and their source-adjacent LTR cells flank unselected Hebrew.
  parity:=layout_build(owner,"abc אבג123def",descriptor,&h.api,&b.api,layout.Options{})
  check(!failed(parity.failure))
  parity_selection:=layout_selection(scratch,&parity.value,10,16)
- check(!failed(parity_selection.failure) && #len(parity_selection.value)==2)
+ check(!failed(parity_selection.failure) && parity_selection.value.len==2)
  check(parity_selection.value[0].x+parity_selection.value[0].width<parity_selection.value[1].x)
  check(parity_selection.value[0].start==10 && parity_selection.value[0].end==13 && parity_selection.value[1].start==13 && parity_selection.value[1].end==16)
  clusters: fail.Status
@@ -174,11 +174,11 @@ fn main() {
  mem.arena_reset(scratch)
  // Long lines must remain linear in glyph count, including selection queries.
  long_bytes:=mem.push_bytes(owner,20000)
- for i in 0..#len(long_bytes) {long_bytes[i]=97}
+ for i in 0..long_bytes.len {long_bytes[i]=97}
  long_line:=layout_build(owner,long_bytes,descriptor,&h.api,&b.api,layout.Options{})
  check(!failed(long_line.failure))
  long_selection:=layout_selection(scratch,&long_line.value,1,19999)
- check(!failed(long_selection.failure) && #len(long_selection.value)==1 && long_selection.value[0].start==1 && long_selection.value[0].end==19999)
+ check(!failed(long_selection.failure) && long_selection.value.len==1 && long_selection.value[0].start==1 && long_selection.value[0].end==19999)
 }
 
 // Writes data to path; whether it worked.

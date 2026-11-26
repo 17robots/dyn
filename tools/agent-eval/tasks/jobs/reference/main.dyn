@@ -42,7 +42,7 @@ fn run(line: []const u8) bool {
   command := line
   rest: []const u8 = ""
   space := bytes.find_byte(line, ' ')
-  if space < #len(line) {
+  if space < line.len {
     command = line[..space]
     rest = strings.trim(line[space + 1..])
   }
@@ -54,7 +54,7 @@ fn run(line: []const u8) bool {
     }
     "copy" => {
       split := bytes.find_byte(rest, ' ')
-      if split == #len(rest) {
+      if split == rest.len {
         io.eprintln("jobs: copy needs FROM and TO: {}", line)
         return false
       }
@@ -92,7 +92,7 @@ fn main() i32 {
     if input.ended { break }
     text := strings.trim(line)
     if bytes.equal(text, "quit") { break }
-    if #len(text) != 0 && !run(text) {
+    if text.len != 0 && !run(text) {
       all_good = false
     }
   }

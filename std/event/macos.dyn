@@ -1,4 +1,4 @@
-use "std/io" io
+use io "std/io"
 use "std/os/macos/sys"
 #target(kernel: darwin)
 struct Kevent { ident: u64, filter: i16, flags: u16, filter_flags: u32, data: i64, user: u64 }
@@ -54,14 +54,14 @@ fn native_wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, milliseco
     timeout.nanoseconds = #cast(i64, (milliseconds % 1000)) * 1000000
     pointer = &timeout
   }
-  code := #syscall(sys.Kevent, queue.handle, 0, 0, &native[0], #len(native), pointer)
+  code := #syscall(sys.Kevent, queue.handle, 0, 0, &native[0], native.len, pointer)
   if code < 0 {
     fail.set(status, io.from_darwin("wait", "", code))
     empty: []Event
     return empty
   }
-  events := mem.push_array(Event, arena, #cast(usize, code))
-  for i in 0..#len(events) {
+  events := mem.push_array<Event>(arena, #cast(usize, code))
+  for i in 0..events.len {
     entry := queue.entries[#cast(usize, native[i].user)]
     flags := Readable
     if native[i].filter == -2 {

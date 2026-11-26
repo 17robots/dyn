@@ -19,7 +19,7 @@ pub fn bytes_per_pixel(format: Format) usize {
 pub fn view(pixels: []u8, width: usize, height: usize, stride: usize, format: Format) View {
   pixel_size := bytes_per_pixel(format)
   row_size := width * pixel_size
-  if pixel_size == 0 || stride < row_size || height > #len(pixels) / stride { return View{} }
+  if pixel_size == 0 || stride < row_size || height > pixels.len / stride { return View{} }
   return View{ pixels: pixels, width: width, height: height, stride: stride, format: format }
 }
 

@@ -7,12 +7,12 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
-SOURCE = r'''use "std/text/template" text
-use "std/html/template" html
+SOURCE = r'''use text "std/text/template"
+use html "std/html/template"
 use "std/fail"
-use "std/io" io
-use "std/mem" mem
-use "std/bytes" bytes
+use io "std/io"
+use mem "std/mem"
+use bytes "std/bytes"
 fn check(ok: bool) { if !ok { #panic("template results") } }
 struct Sink { calls: usize, code: isize }
 fn refuse(data: rawptr, status: *fail.Status, source: []const u8) usize {
@@ -53,20 +53,20 @@ fn main() {
     tiny_storage: [1 + mem.ArenaBufferOverhead]u8
     tiny := mem.arena_from_buffer(tiny_storage[..])
     tiny = mem.arena_from_buffer(tiny.data[..mem.ArenaHeader + 1])
-    _ = mem.push(u8, tiny)
+    _ = mem.push<u8>(tiny)
     tiny_mark := mem.arena_mark(tiny)
     tiny_result := parse(mode, tiny, "")
-    check(tiny_result.failure.kind == fail.Kind.Ok && #len(tiny_result.value.source) == 0 && mem.arena_mark(tiny) == tiny_mark)
+    check(tiny_result.failure.kind == fail.Kind.Ok && tiny_result.value.source.len == 0 && mem.arena_mark(tiny) == tiny_mark)
     tiny_result = parse(mode, tiny, "ab{{ }}")
-    check(tiny_result.failure.kind == fail.Kind.InvalidInput && tiny_result.failure.offset == 2 && #len(tiny_result.value.source) == 0 && mem.arena_mark(tiny) == tiny_mark)
+    check(tiny_result.failure.kind == fail.Kind.InvalidInput && tiny_result.failure.offset == 2 && tiny_result.value.source.len == 0 && mem.arena_mark(tiny) == tiny_mark)
     mark := mem.arena_mark(arena)
     parsed := parse(mode, arena, "")
-    check(parsed.failure.kind == fail.Kind.Ok && #len(parsed.value.source) == 0 && mem.arena_mark(arena) == mark)
+    check(parsed.failure.kind == fail.Kind.Ok && parsed.value.source.len == 0 && mem.arena_mark(arena) == mark)
     invalid: [3][]const u8 = ["{{", "ab{{ }}", "a{{x!}}"]
     offsets: [3]usize = [0, 2, 1]
     for i in 0..3 {
       parsed = parse(mode, arena, invalid[i])
-      check(parsed.failure.kind == fail.Kind.InvalidInput && parsed.failure.offset == offsets[i] && #len(parsed.value.source) == 0 && mem.arena_mark(arena) == mark)
+      check(parsed.failure.kind == fail.Kind.InvalidInput && parsed.failure.offset == offsets[i] && parsed.value.source.len == 0 && mem.arena_mark(arena) == mark)
     }
     source: [10]u8 = ['<','b','>','{','{','x','}','}','!','!']
     parsed = parse(mode, arena, source[..])
@@ -102,8 +102,8 @@ fn main() {
 
 # Nonempty literals retain an arena copy; storage exhaustion must panic rather
 # than return a portable parse failure. Keep each wrapper in its own process.
-PANIC_SOURCE = r'''use "std/PACKAGE/template" template
-use "std/mem" mem
+PANIC_SOURCE = r'''use template "std/PACKAGE/template"
+use mem "std/mem"
 use "std/fail"
 fn main() {
   status: fail.Status

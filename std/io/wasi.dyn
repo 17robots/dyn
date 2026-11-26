@@ -1,6 +1,6 @@
 #target(kernel: wasi)
 use "std/fail"
-use "std/os/wasi/raw" wasi_raw
+use wasi_raw "std/os/wasi/raw"
 
 // Borrow the process standard descriptors; callers do not own or close them.
 pub fn stdin() Reader {
@@ -14,9 +14,9 @@ pub fn stderr() Writer {
 }
 
 fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
-  if status.failed || #len(destination) == 0 { return 0 }
+  if status.failed || destination.len == 0 { return 0 }
   count: usize = 0
-  error := wasi_raw.read(0, &destination[0], #len(destination), &count)
+  error := wasi_raw.read(0, &destination[0], destination.len, &count)
   if error != 0 {
     fail.set(status, from_wasi("read", "standard input", 0 - #cast(isize, error)))
     return 0
@@ -25,9 +25,9 @@ fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
 }
 
 fn write_descriptor(status: *fail.Status, descriptor: u32, path: []const u8, source: []const u8) usize {
-  if status.failed || #len(source) == 0 { return 0 }
+  if status.failed || source.len == 0 { return 0 }
   count: usize = 0
-  error := wasi_raw.write(descriptor, #cast(rawptr, &source[0]), #len(source), &count)
+  error := wasi_raw.write(descriptor, #cast(rawptr, &source[0]), source.len, &count)
   if error != 0 {
     fail.set(status, from_wasi("write", path, 0 - #cast(isize, error)))
   }

@@ -58,7 +58,7 @@ pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *Node 
   if status.failed { return #cast(*Node, &nil_node) }
   mark := mem.arena_mark(arena)
   parser := Parser{ arena: arena, status: status, source: source }
-  root := mem.push(Node, arena)
+  root := mem.push<Node>(arena)
   root.kind = Kind.Root
   parse_children(&parser, root, 0)
   if status.failed {
@@ -134,7 +134,7 @@ pub fn has_tag(node: *const Node, name: []const u8) bool {
 // 1-based line of a byte offset, for error messages.
 pub fn line_of(source: []const u8, offset: usize) usize {
   line: usize = 1
-  for i in 0..#len(source) {
+  for i in 0..source.len {
     if i >= offset { return line }
     if source[i] == '\n' {
       line += 1
@@ -166,29 +166,29 @@ fn closer(byte: u8) bool {
 fn at_pair(parser: *Parser, first: u8, second: u8) bool {
   source := parser.source
   at := parser.at
-  return at + 1 < #len(source) && source[at] == first && source[at + 1] == second
+  return at + 1 < source.len && source[at] == first && source[at + 1] == second
 }
 
 // Skips whitespace and comments, and ',' and ';' when separators is set.
 fn skip(parser: *Parser, separators: bool) {
   source := parser.source
-  for parser.at < #len(source) {
+  for parser.at < source.len {
     byte := source[parser.at]
     if byte == ' ' || byte == '\t' || byte == '\n' || byte == '\r' {
       parser.at += 1
     } else if separators && (byte == ',' || byte == ';') {
       parser.at += 1
     } else if at_pair(parser, '/', '/') {
-      for parser.at < #len(source) && source[parser.at] != '\n' {
+      for parser.at < source.len && source[parser.at] != '\n' {
         parser.at += 1
       }
     } else if at_pair(parser, '/', '*') {
       start := parser.at
       parser.at += 2
-      for parser.at < #len(source) && !at_pair(parser, '*', '/') {
+      for parser.at < source.len && !at_pair(parser, '*', '/') {
         parser.at += 1
       }
-      if parser.at >= #len(source) {
+      if parser.at >= source.len {
         failed_at(parser, "unterminated comment", start)
         return
       }
@@ -203,21 +203,21 @@ fn read_string(parser: *Parser, node: *Node, quote: u8) {
   source := parser.source
   start := parser.at
   width: usize = 1
-  if start + 2 < #len(source) && source[start + 1] == quote && source[start + 2] == quote {
+  if start + 2 < source.len && source[start + 1] == quote && source[start + 2] == quote {
     width = 3
   }
   parser.at += width
   body := parser.at
-  for parser.at < #len(source) {
+  for parser.at < source.len {
     byte := source[parser.at]
-    if width == 1 && byte == '\\' && parser.at + 1 < #len(source) {
+    if width == 1 && byte == '\\' && parser.at + 1 < source.len {
       parser.at += 2
       continue
     }
     if width == 1 && byte == '\n' { break }
     closed := byte == quote
     if width == 3 {
-      closed = parser.at + 2 < #len(source) && byte == quote && source[parser.at + 1] == quote && source[parser.at + 2] == quote
+      closed = parser.at + 2 < source.len && byte == quote && source[parser.at + 1] == quote && source[parser.at + 2] == quote
     }
     if closed {
       node.label = Label.String
@@ -235,13 +235,13 @@ fn read_label(parser: *Parser, node: *Node) {
   start := parser.at
   byte := source[start]
   if letter(byte) {
-    for parser.at < #len(source) && (letter(source[parser.at]) || digit(source[parser.at])) {
+    for parser.at < source.len && (letter(source[parser.at]) || digit(source[parser.at])) {
       parser.at += 1
     }
     node.label = Label.Identifier
     node.string = source[start..parser.at]
   } else if digit(byte) {
-    for parser.at < #len(source) && (letter(source[parser.at]) || digit(source[parser.at]) || source[parser.at] == '.') {
+    for parser.at < source.len && (letter(source[parser.at]) || digit(source[parser.at]) || source[parser.at] == '.') {
       parser.at += 1
     }
     node.label = Label.Number
@@ -276,7 +276,7 @@ fn parse_children(parser: *Parser, parent: *Node, close: u8) {
   for true {
     skip(parser, true)
     if parser.status.failed { return }
-    if parser.at >= #len(parser.source) {
+    if parser.at >= parser.source.len {
       if close != 0 {
         failed_at(parser, "unclosed scope", start)
       }
@@ -310,28 +310,28 @@ fn parse_group(parser: *Parser, node: *Node) {
 
 fn parse_node(parser: *Parser) *Node {
   source := parser.source
-  node := mem.push(Node, parser.arena)
+  node := mem.push<Node>(parser.arena)
   node.kind = Kind.Main
   node.offset = parser.at
-  for parser.at < #len(source) && source[parser.at] == '@' {
+  for parser.at < source.len && source[parser.at] == '@' {
     tag_offset := parser.at
     parser.at += 1
-    if parser.at >= #len(source) || !letter(source[parser.at]) {
+    if parser.at >= source.len || !letter(source[parser.at]) {
       failed_at(parser, "missing tag name", tag_offset)
       return node
     }
-    tag_node := mem.push(Node, parser.arena)
+    tag_node := mem.push<Node>(parser.arena)
     tag_node.kind = Kind.Tag
     tag_node.offset = tag_offset
     read_label(parser, tag_node)
-    if parser.at < #len(source) && source[parser.at] == '(' {
+    if parser.at < source.len && source[parser.at] == '(' {
       parse_group(parser, tag_node)
     }
     append_tag(node, tag_node)
     skip(parser, false)
   }
   if parser.status.failed { return node }
-  if parser.at >= #len(source) || closer(source[parser.at]) || source[parser.at] == ':' {
+  if parser.at >= source.len || closer(source[parser.at]) || source[parser.at] == ':' {
     failed_at(parser, "unexpected token", parser.at)
     return node
   }
@@ -342,10 +342,10 @@ fn parse_node(parser: *Parser) *Node {
   }
   read_label(parser, node)
   skip(parser, false)
-  if parser.at < #len(source) && source[parser.at] == ':' {
+  if parser.at < source.len && source[parser.at] == ':' {
     parser.at += 1
     skip(parser, false)
-    if parser.at >= #len(source) || closer(source[parser.at]) {
+    if parser.at >= source.len || closer(source[parser.at]) {
       failed_at(parser, "unexpected token", parser.at)
     } else if opener(source[parser.at]) {
       parse_group(parser, node)

@@ -1,4 +1,4 @@
-use "std/io" io
+use io "std/io"
 use "std/fail"
 use "std/os/linux/sys"
 #target(kernel: linux)

@@ -1,4 +1,4 @@
-use "std/compress/gzip" gzip
+use gzip "std/compress/gzip"
 
 // Gzip for dynamic responses. Static assets carry a precompressed copy
 // instead (see make_asset).
@@ -25,7 +25,7 @@ pub fn respond_compressed(status: *fail.Status, response: *Response, request: *c
     respond_compressed(&fail.Status{}, response, request, body, options, level, encoder)
     return
   }
-  if !compressible(options.content_type) || #len(body) < CompressMinimum || #len(options.headers) > CompressHeaders ||
+  if !compressible(options.content_type) || body.len < CompressMinimum || options.headers.len > CompressHeaders ||
     has_coding(options.headers) {
     respond(status, response, body, options)
     return
@@ -44,14 +44,14 @@ pub fn respond_compressed(status: *fail.Status, response: *Response, request: *c
     respond(status, response, body, varied)
     return
   }
-  storage := body_buffer(response, gzip.compress_bound(#len(body)))
-  if #len(storage) == 0 {
+  storage := body_buffer(response, gzip.compress_bound(body.len))
+  if storage.len == 0 {
     respond(status, response, body, varied)
     return
   }
   compressing: fail.Status
   encoded := gzip.write(&compressing, storage, body, level, encoder)
-  if compressing.failed || #len(encoded) >= #len(body) {
+  if compressing.failed || encoded.len >= body.len {
     // The reservation lapses: respond queues its own copy.
     respond(status, response, body, varied)
     return
@@ -59,7 +59,7 @@ pub fn respond_compressed(status: *fail.Status, response: *Response, request: *c
   headers[count] = Header{ name: "Content-Encoding", value: "gzip" }
   count += 1
   varied.headers = headers[..count]
-  respond_buffered(status, response, #len(encoded), varied)
+  respond_buffered(status, response, encoded.len, varied)
 }
 
 // Whether a response with these headers already names a content coding.

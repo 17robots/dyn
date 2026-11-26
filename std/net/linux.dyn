@@ -89,12 +89,12 @@ pub fn receive_packet(status: *fail.Status, descriptor: isize, bytes: []u8) usiz
   if status == nil { return receive_packet(&fail.Status{}, descriptor, bytes) }
   if status.failed { return 0 }
   data: *u8 = nil
-  if #len(bytes) > 0 {
+  if bytes.len > 0 {
     data = &bytes[0]
   }
-  value := native_receive(descriptor, data, #len(bytes), 32, nil, nil)
+  value := native_receive(descriptor, data, bytes.len, 32, nil, nil)
   for value == -4 {
-    value = native_receive(descriptor, data, #len(bytes), 32, nil, nil)
+    value = native_receive(descriptor, data, bytes.len, 32, nil, nil)
   }
   if check(status, "receive", value) < 0 { return 0 }
   return #cast(usize, value)

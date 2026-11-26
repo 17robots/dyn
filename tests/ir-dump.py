@@ -8,18 +8,18 @@ import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-MAIN=r'''use "dep" d
+MAIN=r'''use d "dep"
 struct Pair { left:i64, right:f64 }
 enum(u8) Tag { A,B }
 const maximum:u64=18446744073709551615
 const message:[]const u8="a\x00\xffz"
 global:i32=3
 extern fn absent "unlinked_symbol"(x:i32) i32
-fn identity(x:$T) T { return x }
+fn identity<T>(x:T) T { return x }
 fn callback(x:i32) i32 { return x+1 }
 fn work(values:[]i32,which:Tag) i64 {
   p:=Pair{left:7,right:1.5}
-  for i in 0..#len(values) { values[i]+=global }
+  for i in 0..values.len { values[i]+=global }
   for value in values { if value>10 { continue }
   p.left+=#cast(i64,value) }
   case which { Tag.A=>{ p.left+=1 }Tag.B=>{ p.left+=2 } }
@@ -41,7 +41,7 @@ fn main() {
   _=maximum
 }
 '''
-DEP='pub struct Item { value:i64 }\npub fn read(x:Item) i64 { return x.value }\npub fn generic(x:$T) T { return x }\n'
+DEP='pub struct Item { value:i64 }\npub fn read(x:Item) i64 { return x.value }\npub fn generic<T>(x:T) T { return x }\n'
 
 def execute(project,*args,env=None):
     return subprocess.run([DYN,'build',str(project),'--emit-ir',*args],env=env,capture_output=True,timeout=90)
@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-ir-dump-') as temporary:
     relocated_sdk=work/'sdk';relocated_sdk.mkdir()
     shutil.copytree(ROOT/'std',relocated_sdk/'std')
     stdproject=work/'stdapp';stdproject.mkdir()
-    (stdproject/'main.dyn').write_text('use "std/math" m\nfn main(){ _=m.max(#cast(i32,1),#cast(i32,2)) }')
+    (stdproject/'main.dyn').write_text('use m "std/math"\nfn main(){ _=m.max(#cast(i32,1),#cast(i32,2)) }')
     sdkone=execute(stdproject,env=env)
     sdktwo=execute(stdproject,env=dict(env,DYN_SDK=str(relocated_sdk)))
     assert sdkone.returncode==sdktwo.returncode==0,(sdkone.stderr,sdktwo.stderr)

@@ -22,8 +22,8 @@ use "std/net/http"
 use "std/net/http/evented"
 
 struct App {
-  router: http.Routes(App),
-  routes: [16]http.TypedRoute(App),
+  router: http.Routes<App>,
+  routes: [16]http.TypedRoute<App>,
 }
 
 fn health(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
@@ -37,10 +37,10 @@ fn handle(status: *fail.Status, response: *http.Response, request: *const http.R
 fn run(status: *fail.Status, app: *App, workers: []evented.Worker) {
   app.router = http.typed_routes(app.routes[..], app)
   http.add(status, &app.router, "GET", "/health", health)
-  typed := http.Typed(App){ state: app, handler: handle }
+  typed := http.Typed<App>{ state: app, handler: handle }
   binding := http.bind(&typed)
   config := evented.default_config()
-  arena := mem.arena_alloc(evented.storage_size(config, #len(workers)) + mem.MiB)
+  arena := mem.arena_alloc(evented.storage_size(config, workers.len) + mem.MiB)
   defer mem.arena_release(arena)
   // Serves until SIGINT or SIGTERM, then stops and joins the workers.
   evented.serve(arena, status, workers, net.ipv4(127, 0, 0, 1, 8080), config, binding.handler, binding.context)
@@ -94,14 +94,14 @@ such as a SQLite table:
 ```dyn
 use "std/fail"
 use "std/net/http"
-use "std/net/http/session" sessions
+use sessions "std/net/http/session"
 
 // cache is this worker's; shared is one for the whole server.
 fn current(cache: *sessions.Cache, shared: *sessions.Shared, request: *const http.Request, now: i64) sessions.Session {
   token := sessions.token(request)
   missing: fail.Status
   session := sessions.cached(&missing, cache, shared, token, now)
-  if !missing.failed || #len(token) == 0 { return session }
+  if !missing.failed || token.len == 0 { return session }
   // Look token up in the store; on a hit, keep the answer:
   // return sessions.remember(&status, cache, token, user, csrf, name, expires)
   return session
@@ -166,8 +166,8 @@ fn answer(status: *fail.Status, response: *http.Response, request: *const http.R
 }
 
 fn login(status: *fail.Status, response: *http.Response, request: *const http.Request) {
-  job := evented.job(Login, response)
-  if job == nil || #len(request.body) > #len(job.password) {
+  job := evented.job<Login>(response)
+  if job == nil || request.body.len > job.password.len {
     http.respond(status, response, "too large\n", http.ResponseOptions{ status: http.StatusPayloadTooLarge })
     return
   }
@@ -297,7 +297,7 @@ use "std/net/http/evented"
 struct Upload { count: usize }
 
 fn piece(job: *Upload, bytes: []const u8) bool {
-  job.count += #len(bytes)
+  job.count += bytes.len
   return job.count <= 100 * 1024 * 1024
 }
 
@@ -310,7 +310,7 @@ fn done(status: *fail.Status, response: *http.Response, request: *const http.Req
 }
 
 fn large_body(status: *fail.Status, response: *http.Response, request: *const http.Request) {
-  job := evented.job(Upload, response)
+  job := evented.job<Upload>(response)
   reading: fail.Status
   if job != nil {
     evented.receive_body(&reading, response, job, piece, done)
@@ -512,7 +512,7 @@ request.
 ```dyn
 use "std/mem"
 use "std/net/http/evented"
-use "std/net/http/evented/tls" https
+use https "std/net/http/evented/tls"
 
 fn http3_config(quic: *const evented.Quic) evented.Config {
   config := evented.default_config()

@@ -1,5 +1,5 @@
 use "std/fail"
-use "std/mem" memory
+use memory "std/mem"
 
 // C ABI names. Target files select long width and plain-char signedness. No wrappers,
 // conversions, allocation, or distinct-type friction at foreign call sites.
@@ -69,7 +69,7 @@ pub fn succeeded(value: isize) bool {
 pub fn string_into(status: *fail.Status, destination: []u8, source: []const u8) string {
   if status == nil { return string_into(&fail.Status{}, destination, source) }
   if status.failed { return nil }
-  if #len(source) == #cast(usize, -1) {
+  if source.len == #cast(usize, -1) {
     fail.set(status, fail.make(fail.Kind.Overflow, "make C string", "", "the text is too long"))
     return nil
   }
@@ -79,12 +79,12 @@ pub fn string_into(status: *fail.Status, destination: []u8, source: []const u8) 
       return nil
     }
   }
-  if #len(destination) <= #len(source) {
+  if destination.len <= source.len {
     fail.set(status, fail.make(fail.Kind.Capacity, "make C string", "", "the text does not fit the storage"))
     return nil
   }
   _ = memory.move(destination, source)
-  destination[#len(source)] = 0
+  destination[source.len] = 0
   return &destination[0]
 }
 
@@ -93,12 +93,12 @@ pub fn string_into(status: *fail.Status, destination: []u8, source: []const u8) 
 pub fn string_from_bytes(arena: *memory.Arena, status: *fail.Status, source: []const u8) string {
   if status == nil { return string_from_bytes(arena, &fail.Status{}, source) }
   if status.failed { return nil }
-  if #len(source) == #cast(usize, -1) {
+  if source.len == #cast(usize, -1) {
     fail.set(status, fail.make(fail.Kind.Overflow, "make C string", "", "the text is too long"))
     return nil
   }
   mark := memory.arena_mark(arena)
-  allocation := memory.push_bytes(arena, #len(source) + 1)
+  allocation := memory.push_bytes(arena, source.len + 1)
   result := string_into(status, allocation, source)
   if status.failed {
     memory.arena_rewind(arena, mark)

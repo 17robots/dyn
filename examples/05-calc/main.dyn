@@ -18,7 +18,7 @@ use "std/strings"
 // Prints the line with a caret under offset.
 fn point_at(offset: usize, message: []const u8) {
   storage: [256]u8
-  indent := storage[..math.min(offset, #len(storage))]
+  indent := storage[..math.min(offset, storage.len)]
   for *byte in indent {
     byte.* = ' '
   }
@@ -33,7 +33,7 @@ fn main() {
   frame := mem.arena_alloc(0)
   defer mem.arena_release(frame)
 
-  names: map.Map([]const u8, f64)
+  names: map.Map<[]const u8, f64>
   map.init(&names, permanent)
   map.insert(&names, "pi", 3.141592653589793)
 
@@ -48,7 +48,7 @@ fn main() {
       return
     }
     if reader.ended { return }
-    if #len(strings.trim(line)) == 0 { continue }
+    if strings.trim(line).len == 0 { continue }
     io.println("> {}", line)
 
     parsing: fail.Status
@@ -59,7 +59,7 @@ fn main() {
       value := evaluate(statement.value, &names)
       if value.problem != Problem.None {
         point_at(value.offset, problem_text(value.problem))
-      } else if #len(statement.name) > 0 {
+      } else if statement.name.len > 0 {
         // The name points into the reader's storage. Copy it before keeping it.
         name: []const u8 = strings.clone(permanent, statement.name)
         map.insert(&names, name, value.number)

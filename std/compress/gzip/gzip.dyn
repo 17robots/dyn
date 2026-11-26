@@ -1,7 +1,7 @@
-use "std/mem" mem
-use "std/compress/deflate" deflate
-use "std/io" stream
-use "std/hash" hash
+use mem "std/mem"
+use deflate "std/compress/deflate"
+use stream "std/io"
+use hash "std/hash"
 use "std/fail"
 
 pub type Result = deflate.Result
@@ -40,7 +40,7 @@ pub fn compress_bound(size: usize) usize {
 pub fn write(status: *fail.Status, destination: []u8, source: []const u8, level: u8, encoder: *Encoder) []u8 {
   if status == nil { return write(&fail.Status{}, destination, source, level, encoder) }
   if status.failed { return destination[..0] }
-  if #len(destination) < 18 {
+  if destination.len < 18 {
     fail.set(status, fail.make(fail.Kind.Capacity, "compress", "", "the output does not fit destination"))
     return destination[..0]
   }
@@ -53,11 +53,11 @@ pub fn write(status: *fail.Status, destination: []u8, source: []const u8, level:
   for i in 0..10 {
     destination[i] = header[i]
   }
-  body := deflate.deflate(status, destination[10..#len(destination) - 8], source, level, encoder)
+  body := deflate.deflate(status, destination[10..destination.len - 8], source, level, encoder)
   if status.failed { return destination[..0] }
-  at := 10 + #len(body)
+  at := 10 + body.len
   crc := hash.crc32(source)
-  size := #cast(u32, #len(source))
+  size := #cast(u32, source.len)
   for i in 0..4 {
     destination[at + i] = #cast(u8, crc >> #cast(u32, 8 * i))
     destination[at + 4 + i] = #cast(u8, size >> #cast(u32, 8 * i))
@@ -69,9 +69,9 @@ pub fn write(status: *fail.Status, destination: []u8, source: []const u8, level:
 // arena and given back; only the output stays. It cannot fail: the output
 // is sized by compress_bound.
 pub fn compress(arena: *mem.Arena, source: []const u8, level: u8) []u8 {
-  output := mem.push_bytes(arena, compress_bound(#len(source)))
+  output := mem.push_bytes(arena, compress_bound(source.len))
   mark := mem.arena_mark(arena)
-  encoder := mem.push(Encoder, arena)
+  encoder := mem.push<Encoder>(arena)
   status: fail.Status
   encoded := write(&status, output, source, level, encoder)
   mem.arena_rewind(arena, mark)

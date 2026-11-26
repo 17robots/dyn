@@ -20,7 +20,7 @@ use "std/mem"
 struct Vec2 { x: f64, y: f64 }
 enum Op { Add, Sub }
 enum Code { None = 0, Ok = 200, Missing = 404 }
-enum Shape { Dot, Circle: f64 }
+enum Shape { Dot, Circle(f64) }
 struct Unit { name: []const u8, at: Vec2, op: Op, code: Code, hp: i32, alive: bool, size: u8 }
 
 fn spot() Unit {

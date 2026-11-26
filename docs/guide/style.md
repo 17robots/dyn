@@ -62,7 +62,7 @@ fn clamp(value: i32, low: i32, high: i32) i32 {
 
 Dyn has no package manager. Copy a library's directory into your project, for
 example `third_party/dynjson`, and commit it. The copy is the pin. Import it
-from the project root with `use "third_party/dynjson" json`. Updating means
+from the project root with `use json "third_party/dynjson"`. Updating means
 copying the new version over the old one and reviewing the diff. Unused code
 costs nothing in release executables, which keep only functions reachable from
 `main`, global initializers and function values. A git submodule works the same way if you prefer one.

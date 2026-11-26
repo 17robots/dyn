@@ -70,7 +70,7 @@ for dyn, (native, fields) in LAYOUTS.items():
     for field in fields:
         C += f'printf("{dyn}.{field} %zu\\n", offsetof({native}, {field}));\n'
 C += '}\n'
-SOURCE = r'''use "vendor/tree_sitter" ts
+SOURCE = r'''use ts "vendor/tree_sitter"
 use "std/fail"
 use "std/bytes"
 use "std/io"

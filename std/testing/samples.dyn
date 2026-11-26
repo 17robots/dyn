@@ -1,5 +1,5 @@
 use "std/fail"
-use "std/sort" sorting
+use sorting "std/sort"
 
 pub struct Samples { count: usize, minimum, median, p90, maximum: i64 }
 
@@ -10,7 +10,7 @@ pub struct Samples { count: usize, minimum, median, p90, maximum: i64 }
 pub fn summarize(status: *fail.Status, samples: []i64) Samples {
   if status == nil { return summarize(&fail.Status{}, samples) }
   if status.failed { return Samples{} }
-  if #len(samples) == 0 {
+  if samples.len == 0 {
     fail.invalid(status, "summarize samples", "", "there are no samples")
     return Samples{}
   }
@@ -21,7 +21,7 @@ pub fn summarize(status: *fail.Status, samples: []i64) Samples {
     }
   }
   sorting.sort(samples)
-  count := #len(samples)
+  count := samples.len
   return Samples{count: count, minimum: samples[0], median: samples[(count - 1) / 2],
     p90: samples[count - count / 10 - 1], maximum: samples[count - 1]}
 }

@@ -28,13 +28,13 @@ fn audio_failed(status: *fail.Status, operation: []const u8, code: i32) {
 pub fn decoder_create(arena: *mem.Arena, status: *fail.Status, bytes: []const u8) rawptr {
   if status == nil { return decoder_create(arena, &fail.Status{}, bytes) }
   if status.failed { return nil }
-  if arena == nil || #len(bytes) == 0 {
+  if arena == nil || bytes.len == 0 {
     audio_failed(status, "open decoder", -2)
     return nil
   }
   mark := mem.arena_mark(arena)
   state := native_storage(arena, decoder_size(), decoder_align())
-  code := decoder_init(state, #cast(rawptr, &bytes[0]), #len(bytes))
+  code := decoder_init(state, #cast(rawptr, &bytes[0]), bytes.len)
   if code != 0 {
     mem.arena_rewind(arena, mark)
     audio_failed(status, "open decoder", code)
@@ -46,12 +46,12 @@ pub fn decoder_create(arena: *mem.Arena, status: *fail.Status, bytes: []const u8
 pub fn decoder_read(status: *fail.Status, decoder: rawptr, output: []f32) Read {
   if status == nil { return decoder_read(&fail.Status{}, decoder, output) }
   if status.failed { return Read{} }
-  if decoder == nil || #len(output) == 0 || #len(output) % 2 != 0 {
+  if decoder == nil || output.len == 0 || output.len % 2 != 0 {
     audio_failed(status, "decode", -2)
     return Read{}
   }
   frames: u64 = 0
-  code := native_read(decoder, &output[0], (#len(output) / 2), &frames)
+  code := native_read(decoder, &output[0], (output.len / 2), &frames)
   if code != 0 && code != -17 {
     audio_failed(status, "decode", code)
     return Read{}
@@ -101,12 +101,12 @@ pub fn play_file(status: *fail.Status, engine: rawptr, path: []const u8, buffer:
 pub fn mix(status: *fail.Status, engine: rawptr, output: []f32) usize {
   if status == nil { return mix(&fail.Status{}, engine, output) }
   if status.failed { return 0 }
-  if engine == nil || #len(output) == 0 || #len(output) % 2 != 0 {
+  if engine == nil || output.len == 0 || output.len % 2 != 0 {
     audio_failed(status, "mix", -2)
     return 0
   }
   frames: u64 = 0
-  code := native_mix(engine, &output[0], (#len(output) / 2), &frames)
+  code := native_mix(engine, &output[0], (output.len / 2), &frames)
   if code != 0 {
     audio_failed(status, "mix", code)
     return 0

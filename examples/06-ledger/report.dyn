@@ -22,7 +22,7 @@ struct Row {
 // Adds amount under key. A map stores the key slice, not its bytes, and key
 // points into a buffer the next CSV field overwrites, so a new key is copied
 // into the arena first.
-fn add_to(totals: *map.Map([]const u8, Total), arena: *mem.Arena, key: []const u8, amount: Cents) {
+fn add_to(totals: *map.Map<[]const u8, Total>, arena: *mem.Arena, key: []const u8, amount: Cents) {
   found := map.get(totals, key)
   if found == nil {
     kept: []const u8 = strings.clone(arena, key)
@@ -34,8 +34,8 @@ fn add_to(totals: *map.Map([]const u8, Total), arena: *mem.Arena, key: []const u
 }
 
 // A map has no order. Copy its entries into an array to sort them.
-fn rows(totals: *const map.Map([]const u8, Total), arena: *mem.Arena) []Row {
-  result: array.Array(Row)
+fn rows(totals: *const map.Map<[]const u8, Total>, arena: *mem.Arena) []Row {
+  result: array.Array<Row>
   array.init(&result, arena)
   walk := map.walk(totals)
   for map.next(&walk) {
@@ -56,8 +56,8 @@ fn earlier_name(a: Row, b: Row) bool {
 
 fn pad_right(line: *fmt.Buffer, text: []const u8, width: usize) {
   fmt.write(line, text)
-  if #len(text) < width {
-    fmt.write_padding(line, ' ', width - #len(text))
+  if text.len < width {
+    fmt.write_padding(line, ' ', width - text.len)
   }
 }
 
@@ -67,8 +67,8 @@ fn pad_left_cents(line: *fmt.Buffer, amount: Cents, width: usize) {
   cell := fmt.buffer(line.status, storage[..])
   write_cents(&cell, amount)
   text := fmt.bytes(&cell)
-  if #len(text) < width {
-    fmt.write_padding(line, ' ', width - #len(text))
+  if text.len < width {
+    fmt.write_padding(line, ' ', width - text.len)
   }
   fmt.write(line, text)
 }
@@ -101,7 +101,7 @@ fn print_table(title: []const u8, table: []const Row) {
   io.println("{}", fmt.bytes(&line))
 }
 
-fn print_sorted(title: []const u8, totals: *const map.Map([]const u8, Total), arena: *mem.Arena, less: fn(Row, Row) bool) {
+fn print_sorted(title: []const u8, totals: *const map.Map<[]const u8, Total>, arena: *mem.Arena, less: fn(Row, Row) bool) {
   table := rows(totals, arena)
   sort.sort_by(table, less)
   print_table(title, table)

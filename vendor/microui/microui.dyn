@@ -93,7 +93,7 @@ pub fn button(status: *fail.Status, context: Context, text: []const u8, buffer: 
 }
 fn ui_text(status: *fail.Status, operation: []const u8, text: []const u8, buffer: []u8) c.string {
   if status.failed { return nil }
-  if #len(text) > 4096 {
+  if text.len > 4096 {
     fail.invalid(status, operation, "", "text over 4096 bytes")
     return nil
   }

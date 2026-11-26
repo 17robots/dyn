@@ -2,8 +2,8 @@
 
 
 use "std/fail"
-use "std/io" io
-use "std/time" clock
+use io "std/io"
+use clock "std/time"
 
 pub const AddressFamilyIpv4: usize = 2
 pub const AddressFamilyUnix: usize = 1
@@ -28,6 +28,17 @@ pub struct Address { bytes: [128]u8, length: usize }
 // and close them once.
 pub struct Connection { descriptor: isize, active: bool }
 pub struct Listener { descriptor: isize, active: bool }
+
+// Structured network error enum for T!NetErr APIs.
+pub enum NetErr {
+  Refused,
+  TimedOut,
+  Reset,
+  AddressInUse,
+  Closed,
+  InvalidAddress,
+  System(isize),
+}
 
 // Wraps an open socket descriptor; the result owns it and must be closed once.
 pub fn connection_from_descriptor(descriptor: isize) Connection {
@@ -85,7 +96,7 @@ pub fn shutdown(status: *fail.Status, descriptor: isize, how: usize) {
 }
 
 pub fn ipv4_address(destination: []u8, a: u8, b: u8, c: u8, d: u8, port: u16) []u8 {
-  if #len(destination) < 16 { return destination[..0] }
+  if destination.len < 16 { return destination[..0] }
   for i in 0..16 {
     destination[i] = 0
   }
@@ -123,15 +134,15 @@ pub fn ipv6(bytes: [16]u8, port: u16, scope: u32) Ipv6Address {
 // Native sockaddr_un. Empty result means an empty/oversized path.
 pub fn unix(path: []const u8) UnixAddress {
   value: UnixAddress = UnixAddress{}
-  if #len(path) == 0 || #len(path) > UnixPathLimit { return value }
-  for i in 0..#len(path) {
+  if path.len == 0 || path.len > UnixPathLimit { return value }
+  for i in 0..path.len {
     if path[i] == 0 { return value }
   }
-  address_family(value.bytes[..], 3 + #len(path), 1)
-  for i in 0..#len(path) {
+  address_family(value.bytes[..], 3 + path.len, 1)
+  for i in 0..path.len {
     value.bytes[2 + i] = path[i]
   }
-  value.length = 3 + #len(path)
+  value.length = 3 + path.len
   return value
 }
 
@@ -164,7 +175,7 @@ pub fn bind_ipv6(status: *fail.Status, descriptor: isize, address: *const Ipv6Ad
   bind(status, descriptor, address.bytes[..])
 }
 fn unix_bytes(status: *fail.Status, operation: []const u8, address: *const UnixAddress) []const u8 {
-  if address.length == 0 || address.length > #len(address.bytes) {
+  if address.length == 0 || address.length > address.bytes.len {
     invalid(status, operation, "the Unix address is empty or too long")
     return address.bytes[..0]
   }
@@ -191,11 +202,11 @@ pub fn connect(status: *fail.Status, descriptor: isize, address: []const u8) {
     return
   }
   if status.failed { return }
-  if #len(address) == 0 {
+  if address.len == 0 {
     invalid(status, "connect", "empty address")
     return
   }
-  _ = check(status, "connect", native_connect(descriptor, &address[0], #len(address)))
+  _ = check(status, "connect", native_connect(descriptor, &address[0], address.len))
 }
 
 pub fn bind(status: *fail.Status, descriptor: isize, address: []const u8) {
@@ -204,11 +215,11 @@ pub fn bind(status: *fail.Status, descriptor: isize, address: []const u8) {
     return
   }
   if status.failed { return }
-  if #len(address) == 0 {
+  if address.len == 0 {
     invalid(status, "bind", "empty address")
     return
   }
-  _ = check(status, "bind", native_bind(descriptor, &address[0], #len(address)))
+  _ = check(status, "bind", native_bind(descriptor, &address[0], address.len))
 }
 
 // Accepts one connection: its descriptor, or -1 after a failure.
@@ -391,7 +402,7 @@ pub fn connection_write(status: *fail.Status, connection: *Connection, source: [
     return 0
   }
   total: usize = 0
-  for total < #len(source) {
+  for total < source.len {
     sent := send(status, connection.descriptor, source[total..], 0)
     if status.failed { return total }
     if sent == 0 {
@@ -479,7 +490,7 @@ pub fn peer_address(status: *fail.Status, descriptor: isize, address: *Address) 
 // Sends what the socket takes now, up to all of bytes; the count sent.
 pub fn send(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize) usize {
   if status == nil { return send(&fail.Status{}, descriptor, bytes, flags) }
-  if status.failed || #len(bytes) == 0 { return 0 }
+  if status.failed || bytes.len == 0 { return 0 }
   value := send_native(descriptor, bytes, flags)
   if check(status, "send", value) < 0 { return 0 }
   return #cast(usize, value)
@@ -488,7 +499,7 @@ pub fn send(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: u
 // Receives what is available, up to bytes; 0 at the end of a stream.
 pub fn receive(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize) usize {
   if status == nil { return receive(&fail.Status{}, descriptor, bytes, flags) }
-  if status.failed || #len(bytes) == 0 { return 0 }
+  if status.failed || bytes.len == 0 { return 0 }
   value := receive_native(descriptor, bytes, flags)
   if check(status, "receive", value) < 0 { return 0 }
   return #cast(usize, value)
@@ -499,7 +510,7 @@ pub fn receive(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usiz
 pub struct Attempt { count: usize, blocked: bool }
 pub fn try_send(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize) Attempt {
   if status == nil { return try_send(&fail.Status{}, descriptor, bytes, flags) }
-  if status.failed || #len(bytes) == 0 { return Attempt{} }
+  if status.failed || bytes.len == 0 { return Attempt{} }
   value := send_native(descriptor, bytes, flags)
   if value < 0 {
     if native_would_block(value) { return Attempt{ blocked: true } }
@@ -510,7 +521,7 @@ pub fn try_send(status: *fail.Status, descriptor: isize, bytes: []const u8, flag
 }
 pub fn try_receive(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize) Attempt {
   if status == nil { return try_receive(&fail.Status{}, descriptor, bytes, flags) }
-  if status.failed || #len(bytes) == 0 { return Attempt{} }
+  if status.failed || bytes.len == 0 { return Attempt{} }
   value := receive_native(descriptor, bytes, flags)
   if value < 0 {
     if native_would_block(value) { return Attempt{ blocked: true } }
@@ -523,16 +534,16 @@ pub fn try_receive(status: *fail.Status, descriptor: isize, bytes: []u8, flags: 
 fn send_native(descriptor: isize, bytes: []const u8, flags: usize) isize {
   // MSG_NOSIGNAL keeps a disconnected peer a failure instead of a signal.
   flags = flags | NoSignalFlag
-  value := native_send(descriptor, &bytes[0], #len(bytes), flags, nil, 0)
+  value := native_send(descriptor, &bytes[0], bytes.len, flags, nil, 0)
   for native_interrupted(value) {
-    value = native_send(descriptor, &bytes[0], #len(bytes), flags, nil, 0)
+    value = native_send(descriptor, &bytes[0], bytes.len, flags, nil, 0)
   }
   return value
 }
 fn receive_native(descriptor: isize, bytes: []u8, flags: usize) isize {
-  value := native_receive(descriptor, &bytes[0], #len(bytes), flags, nil, nil)
+  value := native_receive(descriptor, &bytes[0], bytes.len, flags, nil, nil)
   for native_interrupted(value) {
-    value = native_receive(descriptor, &bytes[0], #len(bytes), flags, nil, nil)
+    value = native_receive(descriptor, &bytes[0], bytes.len, flags, nil, nil)
   }
   return value
 }
@@ -541,20 +552,20 @@ fn receive_native(descriptor: isize, bytes: []u8, flags: usize) isize {
 pub fn send_to(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize, address: []const u8) usize {
   if status == nil { return send_to(&fail.Status{}, descriptor, bytes, flags, address) }
   if status.failed { return 0 }
-  if #len(address) == 0 {
+  if address.len == 0 {
     invalid(status, "send", "empty address")
     return 0
   }
   // Empty UDP payloads are packets too; the kernel accepts a null buffer.
   data: *const u8 = nil
-  if #len(bytes) > 0 {
+  if bytes.len > 0 {
     data = &bytes[0]
   }
   // This entry point can also send through a connected stream socket.
   flags = flags | NoSignalFlag
-  value := native_send(descriptor, data, #len(bytes), flags, &address[0], #len(address))
+  value := native_send(descriptor, data, bytes.len, flags, &address[0], address.len)
   for native_interrupted(value) {
-    value = native_send(descriptor, data, #len(bytes), flags, &address[0], #len(address))
+    value = native_send(descriptor, data, bytes.len, flags, &address[0], address.len)
   }
   if check(status, "send", value) < 0 { return 0 }
   return #cast(usize, value)
@@ -563,15 +574,15 @@ pub fn send_to(status: *fail.Status, descriptor: isize, bytes: []const u8, flags
 // Receives one datagram and its sender's address; the count received.
 pub fn receive_from(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize, address: []u8, address_length: *u32) usize {
   if status == nil { return receive_from(&fail.Status{}, descriptor, bytes, flags, address, address_length) }
-  if status.failed || #len(bytes) == 0 { return 0 }
+  if status.failed || bytes.len == 0 { return 0 }
   address_raw: *u8 = nil
-  if #len(address) > 0 {
+  if address.len > 0 {
     address_raw = &address[0]
-    address_length.* = #cast(u32, #len(address))
+    address_length.* = #cast(u32, address.len)
   }
-  value := native_receive(descriptor, &bytes[0], #len(bytes), flags, address_raw, address_length)
+  value := native_receive(descriptor, &bytes[0], bytes.len, flags, address_raw, address_length)
   for native_interrupted(value) {
-    value = native_receive(descriptor, &bytes[0], #len(bytes), flags, address_raw, address_length)
+    value = native_receive(descriptor, &bytes[0], bytes.len, flags, address_raw, address_length)
   }
   if check(status, "receive", value) < 0 { return 0 }
   return #cast(usize, value)
@@ -693,7 +704,7 @@ pub fn poll(status: *fail.Status, descriptors: []PollDescriptor, timeout_millise
     if timeout_milliseconds > 0 {
       remaining = interrupted_timeout(start, timeout_milliseconds)
       if remaining == 0 {
-        for i in 0..#len(descriptors) {
+        for i in 0..descriptors.len {
           descriptors[i].returned = 0
         }
         return 0
@@ -754,7 +765,7 @@ fn put_decimal(destination: []u8, at: usize, value: u32) usize {
   }
   position := at
   for i in 0..count {
-    if position < #len(destination) {
+    if position < destination.len {
       destination[position] = digits[count - 1 - i]
     }
     position += 1
@@ -766,7 +777,7 @@ fn put_decimal(destination: []u8, at: usize, value: u32) usize {
 // longest run of zero groups as ::). Empty when destination is shorter than
 // 46 bytes or ip is empty.
 pub fn ip_text(destination: []u8, ip: Ip) []u8 {
-  if #len(destination) < 46 || (ip.length != 4 && ip.length != 16) { return destination[..0] }
+  if destination.len < 46 || (ip.length != 4 && ip.length != 16) { return destination[..0] }
   at: usize = 0
   if ip.length == 4 {
     for i in 0..4 {

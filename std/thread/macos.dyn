@@ -1,8 +1,8 @@
 #target(kernel: darwin)
 #link("System")
-use "std/io" io
+use io "std/io"
 use "std/fail"
-use "std/sync" sync
+use sync "std/sync"
 
 // Apple LP64 pthread_attr_t: eight-byte signature plus 56 opaque bytes.
 struct Attributes { storage: [8]u64 }
@@ -38,7 +38,7 @@ fn trampoline(context: rawptr) rawptr {
 // unmoved until successful join. Fixed arena exhaustion panics; native spawn
 // failure restores the arena mark. Do not copy active Threads.
 fn spawn_untyped(arena: *mem.Arena, status: *fail.Status, stack: []u8, entry: fn(rawptr) isize, context: rawptr) *Thread {
-  return spawn_with_size_untyped(arena, status, #len(stack), entry, context)
+  return spawn_with_size_untyped(arena, status, stack.len, entry, context)
 }
 fn spawn_with_size_untyped(arena: *mem.Arena, status: *fail.Status, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) *Thread {
   if stack_size < 256 || entry == nil || stack_size > #max(usize) - 16383 {
@@ -62,7 +62,7 @@ fn spawn_with_size_untyped(arena: *mem.Arena, status: *fail.Status, stack_size: 
     return nil
   }
   mark := mem.arena_mark(arena)
-  thread := mem.push(Thread, arena)
+  thread := mem.push<Thread>(arena)
   thread.entry = entry
   thread.context = context
   sync.store_u32(&thread.ready, 0)

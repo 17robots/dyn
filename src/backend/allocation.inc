@@ -58,7 +58,7 @@ static void allocation_block(AllocationPlan *p, uint32_t start, uint32_t count, 
     if ((uint64_t)s->case_arm_start + s->case_arm_count > p->ir->case_arm_count) { p->failed = true; return; }
     for (uint32_t a = 0; a < s->case_arm_count; ++a) {
       const DynIrCaseArm *arm = &p->ir->case_arms[s->case_arm_start + a];
-      allocation_touch(p, arm->local_id, false, arm->pointer_binding);
+      allocation_touch(p, arm->local_id, false, false);
       allocation_block(p, arm->body_start, arm->body_count, depth + 1);
     }
     if (s->kind == DYN_STMT_FOR) {

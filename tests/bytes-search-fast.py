@@ -7,23 +7,23 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn')).resolve())
-SOURCE = r'''use "std/bytes" bytes
+SOURCE = r'''use bytes "std/bytes"
 fn expect(ok: bool) { if !ok { #panic("byte search differential") } }
 fn scalar(h: []const u8, n: []const u8) usize {
-  if #len(n)==0 { return 0 }
-  if #len(n)>#len(h) { return #len(h) }
-  for i in 0..#len(h)-#len(n)+1 {
+  if n.len==0 { return 0 }
+  if n.len>h.len { return h.len }
+  for i in 0..h.len-n.len+1 {
     matched:=true
-    for j in 0..#len(n) { if h[i+j]!=n[j] { matched=false
+    for j in 0..n.len { if h[i+j]!=n[j] { matched=false
     break } }
     if matched { return i }
   }
-  return #len(h)
+  return h.len
 }
 fn verify(h: []const u8, n: []const u8) {
   at:=scalar(h,n)
   expect(bytes.find(h,n)==at)
-  expect(bytes.contains(h,n)==(#len(n)==0 || at<#len(h)))
+  expect(bytes.contains(h,n)==(n.len==0 || at<h.len))
 }
 fn main() {
   empty: []const u8

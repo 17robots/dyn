@@ -23,7 +23,7 @@ calendar_days = [rng.randrange(-800000, 800000) for _ in range(300)] + [0, -1, 5
 if not Path('/usr/share/zoneinfo/Europe/Berlin').exists():
     print('SKIP time zones: no zoneinfo database')
     raise SystemExit(0)
-lines = ['use "std/time" time', 'use "std/time/zone" zone', 'use "std/mem" mem', 'use "std/io" io', 'use "std/fail"', '',
+lines = ['use time "std/time"', 'use zone "std/time/zone"', 'use mem "std/mem"', 'use io "std/io"', 'use "std/fail"', '',
          f'const instants: [{len(instants)}]i64 = [{", ".join(map(str, instants))}]',
          f'const days: [{len(calendar_days)}]i64 = [{", ".join(map(str, calendar_days))}]', '',
          'fn main() {', '  status := fail.Status{ on_failure: fail.panic_on_failure }', '  arena := mem.arena_alloc(16777216)', '  defer {', '    mem.arena_release(arena)', '  }',
@@ -43,7 +43,7 @@ lines += ['  posix := zone.parse_posix(arena, &status, "CET-1CEST,M3.5.0,M10.5.0
           '  bad: fail.Status', '  _ = zone.parse_posix(arena, &bad, "CET-1CEST,M13.5.0")', '  if !bad.failed {', '    #panic("bad posix")', '  }',
           '  for seconds in instants {', '    shown := zone.local(&loaded0, time.Instant{ seconds: seconds })',
           '    io.println("format {} {} {}", seconds, zone.format(arena, "%Y-%m-%d %H:%M:%S %j %a %A %b %B %Z %z %%", &shown), zone.format_rfc3339(arena, &shown))', '  }',
-          '  bad_format := zone.local(&loaded0, time.Instant{})', '  if #len(zone.format(arena, "%Q", &bad_format)) != 0 {', '    #panic("bad format")', '  }',
+          '  bad_format := zone.local(&loaded0, time.Instant{})', '  if zone.format(arena, "%Q", &bad_format).len != 0 {', '    #panic("bad format")', '  }',
           '  system := zone.system(arena, &status)',
           '  io.println("system {}", system.name)', '}']
 
@@ -99,8 +99,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-time-zones-') as directory:
         # Windows has no zoneinfo database: load fails, the system zone works.
         windows = project / 'windows'
         windows.mkdir()
-        (windows / 'main.dyn').write_text('''use "std/time/zone" zone
-use "std/mem" mem
+        (windows / 'main.dyn').write_text('''use zone "std/time/zone"
+use mem "std/mem"
 use "std/fail"
 
 fn main() {
@@ -115,7 +115,7 @@ fn main() {
   }
   status: fail.Status
   system := zone.system(arena, &status)
-  if status.failed || #len(system.name) == 0 || #len(system.standard.abbreviation) == 0 {
+  if status.failed || system.name.len == 0 || system.standard.abbreviation.len == 0 {
     #panic("windows system")
   }
 }

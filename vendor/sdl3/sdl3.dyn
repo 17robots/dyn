@@ -190,12 +190,12 @@ pub fn stream_put(status: *fail.Status, stream: AudioStream, source: []const u8)
     return
   }
   if status.failed { return }
-  if stream == nil || #len(source) > 2147483647 {
+  if stream == nil || source.len > 2147483647 {
     fail.invalid(status, "queue audio", "", "no stream, or more than 2 GiB")
     return
   }
-  if #len(source) == 0 { return }
-  checked(status, "queue audio", native_put_audio(stream, #cast(rawptr, &source[0]), #cast(i32, #len(source))))
+  if source.len == 0 { return }
+  checked(status, "queue audio", native_put_audio(stream, #cast(rawptr, &source[0]), #cast(i32, source.len)))
 }
 pub fn stream_resume(status: *fail.Status, stream: AudioStream) {
   if status == nil {

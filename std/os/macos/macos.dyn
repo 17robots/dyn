@@ -1,7 +1,7 @@
 #target(kernel: darwin)
 
-use "std/mem" mem
-use "std/c" cstrings
+use mem "std/mem"
+use cstrings "std/c"
 use "std/os/macos/sys"
 use "std/io"
 use "std/fail"
@@ -19,7 +19,7 @@ fn checked(status: *fail.Status, operation: []const u8, path: []const u8, value:
   return value
 }
 fn terminated(path: []const u8, storage: []u8) *const u8 {
-  if #len(path) == 0 { return nil }
+  if path.len == 0 { return nil }
   status: fail.Status
   return cstrings.string_into(&status, storage, path)
 }
@@ -60,10 +60,10 @@ pub fn socket_close(socket: usize) bool {
   return #syscall(sys.Close, socket) == 0
 }
 pub fn socket_connect(socket: usize, address: []const u8) bool {
-  if #len(address) == 0 { return false }
-  return #syscall(sys.Connect, socket, &address[0], #len(address)) == 0
+  if address.len == 0 { return false }
+  return #syscall(sys.Connect, socket, &address[0], address.len) == 0
 }
 pub fn event_poll(items: []PollDescriptor, milliseconds: i32) isize {
-  if #len(items) == 0 { return 0 }
-  return #syscall(sys.Poll, &items[0], #len(items), milliseconds)
+  if items.len == 0 { return 0 }
+  return #syscall(sys.Poll, &items[0], items.len, milliseconds)
 }

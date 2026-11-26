@@ -28,7 +28,7 @@ fn read_outline(arena: *mem.Arena, face: *const Face, index: u16, depth: usize, 
   if start == end {
     return Outline{ origin: metric_origin(face, index, 0), advance: metric_advance(face, index), ok: true }
   }
-  if #len(data) < 10 { return Outline{ kind: fail.Kind.InvalidInput } }
+  if data.len < 10 { return Outline{ kind: fail.Kind.InvalidInput } }
   contours := i16be(data, 0)
   x0 := i16be(data, 2)
   y0 := i16be(data, 4)
@@ -43,20 +43,20 @@ fn read_outline(arena: *mem.Arena, face: *const Face, index: u16, depth: usize, 
   count := #cast(usize, u16be(data, 10 + (#cast(usize, contours) - 1) * 2)) + 1
   if count > budget.points { return Outline{ kind: fail.Kind.Capacity } }
   budget.points -= count
-  ends := mem.push_array(usize, arena, #cast(usize, contours))
-  for i in 0..#len(ends) {
+  ends := mem.push_array<usize>(arena, #cast(usize, contours))
+  for i in 0..ends.len {
     ends[i] = u16be(data, 10 + i * 2)
     if (i != 0 && ends[i] <= ends[i - 1]) || ends[i] >= count {
       return Outline{ kind: fail.Kind.InvalidInput }
     }
   }
-  at := 10 + #len(ends) * 2
+  at := 10 + ends.len * 2
   instructions := #cast(usize, u16be(data, at))
   at += 2
   if !fits(data, at, instructions) { return Outline{ kind: fail.Kind.InvalidInput } }
   at += instructions
-  flags := mem.push_array(u8, arena, count)
-  points := mem.push_array(Point, arena, count)
+  flags := mem.push_array<u8>(arena, count)
+  points := mem.push_array<Point>(arena, count)
   i: usize = 0
   for i < count {
     if !fits(data, at, 1) { return Outline{ kind: fail.Kind.InvalidInput } }

@@ -57,9 +57,9 @@ fn main() {
   expect(#cast(u8, Op.Sub) == 2 && #cast(u8, Op.Halt) == 3, "dense values")
   expect(#cast(i32, Dir.Forward) == 2 && #cast(u32, Plain.C) == 2, "signed and plain")
   byte: u8 = 3
-  expect(enums.from_int(Op, byte) == Op.Halt, "from integer")
-  expect(#len(name(enums.from_int(Op, 2))) == 3, "case on converted value")
-  expect(enums.from_int(Op, 200) == Op.Nop, "unknown tag gives the first variant")
+  expect(enums.from_int<Op>(byte) == Op.Halt, "from integer")
+  expect(name(enums.from_int<Op>(2)).len == 3, "case on converted value")
+  expect(enums.from_int<Op>(200) == Op.Nop, "unknown tag gives the first variant")
 }
 '''
 PANICS = {
@@ -68,7 +68,6 @@ PANICS = {
 }
 ERRORS = {
   'enum A { X = 1, Y }': 'first enum variant must be 0',
-  'enum Shape { Circle: f32, Box }': 'first enum variant has no payload',
   'fn f() u8 {\n  return #wrap(1)\n}': 'each statement',
   'const K: u8 = 255 + 1': 'overflows',
 }

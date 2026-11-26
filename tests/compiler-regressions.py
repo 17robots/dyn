@@ -94,7 +94,7 @@ pub fn count(total: usize) usize {
 
     # A numeric literal adopts the other operand's type on either side; e and E
     # are digits in hex literals, not exponents.
-    literals = project(root, 'literal-left', {'main.dyn': '''use "std/os/linux" os
+    literals = project(root, 'literal-left', {'main.dyn': '''use os "std/os/linux"
 fn check() u8 {
   step: u32 = 3
   big: u64 = 5000000000
@@ -190,8 +190,8 @@ fn main() {
 fn kind(values: ...any) {
   for value in values {
     case value {
-      f64 x => { io.println("f64") }
-      f32 x => { io.println("f32") }
+      f64(x) => { io.println("f64") }
+      f32(x) => { io.println("f32") }
       _ => { io.println("other") }
     }
   }
@@ -207,7 +207,7 @@ fn main() {
     # generic inference; an f32 context still takes it as f32.
     floats = project(root, 'float-default', {'main.dyn': '''use "std/io"
 
-fn same(a: $T, b: $T) T {
+fn same<T>(a: T, b: T) T {
   return a
 }
 

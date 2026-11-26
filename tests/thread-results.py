@@ -15,9 +15,9 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build' /
                           ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve())
-IMPORTS = '''use "std/thread" thread
-use "std/mem" mem
-use "std/sync" sync
+IMPORTS = '''use thread "std/thread"
+use mem "std/mem"
+use sync "std/sync"
 use "std/fail"
 '''
 SOURCE = IMPORTS + r'''
@@ -71,7 +71,7 @@ fn main() {
   for sync.load_u32(&first.arrived) == 0 || sync.load_u32(&second.arrived) == 0 { thread.yield_now() }
   if thread.id(stable) == 0 || thread.id(borrowed) == 0 || thread.id(stable) == thread.id(borrowed) { #panic("two active ids") }
   base := #cast(usize, &storage[0])
-  end := base + #len(storage)
+  end := base + storage.len
   first_address := #cast(usize, stable)
   second_address := #cast(usize, borrowed)
   if first_address < base || first_address >= end || second_address < base || second_address >= end { #panic("nodes outside caller arena") }

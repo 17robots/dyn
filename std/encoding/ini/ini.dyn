@@ -1,5 +1,5 @@
 use "std/fail"
-use "std/bytes" byte_ops
+use byte_ops "std/bytes"
 use "std/mem"
 // Allocation-free INI scanner. Names and values borrow the input.
 // The first malformed line stops scanning: next fails with InvalidInput at
@@ -20,7 +20,7 @@ fn space(byte: u8) bool {
 }
 fn trim(source: []const u8) []const u8 {
   first: usize = 0
-  last := #len(source)
+  last := source.len
   for first < last && space(source[first]) {
     first += 1
   }
@@ -49,49 +49,49 @@ pub fn next(status: *fail.Status, state: *Scanner) Entry {
   if status == nil { return next(&fail.Status{}, state) }
   if status.failed { return ended(state) }
   if state.failed { return record(status, state, state.error_line, state.error_offset) }
-  for state.offset < #len(state.source) {
+  for state.offset < state.source.len {
     start := state.offset
     finish := start
-    for finish < #len(state.source) && state.source[finish] != '\n' && state.source[finish] != '\r' {
+    for finish < state.source.len && state.source[finish] != '\n' && state.source[finish] != '\r' {
       finish += 1
     }
     state.offset = finish
-    if state.offset < #len(state.source) && state.source[state.offset] == '\r' {
+    if state.offset < state.source.len && state.source[state.offset] == '\r' {
       state.offset += 1
     }
-    if state.offset < #len(state.source) && state.source[state.offset] == '\n' {
+    if state.offset < state.source.len && state.source[state.offset] == '\n' {
       state.offset += 1
     }
     state.line += 1
     line_number := state.line
     line := trim(state.source[start..finish])
-    if #len(line) == 0 || line[0] == ';' || line[0] == '#' { } else if line[0] == '[' {
+    if line.len == 0 || line[0] == ';' || line[0] == '#' { } else if line[0] == '[' {
       section_name := line[..0]
-      if #len(line) >= 3 && line[#len(line) - 1] == ']' {
-        section_name = trim(line[1..#len(line) - 1])
+      if line.len >= 3 && line[line.len - 1] == ']' {
+        section_name = trim(line[1..line.len - 1])
       }
-      if #len(section_name) == 0 {
+      if section_name.len == 0 {
         return record(status, state, line_number, start)
       } else {
         state.section = section_name
         return Entry{ section: section_name, kind: Kind.Section, line: line_number }
       }
     } else {
-      separator := #len(line)
+      separator := line.len
       scan: usize = 0
-      for scan < #len(line) {
+      for scan < line.len {
         if line[scan] == '=' {
           separator = scan
-          scan = #len(line)
+          scan = line.len
         } else {
           scan += 1
         }
       }
       key_name := line[..0]
-      if separator < #len(line) {
+      if separator < line.len {
         key_name = trim(line[..separator])
       }
-      if #len(key_name) == 0 {
+      if key_name.len == 0 {
         return record(status, state, line_number, start)
       } else {
         pair_value := trim(line[separator + 1..])
@@ -124,7 +124,7 @@ pub fn find(status: *fail.Status, source: []const u8, section: []const u8, key: 
   parts: [3][]const u8 = ["\"", key, "\" is missing"]
   for part in parts {
     for byte in part {
-      if used < #len(message) {
+      if used < message.len {
         message[used] = byte
         used += 1
       }
@@ -153,7 +153,7 @@ pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) []Entr
     count += 1
   }
   if status.failed || count == 0 { return empty }
-  entries := mem.push_array(Entry, arena, count)
+  entries := mem.push_array<Entry>(arena, count)
   state = scanner(source)
   for i in 0..count {
     entries[i] = next(status, &state)

@@ -8,14 +8,14 @@ import subprocess
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
-SOURCE = '''use "std/time" time
+SOURCE = '''use time "std/time"
 use "std/fail"
-use "std/profile" profile
-use "std/testing" testing
-use "std/net" net
-use "std/net/dns" dns
-use "std/process" process
-use "std/mem" mem
+use profile "std/profile"
+use testing "std/testing"
+use net "std/net"
+use dns "std/net/dns"
+use process "std/process"
+use mem "std/mem"
 struct Filter { code: u16, jt: u8, jf: u8, k: u32 }
 struct Program { length: u16, filter: *Filter }
 fn require(ok: bool) { if !ok { #panic("clock consumer contract") } }
@@ -47,7 +47,7 @@ fn main() {
   server := net.ipv4(127,0,0,1,53)
   resolving: fail.Status
   resolved := dns.resolve_ipv4(arena, &resolving, "example.test", &server, 10)
-  require(resolving.failed && #len(resolved) == 0 && mem.arena_mark(arena) == mem.ArenaHeader)
+  require(resolving.failed && resolved.len == 0 && mem.arena_mark(arena) == mem.ArenaHeader)
   arguments: [3][]const u8 = ["sh", "-c", "exit 0"]
   captured := process.capture(arena, &status, "/bin/sh", arguments[..], process.Options{}, process.CaptureOptions{timeout_milliseconds:1000})
   require(!status.failed && captured.exit.finished && captured.exit.code == 0)

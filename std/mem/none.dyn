@@ -22,7 +22,7 @@ fn mapping_allocate(size: usize) Mapping {
 fn mapping_release(bytes: []u8) isize {
   start := memory_start()
   at := #cast(usize, &bytes[0]) - start
-  if at + ((#len(bytes) + 15) & ~#cast(usize, 15)) == bare_used {
+  if at + ((bytes.len + 15) & ~#cast(usize, 15)) == bare_used {
     bare_used = at
   }
   return 0
@@ -35,4 +35,20 @@ fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {
 // No advice on this target.
 fn mapping_sparse(bytes: []u8) {
   _ = bytes
+}
+
+fn mapping_protect(bytes: []u8, from: usize, to: usize, accessible: bool) bool {
+  _ = bytes
+  _ = from
+  _ = to
+  _ = accessible
+  return true
+}
+
+fn mapping_thread_id() u64 {
+  return 0
+}
+
+fn mapping_check_lifetimes() bool {
+  return false
 }

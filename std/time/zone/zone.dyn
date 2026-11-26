@@ -2,11 +2,11 @@
 // POSIX systems read TZif files from the zoneinfo database; Windows reads the
 // system zone rule. All zone data lives in the caller's arena.
 
-use "std/time" time
-use "std/mem" mem
-use "std/bytes" bytes
+use time "std/time"
+use mem "std/mem"
+use bytes "std/bytes"
 use "std/fail"
-use "std/strings" strings
+use strings "std/strings"
 
 // One local-time type: seconds east of UTC, daylight flag and abbreviation.
 pub struct Type { offset: i32, dst: bool, abbreviation: []const u8 }
@@ -90,12 +90,12 @@ fn rule_type(zone: *const Zone, seconds: i64) Type {
 
 // The type in effect at a UTC second.
 pub fn type_at(zone: *const Zone, seconds: i64) Type {
-  count := #len(zone.transitions)
+  count := zone.transitions.len
   if count == 0 || seconds >= zone.transitions[count - 1] && zone.has_rule {
     if zone.has_rule { return rule_type(zone, seconds) }
   }
   if count == 0 {
-    if #len(zone.types) != 0 { return zone.types[0] }
+    if zone.types.len != 0 { return zone.types[0] }
     return zone.standard
   }
   if seconds < zone.transitions[0] {
@@ -155,7 +155,7 @@ fn invalid(status: *fail.Status, operation: []const u8, name: []const u8, messag
 pub fn parse_tzif(arena: *mem.Arena, status: *fail.Status, name: []const u8, data: []const u8) Zone {
   if status == nil { return parse_tzif(arena, &fail.Status{}, name, data) }
   if status.failed { return Zone{} }
-  if #len(data) < 44 || !bytes.starts_with(data, "TZif") { return invalid(status, "parse", name, "not a valid TZif file") }
+  if data.len < 44 || !bytes.starts_with(data, "TZif") { return invalid(status, "parse", name, "not a valid TZif file") }
   mark := mem.arena_mark(arena)
   version := data[4]
   at: usize = 0
@@ -171,7 +171,7 @@ pub fn parse_tzif(arena: *mem.Arena, status: *fail.Status, name: []const u8, dat
     character_count := #cast(usize, read_u32(counts, 20))
     at = 44 + transition_count * 5 + type_count * 6 + character_count + leap_count * 8 + standard_count + utc_count
     time_size = 8
-    if at + 44 > #len(data) || !bytes.starts_with(data[at..], "TZif") { return invalid(status, "parse", name, "not a valid TZif file") }
+    if at + 44 > data.len || !bytes.starts_with(data[at..], "TZif") { return invalid(status, "parse", name, "not a valid TZif file") }
   }
   counts := data[at + 20..at + 44]
   utc_count := #cast(usize, read_u32(counts, 0))
@@ -182,11 +182,11 @@ pub fn parse_tzif(arena: *mem.Arena, status: *fail.Status, name: []const u8, dat
   character_count := #cast(usize, read_u32(counts, 20))
   body := at + 44
   size := transition_count * time_size + transition_count + type_count * 6 + character_count + leap_count * (time_size + 4) + standard_count + utc_count
-  if type_count == 0 || type_count > 256 || body + size > #len(data) { return invalid(status, "parse", name, "not a valid TZif file") }
+  if type_count == 0 || type_count > 256 || body + size > data.len { return invalid(status, "parse", name, "not a valid TZif file") }
   zone := Zone{ name: strings.clone(arena, name) }
-  zone.transitions = mem.push_array(i64, arena, transition_count)
-  zone.transition_types = mem.push_array(u8, arena, transition_count)
-  zone.types = mem.push_array(Type, arena, type_count)
+  zone.transitions = mem.push_array<i64>(arena, transition_count)
+  zone.transition_types = mem.push_array<u8>(arena, transition_count)
+  zone.types = mem.push_array<Type>(arena, type_count)
   for i in 0..transition_count {
     if time_size == 8 {
       zone.transitions[i] = read_i64(data, body + i * 8)
@@ -221,12 +221,12 @@ pub fn parse_tzif(arena: *mem.Arena, status: *fail.Status, name: []const u8, dat
   }
   if version >= '2' {
     footer := body + size
-    if footer < #len(data) && data[footer] == 10 {
+    if footer < data.len && data[footer] == 10 {
       close := footer + 1
-      for close < #len(data) && data[close] != 10 {
+      for close < data.len && data[close] != 10 {
         close += 1
       }
-      if close < #len(data) && close > footer + 1 {
+      if close < data.len && close > footer + 1 {
         rule_status: fail.Status
         rule := parse_posix(arena, &rule_status, data[footer + 1..close])
         if rule_status.failed {
@@ -248,7 +248,7 @@ pub fn parse_tzif(arena: *mem.Arena, status: *fail.Status, name: []const u8, dat
 struct Cursor { text: []const u8, at: usize, ok: bool }
 
 fn peek(cursor: *Cursor) u8 {
-  if cursor.at >= #len(cursor.text) { return 0 }
+  if cursor.at >= cursor.text.len { return 0 }
   return cursor.text[cursor.at]
 }
 
@@ -388,7 +388,7 @@ pub fn parse_posix(arena: *mem.Arena, status: *fail.Status, text: []const u8) Zo
       zone.end = rule(&cursor)
     }
   }
-  if !cursor.ok || cursor.at != #len(text) {
+  if !cursor.ok || cursor.at != text.len {
     mem.arena_rewind(arena, mark)
     return invalid(status, "parse", text, "not a valid POSIX TZ rule")
   }
@@ -400,7 +400,7 @@ pub fn parse_posix(arena: *mem.Arena, status: *fail.Status, text: []const u8) Zo
 pub fn load(arena: *mem.Arena, status: *fail.Status, name: []const u8) Zone {
   if status == nil { return load(arena, &fail.Status{}, name) }
   if status.failed { return Zone{} }
-  if #len(name) == 0 || name[0] == '/' || bytes.find(name, "..") != #len(name) { return invalid(status, "load zone", name, "not a zone name") }
+  if name.len == 0 || name[0] == '/' || bytes.find(name, "..") != name.len { return invalid(status, "load zone", name, "not a zone name") }
   return platform_load(arena, status, name)
 }
 
@@ -417,11 +417,11 @@ const weekday_names: [7][]const u8 = ["Sunday", "Monday", "Tuesday", "Wednesday"
 const month_names: [12][]const u8 = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 
 fn put(output: []u8, used: *usize, text: []const u8) bool {
-  if used.* + #len(text) > #len(output) { return false }
-  for i in 0..#len(text) {
+  if used.* + text.len > output.len { return false }
+  for i in 0..text.len {
     output[used.* + i] = text[i]
   }
-  used.* += #len(text)
+  used.* += text.len
   return true
 }
 
@@ -462,20 +462,20 @@ fn put_offset(output: []u8, used: *usize, offset: i32, colon: bool) bool {
 // a percent sign. Other bytes copy through. An unknown directive returns "".
 pub fn format(arena: *mem.Arena, pattern: []const u8, value: *const Local) []u8 {
   mark := mem.arena_mark(arena)
-  capacity := #len(pattern) * (12 + #len(value.abbreviation)) + 16
+  capacity := pattern.len * (12 + value.abbreviation.len) + 16
   output := mem.push_bytes(arena, capacity)
   used: usize = 0
   date := &value.value
   at: usize = 0
   ok := true
-  for ok && at < #len(pattern) {
+  for ok && at < pattern.len {
     byte := pattern[at]
     at += 1
     if byte != '%' {
       ok = put(output, &used, pattern[at - 1..at])
       continue
     }
-    if at == #len(pattern) {
+    if at == pattern.len {
       ok = false
       break
     }
@@ -511,7 +511,7 @@ pub fn format(arena: *mem.Arena, pattern: []const u8, value: *const Local) []u8 
       ok = put(output, &used, value.abbreviation)
     } else if directive == 'z' {
       ok = put_offset(output, &used, value.offset, false)
-    } else if directive == ':' && at < #len(pattern) && pattern[at] == 'z' {
+    } else if directive == ':' && at < pattern.len && pattern[at] == 'z' {
       at += 1
       ok = put_offset(output, &used, value.offset, true)
     } else if directive == '%' {

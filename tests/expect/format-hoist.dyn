@@ -13,7 +13,7 @@ fn spot() Vec2 {
 fn main() {
   arena := mem.arena_alloc(0)
   ready := true
-  if ready && #len(strings.format(arena, "{}", spot())) > 0 {
+  if ready && strings.format(arena, "{}", spot()).len > 0 {
     io.println("ready")
   }
   defer io.println("{}", spot())

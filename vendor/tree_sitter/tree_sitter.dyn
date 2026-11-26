@@ -46,16 +46,16 @@ pub fn parser_language(status: *fail.Status, parser: Parser, language: Language)
 pub fn parse(status: *fail.Status, parser: Parser, old_tree: Tree, source: []const u8) Tree {
   if status == nil { return parse(&fail.Status{}, parser, old_tree, source) }
   if status.failed { return nil }
-  if parser == nil || #len(source) > 4294967295 {
+  if parser == nil || source.len > 4294967295 {
     fail.invalid(status, "parse", "", "no parser, or the source is too large")
     return nil
   }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
-  if #len(source) > 0 {
+  if source.len > 0 {
     pointer = &source[0]
   }
-  tree := native_parse(parser, old_tree, pointer, #cast(u32, #len(source)))
+  tree := native_parse(parser, old_tree, pointer, #cast(u32, source.len))
   if tree == nil {
     fail.set(status, fail.make(fail.Kind.InvalidState, "parse", "", "the parser has no language or was cancelled"))
   }

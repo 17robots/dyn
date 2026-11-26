@@ -7,16 +7,16 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "std/ui/box" box
-use "std/ui" ui
-use "std/mem" mem
-use "std/text/edit" edit
+SOURCE=r'''use box "std/ui/box"
+use ui "std/ui"
+use mem "std/mem"
+use edit "std/text/edit"
 use "std/fail"
-use "std/bytes" bytes
-use "vendor/window/events" events
+use bytes "std/bytes"
+use events "vendor/window/events"
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
 fn measure(data: *u8, text: []const u8) f32 { _ = data
-  return #cast(f32,#len(text))*8.0 }
+  return #cast(f32,text.len)*8.0 }
 struct App { storage: [64]u8, edit: box.Edit, changed: bool, error: fail.Kind }
 fn frame(state: *box.State, arena: *mem.Arena, app: *App, input: box.Input) {
   mem.arena_reset(arena)
@@ -31,8 +31,8 @@ fn frame(state: *box.State, arena: *mem.Arena, app: *App, input: box.Input) {
   ui.end(&context)
 }
 fn correction(collector: *events.EditBuffer, token: u64, start, end: i32, text: []const u8) edit.Replacement {
-  event := events.Event{kind:events.Kind.Edit,key:#cast(u32,token & 4294967295),modifiers:#cast(u32,token>>32),x:start,y:end,width:#cast(i32,#len(text)),text_length:#cast(u32,#len(text)),button:1}
-  for i in 0..#len(text) { event.text[i] = text[i] }
+  event := events.Event{kind:events.Kind.Edit,key:#cast(u32,token & 4294967295),modifiers:#cast(u32,token>>32),x:start,y:end,width:#cast(i32,text.len),text_length:#cast(u32,text.len),button:1}
+  for i in 0..text.len { event.text[i] = text[i] }
   status: fail.Status
   result := events.collect_edit(&status,collector,&event)
   check(!status.failed && result.ready,"native edit assembly")

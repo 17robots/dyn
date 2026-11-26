@@ -12,7 +12,7 @@ SUFFIX = '.exe' if os.name == 'nt' else ''
 DYN = str(Path(os.environ.get('DYN', ROOT/('build/dyn-release'+SUFFIX))).resolve())
 CC = shlex.split(os.environ.get('CC','cc'))
 HAVE_CC = bool(CC) and shutil.which(CC[0]) is not None
-SOURCE = r'''use "vendor/window/events" events
+SOURCE = r'''use events "vendor/window/events"
 fn check(ok: bool) { if !ok { #panic("ordered event queue") } }
 fn main() {
   queue := events.Queue{}
@@ -52,10 +52,10 @@ void *dyn_wake_thread(int (*wake)(void*),void *context) {
 }
 int dyn_join_wake(void*p){Work*w=p;pthread_join(w->thread,NULL);int result=w->result;free(w);return result;}
 '''
-X11 = r'''use "std/io" io
-use "vendor/window" window
-use "vendor/window/events" events
-use "std/time" time
+X11 = r'''use io "std/io"
+use window "vendor/window"
+use events "vendor/window/events"
+use time "std/time"
 use "std/fail"
 fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
   status: fail.Status
@@ -154,10 +154,10 @@ fn main() {
  check(window.next_event(&host,&event) && event.kind == events.Kind.Close)
 }
 '''
-WAYLAND_WAKE = r'''use "std/io" io
-use "vendor/window/wayland" window
-use "vendor/window/events" events
-use "std/time" time
+WAYLAND_WAKE = r'''use io "std/io"
+use window "vendor/window/wayland"
+use events "vendor/window/events"
+use time "std/time"
 use "std/fail"
 fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
   status: fail.Status
@@ -219,12 +219,12 @@ int Xutf8LookupString(XIC context,XKeyPressedEvent *event,char *buffer,int capac
  *status=XLookupBoth;return needed;
 }
 '''
-XIM_SOURCE = r'''use "std/io" io
-use "vendor/window" window
-use "vendor/window/events" events
-use "std/unicode/utf8" utf8
-use "std/process" process
-use "std/mem" mem
+XIM_SOURCE = r'''use io "std/io"
+use window "vendor/window"
+use events "vendor/window/events"
+use utf8 "std/unicode/utf8"
+use process "std/process"
+use mem "std/mem"
 use "std/fail"
 fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
   status: fail.Status
@@ -243,7 +243,7 @@ fn check(ok:bool){if !ok{#panic("XIM commit bounds")}}
 fn main(){
  arena:=mem.arena_alloc(0)
  defer{mem.arena_release(arena)}
- split:=#len(process.environment_or(arena,"DYN_TEST_SPLIT_COMMIT","")) != 0
+ split:=process.environment_or(arena,"DYN_TEST_SPLIT_COMMIT","").len != 0
  host:=window.Window{}
  check(window_open(&host,"XIM commit bounds",64,64).kind == fail.Kind.Ok)
  defer{window.close(&host)}
@@ -271,7 +271,7 @@ fn main(){
  check((total==700&&!overflow)||(total==259&&!overflow&&split)||(total==0&&overflow))
  summary:=window.box_input(&host).text
  check(utf8.valid(summary))
- if split{check(#len(summary)==255)}
+ if split{check(summary.len==255)}
 }
 '''
 WAYLAND_MOCK = r'''#include <assert.h>

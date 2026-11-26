@@ -4,14 +4,14 @@
 // limbs and is never negative.
 
 use "std/fail"
-use "std/mem" mem
-use "std/io" io
+use mem "std/mem"
+use io "std/io"
 pub struct Int { limbs: []const u32, negative: bool }
 
 pub struct Division { quotient: Int, remainder: Int }
 
 fn trimmed(limbs: []u32, negative: bool) Int {
-  length := #len(limbs)
+  length := limbs.len
   for length != 0 && limbs[length - 1] == 0 {
     length -= 1
   }
@@ -23,7 +23,7 @@ pub fn zero() Int {
 }
 
 pub fn from_u64(arena: *mem.Arena, value: u64) Int {
-  limbs := mem.push_array(u32, arena, 2)
+  limbs := mem.push_array<u32>(arena, 2)
   limbs[0] = value & 0xffffffff
   limbs[1] = value >> 32
   return trimmed(limbs, false)
@@ -40,7 +40,7 @@ pub fn from_i64(arena: *mem.Arena, value: i64) Int {
 }
 
 pub fn is_zero(value: Int) bool {
-  return #len(value.limbs) == 0
+  return value.limbs.len == 0
 }
 
 // The value as a u64. A negative value fails with InvalidInput, one past
@@ -52,19 +52,19 @@ pub fn to_u64(status: *fail.Status, value: Int) u64 {
     fail.invalid(status, "convert to u64", "", "the value is negative")
     return 0
   }
-  if #len(value.limbs) > 2 {
+  if value.limbs.len > 2 {
     fail.set(status, fail.make(fail.Kind.Overflow, "convert to u64", "", "the value does not fit in u64"))
     return 0
   }
   result: u64 = 0
-  for i in 0..#len(value.limbs) {
+  for i in 0..value.limbs.len {
     result |= #cast(u64, value.limbs[i]) << #cast(u64, 32 * i)
   }
   return result
 }
 
 pub fn negate(value: Int) Int {
-  return Int{ limbs: value.limbs, negative: !value.negative && #len(value.limbs) != 0 }
+  return Int{ limbs: value.limbs, negative: !value.negative && value.limbs.len != 0 }
 }
 
 pub fn absolute(value: Int) Int {
@@ -72,11 +72,11 @@ pub fn absolute(value: Int) Int {
 }
 
 fn compare_magnitude(a: []const u32, b: []const u32) i32 {
-  if #len(a) != #len(b) {
-    if #len(a) < #len(b) { return -1 }
+  if a.len != b.len {
+    if a.len < b.len { return -1 }
     return 1
   }
-  at := #len(a)
+  at := a.len
   for at != 0 {
     at -= 1
     if a[at] != b[at] {
@@ -105,31 +105,31 @@ pub fn equal(a: Int, b: Int) bool {
 fn add_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32) []u32 {
   long := a
   short := b
-  if #len(b) > #len(a) {
+  if b.len > a.len {
     long = b
     short = a
   }
-  result := mem.push_array(u32, arena, #len(long) + 1)
+  result := mem.push_array<u32>(arena, long.len + 1)
   carry: u64 = 0
-  for i in 0..#len(long) {
+  for i in 0..long.len {
     sum := long[i] + carry
-    if i < #len(short) {
+    if i < short.len {
       sum += short[i]
     }
     result[i] = sum & 0xffffffff
     carry = sum >> 32
   }
-  result[#len(long)] = #cast(u32, carry)
+  result[long.len] = #cast(u32, carry)
   return result
 }
 
 // a - b for |a| >= |b|.
 fn subtract_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32) []u32 {
-  result := mem.push_array(u32, arena, #len(a))
+  result := mem.push_array<u32>(arena, a.len)
   borrow: u64 = 0
-  for i in 0..#len(a) {
+  for i in 0..a.len {
     subtrahend := borrow
-    if i < #len(b) {
+    if i < b.len {
       subtrahend += b[i]
     }
     minuend := #cast(u64, a[i])
@@ -158,16 +158,16 @@ pub fn subtract(arena: *mem.Arena, a: Int, b: Int) Int {
 
 pub fn multiply(arena: *mem.Arena, a: Int, b: Int) Int {
   if is_zero(a) || is_zero(b) { return Int{} }
-  result := mem.push_array(u32, arena, #len(a.limbs) + #len(b.limbs))
-  for i in 0..#len(a.limbs) {
+  result := mem.push_array<u32>(arena, a.limbs.len + b.limbs.len)
+  for i in 0..a.limbs.len {
     carry: u64 = 0
     left := #cast(u64, a.limbs[i])
-    for j in 0..#len(b.limbs) {
+    for j in 0..b.limbs.len {
       product := left * b.limbs[j] + result[i + j] + carry
       result[i + j] = product & 0xffffffff
       carry = product >> 32
     }
-    result[i + #len(b.limbs)] = #cast(u32, carry)
+    result[i + b.limbs.len] = #cast(u32, carry)
   }
   return trimmed(result, a.negative != b.negative)
 }
@@ -184,11 +184,11 @@ fn leading_zeros(value: u32) u32 {
 
 // Knuth's algorithm D for |a| / |b| with b of at least two limbs.
 fn divide_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32, quotient: []u32, remainder: []u32) {
-  shift := leading_zeros(b[#len(b) - 1])
-  n := #len(b)
-  m := #len(a) - n
-  divisor := mem.push_array(u32, arena, n)
-  dividend := mem.push_array(u32, arena, #len(a) + 1)
+  shift := leading_zeros(b[b.len - 1])
+  n := b.len
+  m := a.len - n
+  divisor := mem.push_array<u32>(arena, n)
+  dividend := mem.push_array<u32>(arena, a.len + 1)
   for i in 0..n {
     value := #wrapping(b[i] << shift)
     if shift != 0 && i != 0 {
@@ -196,7 +196,7 @@ fn divide_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32, quotient:
     }
     divisor[i] = value
   }
-  for i in 0..#len(a) {
+  for i in 0..a.len {
     value := #wrapping(a[i] << shift)
     if shift != 0 && i != 0 {
       value |= a[i - 1] >> (32 - shift)
@@ -204,7 +204,7 @@ fn divide_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32, quotient:
     dividend[i] = value
   }
   if shift != 0 {
-    dividend[#len(a)] = a[#len(a) - 1] >> (32 - shift)
+    dividend[a.len] = a[a.len - 1] >> (32 - shift)
   }
   top := #cast(u64, divisor[n - 1])
   next := #cast(u64, divisor[n - 2])
@@ -269,22 +269,22 @@ pub fn divide(arena: *mem.Arena, status: *fail.Status, a: Int, b: Int) Division 
 // divide for a nonzero b.
 fn divided(arena: *mem.Arena, a: Int, b: Int) Division {
   if compare_magnitude(a.limbs, b.limbs) < 0 { return Division{ remainder: a } }
-  quotient := mem.push_array(u32, arena, #len(a.limbs) - #len(b.limbs) + 1)
-  if #len(b.limbs) == 1 {
+  quotient := mem.push_array<u32>(arena, a.limbs.len - b.limbs.len + 1)
+  if b.limbs.len == 1 {
     divisor := #cast(u64, b.limbs[0])
     rest: u64 = 0
-    at := #len(a.limbs)
+    at := a.limbs.len
     for at != 0 {
       at -= 1
       current := rest << 32 | a.limbs[at]
       quotient[at] = #cast(u32, current / divisor)
       rest = current % divisor
     }
-    remainder := mem.push_array(u32, arena, 1)
+    remainder := mem.push_array<u32>(arena, 1)
     remainder[0] = #cast(u32, rest)
     return Division{ quotient: trimmed(quotient, a.negative != b.negative), remainder: trimmed(remainder, a.negative) }
   }
-  remainder := mem.push_array(u32, arena, #len(b.limbs))
+  remainder := mem.push_array<u32>(arena, b.limbs.len)
   mark := mem.arena_mark(arena)
   divide_magnitude(arena, a.limbs, b.limbs, quotient, remainder)
   mem.arena_rewind(arena, mark)
@@ -295,8 +295,8 @@ pub fn shift_left(arena: *mem.Arena, value: Int, bits: usize) Int {
   if is_zero(value) { return value }
   words := bits / 32
   shift := #cast(u32, bits % 32)
-  result := mem.push_array(u32, arena, #len(value.limbs) + words + 1)
-  for i in 0..#len(value.limbs) {
+  result := mem.push_array<u32>(arena, value.limbs.len + words + 1)
+  for i in 0..value.limbs.len {
     limb := value.limbs[i]
     result[i + words] |= #wrapping(limb << shift)
     if shift != 0 {
@@ -309,13 +309,13 @@ pub fn shift_left(arena: *mem.Arena, value: Int, bits: usize) Int {
 // Shifts the magnitude right; negative values round toward zero.
 pub fn shift_right(arena: *mem.Arena, value: Int, bits: usize) Int {
   words := bits / 32
-  if words >= #len(value.limbs) { return Int{} }
+  if words >= value.limbs.len { return Int{} }
   shift := #cast(u32, bits % 32)
-  count := #len(value.limbs) - words
-  result := mem.push_array(u32, arena, count)
+  count := value.limbs.len - words
+  result := mem.push_array<u32>(arena, count)
   for i in 0..count {
     limb := value.limbs[i + words] >> shift
-    if shift != 0 && i + words + 1 < #len(value.limbs) {
+    if shift != 0 && i + words + 1 < value.limbs.len {
       limb |= #wrapping(value.limbs[i + words + 1] << (32 - shift))
     }
     result[i] = limb
@@ -325,8 +325,8 @@ pub fn shift_right(arena: *mem.Arena, value: Int, bits: usize) Int {
 
 pub fn bit_length(value: Int) usize {
   if is_zero(value) { return 0 }
-  top := value.limbs[#len(value.limbs) - 1]
-  return #len(value.limbs) * 32 - #cast(usize, leading_zeros(top))
+  top := value.limbs[value.limbs.len - 1]
+  return value.limbs.len * 32 - #cast(usize, leading_zeros(top))
 }
 
 // The non-negative remainder of value modulo a positive modulus.
@@ -391,24 +391,24 @@ pub fn parse(arena: *mem.Arena, status: *fail.Status, text: []const u8, base: u3
   }
   at: usize = 0
   negative := false
-  if at < #len(text) && (text[at] == '-' || text[at] == '+') {
+  if at < text.len && (text[at] == '-' || text[at] == '+') {
     negative = text[at] == '-'
     at += 1
   }
-  if at == #len(text) {
+  if at == text.len {
     fail.at(status, fail.Kind.InvalidInput, "parse integer", "expected digits", at)
     return Int{}
   }
-  for i in at..#len(text) {
+  for i in at..text.len {
     if digit_value(text[i]) >= base {
       fail.at(status, fail.Kind.InvalidInput, "parse integer", "expected a digit", i)
       return Int{}
     }
   }
   // Each digit needs at most log2(36) < 6 bits.
-  limbs := mem.push_array(u32, arena, (#len(text) - at) * 6 / 32 + 1)
+  limbs := mem.push_array<u32>(arena, (text.len - at) * 6 / 32 + 1)
   used: usize = 0
-  for i in at..#len(text) {
+  for i in at..text.len {
     carry := #cast(u64, digit_value(text[i]))
     for k in 0..used {
       product := #cast(u64, limbs[k]) * #cast(u64, base) + carry
@@ -435,12 +435,12 @@ pub fn format(arena: *mem.Arena, value: Int, base: u32) []u8 {
     return text
   }
   // Digits come out least significant first into scratch after the output.
-  capacity := #len(value.limbs) * 32 + 2
+  capacity := value.limbs.len * 32 + 2
   output := mem.push_bytes(arena, capacity)
   mark := mem.arena_mark(arena)
-  work := mem.push_array(u32, arena, #len(value.limbs))
+  work := mem.push_array<u32>(arena, value.limbs.len)
   _ = mem.copy(work, value.limbs)
-  length := #len(work)
+  length := work.len
   count: usize = 0
   for length != 0 {
     rest: u64 = 0
@@ -479,9 +479,9 @@ pub fn format(arena: *mem.Arena, value: Int, base: u32) []u8 {
 
 // A non-negative value from big-endian bytes.
 pub fn from_bytes(arena: *mem.Arena, data: []const u8) Int {
-  limbs := mem.push_array(u32, arena, (#len(data) + 3) / 4)
-  for i in 0..#len(data) {
-    position := #len(data) - 1 - i
+  limbs := mem.push_array<u32>(arena, (data.len + 3) / 4)
+  for i in 0..data.len {
+    position := data.len - 1 - i
     limbs[position / 4] |= #cast(u32, data[i]) << #cast(u32, 8 * (position % 4))
   }
   return trimmed(limbs, false)

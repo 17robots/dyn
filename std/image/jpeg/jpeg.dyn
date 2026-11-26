@@ -1,6 +1,6 @@
 use "std/fail"
-use "std/mem" mem
-use "std/math" math
+use mem "std/mem"
+use math "std/math"
 // ITU-T T.81 baseline sequential Huffman JPEG, 8-bit gray/RGB/YCbCr.
 // Interleaved and separate scans, restart markers, 1..4 sampling factors.
 // No progressive/arithmetic/lossless, CMYK, DNL or color-profile processing.
@@ -28,14 +28,14 @@ fn invalid(decoder: *Decoder) bool {
 }
 fn take(bits: *Bits, count: u8) u32 {
   for bits.count < count {
-    if bits.at >= #len(bits.source) {
+    if bits.at >= bits.source.len {
       bits.failed = true
       return 0
     }
     value := bits.source[bits.at]
     bits.at += 1
     if value == 255 {
-      if bits.at == #len(bits.source) || bits.source[bits.at] != 0 {
+      if bits.at == bits.source.len || bits.source[bits.at] != 0 {
         bits.failed = true
         return 0
       }
@@ -141,7 +141,7 @@ fn block(decoder: *Decoder, bits: *Bits, component: *Component, bx, by: usize) b
 }
 fn quantization(decoder: *Decoder, payload: []const u8) bool {
   at: usize = 0
-  for at < #len(payload) {
+  for at < payload.len {
     descriptor := payload[at]
     at += 1
     if (descriptor >> 4) != 0 {
@@ -149,7 +149,7 @@ fn quantization(decoder: *Decoder, payload: []const u8) bool {
       return false
     }
     id := #cast(usize, descriptor & 15)
-    if id >= 4 || #len(payload) - at < 64 { return invalid(decoder) }
+    if id >= 4 || payload.len - at < 64 { return invalid(decoder) }
     for i in 0..64 {
       if payload[at + i] == 0 { return invalid(decoder) }
       decoder.quant[id][i] = payload[at + i]
@@ -161,8 +161,8 @@ fn quantization(decoder: *Decoder, payload: []const u8) bool {
 }
 fn huffman(decoder: *Decoder, payload: []const u8) bool {
   at: usize = 0
-  for at < #len(payload) {
-    if #len(payload) - at < 17 { return invalid(decoder) }
+  for at < payload.len {
+    if payload.len - at < 17 { return invalid(decoder) }
     descriptor := payload[at]
     at += 1
     id := #cast(usize, descriptor & 15)
@@ -187,7 +187,7 @@ fn huffman(decoder: *Decoder, payload: []const u8) bool {
       code = (code + #cast(u32, n)) << 1
     }
     at += 16
-    if count == 0 || count > #len(payload) - at { return invalid(decoder) }
+    if count == 0 || count > payload.len - at { return invalid(decoder) }
     for i in 0..count {
       table.values[i] = payload[at + i]
     }
@@ -197,7 +197,7 @@ fn huffman(decoder: *Decoder, payload: []const u8) bool {
   return true
 }
 fn frame(_arena: *mem.Arena, decoder: *Decoder, payload: []const u8) bool {
-  if decoder.count != 0 || #len(payload) < 6 { return invalid(decoder) }
+  if decoder.count != 0 || payload.len < 6 { return invalid(decoder) }
   if payload[0] != 8 {
     decoder.kind = fail.Kind.Unsupported
     return false
@@ -213,7 +213,7 @@ fn frame(_arena: *mem.Arena, decoder: *Decoder, payload: []const u8) bool {
     decoder.kind = fail.Kind.Unsupported
     return false
   }
-  if #len(payload) != 6 + count * 3 { return invalid(decoder) }
+  if payload.len != 6 + count * 3 { return invalid(decoder) }
   if #cast(u64, decoder.width) * #cast(u64, decoder.height) > 16777216 {
     decoder.kind = fail.Kind.Capacity
     return false
@@ -255,7 +255,7 @@ fn allocate_planes(arena: *mem.Arena, decoder: *Decoder) bool {
       return false
     }
     total += size
-    component.pixels = mem.push_array(u8, arena, #cast(usize, size))
+    component.pixels = mem.push_array<u8>(arena, #cast(usize, size))
   }
   return true
 }
@@ -264,9 +264,9 @@ fn padding(bits: *const Bits) bool {
   return !bits.failed && (bits.buffer & mask) == mask
 }
 fn scan(decoder: *Decoder, payload: []const u8) bool {
-  if decoder.count == 0 || #len(payload) < 6 { return invalid(decoder) }
+  if decoder.count == 0 || payload.len < 6 { return invalid(decoder) }
   count := #cast(usize, payload[0])
-  if count == 0 || count > decoder.count || #len(payload) != 1 + count * 2 + 3 {
+  if count == 0 || count > decoder.count || payload.len != 1 + count * 2 + 3 {
     return invalid(decoder)
   }
   if payload[1 + count * 2] != 0 || payload[2 + count * 2] != 63 || payload[3 + count * 2] != 0 {
@@ -312,11 +312,11 @@ fn scan(decoder: *Decoder, payload: []const u8) bool {
         if !padding(&bits) { return invalid(decoder) }
         bits.count = 0
         bits.buffer = 0
-        if bits.at == #len(bits.source) || bits.source[bits.at] != 255 { return invalid(decoder) }
-        for bits.at < #len(bits.source) && bits.source[bits.at] == 255 {
+        if bits.at == bits.source.len || bits.source[bits.at] != 255 { return invalid(decoder) }
+        for bits.at < bits.source.len && bits.source[bits.at] == 255 {
           bits.at += 1
         }
-        if bits.at == #len(bits.source) || bits.source[bits.at] != 208 + restart {
+        if bits.at == bits.source.len || bits.source[bits.at] != 208 + restart {
           return invalid(decoder)
         }
         bits.at += 1
@@ -364,7 +364,7 @@ fn channel(decoder: *const Decoder, index: usize, x, y: usize) i32 {
 pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image {
   if status == nil { return decode(arena, &fail.Status{}, source) }
   if status.failed { return Image{} }
-  if #len(source) < 4 || source[0] != 255 || source[1] != 216 {
+  if source.len < 4 || source[0] != 255 || source[1] != 216 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "decode JPEG", "", "malformed JPEG"))
     return Image{}
   }
@@ -385,15 +385,15 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
     if success { mem.arena_rewind(arena, scratch) } else { mem.arena_rewind(arena, mark) }
   }
   pixels: []u8
-  for decoder.at < #len(source) {
+  for decoder.at < source.len {
     if source[decoder.at] != 255 {
       fail.at(status, fail.Kind.InvalidInput, "decode JPEG", "malformed JPEG", decoder.at)
       return Image{}
     }
-    for decoder.at < #len(source) && source[decoder.at] == 255 {
+    for decoder.at < source.len && source[decoder.at] == 255 {
       decoder.at += 1
     }
-    if decoder.at == #len(source) {
+    if decoder.at == source.len {
       fail.at(status, fail.Kind.InvalidInput, "decode JPEG", "malformed JPEG", decoder.at)
       return Image{}
     }
@@ -475,12 +475,12 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
       fail.at(status, fail.Kind.InvalidInput, "decode JPEG", "malformed JPEG", decoder.at - 1)
       return Image{}
     }
-    if #len(source) - decoder.at < 2 {
+    if source.len - decoder.at < 2 {
       fail.at(status, fail.Kind.InvalidInput, "decode JPEG", "malformed JPEG", decoder.at)
       return Image{}
     }
     length := #cast(usize, be16(source, decoder.at))
-    if length < 2 || length > #len(source) - decoder.at {
+    if length < 2 || length > source.len - decoder.at {
       fail.at(status, fail.Kind.InvalidInput, "decode JPEG", "malformed JPEG", decoder.at)
       return Image{}
     }
@@ -490,7 +490,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
     if marker == 192 {
       ok = frame(arena, &decoder, payload)
       if ok {
-        pixels = mem.push_array(u8, arena, #cast(usize, decoder.width) * #cast(usize, decoder.height) * 4)
+        pixels = mem.push_array<u8>(arena, #cast(usize, decoder.width) * #cast(usize, decoder.height) * 4)
         scratch = mem.arena_mark(arena)
         ok = allocate_planes(arena, &decoder)
       }
@@ -501,8 +501,8 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
     } else if marker == 218 {
       ok = scan(&decoder, payload)
     } else if marker == 221 {
-      if #len(payload) != 2 { ok = invalid(&decoder) } else { decoder.restart = be16(payload, 0) }
-    } else if marker == 238 && #len(payload) >= 12 && payload[0] == 65 && payload[1] == 100 && payload[2] == 111 && payload[3] == 98 && payload[4] == 101 {
+      if payload.len != 2 { ok = invalid(&decoder) } else { decoder.restart = be16(payload, 0) }
+    } else if marker == 238 && payload.len >= 12 && payload[0] == 65 && payload[1] == 100 && payload[2] == 111 && payload[3] == 98 && payload[4] == 101 {
       decoder.has_adobe = true
       decoder.adobe = payload[11]
     } else if marker >= 193 && marker <= 207 && marker != 196 && marker != 200 && marker != 204 {

@@ -57,6 +57,7 @@ core std/progress
 core std/rand
 core std/reflect
 core std/simd
+core std/slice
 core std/text/scanner
 core std/unicode/utf16
 core std/unicode/utf8
@@ -67,6 +68,7 @@ heap std/audio/wav
 heap std/bufio
 heap std/bytes/builder
 heap std/c
+heap std/collections
 heap std/compress/deflate
 heap std/compress/gzip
 heap std/container/array

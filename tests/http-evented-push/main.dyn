@@ -11,7 +11,7 @@ use "std/mem"
 use "std/net"
 use "std/net/http"
 use "std/net/http/evented"
-use "std/net/http/evented/tls" https
+use https "std/net/http/evented/tls"
 use "std/parse"
 use "std/process"
 use "std/sync"
@@ -29,8 +29,8 @@ struct App {
   abandoned: sync.AtomicU32,
   workers: []evented.Worker,
   assets: http.Assets,
-  router: http.Routes(App),
-  route_storage: [19]http.TypedRoute(App),
+  router: http.Routes<App>,
+  route_storage: [19]http.TypedRoute<App>,
   // Requests deferred with later on each worker in the current pass, and the
   // size of the batch the last finish closed.
   pending: [WorkerCount]usize,
@@ -134,7 +134,7 @@ fn later_finish(status: *fail.Status, response: *http.Response, request: *const 
 }
 
 fn deferred(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
-  job := evented.job(Tally, response)
+  job := evented.job<Tally>(response)
   if job == nil {
     text(status, response, 500, "no job storage\n")
     return
@@ -150,8 +150,8 @@ fn deferred(status: *fail.Status, response: *http.Response, request: *const http
 }
 
 fn hash(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
-  job := evented.job(Hash, response)
-  if job == nil || #len(request.body) > #len(job.input) {
+  job := evented.job<Hash>(response)
+  if job == nil || request.body.len > job.input.len {
     text(status, response, 500, "no job storage\n")
     return
   }
@@ -220,7 +220,7 @@ fn upload(status: *fail.Status, response: *http.Response, request: *const http.R
   }
   storage: [64]u8
   out := fmt.buffer(status, storage[..])
-  fmt.write_u64(&out, #len(request.body))
+  fmt.write_u64(&out, request.body.len)
   fmt.write_byte(&out, ' ')
   fmt.write_u64(&out, sum)
   text(status, response, 200, fmt.bytes(&out))
@@ -265,7 +265,7 @@ fn large_chunk(job: *Upload, piece: []const u8) bool {
   for byte in piece {
     job.sum += #cast(u64, byte)
   }
-  job.count += #len(piece)
+  job.count += piece.len
   return job.limit == 0 || job.count <= job.limit
 }
 
@@ -295,12 +295,12 @@ fn large_finish(status: *fail.Status, response: *http.Response, request: *const 
 }
 
 fn large_body(status: *fail.Status, response: *http.Response, request: *const http.Request) {
-  typed := #cast(*http.Typed(App), request.context)
+  typed := #cast(*http.Typed<App>, request.context)
   if !bytes.equal(request.path, "/large") {
     text(status, response, http.StatusPayloadTooLarge, "too large\n")
     return
   }
-  job := evented.job(Upload, response)
+  job := evented.job<Upload>(response)
   if job == nil {
     text(status, response, http.StatusServiceUnavailable, "busy\n")
     return
@@ -369,15 +369,15 @@ fn main() {
   asset_storage: [2]http.Asset
   style: [4096]u8
   rule := "body { color: red; } "
-  for i in 0..#len(style) {
-    style[i] = rule[i % #len(rule)]
+  for i in 0..style.len {
+    style[i] = rule[i % rule.len]
   }
   asset_storage[0] = http.make_asset(arena, "style.css", style[..])
   asset_storage[0].modified = 784111777
   asset_storage[1] = http.make_asset(arena, "logo.png", "\x89PNG not really")
   app.assets = http.Assets{ items: asset_storage[..], count: 2 }
   http.sort_assets(&app.assets)
-  for i in 0..#len(app.big) {
+  for i in 0..app.big.len {
     app.big[i] = #cast(u8, 'a' + i % 26)
   }
   app.router = http.typed_routes(app.route_storage[..], &app)
@@ -397,7 +397,7 @@ fn main() {
   http.add(&setup, &app.router, "GET", "/static/:name", asset)
   http.add(&setup, &app.router, "GET", "/ip", client)
   http.add(&setup, &app.router, "POST", "/upload", upload)
-  typed := http.Typed(App){ state: &app, handler: handle }
+  typed := http.Typed<App>{ state: &app, handler: handle }
   binding := http.bind(&typed)
   config := evented.default_config()
   config.connections_per_worker = 8
@@ -416,18 +416,18 @@ fn main() {
   config.on_busy = busy
   arguments_status: fail.Status
   arguments := process.arguments(arena, &arguments_status)
-  if #len(arguments) > 1 && bytes.equal(arguments[1], "wait") {
+  if arguments.len > 1 && bytes.equal(arguments[1], "wait") {
     config.overflow = evented.Overflow.Wait
   }
   quic_stack := evented.Quic{}
-  if #len(arguments) == 4 && bytes.equal(arguments[1], "h3") {
+  if arguments.len == 4 && bytes.equal(arguments[1], "h3") {
     // HTTP/3 over QUIC, which brings its own TLS; TCP stays cleartext.
     quic_context := https.quic_context(arena, &setup, arguments[2], arguments[3])
     quic_stack = https.quic(quic_context)
     config.http3 = evented.http3()
     config.quic = &quic_stack
   }
-  if #len(arguments) > 1 && (bytes.equal(arguments[1], "h2") || bytes.equal(arguments[1], "h3")) {
+  if arguments.len > 1 && (bytes.equal(arguments[1], "h2") || bytes.equal(arguments[1], "h3")) {
     // HTTP/2 needs room for a whole 16 KiB frame.
     config.http2 = evented.http2()
     config.receive_size = 32 * mem.KiB

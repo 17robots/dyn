@@ -20,7 +20,7 @@ fn control(property: u32) bool {
 // InvalidInput at its offset. Failure leaves offset unchanged.
 pub fn next_grapheme(status: *fail.Status, state: *Graphemes) []const u8 {
   if status == nil { return next_grapheme(&fail.Status{}, state) }
-  if status.failed || state.offset == #len(state.source) {
+  if status.failed || state.offset == state.source.len {
     state.ended = true
     return ""
   }
@@ -40,7 +40,7 @@ pub fn next_grapheme(status: *fail.Status, state: *Graphemes) []const u8 {
   consonant := indic == 2
   linker: bool = false
   at := start + first.width
-  for at < #len(state.source) {
+  for at < state.source.len {
     decoded := utf8.decode(state.source, at)
     if !decoded.valid { return invalid(status, state, at) }
     next_bits := properties(decoded.codepoint)

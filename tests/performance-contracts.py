@@ -9,13 +9,13 @@ def run(*args, ok=True, **kwargs):
     return p
 with tempfile.TemporaryDirectory(prefix='dyn-performance-') as directory:
     root = Path(directory); src=root/'src'; src.mkdir()
-    body=['use "std/bytes" bytes', 'use "std/bytes/search" search', 'use "std/testing" t',
-          '''use "std/mem" mem
-use "std/container/hash" hash
+    body=['use bytes "std/bytes"', 'use search "std/bytes/search"', 'use t "std/testing"',
+          '''use mem "std/mem"
+use hash "std/container/hash"
 use "std/fail"
-use "std/io" io
-use "std/bufio" bufio
-use "std/bytes/builder" builder
+use io "std/io"
+use bufio "std/bufio"
+use builder "std/bytes/builder"
 struct Sink { calls: usize, used: usize, fail_after: usize, fail: bool, bytes: [64]u8 }
 struct Entry { key: []const u8, hash: u64, hash_next: *Entry, bytes: [1]u8, value: usize }
 const nil_entry: Entry = Entry{}
@@ -28,7 +28,7 @@ fn sink_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
     fail.set(status, failure)
     return 0
   }
-  amount := #len(source)
+  amount := source.len
   if amount > 3 { amount = 3 }
   for i in 0..amount { state.bytes[state.used + i] = source[i] }
   state.used += amount
@@ -97,13 +97,13 @@ fn main() {''']
   view := builder.bytes(&built)
   builder.append_grow(arena, &built, view)
   t.expect(built.length == 2000 && mem.arena_used(arena) == 2048, "self append in place")
-  _ = mem.push(u8, arena)
+  _ = mem.push<u8>(arena)
   previous := &built.storage[0]
   builder.reserve(arena, &built, 4096)
-  t.expect(#len(built.storage) == 4096, "interleaved growth")
+  t.expect(built.storage.len == 4096, "interleaved growth")
   t.expect(&built.storage[0] != previous && built.storage[1999] == 'x', "interleaved allocation copied")
   mem.arena_reset(arena)
-  names := hash.slots(Entry, arena, 32)
+  names := hash.slots<Entry>(arena, 32)
   initial := mem.arena_used(arena)
   entries: [30]Entry
   for i in 0..30 {
@@ -145,11 +145,11 @@ fn main() {''']
         run(output)
     if platform.system() == 'Linux':
         # Target isolation must preserve the existing Linux temporary helpers.
-        (src/'main.dyn').write_text('''use "std/testing" t
+        (src/'main.dyn').write_text('''use t "std/testing"
 use "std/fail"
-use "std/fs" fs
-use "std/io" io
-use "std/mem" mem
+use fs "std/fs"
+use io "std/io"
+use mem "std/mem"
 fn main() {
   arena := mem.arena_alloc(0)
   creating: fail.Status
@@ -179,7 +179,7 @@ fn main() {
         run(DYN,'build',src,'--release',*args,ok=False)
     run(DYN,'build',src,'--opt-level','3',ok=False)
     if platform.system()=='Linux' and platform.machine()=='x86_64':
-        (src/'main.dyn').write_text('use "std/io" io\nfn main() {\n state: u64 = 1729\n for i in 0..1000 {\n state = (state * 48271) % 2147483647\n }\n io.println("{}", state)\n}\n')
+        (src/'main.dyn').write_text('use io "std/io"\nfn main() {\n state: u64 = 1729\n for i in 0..1000 {\n state = (state * 48271) % 2147483647\n }\n io.println("{}", state)\n}\n')
         profile=root/'sample.prof'; profile.write_text('main:10000:1\n'+''.join(f' {i}: 1000\n' for i in range(1,7)))
         profiled=build('--sample-profile',profile,'--opt-remarks'); run(output)
         assert 'samples from profile' in profiled.stdout + profiled.stderr, profiled.stdout + profiled.stderr

@@ -31,5 +31,5 @@ fn main() {
     mem.arena_rewind(arena, mark)
     _ = round
   }
-  io.println("{} {}", check, #len(document))
+  io.println("{} {}", check, document.len)
 }

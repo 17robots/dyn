@@ -1,9 +1,9 @@
 use "std/fail"
-use "std/mem" mem
-use "std/io" io
-use "std/unicode/utf8" utf8
-use "std/unicode/text" unicode
-use "std/math" math
+use mem "std/mem"
+use io "std/io"
+use utf8 "std/unicode/utf8"
+use unicode "std/unicode/text"
+use math "std/math"
 
 pub enum Align { Left, Center, Right }
 pub struct Font { data: rawptr, advance: fn(rawptr, u32) f64, kerning: fn(rawptr, u32, u32) f64, line_height: i32 }
@@ -57,20 +57,20 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
     text = unicode.normalize(arena, status, source, unicode.Form.NFC)
     if status.failed { return Layout{} }
   } else {
-    copied := mem.push_array(u8, arena, #len(source))
+    copied := mem.push_array<u8>(arena, source.len)
     _ = mem.copy(copied, source)
     text = copied
   }
   breaks := unicode.line_breaks(arena, status, text)
   if status.failed { return Layout{} }
   count := utf8.codepoint_count(text)
-  work := mem.push_array(Glyph, arena, count)
-  clusters := mem.push_array(Cluster, arena, count)
+  work := mem.push_array<Glyph>(arena, count)
+  clusters := mem.push_array<Cluster>(arena, count)
   used: usize = 0
   cluster_count: usize = 0
   break_index: usize = 0
   iterator := unicode.graphemes(text)
-  for iterator.offset < #len(text) {
+  for iterator.offset < text.len {
     start := iterator.offset
     _ = unicode.next_grapheme(status, &iterator)
     if status.failed { return Layout{} }
@@ -79,7 +79,7 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
     cluster := Cluster{ start: start, end: iterator.offset, first: used, space: first == 32 || first == 9 || first == 0x200b,
       tab: first == 9, soft: first == 0xad,
       hard: first == 10 || first == 13 || first == 11 || first == 12 || first == 0x85 || first == 0x2028 || first == 0x2029 }
-    for break_index < #len(breaks) && breaks[break_index].offset <= cluster.end {
+    for break_index < breaks.len && breaks[break_index].offset <= cluster.end {
       if breaks[break_index].offset == cluster.end {
         cluster.break_after = true
       }
@@ -137,8 +137,8 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
     clusters[cluster_count] = cluster
     cluster_count += 1
   }
-  glyphs := mem.push_array(Glyph, arena, used)
-  lines := mem.push_array(Line, arena, cluster_count + 1)
+  glyphs := mem.push_array<Glyph>(arena, used)
+  lines := mem.push_array<Line>(arena, cluster_count + 1)
   glyph_count: usize = 0
   line_count: usize = 0
   begin: usize = 0
@@ -251,8 +251,8 @@ pub fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: 
     for i in glyph_start..glyph_count {
       glyphs[i].x += shift
     }
-    start_byte := #len(text)
-    end_byte := #len(text)
+    start_byte := text.len
+    end_byte := text.len
     if begin < cluster_count {
       start_byte = clusters[begin].start
     }

@@ -6,13 +6,13 @@ from concurrent.futures import ThreadPoolExecutor
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 def literal(b):return '"'+''.join('\\x%02x'%x for x in b)+'"'
-s='''use "std/crypto/x25519" x
-use "std/crypto/ed25519" ed
-use "std/crypto/exchange" exchange
-use "std/crypto/signature" signature
-use "std/crypto/sha512" sha
+s='''use x "std/crypto/x25519"
+use ed "std/crypto/ed25519"
+use exchange "std/crypto/exchange"
+use signature "std/crypto/signature"
+use sha "std/crypto/sha512"
 use "std/fail"
-use "std/bytes" bytes
+use bytes "std/bytes"
 fn exchange_x25519_fails(output: []u8, a1: []const u8, a2: []const u8) bool {
  status: fail.Status
  _ = exchange.x25519(&status, output, a1, a2)
@@ -37,7 +37,7 @@ fn check(ok: bool) { if !ok { #panic("curve contract") } }
 fn hash(message: []const u8,expected: []const u8) {
  output: [64]u8
  check(bytes.equal(sha.digest(output[..],message),expected))
- for split in 0..#len(message)+1 {
+ for split in 0..message.len+1 {
   state:=sha.init()
   sha.update(&state,message[..split])
   sha.update(&state,"")

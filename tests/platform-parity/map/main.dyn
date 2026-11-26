@@ -1,6 +1,6 @@
 use "std/fail"
-use "std/fs" fs
-use "std/bytes" bytes
+use fs "std/fs"
+use bytes "std/bytes"
 fn check(ok: bool) {
   if !ok {
     #panic("fs map")
@@ -10,13 +10,13 @@ fn check(ok: bool) {
 fn main() {
   zero: []const u8
   fs.unmap(&zero)
-  check(#len(zero) == 0)
+  check(zero.len == 0)
   closed_status: fail.Status
   closed: fs.File
   _ = fs.map(&closed_status, &closed)
   check(closed_status.failed && closed_status.failure.kind == fail.Kind.InvalidState)
   content: [5000]u8
-  for i in 0..#len(content) {
+  for i in 0..content.len {
     content[i] = #cast(u8, (i * 7) & 255)
   }
   status: fail.Status
@@ -31,11 +31,11 @@ fn main() {
   // The view stays valid after its file closes.
   check(mapping[4999] == content[4999])
   fs.unmap(&mapping)
-  check(#len(mapping) == 0)
+  check(mapping.len == 0)
   fs.write_all(&status, "map-empty.bin", "")
   empty_handle := fs.open(&status, "map-empty.bin")
   empty := fs.map(&status, &empty_handle)
-  check(!status.failed && #len(empty) == 0)
+  check(!status.failed && empty.len == 0)
   fs.unmap(&empty)
   fs.close(&empty_handle)
   check(!status.failed)

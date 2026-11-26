@@ -1,6 +1,6 @@
-use "std/mem" mem
+use mem "std/mem"
 use "std/fail"
-use "std/os/windows" platform
+use platform "std/os/windows"
 
 #target(arch: x86_64, kernel: windows, abi: win64)
 

@@ -59,10 +59,10 @@ pub fn execute(status: *fail.Status, state: State, source: []const u8) {
   mode: [2]u8 = ['t', 0]
   empty: [1]u8
   pointer: *const u8 = &empty[0]
-  if #len(source) > 0 {
+  if source.len > 0 {
     pointer = &source[0]
   }
-  code := native_load(state, pointer, #len(source), &name[0], &mode[0])
+  code := native_load(state, pointer, source.len, &name[0], &mode[0])
   if code == 0 {
     code = native_pcall(state, 0, 1, 0, 0, nil)
   }

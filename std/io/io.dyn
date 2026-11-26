@@ -1,6 +1,6 @@
 use "std/fail"
-use "std/mem" memory
-use "std/fmt" format
+use memory "std/mem"
+use format "std/fmt"
 // Byte streams. A Reader or Writer is a data pointer and one function; the
 // function takes the caller's *fail.Status and records any failure there,
 // like every call that can fail. Adapters borrow their state and never own
@@ -19,17 +19,26 @@ pub struct Writer {
   write: fn(rawptr, *fail.Status, []const u8) usize,
 }
 
+// Structured I/O error enum for T!IoErr APIs.
+pub enum IoErr {
+  EndOfStream,
+  InvalidState,
+  InvalidInput,
+  BrokenPipe,
+  System(isize),
+}
+
 // Reads into destination; the count read, zero at the end of the stream and
 // after a failure.
 pub fn read(status: *fail.Status, reader: Reader, destination: []u8) usize {
   if status == nil { return read(&fail.Status{}, reader, destination) }
-  if status.failed || #len(destination) == 0 { return 0 }
+  if status.failed || destination.len == 0 { return 0 }
   if reader.read == nil {
     fail.set(status, fail.make(fail.Kind.InvalidState, "read", "", "reader has no read function"))
     return 0
   }
   count := reader.read(reader.data, status, destination)
-  if count > #len(destination) {
+  if count > destination.len {
     failure := fail.make(fail.Kind.System, "read", "", "reader returned more bytes than asked for")
     failure.native = -5
     fail.set(status, failure)
@@ -43,7 +52,7 @@ pub fn read(status: *fail.Status, reader: Reader, destination: []u8) usize {
 pub fn read_exact(status: *fail.Status, reader: Reader, destination: []u8) usize {
   if status == nil { return read_exact(&fail.Status{}, reader, destination) }
   total: usize = 0
-  for total < #len(destination) {
+  for total < destination.len {
     count := read(status, reader, destination[total..])
     if status.failed { return 0 }
     if count == 0 {
@@ -62,16 +71,16 @@ pub fn write(status: *fail.Status, writer: Writer, source: []const u8) {
     write(&fail.Status{}, writer, source)
     return
   }
-  if status.failed || #len(source) == 0 { return }
+  if status.failed || source.len == 0 { return }
   if writer.write == nil {
     fail.set(status, fail.make(fail.Kind.InvalidState, "write", "", "writer has no write function"))
     return
   }
   total: usize = 0
-  for total < #len(source) {
+  for total < source.len {
     count := writer.write(writer.data, status, source[total..])
     if status.failed { return }
-    if count == 0 || count > #len(source) - total {
+    if count == 0 || count > source.len - total {
       message: []const u8 = "writer made no progress"
       if count != 0 {
         message = "writer reported more bytes than it was given"
@@ -89,53 +98,53 @@ fn print_value(status: *fail.Status, writer: Writer, value: any) {
   storage: [64 + memory.ArenaBufferOverhead]u8
   scratch := memory.arena_from_buffer(storage[..])
   case value {
-    f32 item => {
+    f32(item) => {
       write(status, writer, format.f64_decimal(scratch, item, 6))
     }
-    f64 item => {
+    f64(item) => {
       write(status, writer, format.f64_decimal(scratch, item, 6))
     }
-    bool item => {
+    bool(item) => {
       if item {
         write(status, writer, "true")
       } else {
         write(status, writer, "false")
       }
     }
-    i8 item => {
+    i8(item) => {
       write(status, writer, format.i64_decimal(scratch, item))
     }
-    i16 item => {
+    i16(item) => {
       write(status, writer, format.i64_decimal(scratch, item))
     }
-    i32 item => {
+    i32(item) => {
       write(status, writer, format.i64_decimal(scratch, item))
     }
-    i64 item => {
+    i64(item) => {
       write(status, writer, format.i64_decimal(scratch, item))
     }
-    isize item => {
+    isize(item) => {
       write(status, writer, format.i64_decimal(scratch, item))
     }
-    u8 item => {
+    u8(item) => {
       write(status, writer, format.u64_decimal(scratch, item))
     }
-    u16 item => {
+    u16(item) => {
       write(status, writer, format.u64_decimal(scratch, item))
     }
-    u32 item => {
+    u32(item) => {
       write(status, writer, format.u64_decimal(scratch, item))
     }
-    u64 item => {
+    u64(item) => {
       write(status, writer, format.u64_decimal(scratch, item))
     }
-    usize item => {
+    usize(item) => {
       write(status, writer, format.u64_decimal(scratch, item))
     }
-    []u8 item => {
+    []u8(item) => {
       write(status, writer, item)
     }
-    []const u8 item => {
+    []const u8(item) => {
       write(status, writer, item)
     }
     _ => {
@@ -146,7 +155,7 @@ fn print_value(status: *fail.Status, writer: Writer, value: any) {
       rendering: fail.Status
       rendered := format.buffer(&rendering, text[..])
       format.write_value(&rendered, value)
-      if rendering.failed || #len(format.bytes(&rendered)) == 0 {
+      if rendering.failed || format.bytes(&rendered).len == 0 {
         write(status, writer, "{?}")
       } else {
         write(status, writer, format.bytes(&rendered))
@@ -172,7 +181,7 @@ pub fn print_arguments(status: *fail.Status, writer: Writer, template: []const u
   mismatch := false
   span_start: usize = 0
   index: usize = 0
-  for index < #len(template) {
+  for index < template.len {
     byte := template[index]
     if byte != '{' && byte != '}' {
       index += 1
@@ -182,14 +191,14 @@ pub fn print_arguments(status: *fail.Status, writer: Writer, template: []const u
       write(status, writer, template[span_start..index])
     }
     next: u8 = 0
-    if index + 1 < #len(template) {
+    if index + 1 < template.len {
       next = template[index + 1]
     }
     piece := template[index..index + 1]
     step: usize = 1
     if byte == '{' && next == '}' {
       step = 2
-      if argument_index < #len(arguments) {
+      if argument_index < arguments.len {
         print_value(status, writer, arguments[argument_index])
         argument_index += 1
         piece = ""
@@ -202,16 +211,16 @@ pub fn print_arguments(status: *fail.Status, writer: Writer, template: []const u
     } else {
       mismatch = true
     }
-    if #len(piece) > 0 {
+    if piece.len > 0 {
       write(status, writer, piece)
     }
     index += step
     span_start = index
   }
-  if span_start < #len(template) {
+  if span_start < template.len {
     write(status, writer, template[span_start..])
   }
-  for argument_index < #len(arguments) {
+  for argument_index < arguments.len {
     mismatch = true
     write(status, writer, " {+")
     print_value(status, writer, arguments[argument_index])
@@ -258,7 +267,7 @@ pub fn println_to(status: *fail.Status, writer: Writer, template: []const u8, ar
 pub fn copy(status: *fail.Status, writer: Writer, reader: Reader, scratch: []u8) usize {
   if status == nil { return copy(&fail.Status{}, writer, reader, scratch) }
   if status.failed { return 0 }
-  if #len(scratch) == 0 {
+  if scratch.len == 0 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "copy", "", "scratch buffer is empty"))
     return 0
   }
@@ -281,15 +290,15 @@ pub fn copy_n(status: *fail.Status, writer: Writer, reader: Reader, amount: usiz
     return
   }
   if status.failed || amount == 0 { return }
-  if #len(scratch) == 0 {
+  if scratch.len == 0 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "copy", "", "scratch buffer is empty"))
     return
   }
   total: usize = 0
   for total < amount && !status.failed {
     take := amount - total
-    if take > #len(scratch) {
-      take = #len(scratch)
+    if take > scratch.len {
+      take = scratch.len
     }
     count := read_exact(status, reader, scratch[..take])
     if count == 0 && !status.failed {
@@ -311,14 +320,14 @@ pub fn cursor(data: []const u8) Cursor {
 
 fn cursor_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
   state := #cast(*Cursor, data)
-  if state.offset > #len(state.data) {
+  if state.offset > state.data.len {
     fail.set(status, fail.make(fail.Kind.InvalidState, "read", "", "cursor offset is past its data"))
     return 0
   }
-  remaining := #len(state.data) - state.offset
+  remaining := state.data.len - state.offset
   take := remaining
-  if #len(destination) < take {
-    take = #len(destination)
+  if destination.len < take {
+    take = destination.len
   }
   for i in 0..take {
     destination[i] = state.data[state.offset + i]
@@ -350,12 +359,12 @@ pub fn buffer_writer_reset(state: *BufferWriter) {
 
 fn buffer_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
   state := #cast(*BufferWriter, data)
-  if state.length > #len(state.data) {
+  if state.length > state.data.len {
     fail.set(status, fail.make(fail.Kind.InvalidState, "write", "", "buffer length is past its storage"))
     return 0
   }
-  remaining := #len(state.data) - state.length
-  take := #len(source)
+  remaining := state.data.len - state.length
+  take := source.len
   if remaining < take {
     take = remaining
   }
@@ -363,7 +372,7 @@ fn buffer_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
     state.data[state.length + i] = source[i]
   }
   state.length += take
-  if take != #len(source) {
+  if take != source.len {
     fail.set(status, fail.make(fail.Kind.Capacity, "write", "", "buffer is full"))
   }
   return take

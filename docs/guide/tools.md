@@ -79,7 +79,7 @@ It also checks failure handling by shape:
   never read, so what the calls record in it is lost. An example is a
   `status: fail.Status` that nothing checks. Write `_ = status` to drop it on
   purpose.
-- A result tested for being empty (`#len(text) == 0`) before the status its
+- A result tested for being empty (`text.len == 0`) before the status its
   call filled in is read. An empty result can be a success, such as an empty
   file; test `status.failed`.
 - A struct copied with `copy := original`, with both copies then passed by

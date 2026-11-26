@@ -18,7 +18,7 @@ pub fn pack(scratch: *mem.Arena, status: *fail.Status, width: usize, height: usi
     fail.invalid(status, "pack rectangles", "", "the atlas is larger than 32768")
     return 0
   }
-  size := native_size(#cast(i32, width), #len(rectangles))
+  size := native_size(#cast(i32, width), rectangles.len)
   if size == 0 {
     fail.invalid(status, "pack rectangles", "", "bad width or count")
     return 0
@@ -27,10 +27,10 @@ pub fn pack(scratch: *mem.Arena, status: *fail.Status, width: usize, height: usi
   defer mem.arena_rewind(scratch, mark)
   work := aligned_work(scratch, size)
   data: *Rectangle = nil
-  if #len(rectangles) != 0 {
+  if rectangles.len != 0 {
     data = &rectangles[0]
   }
-  code := native_pack(#cast(i32, width), #cast(i32, height), data, #len(rectangles), #cast(rawptr, &work[0]), size)
+  code := native_pack(#cast(i32, width), #cast(i32, height), data, rectangles.len, #cast(rawptr, &work[0]), size)
   if code < 0 {
     fail.invalid(status, "pack rectangles", "", "bad rectangle sizes")
     return 0

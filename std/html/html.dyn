@@ -7,7 +7,7 @@
 // attributes; those need context-specific encoding.
 use "std/encoding/binary"
 use "std/fail"
-use "std/fmt" fmt
+use fmt "std/fmt"
 
 // Each byte's escaped form as a little-endian word, and its length: the
 // byte itself for ordinary bytes, an entity for & < > " '.
@@ -114,7 +114,7 @@ pub fn print(destination: *Writer, template: []const u8, values: ...any) {
   next: usize = 0
   start: usize = 0
   at: usize = 0
-  for at < #len(template) {
+  for at < template.len {
     byte := template[at]
     if byte != '{' && byte != '}' {
       at += 1
@@ -122,11 +122,11 @@ pub fn print(destination: *Writer, template: []const u8, values: ...any) {
     }
     fmt.write(&destination.buffer, template[start..at])
     following: u8 = 0
-    if at + 1 < #len(template) {
+    if at + 1 < template.len {
       following = template[at + 1]
     }
     if byte == '{' && following == '}' {
-      if next >= #len(values) {
+      if next >= values.len {
         fmt.write(&destination.buffer, "{?}")
         next += 1
         at += 2
@@ -134,17 +134,17 @@ pub fn print(destination: *Writer, template: []const u8, values: ...any) {
         continue
       }
       case values[next] {
-        []const u8 value => { text(destination, value) }
-        []u8 value => { text(destination, value) }
-        Trusted value => { fmt.write(&destination.buffer, value.bytes) }
+        []const u8(value) => { text(destination, value) }
+        []u8(value) => { text(destination, value) }
+        Trusted(value) => { fmt.write(&destination.buffer, value.bytes) }
         // Digits and true/false never need escaping.
-        i64 value => { fmt.write_i64(&destination.buffer, value) }
-        i32 value => { fmt.write_i64(&destination.buffer, value) }
-        isize value => { fmt.write_i64(&destination.buffer, value) }
-        u64 value => { fmt.write_u64(&destination.buffer, value) }
-        u32 value => { fmt.write_u64(&destination.buffer, value) }
-        usize value => { fmt.write_u64(&destination.buffer, value) }
-        bool value => { fmt.write_bool(&destination.buffer, value) }
+        i64(value) => { fmt.write_i64(&destination.buffer, value) }
+        i32(value) => { fmt.write_i64(&destination.buffer, value) }
+        isize(value) => { fmt.write_i64(&destination.buffer, value) }
+        u64(value) => { fmt.write_u64(&destination.buffer, value) }
+        u32(value) => { fmt.write_u64(&destination.buffer, value) }
+        usize(value) => { fmt.write_u64(&destination.buffer, value) }
+        bool(value) => { fmt.write_bool(&destination.buffer, value) }
         _ => {
           storage: [256]u8
           rendered := fmt.buffer(destination.buffer.status, storage[..])
@@ -197,11 +197,11 @@ fn special_bytes(word: u64) u64 {
 // time.
 fn clean_prefix(text: []const u8) usize {
   at: usize = 0
-  for #len(text) - at >= 8 {
+  for text.len - at >= 8 {
     if special_bytes(binary.load_u64_le(text[at..at + 8])) != 0 { break }
     at += 8
   }
-  for at < #len(text) {
+  for at < text.len {
     byte := text[at]
     if byte == '&' || byte == '<' || byte == '>' || byte == '"' || byte == 39 { break }
     at += 1
@@ -213,21 +213,21 @@ pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) {
   // Keep ordinary text on its existing one-copy path. Only escaped text
   // needs the per-entity optimization below.
   first := clean_prefix(text)
-  if first == #len(text) {
+  if first == text.len {
     fmt.write(buffer, text)
     return
   }
   // Reserve the worst case once. Near-capacity and aliased inputs keep the
   // span writer below, including its exact partial-write failure behavior.
-  if !buffer.broken && (buffer.status == nil || !buffer.status.failed) && buffer.length <= #len(buffer.data) && #len(text) > 0 &&
-    #len(text) <= (#len(buffer.data) - buffer.length) / 6 {
-    maximum := #len(text) * 6
+  if !buffer.broken && (buffer.status == nil || !buffer.status.failed) && buffer.length <= buffer.data.len && text.len > 0 &&
+    text.len <= (buffer.data.len - buffer.length) / 6 {
+    maximum := text.len * 6
     destination := buffer.data[buffer.length..buffer.length + maximum]
     output_address := #cast(usize, &destination[0])
     input_address := #cast(usize, &text[0])
     disjoint := false
     if output_address >= input_address {
-      disjoint = output_address - input_address >= #len(text)
+      disjoint = output_address - input_address >= text.len
     } else {
       disjoint = input_address - output_address >= maximum
     }
@@ -235,7 +235,7 @@ pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) {
     state_address := #cast(usize, buffer)
     state_disjoint := false
     if state_address >= input_address {
-      state_disjoint = state_address - input_address >= #len(text)
+      state_disjoint = state_address - input_address >= text.len
     } else {
       state_disjoint = input_address - state_address >= #sizeof(fmt.Buffer)
     }
@@ -254,13 +254,13 @@ pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) {
       }
       used := first
       at := first
-      for at < #len(text) && used + 8 <= total {
+      for at < text.len && used + 8 <= total {
         byte := text[at]
         binary.store_u64_le(destination[used..used + 8], EscapeWords[byte])
         used += EscapeLengths[byte]
         at += 1
       }
-      for at < #len(text) {
+      for at < text.len {
         word := EscapeWords[text[at]]
         length := EscapeLengths[text[at]]
         for k in 0..length {
@@ -274,7 +274,7 @@ pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) {
     }
   }
   start: usize = 0
-  for i in first..#len(text) {
+  for i in first..text.len {
     byte := text[i]
     // Ordinary bytes skip the entity lookup and both writes.
     if byte != '&' && byte != '<' && byte != '>' && byte != '"' && byte != '\'' { continue }

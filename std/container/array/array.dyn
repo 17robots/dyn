@@ -15,32 +15,32 @@
 // must never move, give a slice its own arena and use mem.append, or use a
 // chunk list.
 
-use "std/mem" mem
+use mem "std/mem"
 
 // items is the used front of storage.
-pub struct Array(T) {
+pub struct Array<T> {
   items: []T,
   storage: []T,
   arena: *mem.Arena,
 }
 
 // Sets up an empty array. Nothing is allocated until the first push.
-pub fn init(a: *Array($T), arena: *mem.Arena) {
-  empty: Array(T)
+pub fn init<T>(a: *Array<T>, arena: *mem.Arena) {
+  empty: Array<T>
   a.* = empty
   a.arena = arena
 }
 
 // Adds value at the end.
-pub fn push(a: *Array($T), value: $T) {
+pub fn push<T>(a: *Array<T>, value: T) {
   _ = push_ref(a, value)
 }
 
 // Adds value at the end and returns its address, which goes stale at the
 // next push.
-pub fn push_ref(a: *Array($T), value: $T) *T {
-  count := #len(a.items)
-  if count == #len(a.storage) {
+pub fn push_ref<T>(a: *Array<T>, value: T) *T {
+  count := a.items.len
+  if count == a.storage.len {
     grow(a, count + 1)
   }
   a.storage[count] = value
@@ -49,46 +49,46 @@ pub fn push_ref(a: *Array($T), value: $T) *T {
 }
 
 // Room for at least need elements, doubling.
-fn grow(a: *Array($T), need: usize) {
+fn grow<T>(a: *Array<T>, need: usize) {
   if a.arena == nil {
     #panic("call array.init before array.push")
   }
-  capacity := #len(a.storage) * 2
+  capacity := a.storage.len * 2
   if capacity < 8 {
     capacity = 8
   }
   if capacity < need {
     capacity = need
   }
-  fresh := mem.push_array(T, a.arena, capacity)
+  fresh := mem.push_array<T>(a.arena, capacity)
   _ = mem.copy(fresh, a.items)
   a.storage = fresh
-  a.items = fresh[..#len(a.items)]
+  a.items = fresh[..a.items.len]
 }
 
 // Adds every value at the end.
-pub fn push_all(a: *Array($T), values: []const $T) {
-  count := #len(a.items)
-  if count + #len(values) > #len(a.storage) {
-    grow(a, count + #len(values))
+pub fn push_all<T>(a: *Array<T>, values: []const T) {
+  count := a.items.len
+  if count + values.len > a.storage.len {
+    grow(a, count + values.len)
   }
-  for i in 0..#len(values) {
+  for i in 0..values.len {
     a.storage[count + i] = values[i]
   }
-  a.items = a.storage[..count + #len(values)]
+  a.items = a.storage[..count + values.len]
 }
 
 // The element at index, or nil past the end.
-pub fn get(a: *const Array($T), index: usize) *T {
-  if index >= #len(a.items) { return nil }
+pub fn get<T>(a: *const Array<T>, index: usize) *T {
+  if index >= a.items.len { return nil }
   return &a.items[index]
 }
 
 // The last element, removed, or the zero value when the array is empty.
 // Check #len(a.items) first where empty is possible.
-pub fn pop(a: *Array($T)) T {
+pub fn pop<T>(a: *Array<T>) T {
   result: T
-  count := #len(a.items)
+  count := a.items.len
   if count == 0 { return result }
   result = a.items[count - 1]
   a.items = a.items[..count - 1]
@@ -96,6 +96,6 @@ pub fn pop(a: *Array($T)) T {
 }
 
 // Empties the array. Its storage stays in the arena.
-pub fn clear(a: *Array($T)) {
+pub fn clear<T>(a: *Array<T>) {
   a.items = a.items[..0]
 }

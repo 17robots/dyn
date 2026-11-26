@@ -5,7 +5,7 @@
 
 fn segment_value(codepoint: u32) u32 {
   low: usize = 0
-  high: usize = #len(Segments) / 3
+  high: usize = Segments.len / 3
   for low < high {
     mid := low + (high - low) / 2
     at := mid * 3
@@ -102,7 +102,7 @@ struct Unit { class: u8, flags: u32, first: usize, last: usize, start: usize }
 
 fn first_invalid(text: []const u8) usize {
   offset: usize = 0
-  for offset < #len(text) {
+  for offset < text.len {
     decoded := utf8.decode(text, offset)
     if !decoded.valid { return offset }
     offset += decoded.width
@@ -114,7 +114,7 @@ fn first_invalid(text: []const u8) usize {
 fn decode_values(text: []const u8, values: []u32, starts: []usize) {
   offset: usize = 0
   index: usize = 0
-  for offset < #len(text) {
+  for offset < text.len {
     decoded := utf8.decode(text, offset)
     value := segment_value(decoded.codepoint)
     if decoded.codepoint == 9676 {
@@ -161,11 +161,11 @@ pub fn word_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []
   count := utf8.codepoint_count(text)
   n := count
   if n == 0 { return empty }
-  result := mem.push_array(usize, arena, n)
+  result := mem.push_array<usize>(arena, n)
   mark := mem.arena_mark(arena)
-  values := mem.push_array(u32, arena, n)
-  starts := mem.push_array(usize, arena, n)
-  units := mem.push_array(Unit, arena, n)
+  values := mem.push_array<u32>(arena, n)
+  starts := mem.push_array<usize>(arena, n)
+  units := mem.push_array<Unit>(arena, n)
   decode_values(text, values, starts)
   // WB4: Extend, Format and ZWJ attach to the preceding unit, except after
   // CR, LF and Newline. Boundaries inside a unit are decided by WB3 and WB4.
@@ -241,7 +241,7 @@ pub fn word_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []
       used += 1
     }
   }
-  result[used] = #len(text)
+  result[used] = text.len
   used += 1
   mem.arena_rewind(arena, mark - (n - used) * #sizeof(usize))
   return result[..used]
@@ -277,10 +277,10 @@ fn before_spaces(units: []Unit, index: usize) usize {
   at := index
   for true {
     if units[at].class != LSP { return at }
-    if at == 0 { return #len(units) }
+    if at == 0 { return units.len }
     at -= 1
   }
-  return #len(units)
+  return units.len
 }
 
 // NU (SY | IS)* ending at index.
@@ -298,7 +298,7 @@ fn numeric_run(units: []Unit, index: usize) bool {
 // Whether a line may break between units u - 1 and u (UAX #14 rules 4-31).
 // Returns 0 for no break, 1 for an opportunity and 2 for a mandatory break.
 fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
-  n := #len(units)
+  n := units.len
   left := &units[u - 1]
   right := &units[u]
   a := left.class
@@ -417,11 +417,11 @@ pub fn line_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []
   count := utf8.codepoint_count(text)
   n := count
   if n == 0 { return empty }
-  result := mem.push_array(LineBreak, arena, n)
+  result := mem.push_array<LineBreak>(arena, n)
   mark := mem.arena_mark(arena)
-  values := mem.push_array(u32, arena, n)
-  starts := mem.push_array(usize, arena, n)
-  units := mem.push_array(Unit, arena, n)
+  values := mem.push_array<u32>(arena, n)
+  starts := mem.push_array<usize>(arena, n)
+  units := mem.push_array<Unit>(arena, n)
   decode_values(text, values, starts)
   // LB9 attaches CM and ZWJ to the preceding unit unless it is BK, CR, LF, NL,
   // SP or ZW; LB10 treats a mark left alone as AL.
@@ -456,7 +456,7 @@ pub fn line_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []
       used += 1
     }
   }
-  result[used] = LineBreak{ offset: #len(text), mandatory: true }
+  result[used] = LineBreak{ offset: text.len, mandatory: true }
   used += 1
   mem.arena_rewind(arena, mark - (n - used) * #sizeof(LineBreak))
   return result[..used]

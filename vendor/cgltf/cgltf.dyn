@@ -9,12 +9,12 @@ pub type Model = rawptr
 pub fn parse_owned(status: *fail.Status, bytes: []const u8) Model {
   if status == nil { return parse_owned(&fail.Status{}, bytes) }
   if status.failed { return nil }
-  if #len(bytes) == 0 {
+  if bytes.len == 0 {
     fail.invalid(status, "parse glTF", "", "no data")
     return nil
   }
   model: Model = nil
-  code := native_parse(#cast(rawptr, &bytes[0]), #len(bytes), &model)
+  code := native_parse(#cast(rawptr, &bytes[0]), bytes.len, &model)
   if code != 0 {
     cgltf_failed(status, "parse glTF", code)
     return nil
@@ -91,7 +91,7 @@ pub fn read_float(status: *fail.Status, model: Model, accessor: usize, element: 
     return
   }
   if status.failed { return }
-  if #len(output) == 0 || !native_read(model, accessor, element, &output[0], #len(output)) {
+  if output.len == 0 || !native_read(model, accessor, element, &output[0], output.len) {
     fail.invalid(status, "read accessor", "", "no such accessor element, or output too small")
   }
 }
@@ -113,7 +113,7 @@ pub fn attach_buffer(status: *fail.Status, model: Model, index: usize, bytes: []
     return
   }
   if status.failed { return }
-  if #len(bytes) == 0 || !native_attach(model, index, #cast(rawptr, &bytes[0]), #len(bytes)) {
+  if bytes.len == 0 || !native_attach(model, index, #cast(rawptr, &bytes[0]), bytes.len) {
     fail.invalid(status, "attach buffer", "", "no such buffer, wrong size, or already attached")
   }
 }

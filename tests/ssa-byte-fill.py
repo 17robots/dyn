@@ -39,7 +39,7 @@ if {array}[{n}]!=91 || {array}[{n+1}]!=92 || {array}[{n+2}]!=93 {{ #panic("exten
     # A call between fills must observe the first fill, and a subsequent load
     # must observe the second. A surrounding loop must repeat the fill.
     lines += ['''whole: [129]u8
-pub fn full_length() { for i in 0..#len(whole) { whole[i]=128 } }
+pub fn full_length() { for i in 0..whole.len { whole[i]=128 } }
 data: [67]u8
 seen:u64
 pub fn observe() { seen+=#cast(u64,data[0])
@@ -70,11 +70,11 @@ pub fn local() u8 { a:[64]u8
 for i in 0..64 { a[i]=255 }
 return a[0] }
 pub fn indirect(p:*[64]u8) { for i in 0..64 { p.*[i]=128 } }
-pub fn pointer_length(p:*[64]u8) { for i in 0..#len(p.*) { small[i]=1 } }
-pub fn sliced(p:[]u8) { for i in 0..#len(p) { small[i]=1 } }
+pub fn pointer_length(p:*[64]u8) { for i in 0..p.*.len { small[i]=1 } }
+pub fn sliced(p:[]u8) { for i in 0..p.len { small[i]=1 } }
 pub fn observed(p:[]u8) []u8 { calls+=1
 return p }
-pub fn effect_length() { for i in 0..#len(observed(small[..])) { small[i]=1 } }
+pub fn effect_length() { for i in 0..observed(small[..]).len { small[i]=1 } }
 pub fn short() { for i in 0..63 { small[i]=1 } }
 pub fn other_type() { for i in 0..64 { wide[i]=255 } }
 pub fn extra() { for i in 0..64 { small[i]=1

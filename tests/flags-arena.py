@@ -8,9 +8,9 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = '''use "std/fail"
-use "std/mem" mem
-use "std/flags" flags
-use "std/strings" strings
+use mem "std/mem"
+use flags "std/flags"
+use strings "std/strings"
 use "std/bytes"
 fn check(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 struct Outcome { value: flags.Parsed, failure: fail.Failure }
@@ -24,10 +24,10 @@ fn message(outcome: *const Outcome, text: []const u8) bool {
 }
 fn main() {
   zero_result := flags.Parsed{}
-  check(#len(zero_result.values) == 0 && #len(zero_result.positionals) == 0, "zero result")
+  check(zero_result.values.len == 0 && zero_result.positionals.len == 0, "zero result")
   backing: [4096]u8
   arena := mem.arena_from_buffer(backing[..])
-  prefix := mem.push_array(u8, arena, 3)
+  prefix := mem.push_array<u8>(arena, 3)
   prefix[0] = 91
   choices: [2][]const u8 = ["fast", "slow"]
   options: [5]flags.Option = [flags.bool_option("verbose", 'v'), flags.integer_option("count", 'n'), flags.float_option("ratio", 'r'), flags.choice_option("mode", 'm', choices[..]), flags.string_option("output", 'o')]
@@ -38,13 +38,13 @@ fn main() {
   parsed := parse(arena, options[..], args[..])
   check(parsed.failure.kind == fail.Kind.Ok, "success")
   values := parsed.value.values
-  check(#len(values) == 5 && values[0].occurrences == 2 && values[1].occurrences == 2, "occurrences")
+  check(values.len == 5 && values[0].occurrences == 2 && values[1].occurrences == 2, "occurrences")
   check(bytes.equal(values[1].text, "7") && bytes.equal(values[2].text, "1.25e2"), "typed/last wins")
   check(values[3].occurrences == 0 && bytes.equal(values[3].text, "slow"), "default")
-  check(#len(parsed.value.positionals) == 3 && bytes.equal(parsed.value.positionals[0], "first") && bytes.equal(parsed.value.positionals[2], "-v"), "positional order/terminator")
+  check(parsed.value.positionals.len == 3 && bytes.equal(parsed.value.positionals[0], "first") && bytes.equal(parsed.value.positionals[2], "-v"), "positional order/terminator")
   start := #cast(usize, &backing[0])
-  check(#cast(usize, &values[0]) >= start && #cast(usize, &values[4]) < start + #len(backing), "values owned by fixed arena")
-  check(#cast(usize, &parsed.value.positionals[0]) >= start && #cast(usize, &parsed.value.positionals[2]) < start + #len(backing), "positionals owned by fixed arena")
+  check(#cast(usize, &values[0]) >= start && #cast(usize, &values[4]) < start + backing.len, "values owned by fixed arena")
+  check(#cast(usize, &parsed.value.positionals[0]) >= start && #cast(usize, &parsed.value.positionals[2]) < start + backing.len, "positionals owned by fixed arena")
   output[0] = 'O'
   positional[0] = 'S'
   check(values[4].text[0] == 'O' && parsed.value.positionals[1][0] == 'S', "borrowed strings")
@@ -52,7 +52,7 @@ fn main() {
   bad: [1][]const u8 = ["--unknown"]
   failure := parse(arena, options[..], bad[..])
   check(message(&failure, "unknown option") && failure.failure.offset == 0 && bytes.equal(fail.path_text(&failure.failure), bad[0]), "unknown diagnostic")
-  check(#len(failure.value.values) == 0 && #len(failure.value.positionals) == 0 && mem.arena_mark(arena) == mark && prefix[0] == 91, "failure rollback")
+  check(failure.value.values.len == 0 && failure.value.positionals.len == 0 && mem.arena_mark(arena) == mark && prefix[0] == 91, "failure rollback")
   choice_args: [2][]const u8 = ["-m", "fast"]
   choice_result := parse(arena, options[..], choice_args[..])
   check(choice_result.failure.kind == fail.Kind.Ok && choice_result.value.values[3].occurrences == 1 && bytes.equal(choice_result.value.values[3].text, "fast"), "explicit choice")
@@ -82,12 +82,12 @@ fn main() {
   tiny_pad := (16-(#cast(usize,&tiny[0])&15))&15
   zero := mem.arena_from_buffer(tiny[tiny_pad..tiny_pad+mem.ArenaHeader])
   result := parse(zero, none[..], empty[..])
-  check(result.failure.kind == fail.Kind.Ok && #len(result.value.values) == 0 && #len(result.value.positionals) == 0 && mem.arena_used(zero) == 0, "empty")
+  check(result.failure.kind == fail.Kind.Ok && result.value.values.len == 0 && result.value.positionals.len == 0 && mem.arena_used(zero) == 0, "empty")
 }
 '''
-PANIC = '''use "std/mem" mem
+PANIC = '''use mem "std/mem"
 use "std/fail"
-use "std/flags" flags
+use flags "std/flags"
 fn main() {
   status: fail.Status
   storage: [1+mem.ArenaBufferOverhead]u8

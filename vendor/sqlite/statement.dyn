@@ -26,7 +26,7 @@ pub fn prepare(status: *fail.Status, database: Database, sql: []const u8) Prepar
     sqlite_failed(status, "prepare", InvalidArgument)
     return Prepared{}
   }
-  if #len(sql) > 2147483647 {
+  if sql.len > 2147483647 {
     sqlite_failed(status, "prepare", Overflow)
     return Prepared{}
   }
@@ -36,10 +36,10 @@ pub fn prepare(status: *fail.Status, database: Database, sql: []const u8) Prepar
       return Prepared{}
     }
   }
-  if #len(sql) == 0 { return Prepared{ empty: true } }
+  if sql.len == 0 { return Prepared{ empty: true } }
   handle: rawptr = nil
   tail: c.string = nil
-  code := sqlite_prepare(database, &sql[0], #cast(i32, #len(sql)), &handle, &tail)
+  code := sqlite_prepare(database, &sql[0], #cast(i32, sql.len), &handle, &tail)
   if code != 0 {
     if handle != nil {
       _ = sqlite_finalize(handle)
@@ -171,18 +171,18 @@ pub fn bind_f64(status: *fail.Status, statement: *Statement, index: usize, value
 }
 fn bind_bytes(statement: *Statement, index: usize, value: []const u8, text: bool) i32 {
   if !can_bind(statement) { return InvalidArgument }
-  if #len(value) > 2147483647 { return Overflow }
+  if value.len > 2147483647 { return Overflow }
   // Empty data must have a non-null pointer so it is not bound as SQL NULL.
   empty: [1]u8
   pointer := #cast(rawptr, &empty[0])
-  if #len(value) > 0 {
+  if value.len > 0 {
     pointer = #cast(rawptr, &value[0])
   }
   transient := #cast(rawptr, #cast(isize, -1))
   if text {
-    return sqlite_bind_text(statement.handle, native_index(index), pointer, #cast(i32, #len(value)), transient)
+    return sqlite_bind_text(statement.handle, native_index(index), pointer, #cast(i32, value.len), transient)
   }
-  return sqlite_bind_blob(statement.handle, native_index(index), pointer, #cast(i32, #len(value)), transient)
+  return sqlite_bind_blob(statement.handle, native_index(index), pointer, #cast(i32, value.len), transient)
 }
 // SQLite copies bindings before return. Text must be valid UTF-8 without NUL;
 // use blobs for arbitrary bytes. Inputs may be changed immediately after binding.
@@ -230,45 +230,45 @@ fn bind_list(status: *fail.Status, statement: *Statement, values: []const any) {
     bind_list(&fail.Status{}, statement, values)
     return
   }
-  for i in 0..#len(values) {
+  for i in 0..values.len {
     if status.failed { return }
     index := i + 1
     case values[i] {
-      i64 value => { bind_i64(status, statement, index, value) }
-      i32 value => { bind_i64(status, statement, index, value) }
-      i16 value => { bind_i64(status, statement, index, value) }
-      i8 value => { bind_i64(status, statement, index, value) }
-      u32 value => { bind_i64(status, statement, index, value) }
-      u16 value => { bind_i64(status, statement, index, value) }
-      u8 value => { bind_i64(status, statement, index, value) }
-      u64 value => {
+      i64(value) => { bind_i64(status, statement, index, value) }
+      i32(value) => { bind_i64(status, statement, index, value) }
+      i16(value) => { bind_i64(status, statement, index, value) }
+      i8(value) => { bind_i64(status, statement, index, value) }
+      u32(value) => { bind_i64(status, statement, index, value) }
+      u16(value) => { bind_i64(status, statement, index, value) }
+      u8(value) => { bind_i64(status, statement, index, value) }
+      u64(value) => {
         if value > 9223372036854775807 {
           sqlite_failed(status, "bind", Overflow)
           return
         }
         bind_i64(status, statement, index, #cast(i64, value))
       }
-      usize value => {
+      usize(value) => {
         if #cast(u64, value) > 9223372036854775807 {
           sqlite_failed(status, "bind", Overflow)
           return
         }
         bind_i64(status, statement, index, #cast(i64, value))
       }
-      isize value => { bind_i64(status, statement, index, value) }
-      f64 value => { bind_f64(status, statement, index, value) }
-      f32 value => { bind_f64(status, statement, index, value) }
-      bool value => {
+      isize(value) => { bind_i64(status, statement, index, value) }
+      f64(value) => { bind_f64(status, statement, index, value) }
+      f32(value) => { bind_f64(status, statement, index, value) }
+      bool(value) => {
         flag: i64 = 0
         if value {
           flag = 1
         }
         bind_i64(status, statement, index, flag)
       }
-      []const u8 value => { bind_text(status, statement, index, value) }
-      []u8 value => { bind_text(status, statement, index, value) }
-      Blob value => { bind_blob(status, statement, index, value.bytes) }
-      Null value => { bind_null(status, statement, index) }
+      []const u8(value) => { bind_text(status, statement, index, value) }
+      []u8(value) => { bind_text(status, statement, index, value) }
+      Blob(value) => { bind_blob(status, statement, index, value.bytes) }
+      Null(value) => { bind_null(status, statement, index) }
       _ => {
         fail.invalid(status, "bind", "", "unsupported value type")
         return

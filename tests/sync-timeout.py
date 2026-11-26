@@ -112,7 +112,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-sync-timeout-') as temporary:
     end=text.index('fn native_sync_failure',start)
     text=text[:start]+"fn native_wait_timeout(address: *AtomicU32, expected: u32, duration: i64) isize {\n _ = address\n _ = expected\n _ = duration\n return -22\n}\n"+text[end:]
     backend.write_text(text)
-    (work/'main.dyn').write_text("""use \"sync\" sync
+    (work/'main.dyn').write_text("""use sync \"sync\"
 use \"std/fail\"
 fn main() {
  mutex := sync.mutex()

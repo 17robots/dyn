@@ -1,8 +1,8 @@
 // Revision-tagged UTF-8 replacement. Publish one tracker per native window;
 // keep it alive across widget focus changes so tokens are never reused.
-use "std/mem" mem
+use mem "std/mem"
 use "std/fail"
-use "std/unicode/utf8" utf8
+use utf8 "std/unicode/utf8"
 
 pub const context_limit: usize = 4096
 pub enum Cause { Other, InputMethod }
@@ -23,7 +23,7 @@ pub struct Tracker {
 }
 
 pub fn boundary(text: []const u8, offset: usize) bool {
-  return offset <= #len(text) && (offset == #len(text) || (text[offset] & 0xc0) != 0x80)
+  return offset <= text.len && (offset == text.len || (text[offset] & 0xc0) != 0x80)
 }
 
 // Validates the shared bounded context. Native window protocols additionally
@@ -34,7 +34,7 @@ pub fn validate(status: *fail.Status, context: *const Context) {
     return
   }
   if status.failed { return }
-  if #len(context.text) > context_limit {
+  if context.text.len > context_limit {
     edit_failed(status, fail.Kind.Capacity, "validate", "context is longer than context_limit")
     return
   }
@@ -53,7 +53,7 @@ fn edit_failed(status: *fail.Status, kind: fail.Kind, operation: []const u8, mes
 pub fn snapshot(status: *fail.Status, tracker: *Tracker, owner: u64, text: []const u8, cursor, anchor: usize, cause: Cause) Context {
   if status == nil { return snapshot(&fail.Status{}, tracker, owner, text, cursor, anchor, cause) }
   if status.failed { return Context{} }
-  if #len(text) > context_limit {
+  if text.len > context_limit {
     invalidate(tracker)
     edit_failed(status, fail.Kind.Capacity, "snapshot", "text is longer than context_limit")
     return Context{}
@@ -63,9 +63,9 @@ pub fn snapshot(status: *fail.Status, tracker: *Tracker, owner: u64, text: []con
     edit_failed(status, fail.Kind.InvalidInput, "snapshot", "text is not valid UTF-8 at its boundaries")
     return Context{}
   }
-  equal := tracker.token != 0 && tracker.owner == owner && tracker.length == #len(text) && tracker.cursor == cursor && tracker.anchor == anchor
+  equal := tracker.token != 0 && tracker.owner == owner && tracker.length == text.len && tracker.cursor == cursor && tracker.anchor == anchor
   if equal {
-    for i in 0..#len(text) {
+    for i in 0..text.len {
       if tracker.bytes[i] != text[i] {
         equal = false
         break
@@ -82,10 +82,10 @@ pub fn snapshot(status: *fail.Status, tracker: *Tracker, owner: u64, text: []con
     tracker.token = tracker.serial
     tracker.cause = cause
     tracker.owner = owner
-    tracker.length = #len(text)
+    tracker.length = text.len
     tracker.cursor = cursor
     tracker.anchor = anchor
-    _ = mem.move(tracker.bytes[..#len(text)], text)
+    _ = mem.move(tracker.bytes[..text.len], text)
   }
   return Context{ text: tracker.bytes[..tracker.length], cursor: cursor, anchor: anchor, token: tracker.token, cause: tracker.cause }
 }
@@ -96,11 +96,11 @@ pub fn invalidate(tracker: *Tracker) {
 }
 
 fn overlaps(left, right: []const u8) bool {
-  if #len(left) == 0 || #len(right) == 0 { return false }
+  if left.len == 0 || right.len == 0 { return false }
   a := #cast(usize, &left[0])
   b := #cast(usize, &right[0])
-  if a >= b { return a - b < #len(right) }
-  return b - a < #len(left)
+  if a >= b { return a - b < right.len }
+  return b - a < left.len
 }
 
 // All validation precedes writes. Scratch is rewound on success and failure;
@@ -115,7 +115,7 @@ pub fn apply(scratch: *mem.Arena, status: *fail.Status, buffer: *Buffer, replace
     edit_failed(status, fail.Kind.InvalidState, "apply", "replacement token does not match the buffer")
     return
   }
-  if buffer.length > #len(buffer.storage) || replacement.start > replacement.end || replacement.end > buffer.length {
+  if buffer.length > buffer.storage.len || replacement.start > replacement.end || replacement.end > buffer.length {
     edit_failed(status, fail.Kind.InvalidInput, "apply", "replacement range or text is invalid")
     return
   }
@@ -126,19 +126,19 @@ pub fn apply(scratch: *mem.Arena, status: *fail.Status, buffer: *Buffer, replace
     return
   }
   retained := buffer.length - (replacement.end - replacement.start)
-  if #len(replacement.text) > #len(buffer.storage) - retained {
+  if replacement.text.len > buffer.storage.len - retained {
     edit_failed(status, fail.Kind.Capacity, "apply", "replacement does not fit the buffer")
     return
   }
   // Reject output borrowed from the pending scratch region before allocating:
   // even a later rewind can scribble it when diagnostic poisoning is enabled.
-  if scratch.offset > #len(scratch.data) {
+  if scratch.offset > scratch.data.len {
     edit_failed(status, fail.Kind.InvalidState, "apply", "replacement token does not match the buffer")
     return
   }
-  pending := #len(scratch.data) - scratch.offset
-  if pending > #len(replacement.text) {
-    pending = #len(replacement.text)
+  pending := scratch.data.len - scratch.offset
+  if pending > replacement.text.len {
+    pending = replacement.text.len
   }
   if overlaps(scratch.data[scratch.offset..scratch.offset + pending], buffer.storage) {
     edit_failed(status, fail.Kind.InvalidInput, "apply", "buffer storage overlaps pending scratch")
@@ -148,13 +148,13 @@ pub fn apply(scratch: *mem.Arena, status: *fail.Status, buffer: *Buffer, replace
   defer {
     mem.arena_rewind(scratch, mark)
   }
-  copied := mem.push_bytes(scratch, #len(replacement.text))
+  copied := mem.push_bytes(scratch, replacement.text.len)
   _ = mem.move(copied, replacement.text)
   suffix := buffer.length - replacement.end
-  destination := replacement.start + #len(copied)
+  destination := replacement.start + copied.len
   _ = mem.move(buffer.storage[destination..destination + suffix], buffer.storage[replacement.end..buffer.length])
   _ = mem.copy(buffer.storage[replacement.start..destination], copied)
-  buffer.length = retained + #len(copied)
+  buffer.length = retained + copied.len
   buffer.cursor = destination
   buffer.anchor = destination
   buffer.token = 0

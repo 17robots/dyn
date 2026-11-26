@@ -77,7 +77,7 @@ struct Enemy {
 
 fn main() {
   arena := mem.arena_alloc(0)
-  enemies: array.Array(Enemy)
+  enemies: array.Array<Enemy>
   array.init(&enemies, arena)
   array.push(&enemies, Enemy{ hp: 10 })
   boss := array.push_ref(&enemies, Enemy{ hp: 300 })
@@ -108,7 +108,7 @@ different chunk size, declare your own structs with the same field names:
 ```dyn
 use "std/container/chunk"
 
-fn spawn(arena: *mem.Arena, enemies: *chunk.List(Enemy)) {
+fn spawn(arena: *mem.Arena, enemies: *chunk.List<Enemy>) {
   enemy := chunk.push(arena, enemies, Enemy{hp: 10})
   enemy.hp += 1
   it := enemies.first
@@ -148,7 +148,7 @@ const nil_node: Node = Node{}
 fn reuse(first_free: **Node, root: *Node, arena: *mem.Arena) *Node {
   node := list.free_pop(first_free, &nil_node)
   if node == &nil_node {
-    node = mem.push(Node, arena)
+    node = mem.push<Node>(arena)
   } else {
     mem.clear(node)
   }
@@ -175,14 +175,14 @@ use "std/mem"
 
 fn main() {
   arena := mem.arena_alloc(0)
-  ages: map.Map([]const u8, i32)
+  ages: map.Map<[]const u8, i32>
   map.init(&ages, arena)
   map.insert(&ages, "ada", 36)
   age := map.get(&ages, "ada")
   if age != nil {
     age.* += 1
   }
-  visits: map.Map([]const u8, u64)
+  visits: map.Map<[]const u8, u64>
   map.init(&visits, arena)
   map.upsert(&visits, "ada", 0).* += 1
   it := map.walk(&visits)
@@ -244,7 +244,7 @@ resolving once the slot is freed, even after it is reused. The slot struct
 carries `generation: u32`; an odd generation means live:
 
 ```dyn
-use "std/container/slot_map" slots
+use slots "std/container/slot_map"
 
 struct Enemy { generation: u32, free_next: *Enemy, hp: i32 }
 const nil_enemy: Enemy = Enemy{}

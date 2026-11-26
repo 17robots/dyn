@@ -39,7 +39,7 @@ fn fail(p: *Compiler, offset: usize) {
   p.offset = offset }
 }
 fn space(p: *Compiler) {
-  for p.cursor < #len(p.source) && p.source[p.cursor] == ' ' { p.cursor += 1 }
+  for p.cursor < p.source.len && p.source[p.cursor] == ' ' { p.cursor += 1 }
 }
 fn emit(p: *Compiler, value: u8) {
   if p.used == 64 { fail(p, p.cursor)
@@ -51,14 +51,14 @@ fn alpha(value: u8) bool { return value >= 'a' && value <= 'z' }
 fn atom(p: *Compiler, symbols: *const Symbols, depth: usize) {
   space(p)
   start := p.cursor
-  if depth > 16 || start == #len(p.source) { fail(p, start)
+  if depth > 16 || start == p.source.len { fail(p, start)
   return }
   value := p.source[start]
   if value >= '0' && value <= '9' { p.cursor += 1
   emit(p, value)
   return }
   if alpha(value) {
-    for p.cursor < #len(p.source) && alpha(p.source[p.cursor]) { p.cursor += 1 }
+    for p.cursor < p.source.len && alpha(p.source[p.cursor]) { p.cursor += 1 }
     found := lookup(symbols, p.source[start..p.cursor])
     if !found.ok { fail(p, start)
     return }
@@ -69,7 +69,7 @@ fn atom(p: *Compiler, symbols: *const Symbols, depth: usize) {
     p.cursor += 1
     expression(p, symbols, depth + 1)
     space(p)
-    if p.cursor == #len(p.source) || p.source[p.cursor] != ')' { fail(p, p.cursor)
+    if p.cursor == p.source.len || p.source[p.cursor] != ')' { fail(p, p.cursor)
     return }
     p.cursor += 1
     return
@@ -79,7 +79,7 @@ fn atom(p: *Compiler, symbols: *const Symbols, depth: usize) {
 fn product(p: *Compiler, symbols: *const Symbols, depth: usize) {
   atom(p, symbols, depth)
   space(p)
-  for !p.failed && p.cursor < #len(p.source) && p.source[p.cursor] == '*' {
+  for !p.failed && p.cursor < p.source.len && p.source[p.cursor] == '*' {
     p.cursor += 1
     atom(p, symbols, depth)
     emit(p, '*')
@@ -89,7 +89,7 @@ fn product(p: *Compiler, symbols: *const Symbols, depth: usize) {
 fn expression(p: *Compiler, symbols: *const Symbols, depth: usize) {
   product(p, symbols, depth)
   space(p)
-  for !p.failed && p.cursor < #len(p.source) && p.source[p.cursor] == '+' {
+  for !p.failed && p.cursor < p.source.len && p.source[p.cursor] == '+' {
     p.cursor += 1
     product(p, symbols, depth)
     emit(p, '+')
@@ -101,7 +101,7 @@ fn main() {
   arena := mem.arena_from_buffer(storage[..])
   arguments_status: fail.Status
   arguments := process.arguments(arena, &arguments_status)
-  if arguments_status.failed || #len(arguments) != 2 { #panic("arguments") }
+  if arguments_status.failed || arguments.len != 2 { #panic("arguments") }
   symbols := Symbols{}
   if !insert(&symbols, "alpha", '4') || !insert(&symbols, "beta", '7') { #panic("insert") }
   if insert(&symbols, "alpha", '8') || lookup(&symbols, "absent").ok { #panic("symbols") }
@@ -110,7 +110,7 @@ fn main() {
   p := Compiler{ source: arguments[1] }
   expression(&p, &symbols, 0)
   space(&p)
-  if p.cursor != #len(p.source) { fail(&p, p.cursor) }
+  if p.cursor != p.source.len { fail(&p, p.cursor) }
   if p.failed { io.println("error:{}", p.offset) }
   else { io.println("{}", p.code[..p.used]) }
 }

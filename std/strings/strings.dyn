@@ -1,7 +1,7 @@
-use "std/mem" memory
-use "std/bytes" byte_ops
+use memory "std/mem"
+use byte_ops "std/bytes"
 use "std/fail"
-use "std/io" io
+use io "std/io"
 
 // UTF-8 strings are immutable byte slices. Operations work on bytes unless named otherwise.
 
@@ -10,11 +10,11 @@ use "std/io" io
 // returns #len(text), always a safe slice bound.
 
 pub fn strip_prefix(text: []const u8, prefix: []const u8) []const u8 {
-  if byte_ops.starts_with(text, prefix) { return text[#len(prefix)..] }
+  if byte_ops.starts_with(text, prefix) { return text[prefix.len..] }
   return text
 }
 pub fn strip_suffix(text: []const u8, suffix: []const u8) []const u8 {
-  if byte_ops.ends_with(text, suffix) { return text[..#len(text) - #len(suffix)] }
+  if byte_ops.ends_with(text, suffix) { return text[..text.len - suffix.len] }
   return text
 }
 
@@ -39,7 +39,7 @@ pub fn ascii_to_upper(byte: u8) u8 {
 // Returns a borrowed view of text; no allocation or copy. Keep input storage alive and unchanged.
 pub fn trim(text: []const u8) []const u8 {
   start: usize = 0
-  end := #len(text)
+  end := text.len
   for start < end && ascii_is_whitespace(text[start]) {
     start += 1
   }
@@ -57,7 +57,7 @@ fn digit_value(byte: u8) u8 {
 }
 
 fn parse_u64_into(text: []const u8, base: u8, output: *u64) bool {
-  if #len(text) == 0 || base < 2 || base > 36 { return false }
+  if text.len == 0 || base < 2 || base > 36 { return false }
   value: u64 = 0
   radix := #cast(u64, base)
   maximum: u64 = 18446744073709551615
@@ -76,13 +76,13 @@ fn parse_u64_into(text: []const u8, base: u8, output: *u64) bool {
 }
 
 fn parse_i64_into(text: []const u8, base: u8, output: *i64) bool {
-  if #len(text) == 0 { return false }
+  if text.len == 0 { return false }
   negative := text[0] == '-'
   start: usize = 0
   if negative || text[0] == '+' {
     start = 1
   }
-  if start == #len(text) { return false }
+  if start == text.len { return false }
   magnitude: u64 = 0
   if !parse_u64_into(text[start..], base, &magnitude) { return false }
   if negative {
@@ -111,15 +111,15 @@ pub fn scanner_rest(state: *const Scanner) []const u8 {
 // The text up to the next delimiter, which is consumed, or the rest of the
 // text. Sets state.ended once the text is used up.
 pub fn scan_until(state: *Scanner, delimiter: u8) []const u8 {
-  if state.offset >= #len(state.text) {
+  if state.offset >= state.text.len {
     state.ended = true
     return ""
   }
   start := state.offset
   rest := state.text[start..]
   found := byte_ops.find_byte(rest, delimiter)
-  if found == #len(rest) {
-    state.offset = #len(state.text)
+  if found == rest.len {
+    state.offset = state.text.len
   } else {
     state.offset = start + found + 1
   }
@@ -129,15 +129,15 @@ pub fn scan_until(state: *Scanner, delimiter: u8) []const u8 {
 // The next run of non-whitespace bytes. Sets state.ended when only
 // whitespace is left.
 pub fn scan_field(state: *Scanner) []const u8 {
-  for state.offset < #len(state.text) && ascii_is_whitespace(state.text[state.offset]) {
+  for state.offset < state.text.len && ascii_is_whitespace(state.text[state.offset]) {
     state.offset += 1
   }
-  if state.offset == #len(state.text) {
+  if state.offset == state.text.len {
     state.ended = true
     return ""
   }
   start := state.offset
-  for state.offset < #len(state.text) && !ascii_is_whitespace(state.text[state.offset]) {
+  for state.offset < state.text.len && !ascii_is_whitespace(state.text[state.offset]) {
     state.offset += 1
   }
   return state.text[start..state.offset]
@@ -252,20 +252,20 @@ fn decimal_compare_bits(numerator: *const DecimalInteger, denominator: *const De
 // syntax leaves output unchanged. No heap allocations or locale dependence.
 // Reached through parse(f64, text).
 fn parse_f64_into(text: []const u8, output: *f64) bool {
-  if #len(text) == 0 || #cast(u64, #len(text)) > 9223372036854765807 { return false }
+  if text.len == 0 || #cast(u64, text.len) > 9223372036854765807 { return false }
   at: usize = 0
   negative := text[0] == '-'
   if negative || text[0] == '+' {
     at += 1
   }
-  if at == #len(text) { return false }
+  if at == text.len { return false }
   numerator := DecimalInteger{}
   significant: usize = 0
   digits: usize = 0
   shift: i64 = 0
   sticky := false
   fraction := false
-  for at < #len(text) {
+  for at < text.len {
     byte := text[at]
     if byte == '.' && !fraction {
       fraction = true
@@ -294,22 +294,22 @@ fn parse_f64_into(text: []const u8, output: *f64) bool {
   if digits == 0 { return false }
   exponent: i64 = 0
   exponent_negative := false
-  if at < #len(text) && (text[at] == 'e' || text[at] == 'E') {
+  if at < text.len && (text[at] == 'e' || text[at] == 'E') {
     at += 1
-    if at < #len(text) && (text[at] == '-' || text[at] == '+') {
+    if at < text.len && (text[at] == '-' || text[at] == '+') {
       exponent_negative = text[at] == '-'
       at += 1
     }
     start := at
-    cap := #cast(i64, #len(text)) + 10000
-    for at < #len(text) && ascii_is_digit(text[at]) {
+    cap := #cast(i64, text.len) + 10000
+    for at < text.len && ascii_is_digit(text[at]) {
       digit := #cast(i64, (text[at] - '0'))
       if exponent <= (cap - digit) / 10 { exponent = exponent * 10 + digit } else { exponent = cap }
       at += 1
     }
     if at == start { return false }
   }
-  if at != #len(text) { return false }
+  if at != text.len { return false }
   bits: u64 = 0
   if numerator.used != 0 {
     if exponent_negative {
@@ -357,13 +357,13 @@ fn parse_f64_into(text: []const u8, output: *f64) bool {
 
 pub fn trim_left(text: []const u8) []const u8 {
   at: usize = 0
-  for at < #len(text) && ascii_is_whitespace(text[at]) {
+  for at < text.len && ascii_is_whitespace(text[at]) {
     at += 1
   }
   return text[at..]
 }
 pub fn trim_right(text: []const u8) []const u8 {
-  end := #len(text)
+  end := text.len
   for end > 0 && ascii_is_whitespace(text[end - 1]) {
     end -= 1
   }
@@ -379,21 +379,21 @@ pub fn scan_line(state: *Scanner) []const u8 {
 // Integers accept an optional sign; floats use decimal syntax. Returns zero
 // when text is not a valid T or does not fit. Use valid first when bad input
 // must be reported. Another T panics.
-pub fn parse(T: type, text: []const u8) T {
+pub fn parse<T>(text: []const u8) T {
   result: T
   _ = parse_into(text, 10, &result)
   return result
 }
 
 // Like parse for integer types, in base 2 through 36.
-pub fn parse_base(T: type, text: []const u8, base: u8) T {
+pub fn parse_base<T>(text: []const u8, base: u8) T {
   result: T
   _ = parse_into(text, base, &result)
   return result
 }
 
 // Whether text parses as T, by the same rules as parse.
-pub fn valid(T: type, text: []const u8) bool {
+pub fn valid<T>(text: []const u8) bool {
   result: T
   return parse_into(text, 10, &result)
 }
@@ -407,7 +407,7 @@ fn signed_into(text: []const u8, base: u8, minimum: i64, maximum: i64, output: *
 
 fn unsigned_into(text: []const u8, base: u8, maximum: u64, output: *u64) bool {
   value: u64
-  if #len(text) > 0 && text[0] == '+' {
+  if text.len > 0 && text[0] == '+' {
     if !parse_u64_into(text[1..], base, &value) { return false }
   } else if !parse_u64_into(text, base, &value) { return false }
   if value > maximum { return false }
@@ -419,63 +419,63 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
   wide: i64
   natural: u64
   case target {
-    *i8 p => {
+    *i8(p) => {
       ok := signed_into(text, base, -128, 127, &wide)
       p.* = #cast(i8, wide)
       return ok
     }
-    *i16 p => {
+    *i16(p) => {
       ok := signed_into(text, base, -32768, 32767, &wide)
       p.* = #cast(i16, wide)
       return ok
     }
-    *i32 p => {
+    *i32(p) => {
       ok := signed_into(text, base, -2147483648, 2147483647, &wide)
       p.* = #cast(i32, wide)
       return ok
     }
-    *i64 p => {
+    *i64(p) => {
       return parse_i64_into(text, base, p)
     }
-    *isize p => {
+    *isize(p) => {
       ok := parse_i64_into(text, base, &wide)
       if !ok || wide < #min(isize) || wide > #max(isize) { return false }
       p.* = #cast(isize, wide)
       return true
     }
-    *u8 p => {
+    *u8(p) => {
       ok := unsigned_into(text, base, 255, &natural)
       p.* = #cast(u8, natural)
       return ok
     }
-    *u16 p => {
+    *u16(p) => {
       ok := unsigned_into(text, base, 65535, &natural)
       p.* = #cast(u16, natural)
       return ok
     }
-    *u32 p => {
+    *u32(p) => {
       ok := unsigned_into(text, base, 4294967295, &natural)
       p.* = #cast(u32, natural)
       return ok
     }
-    *u64 p => {
+    *u64(p) => {
       return unsigned_into(text, base, 18446744073709551615, p)
     }
-    *usize p => {
+    *usize(p) => {
       ok := unsigned_into(text, base, #max(usize), &natural)
       p.* = #cast(usize, natural)
       return ok
     }
-    *f64 p => {
+    *f64(p) => {
       return base == 10 && parse_f64_into(text, p)
     }
-    *f32 p => {
+    *f32(p) => {
       value: f64
       if base != 10 || !parse_f64_into(text, &value) { return false }
       p.* = #cast(f32, value)
       return true
     }
-    *bool p => {
+    *bool(p) => {
       if byte_ops.equal(text, "true") {
         p.* = true
         return true
@@ -493,7 +493,7 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
 
 // Copies source into arena.
 pub fn clone(arena: *memory.Arena, source: []const u8) []u8 {
-  output := memory.push_bytes(arena, #len(source))
+  output := memory.push_bytes(arena, source.len)
   _ = memory.copy(output, source)
   return output
 }
@@ -508,15 +508,15 @@ fn checked_add(total: usize, more: usize) usize {
 // Joins parts with separator between them.
 pub fn join(arena: *memory.Arena, parts: [][]const u8, separator: []const u8) []u8 {
   total: usize = 0
-  for i in 0..#len(parts) {
-    total = checked_add(total, #len(parts[i]))
+  for i in 0..parts.len {
+    total = checked_add(total, parts[i].len)
     if i > 0 {
-      total = checked_add(total, #len(separator))
+      total = checked_add(total, separator.len)
     }
   }
   output := memory.push_bytes(arena, total)
   at: usize = 0
-  for i in 0..#len(parts) {
+  for i in 0..parts.len {
     if i > 0 {
       at += memory.copy(output[at..], separator)
     }
@@ -529,7 +529,7 @@ pub fn join(arena: *memory.Arena, parts: [][]const u8, separator: []const u8) []
 // borrow source, so keep both alive. Empty fields, including the last, are
 // kept. Panics when separator is empty.
 pub fn split(arena: *memory.Arena, source: []const u8, separator: []const u8) [][]const u8 {
-  if #len(separator) == 0 {
+  if separator.len == 0 {
     #panic("split separator is empty")
   }
   count: usize = 1
@@ -537,16 +537,16 @@ pub fn split(arena: *memory.Arena, source: []const u8, separator: []const u8) []
   for {
     rest := source[at..]
     found := byte_ops.find(rest, separator)
-    if found == #len(rest) { break }
+    if found == rest.len { break }
     count += 1
-    at += found + #len(separator)
+    at += found + separator.len
   }
-  values := memory.push_array([]const u8, arena, count)
+  values := memory.push_array<[]const u8>(arena, count)
   at = 0
   for i in 0..count - 1 {
     end := at + byte_ops.find(source[at..], separator)
     values[i] = source[at..end]
-    at = end + #len(separator)
+    at = end + separator.len
   }
   values[count - 1] = source[at..]
   return values
@@ -554,17 +554,17 @@ pub fn split(arena: *memory.Arena, source: []const u8, separator: []const u8) []
 
 // A copy of source with every needle replaced. Panics when needle is empty.
 pub fn replace(arena: *memory.Arena, source: []const u8, needle: []const u8, replacement: []const u8) []u8 {
-  if #len(needle) == 0 {
+  if needle.len == 0 {
     #panic("replace needle is empty")
   }
-  total := #len(source)
+  total := source.len
   at: usize = 0
   for {
     rest := source[at..]
     found := byte_ops.find(rest, needle)
-    if found == #len(rest) { break }
-    total = checked_add(total - #len(needle), #len(replacement))
-    at += found + #len(needle)
+    if found == rest.len { break }
+    total = checked_add(total - needle.len, replacement.len)
+    at += found + needle.len
   }
   output := memory.push_bytes(arena, total)
   at = 0
@@ -572,11 +572,11 @@ pub fn replace(arena: *memory.Arena, source: []const u8, needle: []const u8, rep
   for {
     rest := source[at..]
     next := byte_ops.find(rest, needle)
-    if next == #len(rest) { break }
+    if next == rest.len { break }
     end := at + next
     written += memory.copy(output[written..], source[at..end])
     written += memory.copy(output[written..], replacement)
-    at = end + #len(needle)
+    at = end + needle.len
   }
   written += memory.copy(output[written..], source[at..])
   return output
@@ -587,20 +587,20 @@ pub fn replace(arena: *memory.Arena, source: []const u8, needle: []const u8, rep
 pub fn glob_match(pattern: []const u8, text: []const u8) bool {
   p: usize = 0
   t: usize = 0
-  star := #len(pattern)
+  star := pattern.len
   retry: usize = 0
-  for t < #len(text) {
-    if p < #len(pattern) && pattern[p] == '*' {
+  for t < text.len {
+    if p < pattern.len && pattern[p] == '*' {
       star = p
       p += 1
       retry = t
     } else {
       next := p
       matched := false
-      if next < #len(pattern) {
+      if next < pattern.len {
         if pattern[next] == '\\' {
           next += 1
-          if next < #len(pattern) {
+          if next < pattern.len {
             matched = pattern[next] == text[t]
             next += 1
           }
@@ -612,7 +612,7 @@ pub fn glob_match(pattern: []const u8, text: []const u8) bool {
       if matched {
         p = next
         t += 1
-      } else if star < #len(pattern) {
+      } else if star < pattern.len {
         retry += 1
         t = retry
         p = star + 1
@@ -621,16 +621,16 @@ pub fn glob_match(pattern: []const u8, text: []const u8) bool {
       }
     }
   }
-  for p < #len(pattern) && pattern[p] == '*' {
+  for p < pattern.len && pattern[p] == '*' {
     p += 1
   }
-  return p == #len(pattern)
+  return p == pattern.len
 }
 
 fn count_write(data: rawptr, _status: *fail.Status, source: []const u8) usize {
   total := #cast(*usize, data)
-  total.* += #len(source)
-  return #len(source)
+  total.* += source.len
+  return source.len
 }
 
 // Formats into arena using the io.print template language: {} inserts a value,
@@ -668,12 +668,12 @@ pub struct List {
 
 // Pushes one node; value is not copied.
 pub fn list_push(arena: *memory.Arena, list: *List, value: []const u8) {
-  node := memory.push(ListNode, arena)
+  node := memory.push<ListNode>(arena)
   node.value = value
   if list.last == nil { list.first = node } else { list.last.next = node }
   list.last = node
   list.count += 1
-  list.total += #len(value)
+  list.total += value.len
 }
 
 // Formats into arena, then pushes the result.
@@ -685,7 +685,7 @@ pub fn list_push_format(arena: *memory.Arena, list: *List, template: []const u8,
 pub fn list_join(arena: *memory.Arena, list: *const List, separator: []const u8) []u8 {
   size := list.total
   if list.count > 1 {
-    size += (list.count - 1) * #len(separator)
+    size += (list.count - 1) * separator.len
   }
   output := memory.push_bytes(arena, size)
   at: usize = 0

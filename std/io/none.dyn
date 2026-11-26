@@ -19,8 +19,8 @@ fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
 }
 fn console_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
   if status.failed { return 0 }
-  if #len(source) != 0 {
-    console_write(&source[0], #len(source))
+  if source.len != 0 {
+    console_write(&source[0], source.len)
   }
-  return #len(source)
+  return source.len
 }

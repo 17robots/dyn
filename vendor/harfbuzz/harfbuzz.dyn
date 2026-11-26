@@ -1,7 +1,7 @@
 use "std/fail"
-use "std/dynlib" dynlib
-use "std/mem" mem
-use "std/io" io
+use dynlib "std/dynlib"
+use mem "std/mem"
+use io "std/io"
 // Dynamic HarfBuzz OpenType shaping. Keep the loader handle open for every
 // table/object lifetime. Buffer glyphs borrow native storage until mutation;
 // shape copies them into the caller arena. HarfBuzz shapes one directional run:
@@ -42,12 +42,12 @@ pub const EndOfText: u32 = 2
 pub fn font_owned(status: *fail.Status, api: *const Api, bytes: []const u8, face_index: u32) rawptr {
   if status == nil { return font_owned(&fail.Status{}, api, bytes, face_index) }
   if status.failed { return nil }
-  if #len(bytes) == 0 || #cast(u64, #len(bytes)) > 0xffffffff {
+  if bytes.len == 0 || #cast(u64, bytes.len) > 0xffffffff {
     hb_failed(status, fail.Kind.InvalidInput, "font owned", 0)
     return nil
   }
-  blob := api.blob_create(&bytes[0], #cast(u32, #len(bytes)), 0, nil, nil)
-  if blob == nil || api.blob_length(blob) != #cast(u32, #len(bytes)) {
+  blob := api.blob_create(&bytes[0], #cast(u32, bytes.len), 0, nil, nil)
+  if blob == nil || api.blob_length(blob) != #cast(u32, bytes.len) {
     if blob != nil {
       api.blob_destroy(blob)
     }
@@ -96,7 +96,7 @@ pub fn shape_run(arena: *mem.Arena, status: *fail.Status, api: *const Api, font:
   empty: []Glyph
   if status.failed { return empty }
   direction:=options.direction
-  if options.cluster_level>2 || (options.flags&~#cast(u32, 255))!=0 || #len(options.language)>2147483647 {
+  if options.cluster_level>2 || (options.flags&~#cast(u32, 255))!=0 || options.language.len>2147483647 {
     hb_failed(status, fail.Kind.InvalidInput, "shape run", 0)
     return empty
   }
@@ -106,19 +106,19 @@ pub fn shape_run(arena: *mem.Arena, status: *fail.Status, api: *const Api, font:
       return empty
     }
   }
-  if font == nil || #len(text) > 2147483647 || #cast(u64, #len(features)) > 0xffffffff || (direction != 0 && (direction < 4 || direction > 7)) {
+  if font == nil || text.len > 2147483647 || #cast(u64, features.len) > 0xffffffff || (direction != 0 && (direction < 4 || direction > 7)) {
     hb_failed(status, fail.Kind.InvalidInput, "shape run", 0)
     return empty
   }
-  if #cast(usize, options.item_offset)>#len(text) || (options.has_item_length && options.item_length<0) {
+  if #cast(usize, options.item_offset)>text.len || (options.has_item_length && options.item_length<0) {
     hb_failed(status, fail.Kind.InvalidInput, "shape run", 0)
     return empty
   }
   item_length:=options.item_length
   if !options.has_item_length {
-    item_length=#cast(i32, #len(text)-#cast(usize, options.item_offset))
+    item_length=#cast(i32, text.len-#cast(usize, options.item_offset))
   }
-  if #cast(usize, item_length)>#len(text)-#cast(usize, options.item_offset) {
+  if #cast(usize, item_length)>text.len-#cast(usize, options.item_offset) {
     hb_failed(status, fail.Kind.InvalidInput, "shape run", 0)
     return empty
   }
@@ -130,8 +130,8 @@ pub fn shape_run(arena: *mem.Arena, status: *fail.Status, api: *const Api, font:
   defer {
     api.buffer_destroy(buffer)
   }
-  if #len(text) != 0 {
-    api.buffer_add_utf8(buffer, &text[0], #cast(i32, #len(text)), options.item_offset, item_length)
+  if text.len != 0 {
+    api.buffer_add_utf8(buffer, &text[0], #cast(i32, text.len), options.item_offset, item_length)
   }
   if direction != 0 {
     api.buffer_set_direction(buffer, direction)
@@ -139,8 +139,8 @@ pub fn shape_run(arena: *mem.Arena, status: *fail.Status, api: *const Api, font:
   if options.script!=0 {
     api.buffer_set_script(buffer, options.script)
   }
-  if #len(options.language)!=0 {
-    language:=api.language_from_string(&options.language[0], #cast(i32, #len(options.language)))
+  if options.language.len!=0 {
+    language:=api.language_from_string(&options.language[0], #cast(i32, options.language.len))
     if language==nil {
       hb_failed(status, fail.Kind.InvalidInput, "shape run", 0)
       return empty
@@ -151,10 +151,10 @@ pub fn shape_run(arena: *mem.Arena, status: *fail.Status, api: *const Api, font:
   api.buffer_set_flags(buffer, options.flags)
   api.buffer_guess_properties(buffer)
   feature_pointer: *const Feature
-  if #len(features) != 0 {
+  if features.len != 0 {
     feature_pointer = &features[0]
   }
-  api.shape(font, buffer, feature_pointer, #cast(u32, #len(features)))
+  api.shape(font, buffer, feature_pointer, #cast(u32, features.len))
   if api.buffer_allocation_successful(buffer) == 0 {
     hb_failed(status, fail.Kind.System, "shape run", 0)
     return empty
@@ -171,10 +171,10 @@ pub fn shape_run(arena: *mem.Arena, status: *fail.Status, api: *const Api, font:
     hb_failed(status, fail.Kind.Overflow, "shape run", 0)
     return empty
   }
-  glyphs := mem.push_array(Glyph, arena, #cast(usize, count))
+  glyphs := mem.push_array<Glyph>(arena, #cast(usize, count))
   info_view := #slice(infos, count)
   position_view := #slice(positions, count)
-  for i in 0..#len(glyphs) {
+  for i in 0..glyphs.len {
     info := info_view[i]
     position := position_view[i]
     glyphs[i] = Glyph{index:info.codepoint, cluster:info.cluster, x_advance:position.x_advance, y_advance:position.y_advance, x_offset:position.x_offset, y_offset:position.y_offset}

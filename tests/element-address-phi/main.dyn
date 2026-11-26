@@ -1,7 +1,7 @@
 use "std/io"
 fn pick(xs: []u64, n: usize) *u64 {
   p: *u64 = nil
-  for i in 0..#len(xs) {
+  for i in 0..xs.len {
     if i == n {
       p = &xs[i]
     }

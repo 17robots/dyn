@@ -1,26 +1,26 @@
 use "std/fail"
-use "std/crypto/aesgcm" aes
-use "std/mem" mem
-use "std/crypto/chacha20poly1305" native
+use aes "std/crypto/aesgcm"
+use mem "std/mem"
+use native "std/crypto/chacha20poly1305"
 pub enum Cipher { Aes256Gcm, Chacha20Poly1305 }
 pub struct Sealed { ciphertext: []u8, tag: []u8 }
 
 fn valid(kind: Cipher, count: usize, additional: []const u8, key: []const u8, nonce: []const u8) bool {
   if kind != Cipher.Aes256Gcm && kind != Cipher.Chacha20Poly1305 { return false }
-  if #len(key) != 32 || #len(nonce) == 0 || #len(nonce) > 2147483647 || count > 2147483647 || #len(additional) > 2147483647 {
+  if key.len != 32 || nonce.len == 0 || nonce.len > 2147483647 || count > 2147483647 || additional.len > 2147483647 {
     return false
   }
   // Preserve the established GCM nonce and payload limits; ChaCha fixes IV12.
-  if kind == Cipher.Aes256Gcm && #len(nonce) > 128 { return false }
-  if kind == Cipher.Chacha20Poly1305 && #len(nonce) != 12 { return false }
+  if kind == Cipher.Aes256Gcm && nonce.len > 128 { return false }
+  if kind == Cipher.Chacha20Poly1305 && nonce.len != 12 { return false }
   return true
 }
 fn overlaps(left: []const u8, right: []const u8) bool {
-  if #len(left) == 0 || #len(right) == 0 { return false }
+  if left.len == 0 || right.len == 0 { return false }
   a := #cast(usize, &left[0])
   b := #cast(usize, &right[0])
-  if a <= b { return b - a < #len(left) }
-  return a - b < #len(right)
+  if a <= b { return b - a < left.len }
+  return a - b < right.len
 }
 // Reject unused backing before allocations can overwrite borrowed inputs.
 // Allocated inputs remain stable when this arena adds blocks.
@@ -38,7 +38,7 @@ fn conflicts(arena: *mem.Arena, _count: usize, first: []const u8, second: []cons
 pub fn seal(arena: *mem.Arena, status: *fail.Status, kind: Cipher, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Sealed {
   if status == nil { return seal(arena, &fail.Status{}, kind, plaintext, additional, key, nonce) }
   if status.failed { return Sealed{} }
-  count := #len(plaintext)
+  count := plaintext.len
   if !valid(kind, count, additional, key, nonce) || count > #max(usize) - 16 {
     fail.invalid(status, "seal", "", "bad cipher, key, nonce or size")
     return Sealed{}
@@ -73,8 +73,8 @@ pub fn open(arena: *mem.Arena, status: *fail.Status, kind: Cipher, ciphertext: [
   if status == nil { return open(arena, &fail.Status{}, kind, ciphertext, tag, additional, key, nonce) }
   empty: []u8
   if status.failed { return empty }
-  count := #len(ciphertext)
-  if !valid(kind, count, additional, key, nonce) || #len(tag) != 16 {
+  count := ciphertext.len
+  if !valid(kind, count, additional, key, nonce) || tag.len != 16 {
     fail.invalid(status, "open", "", "bad cipher, key, nonce, tag or size")
     return empty
   }

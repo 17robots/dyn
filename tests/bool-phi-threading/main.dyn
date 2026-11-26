@@ -1,16 +1,16 @@
 fn swap_extension(list: []const u8, wanted: []const u8) bool {
   at:usize=0
-  for at<#len(list) {
-    for at<#len(list) && list[at]==32 {
+  for at<list.len {
+    for at<list.len && list[at]==32 {
       at+=1
     }
     first:=at
-    for at<#len(list) && list[at]!=32 {
+    for at<list.len && list[at]!=32 {
       at+=1
     }
-    if at-first==#len(wanted) {
+    if at-first==wanted.len {
       equal:=true
-      for i in 0..#len(wanted) {
+      for i in 0..wanted.len {
         if list[first+i]!=wanted[i] {
           equal=false
           break

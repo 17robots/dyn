@@ -7,9 +7,9 @@
 // Iterator must be zero-initialized or created by iterator(); advance only
 // through next(). Copying an iterator copies its position and borrowed view.
 use "std/fail"
-use "std/mem" memory
-use "std/strings" text
-use "std/unicode/utf8" utf8
+use memory "std/mem"
+use text "std/strings"
+use utf8 "std/unicode/utf8"
 use "std/bytes"
 use "std/encoding/json/scan"
 
@@ -33,12 +33,12 @@ const ReadSigned: u64 = 512
 const ReadFloat: u64 = 768
 
 fn tape(arena: *memory.Arena, capacity: usize) []Value {
-  return memory.push_array(Value, arena, capacity)
+  return memory.push_array<Value>(arena, capacity)
 }
 
 fn read_append(state: *ReadParser, kind: u8, bits: u64) usize {
-  if state.used == #len(state.values) {
-    old := #len(state.values)
+  if state.used == state.values.len {
+    old := state.values.len
     capacity := old * 2
     if capacity > state.limit {
       capacity = state.limit
@@ -53,7 +53,7 @@ fn read_append(state: *ReadParser, kind: u8, bits: u64) usize {
     block := state.arena.current
     cursor := #cast(usize, &block.data[0]) + block.offset
     extra := (capacity - old) * #sizeof(Value)
-    if #cast(usize, &state.values[0]) + old * #sizeof(Value) == cursor && #len(block.data) - block.offset >= extra {
+    if #cast(usize, &state.values[0]) + old * #sizeof(Value) == cursor && block.data.len - block.offset >= extra {
       _ = tape(state.arena, capacity - old)
       state.values = #slice(&state.values[0], capacity)
     } else {
@@ -71,7 +71,7 @@ fn read_append(state: *ReadParser, kind: u8, bits: u64) usize {
 fn read_skip(cursor: *Cursor) {
   source := cursor.source
   at := cursor.at
-  for at < #len(source) {
+  for at < source.len {
     byte := source[at]
     if byte != ' ' && byte != 10 && byte != 13 && byte != 9 { break }
     at += 1
@@ -86,7 +86,7 @@ fn read_number(state: *ReadParser) bool {
   if negative {
     at += 1
   }
-  if at == #len(source) { return false }
+  if at == source.len { return false }
   integer: u64 = 0
   exact := true
   byte := source[at]
@@ -94,7 +94,7 @@ fn read_number(state: *ReadParser) bool {
     at += 1
   } else {
     if byte < '1' || byte > '9' { return false }
-    for at < #len(source) {
+    for at < source.len {
       byte = source[at]
       if byte < '0' || byte > '9' { break }
       n := #cast(u64, byte - '0')
@@ -108,11 +108,11 @@ fn read_number(state: *ReadParser) bool {
       at += 1
     }
   }
-  if at < #len(source) && source[at] == '.' {
+  if at < source.len && source[at] == '.' {
     exact = false
     at += 1
     begin := at
-    for at < #len(source) {
+    for at < source.len {
       byte = source[at]
       if byte < '0' || byte > '9' { break }
       at += 1
@@ -122,14 +122,14 @@ fn read_number(state: *ReadParser) bool {
       return false
     }
   }
-  if at < #len(source) && (source[at] == 'e' || source[at] == 'E') {
+  if at < source.len && (source[at] == 'e' || source[at] == 'E') {
     exact = false
     at += 1
-    if at < #len(source) && (source[at] == '+' || source[at] == '-') {
+    if at < source.len && (source[at] == '+' || source[at] == '-') {
       at += 1
     }
     begin := at
-    for at < #len(source) {
+    for at < source.len {
       byte = source[at]
       if byte < '0' || byte > '9' { break }
       at += 1
@@ -151,7 +151,7 @@ fn read_number(state: *ReadParser) bool {
     state.values[index].tag |= ReadSigned
     return true
   }
-  value := text.parse(f64, source[start..at])
+  value := text.parse<f64>(source[start..at])
   if value > 1.7976931348623157e308 || value < -1.7976931348623157e308 {
     state.cursor.error = fail.Kind.Overflow
     return false
@@ -167,17 +167,17 @@ fn read_string_value(state: *ReadParser) bool {
   value := read_decoded_string(state)
   if state.cursor.error != fail.Kind.Ok { return false }
   pointer: u64 = 0
-  if #len(value) != 0 {
+  if value.len != 0 {
     pointer = #cast(usize, &value[0])
   }
   index := read_append(state, KindString, pointer)
-  state.values[index].tag |= #cast(u64, #len(value)) << 8
+  state.values[index].tag |= #cast(u64, value.len) << 8
   return true
 }
 
 fn read_value(state: *ReadParser, depth: usize) bool {
   read_skip(&state.cursor)
-  if state.cursor.at == #len(state.buffer) { return false }
+  if state.cursor.at == state.buffer.len { return false }
   byte := state.buffer[state.cursor.at]
   if byte == '"' { return read_string_value(state) }
   if byte == 'n' {
@@ -212,7 +212,7 @@ fn read_value(state: *ReadParser, depth: usize) bool {
   state.cursor.at += 1
   read_skip(&state.cursor)
   count: usize = 0
-  if state.cursor.at < #len(state.buffer) && state.buffer[state.cursor.at] == close {
+  if state.cursor.at < state.buffer.len && state.buffer[state.cursor.at] == close {
     state.cursor.at += 1
     state.values[index].bits = state.used - index
     return true
@@ -220,12 +220,12 @@ fn read_value(state: *ReadParser, depth: usize) bool {
   for {
     if object {
       read_skip(&state.cursor)
-      if state.cursor.at == #len(state.buffer) || state.buffer[state.cursor.at] != '"' {
+      if state.cursor.at == state.buffer.len || state.buffer[state.cursor.at] != '"' {
         return false
       }
       if !read_string_value(state) { return false }
       read_skip(&state.cursor)
-      if state.cursor.at == #len(state.buffer) || state.buffer[state.cursor.at] != ':' {
+      if state.cursor.at == state.buffer.len || state.buffer[state.cursor.at] != ':' {
         return false
       }
       state.cursor.at += 1
@@ -233,7 +233,7 @@ fn read_value(state: *ReadParser, depth: usize) bool {
     if !read_value(state, depth + 1) { return false }
     count += 1
     read_skip(&state.cursor)
-    if state.cursor.at == #len(state.buffer) { return false }
+    if state.cursor.at == state.buffer.len { return false }
     byte = state.buffer[state.cursor.at]
     state.cursor.at += 1
     if byte == close { break }
@@ -256,15 +256,15 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *co
   if status == nil { return parse(arena, &fail.Status{}, source) }
   if status.failed { return &nil_value }
   mark := memory.arena_mark(arena)
-  if #len(source) == 0 {
+  if source.len == 0 {
     fail.at(status, fail.Kind.InvalidInput, "parse JSON", "empty input", 0)
     return &nil_value
   }
   maximum := #max(usize)
   // Incomplete containers can consume one node per input byte before failure.
   // The smaller complete-document estimate is only an initial capacity hint.
-  limit := #len(source)
-  if limit > maximum / 16 || #cast(u64, #len(source)) > 0x00ffffffffffffff {
+  limit := source.len
+  if limit > maximum / 16 || #cast(u64, source.len) > 0x00ffffffffffffff {
     fail.at(status, fail.Kind.Overflow, "parse JSON", "input too large", 0)
     return &nil_value
   }
@@ -272,22 +272,22 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *co
     fail.invalid(status, "parse JSON", "", "the input lies in the arena's free space")
     return &nil_value
   }
-  buffer := memory.push_bytes(arena, #len(source))
+  buffer := memory.push_bytes(arena, source.len)
   _ = memory.copy(buffer, source)
-  capacity := #len(source) / 2 + 1
+  capacity := source.len / 2 + 1
   if capacity > 32 {
     capacity = 32
   }
   probe := Cursor{ source: buffer }
   read_skip(&probe)
-  if probe.at < #len(buffer) && buffer[probe.at] != '[' && buffer[probe.at] != '{' {
+  if probe.at < buffer.len && buffer[probe.at] != '[' && buffer[probe.at] != '{' {
     capacity = 1
   }
   values := tape(arena, capacity)
   state := ReadParser{ cursor: probe, buffer: buffer, values: values, limit: limit, arena: arena }
   ok := read_value(&state, 0)
   read_skip(&state.cursor)
-  if !ok || state.cursor.at != #len(source) {
+  if !ok || state.cursor.at != source.len {
     offset := state.cursor.at
     kind := state.cursor.error
     if kind == fail.Kind.Ok {
@@ -305,7 +305,7 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *co
     fail.at(status, kind, "parse JSON", message, offset)
     return &nil_value
   }
-  unused := (#len(state.values) - state.used) * 16
+  unused := (state.values.len - state.used) * 16
   memory.arena_rewind(arena, memory.arena_mark(arena) - unused)
   return &state.values[0]
 }
@@ -352,7 +352,7 @@ pub fn get(object: *const Value, key: []const u8) *const Value {
   for i in 0..#cast(usize, object.tag >> 8) {
     value := #cast(*const Value, #cast(usize, at) + 16)
     length := #cast(usize, at.tag >> 8)
-    if length == #len(key) {
+    if length == key.len {
       if length == 0 { return value }
       name := #slice(#cast(*const u8, #cast(usize, at.bits)), length)
       if bytes.equal(name, key) { return value }
@@ -381,14 +381,14 @@ fn ascii_string_prefix(source: []const u8) usize {
 fn read_decoded_string(state: *ReadParser) []const u8 {
   cursor := &state.cursor
   source := cursor.source
-  if cursor.at >= #len(source) || source[cursor.at] != '"' { return failed_string(cursor) }
+  if cursor.at >= source.len || source[cursor.at] != '"' { return failed_string(cursor) }
   cursor.at += 1
   start := cursor.at
   end := start
   end += ascii_string_prefix(source[start..])
   has_escape: bool = false
   ascii: bool = true
-  for end < #len(source) {
+  for end < source.len {
     byte := source[end]
     if byte == '"' { break }
     if byte >= 128 {
@@ -397,7 +397,7 @@ fn read_decoded_string(state: *ReadParser) []const u8 {
     if byte == '\\' {
       has_escape = true
       end += 1
-      if end >= #len(source) { return failed_string(cursor) }
+      if end >= source.len { return failed_string(cursor) }
       byte = source[end]
       if byte >= 128 {
         ascii = false
@@ -407,7 +407,7 @@ fn read_decoded_string(state: *ReadParser) []const u8 {
     end += 1
   }
 
-  if end >= #len(source) { return failed_string(cursor) }
+  if end >= source.len { return failed_string(cursor) }
   if !ascii && !utf8.valid(source[start..end]) { return failed_string(cursor) }
   if end == start {
     cursor.at = end + 1
@@ -508,11 +508,11 @@ fn utf8_byte(value: usize, marker: u8) u8 {
 }
 
 fn literal(cursor: *Cursor, content: []const u8) bool {
-  if cursor.at + #len(content) > #len(cursor.source) { return false }
-  for i in 0..#len(content) {
+  if cursor.at + content.len > cursor.source.len { return false }
+  for i in 0..content.len {
     if cursor.source[cursor.at + i] != content[i] { return false }
   }
-  cursor.at += #len(content)
+  cursor.at += content.len
   return true
 }
 

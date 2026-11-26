@@ -7,7 +7,7 @@ fn font_directories(arena: *mem.Arena, output: [][]const u8) usize {
   output[count] = strings.join(arena, parts[..], "\\")
   count += 1
   local := process.environment_or(arena, "LOCALAPPDATA", "")
-  if #len(local) != 0 {
+  if local.len != 0 {
     local_parts: [2][]const u8 = [local, "Microsoft\\Windows\\Fonts"]
     output[count] = strings.join(arena, local_parts[..], "\\")
     count += 1

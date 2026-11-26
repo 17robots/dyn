@@ -12,13 +12,13 @@ fn main() {
   seed: u64 = 7
   for i in 0..size {
     seed = seed * 6364136223846793005 + 1442695040888963407
-    text[i] = words[(i + #cast(usize, seed >> 60)) % #len(words)]
+    text[i] = words[(i + #cast(usize, seed >> 60)) % words.len]
   }
   total: usize = 0
   for round in 0..4 {
     mark := mem.arena_mark(arena)
     encoded := gzip.compress(arena, text, 6)
-    total += #len(encoded)
+    total += encoded.len
     mem.arena_rewind(arena, mark)
     _ = round
   }

@@ -1,13 +1,13 @@
 // Headless UI example. Writes ui-demo.png in the working directory.
 // The tiny bitmap alphabet is example-owned; no platform font service is used.
-use "std/io" io
-use "std/ui" ui
-use "std/ui/software" software
-use "std/mem" mem
-use "std/image/png" png
+use io "std/io"
+use ui "std/ui"
+use software "std/ui/software"
+use mem "std/mem"
+use png "std/image/png"
 use "std/fail"
-use "std/fs" fs
-use "std/fmt" fmt
+use fs "std/fs"
+use fmt "std/fmt"
 patterns: [38][7]u8 = [
   [14, 17, 17, 31, 17, 17, 17],
   [30, 17, 17, 30, 17, 17, 30],
@@ -103,7 +103,7 @@ fn main() {
   fmt.write_i64(&label, #cast(i64, count))
   ui.label(&context, ui.Rect{ x: 32, y: 64, width: 416, height: 24 }, fmt.bytes(&label), context.style.accent)
   ui.end(&context)
-  pixels := mem.push_array(u8, output, #cast(usize, 480 * 240 * 4))
+  pixels := mem.push_array<u8>(output, #cast(usize, 480 * 240 * 4))
   surface := software.Surface{ pixels: pixels, width: 480, height: 240, stride: 480 * 4 }
   rendering: fail.Status
   software.render(&rendering, &surface, ui.first(&context), software.Font{ glyph: glyph, line_height: 20 })

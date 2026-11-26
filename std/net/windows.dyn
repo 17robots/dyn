@@ -1,5 +1,5 @@
 #target(kernel: windows)
-use "std/os/windows" win
+use win "std/os/windows"
 pub const AddressFamilyIpv6: usize = 23
 pub type Descriptor = isize
 pub struct PollDescriptor { descriptor: Descriptor, events: i16, returned: i16, saved_events: i16 }
@@ -125,7 +125,7 @@ fn native_timeout(descriptor: isize, milliseconds: usize, sending: bool) isize {
   return native_set_option(descriptor, SocketLevel, option, &value, 4)
 }
 fn poll_native(items: []PollDescriptor, milliseconds: i32) isize {
-  if #len(items) == 0 {
+  if items.len == 0 {
     duration: u32 = 4294967295
     if milliseconds >= 0 {
       duration = #cast(u32, milliseconds)
@@ -133,11 +133,11 @@ fn poll_native(items: []PollDescriptor, milliseconds: i32) isize {
     raw_idle(duration)
     return 0
   }
-  if #len(items) > 4294967295 { return -22 }
-  for i in 0..#len(items) {
+  if items.len > 4294967295 { return -22 }
+  for i in 0..items.len {
     if (items[i].events & ~#cast(i16, 29)) != 0 { return -22 }
   }
-  for i in 0..#len(items) {
+  for i in 0..items.len {
     requested: i16 = 0
     if (items[i].events & PollReadable) != 0 {
       requested |= 256
@@ -150,9 +150,9 @@ fn poll_native(items: []PollDescriptor, milliseconds: i32) isize {
     items[i].events = requested
   }
   // The private saved field uses WSAPOLLFD padding; native stride remains 16.
-  native := #slice(#cast(*win.PollDescriptor, &items[0]), #len(items))
+  native := #slice(#cast(*win.PollDescriptor, &items[0]), items.len)
   value := win.event_poll(native, milliseconds)
-  for i in 0..#len(items) {
+  for i in 0..items.len {
     items[i].events = items[i].saved_events
     flags := items[i].returned
     returned: i16 = 0
@@ -181,14 +181,14 @@ pub fn receive_packet(status: *fail.Status, descriptor: isize, bytes: []u8) usiz
   if status == nil { return receive_packet(&fail.Status{}, descriptor, bytes) }
   if status.failed { return 0 }
   data: *u8 = nil
-  if #len(bytes) > 0 {
+  if bytes.len > 0 {
     data = &bytes[0]
   }
-  value := native_receive(descriptor, data, #len(bytes), 0, nil, nil)
+  value := native_receive(descriptor, data, bytes.len, 0, nil, nil)
   for native_interrupted(value) {
-    value = native_receive(descriptor, data, #len(bytes), 0, nil, nil)
+    value = native_receive(descriptor, data, bytes.len, 0, nil, nil)
   }
-  if value == -10040 { return #len(bytes) + 1 }
+  if value == -10040 { return bytes.len + 1 }
   if check(status, "receive", value) < 0 { return 0 }
   return #cast(usize, value)
 }

@@ -33,7 +33,7 @@ struct Tally {
 fn count(arena: *mem.Arena, text: []const u8) Tally {
   tally := Tally{}
   for line in strings.split(arena, text, "\n") {
-    if #len(line) == 0 { continue }
+    if line.len == 0 { continue }
     tally.lines += 1
     in_word := false
     for byte in line {
@@ -50,7 +50,7 @@ fn main() i32 {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   text: []const u8 = "one two\nthree\n"
-  if #len(program.args) > 1 {
+  if program.args.len > 1 {
     status: fail.Status
     text = fs.read_all(arena, &status, program.args[1], mem.MiB)
     if status.failed {

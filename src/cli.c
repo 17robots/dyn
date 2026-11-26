@@ -11,6 +11,9 @@ void dyn_cli_help(const char *command) {
       "Commands:\n  check    parse and validate module\n  fix      apply the fixes check reports, then check\n"
       "  vet      check module and report suspicious code\n  build    build "
       "executable module\n  run      build and run executable module\n"
+      "  test     discover and run test_* functions (including *_test.dyn)\n"
+      "  bench    discover and run bench_* benchmarks in release mode\n"
+      "  fuzz     discover and run fuzz_* targets with mutation inputs\n"
       "  fmt      canonicalize source layout\n"
       "  docs     print public declarations (Markdown or --json)\n"
       "  guide    print the guide: --brief for one page, or a topic\n"
@@ -24,6 +27,10 @@ void dyn_cli_help(const char *command) {
       "  --jobs <1..256>  --max-work <positive frontend work units>\n"
       "  --cpu <generic|native>  --opt-level <1|2|3>  --opt-remarks\n"
       "  --check-overflow  (panic when + - * << or negation in the program's own code overflows)\n"
+      "  --check-lifetimes  (enable hardened arena PROT_NONE, poison, and thread-affinity checks)\n"
+      "  --race  (instrument shared memory reads/writes for dynamic data-race detection)\n"
+      "  --filter <substring>  (filter tests/benchmarks/fuzz targets by name)\n"
+      "  --iterations <count>  (iteration count for dyn bench / dyn fuzz)\n"
       "  --sample-profile <text profile>  (release builds only)\n"
       "  --backend <auto|native>  independent code generator\n"
       "  --link <object-archive-or-so>  (repeatable explicit FFI input)\n"
@@ -40,13 +47,23 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
   o->command = argv[1];
   for (int i = 2; i < argc; ++i) {
     const char *a = argv[i];
-    if (strcmp(a, "--output") == 0 || strcmp(a, "--target") == 0 || strcmp(a, "--link") == 0 || strcmp(a, "--diagnostics") == 0 || strcmp(a, "--jobs") == 0 || strcmp(a, "--max-work") == 0 || strcmp(a, "--cpu") == 0 || strcmp(a, "--opt-level") == 0 || strcmp(a, "--sample-profile") == 0 || strcmp(a, "--backend") == 0) {
+    if (strcmp(a, "--output") == 0 || strcmp(a, "--target") == 0 || strcmp(a, "--link") == 0 || strcmp(a, "--diagnostics") == 0 || strcmp(a, "--jobs") == 0 || strcmp(a, "--max-work") == 0 || strcmp(a, "--cpu") == 0 || strcmp(a, "--opt-level") == 0 || strcmp(a, "--sample-profile") == 0 || strcmp(a, "--backend") == 0 || strcmp(a, "--filter") == 0 || strcmp(a, "--iterations") == 0) {
       if (++i >= argc) {
         fprintf(stderr, "error: %s requires a value\n", a);
         return 2;
       }
       if (strcmp(a, "--output") == 0) o->output = argv[i];
       else if (strcmp(a, "--target") == 0) o->target = argv[i];
+      else if (strcmp(a, "--filter") == 0) o->filter = argv[i];
+      else if (strcmp(a, "--iterations") == 0) {
+        char *end = NULL;
+        errno = 0;
+        unsigned long long value = strtoull(argv[i], &end, 10);
+        if (errno || argv[i][0] < '0' || argv[i][0] > '9' || *end || !value) {
+          fprintf(stderr, "error: --iterations requires a positive integer\n"); return 2;
+        }
+        o->iterations = value;
+      }
       else if (strcmp(a, "--cpu") == 0) {
         if (strcmp(argv[i], "generic") && strcmp(argv[i], "native")) {
           fprintf(stderr, "error: --cpu accepts generic or native\n"); return 2;
@@ -103,6 +120,10 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
     } else if (strcmp(a, "--no-check-overflow") == 0) {
       o->overflow_set = true;
       o->no_check_overflow = true;
+    } else if (strcmp(a, "--check-lifetimes") == 0) {
+      o->optimization.check_lifetimes = true;
+    } else if (strcmp(a, "--race") == 0) {
+      o->optimization.race = true;
     } else if (strcmp(a, "--debug") == 0) {
       o->release = false;
       if (!o->debug_info_set)

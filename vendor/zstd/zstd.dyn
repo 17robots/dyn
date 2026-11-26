@@ -17,13 +17,13 @@ pub fn compress(status: *fail.Status, destination: []u8, source: []const u8, lev
   if status.failed { return 0 }
   destination_pointer: rawptr = nil
   source_pointer: rawptr = nil
-  if #len(destination) > 0 {
+  if destination.len > 0 {
     destination_pointer = #cast(rawptr, &destination[0])
   }
-  if #len(source) > 0 {
+  if source.len > 0 {
     source_pointer = #cast(rawptr, &source[0])
   }
-  code := zstd_compress(destination_pointer, #len(destination), source_pointer, #len(source), level)
+  code := zstd_compress(destination_pointer, destination.len, source_pointer, source.len, level)
   return checked(status, "compress", code)
 }
 // The decompressed size. Malformed input fails with InvalidInput, too small a
@@ -33,13 +33,13 @@ pub fn decompress(status: *fail.Status, destination: []u8, source: []const u8) u
   if status.failed { return 0 }
   destination_pointer: rawptr = nil
   source_pointer: rawptr = nil
-  if #len(destination) > 0 {
+  if destination.len > 0 {
     destination_pointer = #cast(rawptr, &destination[0])
   }
-  if #len(source) > 0 {
+  if source.len > 0 {
     source_pointer = #cast(rawptr, &source[0])
   }
-  code := zstd_decompress(destination_pointer, #len(destination), source_pointer, #len(source))
+  code := zstd_decompress(destination_pointer, destination.len, source_pointer, source.len)
   return checked(status, "decompress", code)
 }
 // A malformed or empty frame header fails with InvalidInput.
@@ -47,8 +47,8 @@ pub fn frame_size(status: *fail.Status, source: []const u8) FrameSize {
   if status == nil { return frame_size(&fail.Status{}, source) }
   if status.failed { return FrameSize{} }
   size := ContentSizeError
-  if #len(source) != 0 {
-    size = zstd_frame_content_size(#cast(rawptr, &source[0]), #len(source))
+  if source.len != 0 {
+    size = zstd_frame_content_size(#cast(rawptr, &source[0]), source.len)
   }
   if size == ContentSizeError {
     fail.invalid(status, "read zstd frame", "", "malformed frame header")
@@ -79,7 +79,7 @@ fn provider_failed(status: *fail.Status, operation: []const u8, code: usize) {
     kind = fail.Kind.Capacity
   }
   message := error_name(code, 128)
-  if #len(message) == 0 {
+  if message.len == 0 {
     message = "zstd failed"
   }
   failure := fail.make(kind, operation, "", message)
@@ -115,14 +115,14 @@ pub fn stream_context(status: *fail.Status, workspace: []u8, window_log: u32) St
   if status == nil { return stream_context(&fail.Status{}, workspace, window_log) }
   if status.failed { return StreamContext{ failed: true } }
   required := stream_workspace_size(window_log)
-  if required == 0 || #len(workspace) < required {
+  if required == 0 || workspace.len < required {
     fail.set(status, fail.make(fail.Kind.Capacity, "start zstd stream", "", "the workspace is too small"))
     return StreamContext{ failed: true }
   }
   address := #cast(usize, &workspace[0])
   eight: usize = 8
   padding := (eight - (address & 7)) & 7
-  value := zstd_init_static_dstream(#cast(rawptr, &workspace[padding]), #len(workspace) - padding)
+  value := zstd_init_static_dstream(#cast(rawptr, &workspace[padding]), workspace.len - padding)
   if value == nil {
     fail.set(status, fail.make(fail.Kind.Capacity, "start zstd stream", "", "the workspace is too small"))
     return StreamContext{ failed: true }
@@ -147,15 +147,15 @@ pub fn stream_decode(status: *fail.Status, context: *StreamContext, destination:
   }
   output_pointer: rawptr = nil
   input_pointer: rawptr = nil
-  if #len(destination) != 0 {
+  if destination.len != 0 {
     output_pointer = #cast(rawptr, &destination[0])
   }
-  if #len(source) != 0 {
+  if source.len != 0 {
     input_pointer = #cast(rawptr, &source[0])
   }
   written: usize = 0
   consumed: usize = 0
-  code := zstd_decompress_stream(context.value, output_pointer, #len(destination), &written, input_pointer, #len(source), &consumed)
+  code := zstd_decompress_stream(context.value, output_pointer, destination.len, &written, input_pointer, source.len, &consumed)
   if zstd_is_error(code) != 0 {
     context.failed = true
     context.provider_code = code

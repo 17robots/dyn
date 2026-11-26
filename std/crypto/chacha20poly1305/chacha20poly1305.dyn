@@ -1,6 +1,6 @@
-use "std/crypto/chacha20" chacha
-use "std/crypto/poly1305" poly
-use "std/encoding/binary" binary
+use chacha "std/crypto/chacha20"
+use poly "std/crypto/poly1305"
+use binary "std/encoding/binary"
 use "std/fail"
 // RFC 8439 AEAD. Key:32, nonce:12, tag:16 bytes. Never reuse a nonce/key pair.
 // Caller owns all storage. Input/output may be exactly the same slice, but no
@@ -8,17 +8,17 @@ use "std/fail"
 // writing. Bad sizes or overlaps fail with InvalidInput, and so does a tag that
 // does not authenticate; failure leaves destination unchanged.
 fn overlaps(left: []const u8, right: []const u8) bool {
-  if #len(left) == 0 || #len(right) == 0 { return false }
+  if left.len == 0 || right.len == 0 { return false }
   a := #cast(usize, &left[0])
   b := #cast(usize, &right[0])
-  if a <= b { return b - a < #len(left) }
-  return a - b < #len(right)
+  if a <= b { return b - a < left.len }
+  return a - b < right.len
 }
 fn valid(output: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool {
-  if #len(key) != 32 || #len(nonce) != 12 || #len(output) != #len(input) { return false }
+  if key.len != 32 || nonce.len != 12 || output.len != input.len { return false }
   // Counter zero is reserved for the MAC key. This expression cannot overflow.
-  blocks := #len(input) / 64
-  if #len(input) % 64 != 0 {
+  blocks := input.len / 64
+  if input.len % 64 != 0 {
     blocks += 1
   }
   if #cast(u64, blocks) > 0xffffffff { return false }
@@ -35,16 +35,16 @@ fn mac(status: *fail.Status, ciphertext: []const u8, aad: []const u8, key: []con
   state := poly.init(status, first[..32])
   zero: [16]u8
   poly.update(&state, aad)
-  if #len(aad) % 16 != 0 {
-    poly.update(&state, zero[..16-#len(aad)%16])
+  if aad.len % 16 != 0 {
+    poly.update(&state, zero[..16-aad.len%16])
   }
   poly.update(&state, ciphertext)
-  if #len(ciphertext) % 16 != 0 {
-    poly.update(&state, zero[..16-#len(ciphertext)%16])
+  if ciphertext.len % 16 != 0 {
+    poly.update(&state, zero[..16-ciphertext.len%16])
   }
   lengths: [16]u8
-  binary.store_u64_le(lengths[..8], #len(aad))
-  binary.store_u64_le(lengths[8..], #len(ciphertext))
+  binary.store_u64_le(lengths[..8], aad.len)
+  binary.store_u64_le(lengths[8..], ciphertext.len)
   poly.update(&state, lengths[..])
   return poly.finish(status, &state)
 }
@@ -54,7 +54,7 @@ pub fn seal(status: *fail.Status, output: []u8, tag: []u8, input: []const u8, aa
     return
   }
   if status.failed { return }
-  if !valid(output, input, aad, key, nonce) || #len(tag) != 16 || overlaps(tag, output) || overlaps(tag, input) || overlaps(tag, aad) || overlaps(tag, key) || overlaps(tag, nonce) {
+  if !valid(output, input, aad, key, nonce) || tag.len != 16 || overlaps(tag, output) || overlaps(tag, input) || overlaps(tag, aad) || overlaps(tag, key) || overlaps(tag, nonce) {
     fail.invalid(status, "ChaCha20-Poly1305 seal", "", "bad key, nonce, tag or output size, or overlapping buffers")
     return
   }
@@ -71,7 +71,7 @@ pub fn open(status: *fail.Status, output: []u8, input: []const u8, tag: []const 
     return
   }
   if status.failed { return }
-  if !valid(output, input, aad, key, nonce) || #len(tag) != 16 || overlaps(output, tag) {
+  if !valid(output, input, aad, key, nonce) || tag.len != 16 || overlaps(output, tag) {
     fail.invalid(status, "ChaCha20-Poly1305 open", "", "bad key, nonce, tag or output size, or overlapping buffers")
     return
   }

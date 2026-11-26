@@ -196,7 +196,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-sort-algorithms-') as directory:
     probe = work / 'probe'
     probe.mkdir()
     (probe / 'probe.dyn').write_text((ROOT / 'std/sort/sort.dyn').read_text().replace(
-        'fn introsort(', 'pub fn introsort('))
+        'fn introsort<T>(', 'pub fn introsort<T>('))
     for mode, extra in (('debug', ['--debug']), ('release', ['--release']),
                         ('release-tree', ['--release']),
                         ('heap-depth0', ['--release']), ('heap-depth1', ['--release'])):

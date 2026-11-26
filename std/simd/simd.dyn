@@ -15,7 +15,7 @@ pub fn u8x16_splat(value: u8) U8x16 {
 }
 // Requires at least 16 elements; extra elements are ignored.
 pub fn u8x16_load(source: []const u8) U8x16 {
-  if #len(source) < 16 {
+  if source.len < 16 {
     #panic("short SIMD load")
   }
   output: U8x16
@@ -26,7 +26,7 @@ pub fn u8x16_load(source: []const u8) U8x16 {
 }
 // Writes exactly 16 elements; requires at least 16 elements.
 pub fn u8x16_store(destination: []u8, value: U8x16) {
-  if #len(destination) < 16 {
+  if destination.len < 16 {
     #panic("short SIMD store")
   }
   for i in 0..16 {
@@ -112,7 +112,7 @@ pub fn i8x16_splat(value: i8) I8x16 {
 }
 // Requires at least 16 elements; extra elements are ignored.
 pub fn i8x16_load(source: []const i8) I8x16 {
-  if #len(source) < 16 {
+  if source.len < 16 {
     #panic("short SIMD load")
   }
   output: I8x16
@@ -123,7 +123,7 @@ pub fn i8x16_load(source: []const i8) I8x16 {
 }
 // Writes exactly 16 elements; requires at least 16 elements.
 pub fn i8x16_store(destination: []i8, value: I8x16) {
-  if #len(destination) < 16 {
+  if destination.len < 16 {
     #panic("short SIMD store")
   }
   for i in 0..16 {
@@ -209,7 +209,7 @@ pub fn u16x8_splat(value: u16) U16x8 {
 }
 // Requires at least 8 elements; extra elements are ignored.
 pub fn u16x8_load(source: []const u16) U16x8 {
-  if #len(source) < 8 {
+  if source.len < 8 {
     #panic("short SIMD load")
   }
   output: U16x8
@@ -220,7 +220,7 @@ pub fn u16x8_load(source: []const u16) U16x8 {
 }
 // Writes exactly 8 elements; requires at least 8 elements.
 pub fn u16x8_store(destination: []u16, value: U16x8) {
-  if #len(destination) < 8 {
+  if destination.len < 8 {
     #panic("short SIMD store")
   }
   for i in 0..8 {
@@ -306,7 +306,7 @@ pub fn i16x8_splat(value: i16) I16x8 {
 }
 // Requires at least 8 elements; extra elements are ignored.
 pub fn i16x8_load(source: []const i16) I16x8 {
-  if #len(source) < 8 {
+  if source.len < 8 {
     #panic("short SIMD load")
   }
   output: I16x8
@@ -317,7 +317,7 @@ pub fn i16x8_load(source: []const i16) I16x8 {
 }
 // Writes exactly 8 elements; requires at least 8 elements.
 pub fn i16x8_store(destination: []i16, value: I16x8) {
-  if #len(destination) < 8 {
+  if destination.len < 8 {
     #panic("short SIMD store")
   }
   for i in 0..8 {
@@ -403,7 +403,7 @@ pub fn u32x4_splat(value: u32) U32x4 {
 }
 // Requires at least 4 elements; extra elements are ignored.
 pub fn u32x4_load(source: []const u32) U32x4 {
-  if #len(source) < 4 {
+  if source.len < 4 {
     #panic("short SIMD load")
   }
   output: U32x4
@@ -414,7 +414,7 @@ pub fn u32x4_load(source: []const u32) U32x4 {
 }
 // Writes exactly 4 elements; requires at least 4 elements.
 pub fn u32x4_store(destination: []u32, value: U32x4) {
-  if #len(destination) < 4 {
+  if destination.len < 4 {
     #panic("short SIMD store")
   }
   for i in 0..4 {
@@ -500,7 +500,7 @@ pub fn i32x4_splat(value: i32) I32x4 {
 }
 // Requires at least 4 elements; extra elements are ignored.
 pub fn i32x4_load(source: []const i32) I32x4 {
-  if #len(source) < 4 {
+  if source.len < 4 {
     #panic("short SIMD load")
   }
   output: I32x4
@@ -511,7 +511,7 @@ pub fn i32x4_load(source: []const i32) I32x4 {
 }
 // Writes exactly 4 elements; requires at least 4 elements.
 pub fn i32x4_store(destination: []i32, value: I32x4) {
-  if #len(destination) < 4 {
+  if destination.len < 4 {
     #panic("short SIMD store")
   }
   for i in 0..4 {
@@ -597,7 +597,7 @@ pub fn u64x2_splat(value: u64) U64x2 {
 }
 // Requires at least 2 elements; extra elements are ignored.
 pub fn u64x2_load(source: []const u64) U64x2 {
-  if #len(source) < 2 {
+  if source.len < 2 {
     #panic("short SIMD load")
   }
   output: U64x2
@@ -608,7 +608,7 @@ pub fn u64x2_load(source: []const u64) U64x2 {
 }
 // Writes exactly 2 elements; requires at least 2 elements.
 pub fn u64x2_store(destination: []u64, value: U64x2) {
-  if #len(destination) < 2 {
+  if destination.len < 2 {
     #panic("short SIMD store")
   }
   for i in 0..2 {
@@ -694,7 +694,7 @@ pub fn i64x2_splat(value: i64) I64x2 {
 }
 // Requires at least 2 elements; extra elements are ignored.
 pub fn i64x2_load(source: []const i64) I64x2 {
-  if #len(source) < 2 {
+  if source.len < 2 {
     #panic("short SIMD load")
   }
   output: I64x2
@@ -705,7 +705,7 @@ pub fn i64x2_load(source: []const i64) I64x2 {
 }
 // Writes exactly 2 elements; requires at least 2 elements.
 pub fn i64x2_store(destination: []i64, value: I64x2) {
-  if #len(destination) < 2 {
+  if destination.len < 2 {
     #panic("short SIMD store")
   }
   for i in 0..2 {
@@ -791,7 +791,7 @@ pub fn f32x4_splat(value: f32) F32x4 {
 }
 // Requires at least 4 elements; extra elements are ignored.
 pub fn f32x4_load(source: []const f32) F32x4 {
-  if #len(source) < 4 {
+  if source.len < 4 {
     #panic("short SIMD load")
   }
   output: F32x4
@@ -802,7 +802,7 @@ pub fn f32x4_load(source: []const f32) F32x4 {
 }
 // Writes exactly 4 elements; requires at least 4 elements.
 pub fn f32x4_store(destination: []f32, value: F32x4) {
-  if #len(destination) < 4 {
+  if destination.len < 4 {
     #panic("short SIMD store")
   }
   for i in 0..4 {
@@ -853,7 +853,7 @@ pub fn f64x2_splat(value: f64) F64x2 {
 }
 // Requires at least 2 elements; extra elements are ignored.
 pub fn f64x2_load(source: []const f64) F64x2 {
-  if #len(source) < 2 {
+  if source.len < 2 {
     #panic("short SIMD load")
   }
   output: F64x2
@@ -864,7 +864,7 @@ pub fn f64x2_load(source: []const f64) F64x2 {
 }
 // Writes exactly 2 elements; requires at least 2 elements.
 pub fn f64x2_store(destination: []f64, value: F64x2) {
-  if #len(destination) < 2 {
+  if destination.len < 2 {
     #panic("short SIMD store")
   }
   for i in 0..2 {

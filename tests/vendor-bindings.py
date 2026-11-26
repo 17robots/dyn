@@ -135,7 +135,7 @@ void T_get_callback(T_Callback *out) { *out=shift; }
 fn main() {
   if !verify_layout() { #panic("layout") }
   if T_Negative != -7 || T_Next != -6 || T_BIG != 18446744073709551615 { #panic("constants") }
-  if #len(T_TEXT) != 3 || T_TEXT[1] != 0 || T_TEXT[2] != 'b' { #panic("string bytes") }
+  if T_TEXT.len != 3 || T_TEXT[1] != 0 || T_TEXT[2] != 'b' { #panic("string bytes") }
   if T_NULL != nil || #cast(usize, T_SENTINEL()) != 18446744073709551615 { #panic("pointer constants") }
   pair := T_apply(callback, T_pair(8))
   if pair.x != 9 || pair.y != 6.5 { #panic("aggregate calling convention") }
@@ -190,7 +190,7 @@ fn main() {
 }
 '''
     program = re.sub(r'\bT_\w+', lambda match: 'raw.' + match[0], program).replace('verify_layout()', 'raw.verify_layout()')
-    (work / 'main.dyn').write_text('use "./module" raw\nuse "std/c"\n' + program)
+    (work / 'main.dyn').write_text('use raw "./module"\nuse "std/c"\n' + program)
     for mode in ([], ['--release']):
         run([DYN, 'build', work, '--no-cache', '--output', work / 'test', *mode], env)
         run([work / 'test'], env)

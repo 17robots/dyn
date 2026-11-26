@@ -32,7 +32,7 @@ fn receive(data: *const u8, size: usize, count: usize, context: rawptr) usize {
     return 0
   }
   length := size * count
-  if length > #len(sink.destination) - sink.used {
+  if length > sink.destination.len - sink.used {
     sink.full = true
     return 0
   }

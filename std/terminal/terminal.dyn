@@ -31,7 +31,7 @@ pub struct Key { kind: KeyKind, codepoint: u32, consumed: usize }
 // Recognizes UTF-8 text and common CSI cursor keys. Incomplete sequences consume
 // nothing. A standalone ESC is returned immediately; callers choose any timeout.
 pub fn key_decode(bytes: []const u8) Key {
-  if #len(bytes) == 0 { return Key{ kind: KeyKind.Incomplete } }
+  if bytes.len == 0 { return Key{ kind: KeyKind.Incomplete } }
   if bytes[0] != 27 {
     decoded := utf8.decode(bytes, 0)
     if decoded.valid {
@@ -45,11 +45,11 @@ pub fn key_decode(bytes: []const u8) Key {
     } else if bytes[0] >= 240 && bytes[0] <= 244 {
       width = 4
     }
-    if #len(bytes) < width { return Key{ kind: KeyKind.Incomplete } }
+    if bytes.len < width { return Key{ kind: KeyKind.Incomplete } }
     return Key{ kind: KeyKind.Unknown, consumed: 1 }
   }
-  if #len(bytes) == 1 || bytes[1] != '[' { return Key{ kind: KeyKind.Escape, consumed: 1 } }
-  if #len(bytes) < 3 { return Key{ kind: KeyKind.Incomplete } }
+  if bytes.len == 1 || bytes[1] != '[' { return Key{ kind: KeyKind.Escape, consumed: 1 } }
+  if bytes.len < 3 { return Key{ kind: KeyKind.Incomplete } }
   kind := KeyKind.Unknown
   if bytes[2] == 'A' {
     kind = KeyKind.Up
@@ -65,7 +65,7 @@ pub fn key_decode(bytes: []const u8) Key {
     kind = KeyKind.End
   }
   if kind != KeyKind.Unknown { return Key{ kind: kind, consumed: 3 } }
-  for end in 2..#len(bytes) {
+  for end in 2..bytes.len {
     if bytes[end] >= 64 && bytes[end] <= 126 {
       if end == 3 && bytes[end] == '~' {
         if bytes[2] == '1' {

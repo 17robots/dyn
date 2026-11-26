@@ -1,9 +1,9 @@
 #target(kernel: windows)
-use "std/io" io
+use io "std/io"
 use "std/fail"
-use "std/mem" mem
-use "std/unicode/utf8" utf8
-use "std/unicode/utf16" utf16
+use mem "std/mem"
+use utf8 "std/unicode/utf8"
+use utf16 "std/unicode/utf16"
 
 pub const Modify: u32 = 2
 pub const Attributes: u32 = 4
@@ -67,12 +67,12 @@ fn arm(slot: *Slot, code: *isize) bool {
 pub fn open(status: *fail.Status, storage: []u8) Watcher {
   if status == nil { return open(&fail.Status{}, storage) }
   if status.failed { return Watcher{} }
-  if #len(storage) < 272 {
+  if storage.len < 272 {
     _ = validation_failure(status, "watch", "", -28)
     return Watcher{}
   }
   owner := mem.arena_alloc(#sizeof(Native))
-  native := mem.push(Native, owner)
+  native := mem.push<Native>(owner)
   native.next_id = 1
   return Watcher{ native: native, owner: owner, storage: storage }
 }
@@ -108,7 +108,7 @@ fn retire(slot: *Slot) isize {
 pub fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i32 {
   if status == nil { return add(&fail.Status{}, state, path, mask) }
   if status.failed { return -1 }
-  if state.native == nil || #len(path) == 0 { return validation_failure(status, "watch", path, -22) }
+  if state.native == nil || path.len == 0 { return validation_failure(status, "watch", path, -22) }
   if (mask & SupportedEvents) == 0 { return validation_failure(status, "watch", path, -95) }
   index: usize = 16
   for i in 0..16 {
@@ -121,7 +121,7 @@ pub fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i
   wide: [4096]u16
   at: usize = 0
   used: usize = 0
-  for at < #len(path) {
+  for at < path.len {
     decoded := utf8.decode(path, at)
     if !decoded.valid || decoded.codepoint == 0 { return validation_failure(status, "watch", path, -22) }
     width := utf16.encode(wide[used..4095], decoded.codepoint)
@@ -276,7 +276,7 @@ pub fn next(status: *fail.Status, state: *Watcher) Event {
       names := #slice(#cast(*u16, &bytes[at + 12]), length / 2)
       position: usize = 0
       used: usize = 0
-      for position < #len(names) {
+      for position < names.len {
         decoded := utf16.decode(names, position)
         if !decoded.valid { return rescan(state, slot.id) }
         width := utf8.encode(state.storage[used..], decoded.codepoint)

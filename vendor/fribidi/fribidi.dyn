@@ -1,8 +1,8 @@
 use "std/fail"
-use "std/dynlib" dynlib
-use "std/mem" mem
-use "std/io" io
-use "std/unicode/utf8" utf8
+use dynlib "std/dynlib"
+use mem "std/mem"
+use io "std/io"
+use utf8 "std/unicode/utf8"
 
 // FriBidi's fixed-width public C ABI. The API table borrows a caller-owned
 // loader handle. Keep it loaded during calls; all helper results are copied
@@ -65,13 +65,13 @@ fn separator(cp: u32) bool {
 pub fn resolve(arena: *mem.Arena, status: *fail.Status, api: *const Api, text: []const u8, base: u32) Paragraph {
   if status == nil { return resolve(arena, &fail.Status{}, api, text, base) }
   if status.failed { return Paragraph{} }
-  if !direction(base) || #len(text) > 2147483647 {
+  if !direction(base) || text.len > 2147483647 {
     bidi_failed(status, fail.Kind.InvalidInput, "resolve", 0)
     return Paragraph{}
   }
   count: usize = 0
   offset: usize = 0
-  for offset < #len(text) {
+  for offset < text.len {
     decoded := utf8.decode(text, offset)
     if !decoded.valid || separator(decoded.codepoint) {
       bidi_failed(status, fail.Kind.InvalidInput, "resolve", 0)
@@ -86,14 +86,14 @@ pub fn resolve(arena: *mem.Arena, status: *fail.Status, api: *const Api, text: [
     return Paragraph{}
   }
   mark := mem.arena_mark(arena)
-  logical := mem.push_array(u32, arena, count)
-  visual := mem.push_array(u32, arena, count)
-  starts := mem.push_array(usize, arena, count)
-  ends := mem.push_array(usize, arena, count)
-  logical_to_visual := mem.push_array(i32, arena, count)
-  visual_to_logical := mem.push_array(i32, arena, count)
-  levels := mem.push_array(i8, arena, count)
-  types := mem.push_array(u32, arena, count)
+  logical := mem.push_array<u32>(arena, count)
+  visual := mem.push_array<u32>(arena, count)
+  starts := mem.push_array<usize>(arena, count)
+  ends := mem.push_array<usize>(arena, count)
+  logical_to_visual := mem.push_array<i32>(arena, count)
+  visual_to_logical := mem.push_array<i32>(arena, count)
+  levels := mem.push_array<i8>(arena, count)
+  types := mem.push_array<u32>(arena, count)
   offset = 0
   for i in 0..count {
     decoded := utf8.decode(text, offset)
@@ -137,8 +137,8 @@ pub fn resolve(arena: *mem.Arena, status: *fail.Status, api: *const Api, text: [
 pub fn reorder(arena: *mem.Arena, status: *fail.Status, api: *const Api, paragraph: *const Paragraph, start, end: usize) Line {
   if status == nil { return reorder(arena, &fail.Status{}, api, paragraph, start, end) }
   if status.failed { return Line{} }
-  count := #len(paragraph.logical)
-  if start > end || end > count || count > 2147483647 || #len(paragraph.levels) != count || #len(paragraph.types) != count || !direction(paragraph.base) {
+  count := paragraph.logical.len
+  if start > end || end > count || count > 2147483647 || paragraph.levels.len != count || paragraph.types.len != count || !direction(paragraph.base) {
     bidi_failed(status, fail.Kind.InvalidInput, "reorder", 0)
     return Line{}
   }
@@ -154,8 +154,8 @@ pub fn reorder(arena: *mem.Arena, status: *fail.Status, api: *const Api, paragra
     }
   }
   mark := mem.arena_mark(arena)
-  levels := mem.push_array(i8, arena, end-start)
-  map := mem.push_array(i32, arena, end-start)
+  levels := mem.push_array<i8>(arena, end-start)
+  map := mem.push_array<i32>(arena, end-start)
   for i in 0..end-start {
     levels[i] = paragraph.levels[start+i]
     map[i] = #cast(i32, start+i)
@@ -166,8 +166,8 @@ pub fn reorder(arena: *mem.Arena, status: *fail.Status, api: *const Api, paragra
     return Line{}
   }
   scratch := mem.arena_mark(arena)
-  seen := mem.push_array(u8, arena, #len(map))
-  for i in 0..#len(map) {
+  seen := mem.push_array<u8>(arena, map.len)
+  for i in 0..map.len {
     if map[i] < 0 || #cast(usize, map[i]) < start || #cast(usize, map[i]) >= end || levels[i] < 0 {
       mem.arena_rewind(arena, mark)
       bidi_failed(status, fail.Kind.InvalidState, "reorder", 0)

@@ -1,5 +1,5 @@
-use "std/mem" memory
-use "std/container/list" list
+use memory "std/mem"
+use list "std/container/list"
 
 struct Slot { free_next: *Slot, value: [16]u8 }
 const nil_slot: Slot = Slot{}
@@ -9,12 +9,12 @@ fn main() {
   backing: [512 + 3 * memory.ArenaBufferOverhead]u8
   arena := memory.arena_from_buffer(backing[..])
 
-  first := memory.push_array(u8, arena, 13)
+  first := memory.push_array<u8>(arena, 13)
   for *byte in first {
     if byte.* != 0 { #panic("arena allocation was not zeroed") }
     byte.* = 0xaa
   }
-  wide := memory.push(Wide, arena)
+  wide := memory.push<Wide>(arena)
   if (#cast(usize, wide) & 7) != 0 || wide.a != 0 { #panic("arena alignment failed") }
   before := memory.arena_mark(arena)
   bytes := memory.push_bytes(arena, 3)
@@ -35,7 +35,7 @@ fn main() {
   // Fixed-buffer reuse through an intrusive free list.
   list_arena_storage: [256 + memory.ArenaBufferOverhead]u8
   list_arena := memory.arena_from_buffer(list_arena_storage[..])
-  slots := memory.push_array(Slot, list_arena, 4)
+  slots := memory.push_array<Slot>(list_arena, 4)
   first_free: *Slot
   for *slot in slots { list.free_push(&first_free, slot) }
   taken: [4]*Slot

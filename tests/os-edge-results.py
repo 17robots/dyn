@@ -8,10 +8,10 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = '''use "std/terminal" terminal
-use "std/fs/capability" cap
+SOURCE = '''use terminal "std/terminal"
+use cap "std/fs/capability"
 use "std/fail"
-use "std/bytes" bytes
+use bytes "std/bytes"
 fn require(ok: bool) { if !ok { #panic("OS edge result contract") } }
 fn read_failure(directory: *const cap.Directory, path: []const u8, output: []u8) fail.Failure {
  status: fail.Status

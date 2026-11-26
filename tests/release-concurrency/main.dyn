@@ -1,5 +1,5 @@
 use "std/thread"
-use "std/mem" mem
+use mem "std/mem"
 use "std/fail"
 use "std/sync"
 struct State { lock: sync.Mutex, ready: sync.Condition, gate: sync.Semaphore, once: sync.Once, atomic: sync.AtomicU64, total: u64, initializers: u32, started: u32, proceed: bool }

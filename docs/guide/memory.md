@@ -115,7 +115,7 @@ starting, then give the work an arena whose limit fits it:
 
 ```dyn
 fn handle(server: *mem.Arena, request: []const u8) bool {
-  if #len(request) > MaxRequest {
+  if request.len > MaxRequest {
     return false // reject before starting
   }
   mark := mem.arena_mark(server)

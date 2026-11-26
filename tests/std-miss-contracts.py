@@ -7,10 +7,10 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/fail"
-use "std/sort" sort
-use "std/mem" mem
-use "std/encoding/mdesk" mdesk
-use "std/encoding/json" json
+use sort "std/sort"
+use mem "std/mem"
+use mdesk "std/encoding/mdesk"
+use json "std/encoding/json"
 fn main() {
   values:[5]i32=[2,4,4,8,10]
   for input: isize in -2..14 {
@@ -25,7 +25,7 @@ fn main() {
   if sort.search(empty[..],0)!=0 { #panic("empty search") }
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  prefix:=mem.push(u8,arena)
+  prefix:=mem.push<u8>(arena)
   prefix.*=91
   mark:=mem.arena_mark(arena)
   broken:fail.Status

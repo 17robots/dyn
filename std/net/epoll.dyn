@@ -103,7 +103,7 @@ pub fn event_remove(status: *fail.Status, queue: isize, descriptor: isize) {
 pub fn event_wait(status: *fail.Status, queue: isize, events: []Event, timeout_milliseconds: i32) usize {
   if status == nil { return event_wait(&fail.Status{}, queue, events, timeout_milliseconds) }
   if status.failed { return 0 }
-  if #len(events) == 0 {
+  if events.len == 0 {
     invalid(status, "epoll wait", "no room for events")
     return 0
   }
@@ -112,13 +112,13 @@ pub fn event_wait(status: *fail.Status, queue: isize, events: []Event, timeout_m
     start = clock.monotonic_now()
   }
   remaining := timeout_milliseconds
-  value := #syscall(sys.EpollWait, queue, &events[0], #len(events), remaining)
+  value := #syscall(sys.EpollWait, queue, &events[0], events.len, remaining)
   for value == -4 {
     if timeout_milliseconds > 0 {
       remaining = interrupted_timeout(start, timeout_milliseconds)
       if remaining == 0 { return 0 }
     }
-    value = #syscall(sys.EpollWait, queue, &events[0], #len(events), remaining)
+    value = #syscall(sys.EpollWait, queue, &events[0], events.len, remaining)
   }
   if check(status, "epoll wait", value) < 0 { return 0 }
   return #cast(usize, value)

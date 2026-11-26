@@ -37,10 +37,10 @@ sources = {
     'line': gzip.decompress((DATA / 'LineBreakTest.txt.gz').read_bytes()).decode().splitlines(),
 }
 assert any('17.0.0' in line for line in sources['line'][:3]), 'expected Unicode 17 test data'
-SOURCE = '''use "std/unicode/text" text
+SOURCE = '''use text "std/unicode/text"
 use "std/fail"
-use "std/io" io
-use "std/mem" mem
+use io "std/io"
+use mem "std/mem"
 
 const data: []const u8 = #load("cases.bin")
 
@@ -55,7 +55,7 @@ fn main() {
   }
   status := fail.Status{ on_failure: fail.panic_on_failure }
   at: usize = 0
-  for at < #len(data) {
+  for at < data.len {
     kind := data[at]
     length := read_u32(at + 1)
     sample := data[at + 5..at + 5 + length]

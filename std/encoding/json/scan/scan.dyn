@@ -9,9 +9,9 @@ pub fn text_prefix(source: []const u8) usize {
 }
 
 fn text_prefix_bytes(source: []const u8) usize {
-  for i in 0..#len(source) {
+  for i in 0..source.len {
     byte := source[i]
     if byte < 32 || byte >= 128 || byte == '"' || byte == '\\' { return i }
   }
-  return #len(source)
+  return source.len
 }

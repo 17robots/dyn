@@ -1,7 +1,7 @@
 use "std/fail"
-use "std/dynlib" dynlib
-use "std/io" io
-use "std/ui/software" software
+use dynlib "std/dynlib"
+use io "std/io"
+use software "std/ui/software"
 // Dynamic FreeType 2 bindings. The caller owns the loader handle and keeps it
 // open until all faces/libraries and tables are dead. Memory faces borrow bytes.
 // C long is target-specific (32-bit Windows, pointer-width Unix).
@@ -106,7 +106,7 @@ pub fn open(status: *fail.Status, font: *Font, api: Api, bytes: []const u8, inde
     ft_failed(status, fail.Kind.InvalidState, "open", 0)
     return
   }
-  if #len(bytes) == 0 || #cast(u64, #len(bytes)) > #cast(u64, (~#cast(ULong, 0))>>1) || pixels == 0 || #cast(u64, index) > #cast(u64, (~#cast(ULong, 0))>>1) {
+  if bytes.len == 0 || #cast(u64, bytes.len) > #cast(u64, (~#cast(ULong, 0))>>1) || pixels == 0 || #cast(u64, index) > #cast(u64, (~#cast(ULong, 0))>>1) {
     ft_failed(status, fail.Kind.InvalidInput, "open", 0)
     return
   }
@@ -117,7 +117,7 @@ pub fn open(status: *fail.Status, font: *Font, api: Api, bytes: []const u8, inde
     return
   }
   face: rawptr
-  error = api.new_memory_face(library, &bytes[0], #cast(Long, #len(bytes)), #cast(Long, index), &face)
+  error = api.new_memory_face(library, &bytes[0], #cast(Long, bytes.len), #cast(Long, index), &face)
   if error != 0 {
     _ = api.done(library)
     ft_failed(status, fail.Kind.System, "open", error)

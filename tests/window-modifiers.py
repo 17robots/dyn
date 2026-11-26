@@ -19,8 +19,8 @@ int dyn_test_send_key(Display *d, Window w, unsigned long sym, unsigned int stat
  int r=XSendEvent(d,w,False,pressed?KeyPressMask:KeyReleaseMask,&e); XSync(d,False); return r;
 }''')
  subprocess.run(['cc','-fno-stack-protector','-c',str(p/'send.c'),'-o',str(p/'send.o')],check=True)
- (p/'main.dyn').write_text('''use "std/io" io
-use "vendor/window" window
+ (p/'main.dyn').write_text('''use io "std/io"
+use window "vendor/window"
 use "std/fail"
 fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
   status: fail.Status

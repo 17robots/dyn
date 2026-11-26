@@ -18,11 +18,11 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build' /
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--cross', action='store_true', help='cross-link all four native targets; do not execute')
 options = parser.parse_args()
-SOURCE = r'''use "std/net" net
-use "std/net/dns" dns
+SOURCE = r'''use net "std/net"
+use dns "std/net/dns"
 use "std/fail"
-use "std/mem" mem
-use "std/crypto/random" random
+use mem "std/mem"
+use random "std/crypto/random"
 fn require(value: bool, message: []const u8) { if !value { #panic(message) } }
 fn main() {
   bytes: [515]u8
@@ -40,16 +40,16 @@ fn main() {
   defer mem.arena_release(arena)
   status: fail.Status
   result := dns.resolve_ipv4(arena,&status,"a.test",&server,4000)
-  require(!status.failed && #len(result) == 1,"A response")
+  require(!status.failed && result.len == 1,"A response")
   require(result[0].a == 1 && result[0].b == 2 && result[0].c == 3 && result[0].d == 4,"A value / nonce filtering")
   result6 := dns.resolve_ipv6(arena,&status,"aaaa.test",&server,4000)
-  require(!status.failed && #len(result6) == 1,"AAAA response")
+  require(!status.failed && result6.len == 1,"AAAA response")
   for i in 0..16 { require(result6[0].bytes[i] == #cast(u8, i),"AAAA value") }
   missing: fail.Status
   _ = dns.resolve_ipv4(arena,&missing,"missing.test",&server,4000)
   require(missing.failure.kind == fail.Kind.NotFound && missing.failure.native == -3,"NXDOMAIN response")
   result = dns.resolve_ipv4(arena,&status,"large.test",&server,4000)
-  require(!status.failed && #len(result) == 1,"UDP truncation TCP fallback")
+  require(!status.failed && result.len == 1,"UDP truncation TCP fallback")
   require(result[0].a == 9 && result[0].b == 8 && result[0].c == 7 && result[0].d == 6,"TCP response value")
 }
 '''

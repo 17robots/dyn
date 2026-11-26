@@ -241,9 +241,8 @@ static void expression(Dump *d, const DynIrExpr *e) {
         type(d,"operand_type",(DynType)e->integer);
       } else EX("operand",e->left);
       break;
-    case DYN_EXPR_OFFSET:
-      /* Source-byte field selectors cannot be represented by lowered IR.
-         Sema must have folded this node before a semantic snapshot. */
+    case DYN_EXPR_OFFSET: case DYN_EXPR_TRY: case DYN_EXPR_CATCH: case DYN_EXPR_TAKE:
+      /* Source-only nodes that sema must lower before IR. */
       d->valid=false; break;
     case DYN_EXPR_NIL: case DYN_EXPR_TYPE: break;
   }
@@ -288,6 +287,8 @@ static void statement(Dump *d,const DynIrStmt *s) {
       flag(d,"block",s->defer_block);
       BODY("body",s->body_start,s->body_count);
       break;
+    case DYN_STMT_FAIL: case DYN_STMT_ERRDEFER:
+      d->valid=false; break;
   }
 }
 

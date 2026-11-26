@@ -31,8 +31,8 @@ pub fn next(status: *fail.Status, state: *Cursor) Element {
   if status.failed { return ended(state, state.offset) }
   if state.failed { return failed(status, state, state.error_kind, state.error_offset) }
   start := state.offset
-  if start == #len(state.source) { return ended(state, start) }
-  if start > #len(state.source) || #len(state.source) - start < 2 {
+  if start == state.source.len { return ended(state, start) }
+  if start > state.source.len || state.source.len - start < 2 {
     return failed(status, state, fail.Kind.InvalidInput, start)
   }
   tag := state.source[start]
@@ -45,7 +45,7 @@ pub fn next(status: *fail.Status, state: *Cursor) Element {
     length = first_length
   } else {
     count := #cast(usize, (first_length & 127))
-    if count == 0 || count > #len(state.source) - at {
+    if count == 0 || count > state.source.len - at {
       return failed(status, state, fail.Kind.InvalidInput, at - 1)
     }
     if count > #sizeof(usize) { return failed(status, state, fail.Kind.Overflow, at - 1) }
@@ -59,7 +59,7 @@ pub fn next(status: *fail.Status, state: *Cursor) Element {
     if length < 128 { return failed(status, state, fail.Kind.InvalidInput, at) }
     at += count
   }
-  if length > #len(state.source) - at { return failed(status, state, fail.Kind.InvalidInput, at) }
+  if length > state.source.len - at { return failed(status, state, fail.Kind.InvalidInput, at) }
   finish := at + length
   state.offset = finish
   state.start = start
@@ -69,5 +69,5 @@ pub fn enter(element: Element) Cursor {
   return cursor(element.content)
 }
 pub fn finished(state: *const Cursor) bool {
-  return !state.failed && state.offset == #len(state.source)
+  return !state.failed && state.offset == state.source.len
 }

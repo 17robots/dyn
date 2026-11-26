@@ -18,10 +18,10 @@ fn native_wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout: 
       count += 1
     }
   }
-  native := mem.push_array(net.PollDescriptor, arena, count)
-  indices := mem.push_array(usize, arena, count)
+  native := mem.push_array<net.PollDescriptor>(arena, count)
+  indices := mem.push_array<usize>(arena, count)
   at: usize = 0
-  for i in 0..#len(queue.entries) {
+  for i in 0..queue.entries.len {
     entry := queue.entries[i]
     if entry.active {
       native[at] = net.PollDescriptor{ descriptor: entry.descriptor, events: #cast(i16, entry.events) }
@@ -30,7 +30,7 @@ fn native_wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout: 
     }
   }
   ready := net.poll(status, native, timeout)
-  events := mem.push_array(Event, arena, ready)
+  events := mem.push_array<Event>(arena, ready)
   at = 0
   for i in 0..count {
     if native[i].returned != 0 {

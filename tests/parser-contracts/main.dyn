@@ -1,24 +1,24 @@
 use "std/fail"
-use "std/encoding/csv" csv
-use "std/encoding/xml" xml
-use "std/encoding/ini" ini
-use "std/io" io
-use "std/bytes" bytes
-use "std/encoding/json" json
-use "std/mem" mem
-use "std/unicode/utf8" utf8
+use csv "std/encoding/csv"
+use xml "std/encoding/xml"
+use ini "std/encoding/ini"
+use io "std/io"
+use bytes "std/bytes"
+use json "std/encoding/json"
+use mem "std/mem"
+use utf8 "std/unicode/utf8"
 struct Chunk { source: []const u8, at: usize, split: usize, limit: usize }
 fn read_chunk(data: rawptr, status: *fail.Status, destination: []u8) usize {
   state := #cast(*Chunk, data)
-  take := #len(state.source) - state.at
+  take := state.source.len - state.at
   if state.at < state.split && take > state.split - state.at {
     take = state.split - state.at
   }
   if state.limit > 0 && take > state.limit {
     take = state.limit
   }
-  if take > #len(destination) {
-    take = #len(destination)
+  if take > destination.len {
+    take = destination.len
   }
   for i in 0..take {
     destination[i] = state.source[state.at + i]
@@ -58,7 +58,7 @@ fn xml_check(source: []const u8, expected: bool) {
     #panic("XML fixture invalid")
   }
   if expected {
-    for capacity in 0..#len(source) {
+    for capacity in 0..source.len {
       chunk := Chunk{source: source, limit: 1}
       storage: [128]u8
       streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
@@ -70,10 +70,10 @@ fn xml_check(source: []const u8, expected: bool) {
     }
   }
   for limit in 0..4 {
-    for split in 1..#len(source) + 1 {
+    for split in 1..source.len + 1 {
       chunk := Chunk{source: source, split: split, limit: limit}
       storage: [128]u8
-      capacity := #len(source)
+      capacity := source.len
       if !expected {
         capacity += 1
       }
@@ -134,11 +134,11 @@ fn json_stream_check(value: *const json.Value, document: []const u8, expected: b
 fn json_bytes(value: []const u8, expected: bool) {
   quoted: [64]u8
   quoted[0] = '"'
-  for i in 0..#len(value) {
+  for i in 0..value.len {
     quoted[i+1] = value[i]
   }
-  quoted[#len(value)+1] = '"'
-  length := #len(value)+2
+  quoted[value.len+1] = '"'
+  length := value.len+2
   json_document(quoted[..length], expected)
   arena_storage: [512]u8
   arena := mem.arena_from_buffer(arena_storage[..])
@@ -153,30 +153,30 @@ fn json_bytes(value: []const u8, expected: bool) {
     object[i+1] = quoted[i]
   }
   tail := ":null}"
-  for i in 0..#len(tail) {
+  for i in 0..tail.len {
     object[length+1+i] = tail[i]
   }
-  json_document(object[..length+1+#len(tail)], expected)
+  json_document(object[..length+1+tail.len], expected)
   object_value := json.push_object(arena)
   child := json.push_null(arena)
   if object_value == nil || child == nil || !json.add_member(object_value, value, child) {
     #panic("JSON test member allocation")
   }
-  json_stream_check(object_value, object[..length+1+#len(tail)], expected, "{")
+  json_stream_check(object_value, object[..length+1+tail.len], expected, "{")
   head := "{\"k\":"
-  for i in 0..#len(head) {
+  for i in 0..head.len {
     object[i] = head[i]
   }
   for i in 0..length {
-    object[#len(head)+i] = quoted[i]
+    object[head.len+i] = quoted[i]
   }
-  object[#len(head)+length] = '}'
-  json_document(object[..#len(head)+length+1], expected)
+  object[head.len+length] = '}'
+  json_document(object[..head.len+length+1], expected)
   storage: [64 + mem.ArenaBufferOverhead]u8
   output := mem.arena_from_buffer(storage[..])
   written := json.write_string(output, value)
   if !expected {
-    if #len(written) != 0 || mem.arena_used(output) != 0 {
+    if written.len != 0 || mem.arena_used(output) != 0 {
       #panic("JSON writes invalid UTF8")
     }
   } else if !bytes.equal(written, quoted[..length]) || mem.arena_used(output) != length {
@@ -191,7 +191,7 @@ fn json_contracts() {
     [194, 0, 0, 0], [226, 40, 161, 0], [240, 159, 152, 0],
   ]
   lengths: [13]usize = [1, 1, 2, 2, 3, 3, 4, 4, 4, 2, 1, 3, 3]
-  for i in 0..#len(invalid) {
+  for i in 0..invalid.len {
     json_bytes(invalid[i][..lengths[i]], false)
   }
   codepoints: [12]u32 = [32, 127, 128, 2047, 2048, 55295, 57344, 65535, 65536, 128512, 1114110, 1114111]

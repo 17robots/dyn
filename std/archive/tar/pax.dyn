@@ -1,4 +1,4 @@
-use "std/bytes" bytes
+use bytes "std/bytes"
 use "std/fail"
 
 struct Overrides { path: []const u8, link: []const u8, size: u64, has_path: bool, has_link: bool, has_size: bool, delete_size: bool }
@@ -9,7 +9,7 @@ pub fn reader(source: []const u8) ArchiveReader {
   return ArchiveReader{ source: source }
 }
 fn decimal(source: []const u8, output: *u64) bool {
-  if #len(source) == 0 { return false }
+  if source.len == 0 { return false }
   value: u64 = 0
   for byte in source {
     if byte < '0' || byte > '9' || value > (18446744073709551615 - #cast(u64, (byte - '0'))) / 10 {
@@ -22,14 +22,14 @@ fn decimal(source: []const u8, output: *u64) bool {
 }
 fn pax(source: []const u8, values: *Overrides, global: bool) bool {
   at: usize = 0
-  for at < #len(source) {
+  for at < source.len {
     space := at
-    for space < #len(source) && source[space] != ' ' {
+    for space < source.len && source[space] != ' ' {
       space += 1
     }
-    if space == #len(source) { return false }
+    if space == source.len { return false }
     length: u64 = 0
-    if !decimal(source[at..space], &length) || length > (#len(source) - at) || length <= (space - at + 2) {
+    if !decimal(source[at..space], &length) || length > (source.len - at) || length <= (space - at + 2) {
       return false
     }
     end := at + #cast(usize, length)
@@ -46,17 +46,17 @@ fn pax(source: []const u8, values: *Overrides, global: bool) bool {
     }
     if bytes.equal(key, "path") {
       values.path = value
-      values.has_path = !global || #len(value) > 0
+      values.has_path = !global || value.len > 0
     } else if bytes.equal(key, "linkpath") {
       values.link = value
-      values.has_link = !global || #len(value) > 0
+      values.has_link = !global || value.len > 0
     } else if bytes.equal(key, "size") {
-      values.has_size = !global || #len(value) > 0
-      values.delete_size = #len(value) == 0
-      if #len(value) > 0 && !decimal(value, &values.size) { return false }
+      values.has_size = !global || value.len > 0
+      values.delete_size = value.len == 0
+      if value.len > 0 && !decimal(value, &values.size) { return false }
     }
     // Sparse payloads need a different extraction model; never expose them as ordinary files.
-    else if #len(key) >= 10 && bytes.equal(key[..10], "GNU.sparse") { return false }
+    else if key.len >= 10 && bytes.equal(key[..10], "GNU.sparse") { return false }
     at = end
   }
   return true
@@ -65,11 +65,11 @@ fn combined_overrides(global: Overrides, local: Overrides) Overrides {
   result := global
   if local.has_path {
     result.path = local.path
-    result.has_path = #len(local.path) > 0
+    result.has_path = local.path.len > 0
   }
   if local.has_link {
     result.link = local.link
-    result.has_link = #len(local.link) > 0
+    result.has_link = local.link.len > 0
   }
   if local.has_size {
     result.size = local.size
@@ -103,12 +103,12 @@ pub fn next(status: *fail.Status, state: *ArchiveReader) Entry {
   pending: bool = false
   for {
     record_start := cursor
-    if cursor > #len(state.source) { return malformed(status, state, cursor) }
-    if cursor == #len(state.source) {
-      if pending { return malformed(status, state, #len(state.source)) }
+    if cursor > state.source.len { return malformed(status, state, cursor) }
+    if cursor == state.source.len {
+      if pending { return malformed(status, state, state.source.len) }
       return archive_ended(state)
     }
-    if #len(state.source) - cursor < 512 { return malformed(status, state, #len(state.source)) }
+    if state.source.len - cursor < 512 { return malformed(status, state, state.source.len) }
     header := parse_header(state.source[cursor..cursor + 512])
     if !header.ok { return malformed(status, state, record_start) }
     if header.ended {
@@ -121,10 +121,10 @@ pub fn next(status: *fail.Status, state: *ArchiveReader) Entry {
       apply_overrides(&entry, combined_overrides(global, local))
     }
     start := cursor + 512
-    if entry.size > (#len(state.source) - start) { return malformed(status, state, #len(state.source)) }
+    if entry.size > (state.source.len - start) { return malformed(status, state, state.source.len) }
     size := #cast(usize, entry.size)
     padding: usize = (512 - size % 512) % 512
-    if padding > #len(state.source) - start - size { return malformed(status, state, #len(state.source)) }
+    if padding > state.source.len - start - size { return malformed(status, state, state.source.len) }
     entry.data = state.source[start..start + size]
     cursor = start + size + padding
     if !extension {

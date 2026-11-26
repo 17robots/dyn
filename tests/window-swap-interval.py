@@ -7,10 +7,10 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-MOCK=r'''use "std/io" errors
-use "std/io" io
-use "std/c" c
-use "std/bytes" bytes
+MOCK=r'''use errors "std/io"
+use io "std/io"
+use c "std/c"
+use bytes "std/bytes"
 use "std/fail"
 pub struct Window {display:rawptr,context:rawptr,handle:usize}
 context_error_display:rawptr
@@ -161,9 +161,9 @@ fn main(){
  restored()
 }
 '''
-NATIVE=r'''use "vendor/window/x11" window
-use "std/io" errors
-use "std/io" io
+NATIVE=r'''use window "vendor/window/x11"
+use errors "std/io"
+use io "std/io"
 use "std/fail"
 fn window_set_swap_interval(p0:*window.Window, p1:i32) fail.Failure {
   status: fail.Status

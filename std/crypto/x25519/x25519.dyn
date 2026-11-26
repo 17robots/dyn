@@ -1,5 +1,5 @@
 use "std/fail"
-use "std/crypto/curve25519" field
+use field "std/crypto/curve25519"
 // RFC 7748. Caller storage
 // destination must have at least 32 bytes. Inputs are
 // copied before writing, permitting in-place use. All-zero shared secrets fail.
@@ -11,7 +11,7 @@ pub fn shared(status: *fail.Status, destination: []u8, private_key: []const u8, 
     return
   }
   if status.failed { return }
-  if #len(destination)<32 || #len(private_key)!=32 || #len(peer)!=32 {
+  if destination.len<32 || private_key.len!=32 || peer.len!=32 {
     fail.invalid(status, "X25519", "", "keys and output must be 32 bytes")
     return
   }

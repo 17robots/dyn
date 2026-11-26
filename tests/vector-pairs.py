@@ -18,7 +18,7 @@ struct V { x: f32, y: f32 }
 
 fn mix(ps: []V, vs: []V, k: f32) f32 {
   e: f32 = 0.0
-  for i in 0..#len(ps) {
+  for i in 0..ps.len {
     ps[i] = V{ x: ps[i].x - vs[i].x * k, y: ps[i].y - vs[i].y * k }
     e += ps[i].x * vs[i].x + ps[i].y * vs[i].y
   }
@@ -26,13 +26,13 @@ fn mix(ps: []V, vs: []V, k: f32) f32 {
 }
 
 fn swapped(ps: []V, vs: []V) {
-  for i in 0..#len(ps) {
+  for i in 0..ps.len {
     ps[i] = V{ x: vs[i].y + ps[i].x, y: vs[i].x + ps[i].y }
   }
 }
 
 fn between(ps: []V, vs: []V) {
-  for i in 0..#len(ps) {
+  for i in 0..ps.len {
     a := vs[i].x
     vs[i].y = a * 0.5
     ps[i] = V{ x: a + ps[i].x, y: vs[i].y + ps[i].y }
@@ -40,7 +40,7 @@ fn between(ps: []V, vs: []V) {
 }
 
 fn shifted(ps: []V) {
-  for i in 1..#len(ps) {
+  for i in 1..ps.len {
     ps[i] = V{ x: ps[i - 1].x * 0.25 + ps[i].x * 0.5, y: ps[i - 1].y * 0.25 + ps[i].y * 0.5 }
   }
 }
@@ -71,8 +71,8 @@ fn bits(ps: []V) u64 {
 
 fn main() {
   arena := mem.arena_alloc(0)
-  ps := mem.push_array(V, arena, 257)
-  vs := mem.push_array(V, arena, 257)
+  ps := mem.push_array<V>(arena, 257)
+  vs := mem.push_array<V>(arena, 257)
   for i in 0..257 {
     f := #cast(f32, i)
     ps[i] = V{ x: f * 0.37 - 41.0, y: 1.0 / (f + 0.5) }

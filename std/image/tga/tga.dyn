@@ -1,6 +1,6 @@
 use "std/fail"
-use "std/mem" mem
-use "std/encoding/binary" binary
+use mem "std/mem"
+use binary "std/encoding/binary"
 // True-color and gray TGA, including RLE and all origin directions. Color-map
 // images, 15/16-bit true color, and interleaving return Unsupported.
 pub struct Info { width: usize, height: usize, channels: u8 }
@@ -11,7 +11,7 @@ pub struct Image { info: Info, pixels: []u8 }
 pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image {
   if status == nil { return decode(arena, &fail.Status{}, source) }
   if status.failed { return Image{} }
-  if #len(source) < 18 {
+  if source.len < 18 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "decode TGA", "", "malformed TGA"))
     return Image{}
   }
@@ -49,7 +49,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
   }
   stride := #cast(usize, bits / 8)
   at := 18 + #cast(usize, source[0])
-  if at > #len(source) {
+  if at > source.len {
     fail.at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", 18)
     return Image{}
   }
@@ -60,13 +60,13 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
       mem.arena_rewind(arena, mark)
     }
   }
-  pixels := mem.push_array(u8, arena, count * 4)
+  pixels := mem.push_array<u8>(arena, count * 4)
   produced: usize = 0
   for produced < count {
     repeat := false
     length: usize = 1
     if rle {
-      if at == #len(source) {
+      if at == source.len {
         fail.at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", at)
         return Image{}
       }
@@ -82,7 +82,7 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
     if repeat {
       needed = stride
     }
-    if needed > #len(source) - at {
+    if needed > source.len - at {
       fail.at(status, fail.Kind.InvalidInput, "decode TGA", "malformed TGA", at)
       return Image{}
     }
@@ -137,11 +137,11 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width
     return empty
   }
   size := #cast(usize, count) * #cast(usize, channels)
-  if #len(pixels) != size {
+  if pixels.len != size {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "encode TGA", "", "invalid pixels or size"))
     return empty
   }
-  output := mem.push_array(u8, arena, 18 + size)
+  output := mem.push_array<u8>(arena, 18 + size)
   output[2] = 2
   if channels < 3 {
     output[2] = 3

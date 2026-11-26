@@ -12,7 +12,7 @@ struct App { unused: u8 }
 struct Big { data: [4096]u8 }
 
 fn handle(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
-  job := evented.job(Big, response)
+  job := evented.job<Big>(response)
   if job == nil {
     http.text(status, response, 503, "busy")
     return
@@ -24,7 +24,7 @@ fn main() {
   arena := mem.arena_alloc(16 * mem.MiB)
   defer mem.arena_release(arena)
   app := App{}
-  typed := http.Typed(App){ state: &app, handler: handle }
+  typed := http.Typed<App>{ state: &app, handler: handle }
   binding := http.bind(&typed)
   workers: [1]evented.Worker
   config := evented.default_config()

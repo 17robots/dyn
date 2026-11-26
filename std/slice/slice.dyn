@@ -1,0 +1,59 @@
+// Generic slice helpers: element-wise equality, search, copy, fill, and reverse.
+// Slice `==` is intentionally not built in so equality stays O(1) everywhere;
+// call `slice.eql(a, b)` whenever you want an O(n) element comparison.
+
+// Returns true when `a` and `b` have the same length and equal elements.
+pub fn eql<T>(a: []const T, b: []const T) bool {
+  if a.len != b.len { return false }
+  for i in 0..a.len {
+    if a[i] != b[i] { return false }
+  }
+  return true
+}
+
+// Returns the first index where `items[i] == target`, or `items.len` if absent.
+pub fn find<T>(items: []const T, target: T) usize {
+  for i in 0..items.len {
+    if items[i] == target { return i }
+  }
+  return items.len
+}
+
+// Returns true when `target` appears in `items`.
+pub fn contains<T>(items: []const T, target: T) bool {
+  return find(items, target) < items.len
+}
+
+// Copies `min(dst.len, src.len)` elements from `src` into `dst` and returns
+// the number copied.
+pub fn copy<T>(dst: []T, src: []const T) usize {
+  n := dst.len
+  if src.len < n {
+    n = src.len
+  }
+  for i in 0..n {
+    dst[i] = src[i]
+  }
+  return n
+}
+
+// Sets every element of `dst` to `value`.
+pub fn fill<T>(dst: []T, value: T) {
+  for i in 0..dst.len {
+    dst[i] = value
+  }
+}
+
+// Reverses `items` in place.
+pub fn reverse<T>(items: []T) {
+  if items.len < 2 { return }
+  lo: usize = 0
+  hi := items.len - 1
+  for lo < hi {
+    tmp := items[lo]
+    items[lo] = items[hi]
+    items[hi] = tmp
+    lo += 1
+    hi -= 1
+  }
+}

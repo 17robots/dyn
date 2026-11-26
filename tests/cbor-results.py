@@ -8,9 +8,9 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/fail"
-use "std/encoding/cbor" cbor
-use "std/mem" mem
-use "std/bytes" bytes
+use cbor "std/encoding/cbor"
+use mem "std/mem"
+use bytes "std/bytes"
 struct Got { value: cbor.Token, offset: usize, found: bool, failure: fail.Failure }
 fn next(state: *cbor.Reader) Got {
  status: fail.Status

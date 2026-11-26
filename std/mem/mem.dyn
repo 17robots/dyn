@@ -16,7 +16,7 @@
 // records the newest block and the arena-wide settings. A position is a byte
 // offset in the arena's position space, where each block begins where the
 // previous one ended; marks are positions.
-pub struct Arena {
+pub nocopy struct Arena {
   // First block only: the newest block, where pushes go.
   current: *Arena,
   // The block before this one; nil for the first block.
@@ -38,12 +38,22 @@ pub struct Arena {
   owns_memory: bool,
   // First block only. Never add blocks: set for arena_from_buffer.
   fixed_buffer: bool,
+  // First block only. Opt-in diagnostic scribble; does not make expired pointers safe.
+  poison_on_rewind: bool,
+  // First block only. Opt-in PROT_NONE trapping on rewound/reset OS pages.
+  protect_on_rewind: bool,
+  // First block only. Opt-in thread-affinity check on push/rewind/release.
+  check_thread: bool,
   // First block only: where new blocks come from.
   source: Source,
   // First block only: backing bytes across all blocks.
   backing: usize,
-  // First block only. Opt-in diagnostic scribble; does not make expired pointers safe.
-  poison_on_rewind: bool,
+  // First block only: bumped on rewind, reset, and release (for mem.Ref<T>).
+  generation: u64,
+  // First block only: thread id owning this arena when check_thread is enabled.
+  owner_thread: u64,
+  // This block only: byte offset from which pages are currently PROT_NONE (0 = none).
+  protected_from: usize,
 }
 
 // Where an arena's blocks come from. With take nil, blocks are OS pages,
@@ -96,12 +106,46 @@ fn mapping_with_header(size: usize) Mapping {
 // Puts a block header at the start of bytes.
 fn block_init(bytes: []u8, base: usize, owns_memory: bool, committed: usize, zeroed: bool) *Arena {
   block := #cast(*Arena, &bytes[0])
-  fresh := #len(bytes)
+  fresh := bytes.len
   if zeroed {
     fresh = header_size()
   }
-  block.* = Arena{ data: bytes, base: base, offset: header_size(), owns_memory: owns_memory, committed: committed, fresh: fresh }
+  block.* = Arena{ data: bytes, base: base, offset: header_size(), owns_memory: owns_memory, committed: committed, fresh: fresh, generation: 1 }
   return block
+}
+
+fn arena_apply_hardening(arena: *Arena) {
+  if mapping_check_lifetimes() {
+    arena.poison_on_rewind = true
+    arena.protect_on_rewind = true
+    arena.check_thread = true
+    arena.owner_thread = mapping_thread_id()
+  }
+}
+
+fn arena_check_thread(arena: *const Arena) {
+  if arena.check_thread && arena.owner_thread != 0 {
+    tid := mapping_thread_id()
+    if tid != 0 && tid != arena.owner_thread {
+      #panic("arena accessed from a thread other than its owner; call mem.arena_transfer(arena) to hand off ownership")
+    }
+  }
+}
+
+// Enables PROT_NONE trapping on rewound/reset OS pages for this arena.
+pub fn arena_enable_protect(arena: *Arena) {
+  arena.protect_on_rewind = true
+}
+
+// Enables thread-affinity checks on this arena, binding it to the calling thread.
+pub fn arena_enable_thread_check(arena: *Arena) {
+  arena.check_thread = true
+  arena.owner_thread = mapping_thread_id()
+}
+
+// Transfers thread-affinity ownership of arena to the calling thread.
+pub fn arena_transfer(arena: *Arena) {
+  arena.owner_thread = mapping_thread_id()
 }
 
 // OS pages for an arena, at most limit bytes in all (zero: no cap). A pushed
@@ -141,18 +185,19 @@ pub fn arena_from_zeroed(storage: []u8) *Arena {
 }
 
 fn buffer_arena(backing: []u8, zeroed: bool) *Arena {
-  if #len(backing) == 0 {
+  if backing.len == 0 {
     #panic("arena buffer cannot hold the arena header")
   }
   address := #cast(usize, &backing[0])
   skip := align_size(address, 16) - address
-  if skip > #len(backing) || #len(backing) - skip < header_size() {
+  if skip > backing.len || backing.len - skip < header_size() {
     #panic("arena buffer cannot hold the arena header")
   }
-  arena := block_init(backing[skip..], 0, false, #len(backing) - skip, zeroed)
+  arena := block_init(backing[skip..], 0, false, backing.len - skip, zeroed)
   arena.current = arena
   arena.fixed_buffer = true
-  arena.backing = #len(arena.data)
+  arena.backing = arena.data.len
+  arena_apply_hardening(arena)
   return arena
 }
 
@@ -186,7 +231,8 @@ pub fn arena_from_source(source: Source) *Arena {
   arena := new_block(&source, size, 0)
   arena.current = arena
   arena.source = source
-  arena.backing = #len(arena.data)
+  arena.backing = arena.data.len
+  arena_apply_hardening(arena)
   return arena
 }
 
@@ -200,13 +246,13 @@ fn new_block(source: *const Source, size: usize, base: usize) *Arena {
     return block_init(mapping.bytes, base, true, mapping.committed, mapping.zeroed)
   }
   bytes := source.take(source.context, size)
-  if #len(bytes) < size || #len(bytes) < header_size() {
+  if bytes.len < size || bytes.len < header_size() {
     #panic("arena exhausted: its source has no more memory")
   }
   if (#cast(usize, &bytes[0]) & 15) != 0 {
     #panic("arena source block is not 16-byte aligned")
   }
-  return block_init(bytes, base, false, #len(bytes), false)
+  return block_init(bytes, base, false, bytes.len, false)
 }
 
 // Returns a block to where it came from.
@@ -227,7 +273,7 @@ fn release_blocks_after(arena: *Arena, keep: *Arena) {
   for arena.current != nil && arena.current != keep {
     block := arena.current
     arena.current = block.previous
-    arena.backing -= #len(block.data)
+    arena.backing -= block.data.len
     give_block(arena, block)
   }
 }
@@ -238,6 +284,9 @@ fn release_blocks_after(arena: *Arena, keep: *Arena) {
 // the arena itself.
 pub fn arena_release(arena: *Arena) {
   if arena == nil { return }
+  arena_check_thread(arena)
+  arena.generation += 1
+  if arena.generation == 0 { arena.generation = 1 }
   release_blocks_after(arena, arena)
   if arena.owns_memory || arena.source.give != nil {
     give_block(arena, arena)
@@ -251,8 +300,8 @@ const CommitStep: usize = 1048576
 // Commits a block's backing through end, in CommitStep pieces. Windows only in practice.
 fn arena_commit(block: *Arena, end: usize) bool {
   target := align_size(end, CommitStep)
-  if target > #len(block.data) || target < end {
-    target = #len(block.data)
+  if target > block.data.len || target < end {
+    target = block.data.len
   }
   if !mapping_commit(block.data, block.committed, target) { return false }
   block.committed = target
@@ -275,7 +324,7 @@ pub fn arena_used(arena: *const Arena) usize {
 // Alignment padding can take up to 15 more bytes from a typed push.
 pub fn arena_room(arena: *const Arena) usize {
   block := arena.current
-  tail := #len(block.data) - block.offset
+  tail := block.data.len - block.offset
   if arena.fixed_buffer { return tail }
   limit := arena.source.limit
   if limit == 0 { return #max(usize) }
@@ -290,15 +339,15 @@ pub fn arena_room(arena: *const Arena) usize {
 // not live allocations, which the next push may overwrite. Producers that
 // write into arena refuse such inputs. Cost: linear in the arena's blocks.
 pub fn arena_overlaps_unallocated(arena: *const Arena, source: []const u8) bool {
-  if arena == nil || #len(source) == 0 { return false }
+  if arena == nil || source.len == 0 { return false }
   input := #cast(usize, &source[0])
   block := arena.current
   for block != nil {
-    if block.offset < #len(block.data) {
+    if block.offset < block.data.len {
       tail := #cast(usize, &block.data[block.offset])
-      count := #len(block.data) - block.offset
+      count := block.data.len - block.offset
       if input <= tail {
-        if tail - input < #len(source) { return true }
+        if tail - input < source.len { return true }
       } else if input - tail < count { return true }
     }
     block = block.previous
@@ -318,9 +367,12 @@ pub fn arena_reset(arena: *Arena) {
 
 // Takes back everything pushed after mark, and frees the blocks added since.
 pub fn arena_rewind(arena: *Arena, mark: usize) {
+  arena_check_thread(arena)
   if mark > arena_mark(arena) {
     #panic("arena mark is ahead of current position")
   }
+  arena.generation += 1
+  if arena.generation == 0 { arena.generation = 1 }
   // Marks below the start, such as 0, rewind to the start.
   target := mark
   if target < header_size() {
@@ -329,7 +381,7 @@ pub fn arena_rewind(arena: *Arena, mark: usize) {
   for arena.current != arena && target <= arena.current.base + header_size() {
     block := arena.current
     arena.current = block.previous
-    arena.backing -= #len(block.data)
+    arena.backing -= block.data.len
     give_block(arena, block)
   }
   block := arena.current
@@ -343,6 +395,16 @@ pub fn arena_rewind(arena: *Arena, mark: usize) {
     for i < block.offset {
       block.data[i] = 221
       i += 1
+    }
+  }
+  if arena.protect_on_rewind && block.owns_memory && at < block.offset {
+    protect_end := block.offset
+    if block.fresh > protect_end {
+      protect_end = block.fresh
+    }
+    _ = mapping_protect(block.data, at, protect_end, false)
+    if block.protected_from == 0 || at < block.protected_from {
+      block.protected_from = at
     }
   }
   block.offset = at
@@ -360,15 +422,15 @@ fn align_size(size: usize, alignment: usize) usize {
 // Zero only payload bytes: align with scalar stores, then use bounded machine words.
 fn zero_bytes_fast(items: []u8) {
   i: usize = 0
-  for i < #len(items) && (#cast(usize, &items[i]) & (#sizeof(usize) - 1)) != 0 {
+  for i < items.len && (#cast(usize, &items[i]) & (#sizeof(usize) - 1)) != 0 {
     items[i] = 0
     i += 1
   }
-  for #len(items) - i >= #sizeof(usize) {
+  for items.len - i >= #sizeof(usize) {
     (#cast(*usize, &items[i])).* = 0
     i += #sizeof(usize)
   }
-  for i < #len(items) {
+  for i < items.len {
     items[i] = 0
     i += 1
   }
@@ -429,12 +491,13 @@ fn arena_grow(arena: *Arena, size: usize, alignment: usize) {
   block := new_block(&arena.source, wanted, arena_mark(arena) - header_size())
   block.previous = arena.current
   arena.current = block
-  arena.backing += #len(block.data)
+  arena.backing += block.data.len
 }
 
 // Pushes size bytes at alignment, zeroed when zero_memory. Grows the arena,
 // or panics when it cannot.
 fn arena_push_slow(arena: *Arena, size: usize, alignment: usize, zero_memory: bool) *u8 {
+  arena_check_thread(arena)
   if alignment == 0 || (alignment & (alignment - 1)) != 0 {
     #panic("arena alignment is not a power of two")
   }
@@ -443,17 +506,21 @@ fn arena_push_slow(arena: *Arena, size: usize, alignment: usize, zero_memory: bo
   for {
     block := arena.current
     available := block.data[block.offset..]
-    if #len(available) != 0 {
+    if available.len != 0 {
       address := #cast(usize, &available[0])
       remainder := address & (alignment - 1)
       padding: usize = 0
       if remainder != 0 {
         padding = alignment - remainder
       }
-      if padding <= #len(available) && size <= #len(available) - padding {
+      if padding <= available.len && size <= available.len - padding {
         end := block.offset + padding + size
         if block.owns_memory && end > block.committed && !arena_commit(block, end) {
           #panic("cannot commit arena memory")
+        }
+        if block.protected_from != 0 && end > block.protected_from {
+          _ = mapping_protect(block.data, block.protected_from, end, true)
+          block.protected_from = end
         }
         memory := &available[padding]
         prior := block.offset
@@ -482,7 +549,7 @@ fn arena_push_fast(arena: *Arena, size: usize, alignment: usize) *u8 {
   // address. Alignments of 0 and above 16 take the slow path.
   mask := alignment - 1
   start := (block.offset + mask) & ~mask
-  if size == 0 || mask >= 16 || (alignment & mask) != 0 || start > block.committed || size > block.committed - start {
+  if arena.check_thread || block.protected_from != 0 || size == 0 || mask >= 16 || (alignment & mask) != 0 || start > block.committed || size > block.committed - start {
     return nil
   }
   block.offset = start + size
@@ -511,10 +578,36 @@ pub fn advise_sparse(bytes: []u8) {
 // Allocation: aligned for T; an owning arena adds a block when full.
 // Failure: panics when the arena is exhausted.
 // Thread safety: caller synchronizes access to the arena.
-pub fn push(T: type, arena: *Arena) *T {
+pub fn push<T>(arena: *Arena) *T {
   value := #cast(*T, push_raw(arena, #sizeof(T), #alignof(T)))
   #init(value)
   return value
+}
+
+// Generational arena reference. Panics on deref after the arena has been
+// rewound, reset, or released, keeping 8-byte *T free of overhead elsewhere.
+pub struct Ref<T> {
+  ptr: *T,
+  arena: *const Arena,
+  generation: u64,
+}
+
+// Pushes one fresh T and returns a generational Ref<T> bound to arena's current generation.
+pub fn push_ref<T>(arena: *Arena) Ref<T> {
+  return Ref<T>{ ptr: push<T>(arena), arena: arena, generation: arena.generation }
+}
+
+// Validates that ref's arena has not been rewound, reset, or released, and returns *T.
+pub fn deref<T>(ref: Ref<T>) *T {
+  if ref.ptr == nil || ref.arena == nil || ref.arena.generation != ref.generation {
+    #panic("dangling mem.Ref: arena was rewound, reset, or released")
+  }
+  return ref.ptr
+}
+
+// Reports whether ref still points into a live generation of its arena.
+pub fn ref_valid<T>(ref: Ref<T>) bool {
+  return ref.ptr != nil && ref.arena != nil && ref.arena.generation == ref.generation
 }
 
 // Pushes count zeroed elements.
@@ -523,7 +616,7 @@ pub fn push(T: type, arena: *Arena) *T {
 // Allocation: checked count * #sizeof(T), aligned and zeroed; no heap fallback.
 // Failure: panics when the arena is exhausted or the size overflows.
 // Thread safety: caller synchronizes access to the arena.
-pub fn push_array(T: type, arena: *Arena, count: usize) []T {
+pub fn push_array<T>(arena: *Arena, count: usize) []T {
   if count == 0 {
     empty: []T
     return empty
@@ -556,42 +649,42 @@ pub fn push_bytes(arena: *Arena, count: usize) []u8 {
 
 // Copies source into the start of destination and returns the element count.
 // Panics if destination is shorter than source. Use move for overlapping ranges.
-pub fn copy(destination: []$T, source: []const $T) usize {
-  if #len(destination) < #len(source) {
+pub fn copy<T>(destination: []T, source: []const T) usize {
+  if destination.len < source.len {
     #panic("copy destination too small")
   }
-  for i in 0..#len(source) {
+  for i in 0..source.len {
     destination[i] = source[i]
   }
-  return #len(source)
+  return source.len
 }
 
 // Like copy, but source and destination may overlap.
-pub fn move(destination: []$T, source: []const $T) usize {
-  if #len(destination) < #len(source) {
+pub fn move<T>(destination: []T, source: []const T) usize {
+  if destination.len < source.len {
     #panic("move destination too small")
   }
-  if #len(source) == 0 { return 0 }
+  if source.len == 0 { return 0 }
   destination_address := #cast(usize, &destination[0])
   source_address := #cast(usize, &source[0])
   i: usize = 0
-  if destination_address > source_address && destination_address < source_address + #len(source) * #sizeof(T) {
-    i = #len(source)
+  if destination_address > source_address && destination_address < source_address + source.len * #sizeof(T) {
+    i = source.len
     for i > 0 {
       i -= 1
       destination[i] = source[i]
     }
   } else {
-    for i < #len(source) {
+    for i < source.len {
       destination[i] = source[i]
       i += 1
     }
   }
-  return #len(source)
+  return source.len
 }
 
 // Sets every element to its zero value.
-pub fn zero(items: []$T) {
+pub fn zero<T>(items: []T) {
   empty: T
   for *item in items {
     item.* = empty
@@ -600,41 +693,41 @@ pub fn zero(items: []$T) {
 
 // Zeroes the value behind a pointer byte by byte, without a temporary copy,
 // so it is safe for structs too large for the stack.
-pub fn clear(value: *$T) {
+pub fn clear<T>(value: *T) {
   zero(#slice(#cast(*u8, value), #sizeof(T)))
 }
 
-pub fn fill(items: []$T, value: $T) {
+pub fn fill<T>(items: []T, value: T) {
   for *item in items {
     item.* = value
   }
 }
 
-pub fn swap(a, b: *$T) {
+pub fn swap<T>(a, b: *T) {
   t := a.*
   a.* = b.*
   b.* = t
 }
 
 // Elementwise ==. Elements must support ==.
-pub fn equal(left, right: []const $T) bool {
-  if #len(left) != #len(right) { return false }
-  for i in 0..#len(left) {
+pub fn equal<T>(left, right: []const T) bool {
+  if left.len != right.len { return false }
+  for i in 0..left.len {
     if left[i] != right[i] { return false }
   }
   return true
 }
 
 pub fn compare(left: []const u8, right: []const u8) i32 {
-  count := #len(left)
-  if #len(right) < count {
-    count = #len(right)
+  count := left.len
+  if right.len < count {
+    count = right.len
   }
   for i in 0..count {
     if left[i] < right[i] { return -1 }
     if left[i] > right[i] { return 1 }
   }
-  if #len(left) < #len(right) { return -1 }
-  if #len(left) > #len(right) { return 1 }
+  if left.len < right.len { return -1 }
+  if left.len > right.len { return 1 }
   return 0
 }

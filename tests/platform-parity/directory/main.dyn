@@ -1,6 +1,6 @@
 use "std/fail"
-use "std/fs" fs
-use "std/bytes" bytes
+use fs "std/fs"
+use bytes "std/bytes"
 
 fn check(ok: bool, message: []const u8) {
   if !ok {

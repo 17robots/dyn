@@ -54,10 +54,10 @@ for a, b in cases:
     out += [pow(a, exponent, modulus) if modulus > 0 else 'none']
     expected.append(' '.join(str(x) for x in out))
 SOURCE = '''use "std/fail"
-use "std/math/big" big
-use "std/io" io
-use "std/mem" mem
-use "std/bytes" bytes
+use big "std/math/big"
+use io "std/io"
+use mem "std/mem"
+use bytes "std/bytes"
 
 const data: []const u8 = #load("cases.txt")
 
@@ -71,7 +71,7 @@ fn main() {
     mem.arena_release(arena)
   }
   at: usize = 0
-  for at < #len(data) {
+  for at < data.len {
     end := at + bytes.find_byte(data[at..], 10)
     line := data[at..end]
     at = end + 1

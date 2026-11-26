@@ -60,10 +60,10 @@ extern fn sum "sum"(count: i32, ...) i64
 extern fn mix_again "mix_again"(kinds: *const u8, ...) f64
 
 fn kinds(text: []const u8, buffer: *[32]u8) *const u8 {
-  for i in 0..#len(text) {
+  for i in 0..text.len {
     buffer.*[i] = text[i]
   }
-  buffer.*[#len(text)] = 0
+  buffer.*[text.len] = 0
   return &buffer.*[0]
 }
 

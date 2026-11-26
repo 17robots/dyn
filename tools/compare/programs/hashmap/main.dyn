@@ -12,8 +12,8 @@ fn slot(key: u64) usize {
 
 fn main() {
   arena := mem.arena_alloc(0)
-  keys := mem.push_array(u64, arena, Capacity)
-  counts := mem.push_array(u64, arena, Capacity)
+  keys := mem.push_array<u64>(arena, Capacity)
+  counts := mem.push_array<u64>(arena, Capacity)
   state: u64 = 7
   for _ in 0..Inserts {
     state = (state * 6364136223846793005 + 1442695040888963407)

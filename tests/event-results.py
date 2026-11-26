@@ -8,10 +8,10 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/event" event
+SOURCE = r'''use event "std/event"
 use "std/fail"
-use "std/net" net
-use "std/mem" mem
+use net "std/net"
+use mem "std/mem"
 fn check(ok: bool) { if !ok { #panic("event readiness") } }
 fn kind(status: *const fail.Status) fail.Kind {
   return status.failure.kind
@@ -46,16 +46,16 @@ fn main() {
   check(kind(&full) == fail.Kind.Capacity)
   net.close(other)
   empty := event.wait(scratch, &status, &queue, 5)
-  check(#len(empty) == 0)
+  check(empty.len == 0)
   _ = net.send_to(&status, descriptor, "x", 0, local.bytes[..local.length])
   ready := event.wait(scratch, &status, &queue, 1000)
-  check(#len(ready) == 1)
+  check(ready.len == 1)
   check(ready[0].descriptor == descriptor && ready[0].token == 42 && (ready[0].events & event.Readable) != 0)
   ready = event.wait(scratch, &status, &queue, 0)
-  check(#len(ready) == 1)
+  check(ready.len == 1)
   event.modify(&status, &queue, descriptor, event.Writable, 18446744073709551615)
   ready = event.wait(scratch, &status, &queue, 1000)
-  check(#len(ready) == 1 && ready[0].token == 18446744073709551615 && (ready[0].events & event.Writable) != 0)
+  check(ready.len == 1 && ready[0].token == 18446744073709551615 && (ready[0].events & event.Writable) != 0)
   event.remove(&status, &queue, descriptor)
   missing: fail.Status
   event.remove(&missing, &queue, descriptor)
@@ -66,7 +66,7 @@ fn main() {
   _ = event.wait(scratch, &status, &queue, 0)
   event.add(&status, &queue, descriptor, event.Readable, 7)
   ready = event.wait(scratch, &status, &queue, 0)
-  check(#len(ready) == 1 && ready[0].token == 7)
+  check(ready.len == 1 && ready[0].token == 7)
   event.remove(&status, &queue, descriptor)
   event.close(&queue)
   event.close(&queue)

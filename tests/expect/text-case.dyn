@@ -8,8 +8,4 @@ fn main() {
     "a" => { } // error: duplicate case pattern
     Go => { } // error: must be a string literal
   }
-  case word {
-    "b" x => { } // error: takes no binding
-    _ => { }
-  }
 }

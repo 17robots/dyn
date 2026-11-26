@@ -1,11 +1,11 @@
 #target(kernel: linux)
-use "std/fmt" format
-use "std/os/linux" platform
+use format "std/fmt"
+use platform "std/os/linux"
 use "std/sync"
 use "std/fail"
-use "std/fs" fs
-use "std/io" io
-use "std/mem" mem
+use fs "std/fs"
+use io "std/io"
+use mem "std/mem"
 pub struct TemporaryDirectory { path: []const u8, active: bool }
 // Reserves a private 0700 directory. Its path is in arena.
 pub fn temporary_directory(arena: *mem.Arena, status: *fail.Status, prefix: []const u8) TemporaryDirectory {

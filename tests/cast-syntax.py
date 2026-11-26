@@ -11,7 +11,7 @@ SOURCE = '''calls: i32
 fn next() i32 { calls += 1
 return 7 }
 fn identity(value: i32) i32 { return value }
-fn generic(value: $T) i64 { return #cast(i64, value) }
+fn generic<T>(value: T) i64 { return #cast(i64, value) }
 struct Item { value: i32 }
 enum(u8) Op { None, Read, Write }
 fn main() {

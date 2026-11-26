@@ -32,7 +32,7 @@ fn main() {{
   defer mem.arena_release(arena)
   status: fail.Status
   arguments := process.arguments(arena, &status)
-  value := #cast(u64, #len(arguments)) + 999
+  value := #cast(u64, arguments.len) + 999
 {calls}  storage: [256]u8
   if status.failed {{
     io.println("{{}}", fail.describe(storage[..], status.failure))

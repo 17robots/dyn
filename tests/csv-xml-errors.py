@@ -12,11 +12,11 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get("DYN", ROOT / "build/dyn-release")).resolve()
 
-SOURCE = r'''use "std/encoding/csv" csv
-use "std/encoding/xml" xml
+SOURCE = r'''use csv "std/encoding/csv"
+use xml "std/encoding/xml"
 use "std/fail"
-use "std/io" io
-use "std/bytes" bytes
+use io "std/io"
+use bytes "std/bytes"
 struct Probe { calls: usize, code: isize, mode: usize }
 fn check(ok: bool) { if !ok { #panic("CSV/XML diagnostic contract") } }
 fn refused(status: *fail.Status, code: isize) usize {
@@ -120,7 +120,7 @@ fn callback_contracts() {
   eof := Probe{ mode: 1 }
   c := csv.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: read })
   f := csv_stream(&c, scratch[..])
-  check(f.value.found && #len(f.value.text) == 1 && f.value.end_input && f.failure.kind == fail.Kind.Ok)
+  check(f.value.found && f.value.text.len == 1 && f.value.end_input && f.failure.kind == fail.Kind.Ok)
   check(!csv_stream(&c, scratch[..]).value.found && eof.calls == 2)
   eof.calls = 0
   x := xml.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: read }, scratch[..])
@@ -157,7 +157,7 @@ fn additional_contracts() {
   reader := io.Reader{data: #cast(rawptr, &p), read: read}
   c := csv.stream_scanner(reader)
   f := csv_stream(&c, scratch[..0])
-  check(f.value.found && #len(f.value.text) == 0 && f.value.end_input && f.value.end_record && f.failure.kind == fail.Kind.Ok)
+  check(f.value.found && f.value.text.len == 0 && f.value.end_input && f.value.end_record && f.failure.kind == fail.Kind.Ok)
   check(!csv_stream(&c, scratch[..0]).value.found && p.calls == 1)
   p.calls = 0
   x := xml.stream_scanner(reader, scratch[..])
@@ -180,7 +180,7 @@ fn additional_contracts() {
   zero_field: csv.Field
   zero_event: xml.Event
   zero_attribute: xml.Attribute
-  check(#len(zero_field.text) == 0 && #len(zero_event.name) == 0 && #len(zero_attribute.name) == 0)
+  check(zero_field.text.len == 0 && zero_event.name.len == 0 && zero_attribute.name.len == 0)
   // CSV diagnostics retain the field's starting byte offset.
   bad := csv.scanner("a,\"unfinished")
   check(csv_next(&bad, scratch[..]).value.found)
@@ -229,15 +229,15 @@ struct Chunk { calls: usize, source: []const u8, at: usize, split: usize, limit:
 fn read_chunk(data: rawptr, status: *fail.Status, destination: []u8) usize {
   state := #cast(*Chunk, data)
   state.calls += 1
-  take := #len(state.source) - state.at
+  take := state.source.len - state.at
   if state.at < state.split && take > state.split - state.at {
     take = state.split - state.at
   }
   if state.limit > 0 && take > state.limit {
     take = state.limit
   }
-  if take > #len(destination) {
-    take = #len(destination)
+  if take > destination.len {
+    take = destination.len
   }
   for i in 0..take {
     destination[i] = state.source[state.at + i]
@@ -279,7 +279,7 @@ fn xml_check(source: []const u8, expected: bool) {
     #panic("XML fixture invalid")
   }
   if expected {
-    for capacity in 0..#len(source) {
+    for capacity in 0..source.len {
       chunk := Chunk{source: source, limit: 1}
       storage: [128]u8
       streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
@@ -290,10 +290,10 @@ fn xml_check(source: []const u8, expected: bool) {
     }
   }
   for limit in 0..4 {
-    for split in 1..#len(source) + 1 {
+    for split in 1..source.len + 1 {
       chunk := Chunk{source: source, split: split, limit: limit}
       storage: [128]u8
-      capacity := #len(source)
+      capacity := source.len
       if !expected {
         capacity += 1
       }

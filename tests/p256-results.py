@@ -40,10 +40,10 @@ def vector(key,message):
  public=scalar(key)
  return b'\4'+b''.join(x.to_bytes(32,'big') for x in public),r.to_bytes(32,'big')+s.to_bytes(32,'big')
 def literal(value):return '"'+''.join('\\x%02x'%b for b in value)+'"'
-s='''use "std/crypto/signature" facade
+s='''use facade "std/crypto/signature"
 use "std/fail"
-use "std/crypto/p256" p
-use "std/bytes" bytes
+use p "std/crypto/p256"
+use bytes "std/bytes"
 fn facade_p256_public_fails(output: []u8, a1: []const u8) bool {
  status: fail.Status
  _ = facade.p256_public(&status, output, a1)
@@ -115,7 +115,7 @@ s+=''' key: [32]u8
  for i in 0..96 { output[i]=165 }
  rejected: fail.Status
  invalid:=facade.p256_public(&rejected,output[..],key[..])
- check(rejected.failed && rejected.failure.kind == fail.Kind.InvalidInput && #len(invalid)==0)
+ check(rejected.failed && rejected.failure.kind == fail.Kind.InvalidInput && invalid.len==0)
  check(facade_p256_sign_fails(output[..],"",key[..]))
  for i in 0..96 { check(output[i]==165) }
  check(public_fails(output[..],key[..]) && sign_fails(output[..],"",key[..]))

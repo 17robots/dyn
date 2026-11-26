@@ -11,7 +11,7 @@ DYN = str(Path(os.environ.get('DYN', ROOT/'build'/('dyn-release.exe' if os.name 
 SOURCE = r'''use "std/net"
 use "std/thread"
 use "std/fail"
-use "std/mem" mem
+use mem "std/mem"
 use "std/sync"
 use "std/bytes"
 struct Context { listener: net.Listener, ready: sync.AtomicU32, count: sync.AtomicU64 }

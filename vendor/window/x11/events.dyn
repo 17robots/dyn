@@ -1,4 +1,4 @@
-use "vendor/window/events" ordered
+use ordered "vendor/window/events"
 #link("c")
 pub type EventKind = ordered.Kind
 pub type OrderedEvent = ordered.Event
@@ -93,8 +93,8 @@ fn ordered_keyboard(window: *Window, event: *Event) {
 }
 fn ordered_text(window: *Window, text: []const u8) {
   at: usize = 0
-  for at < #len(text) {
-    count := #len(text) - at
+  for at < text.len {
+    count := text.len - at
     if count > 256 {
       count = 256
       for count > 0 && (text[at + count] & 0xc0) == 0x80 {
@@ -142,22 +142,22 @@ fn ordered_wakes(window: *Window) {
 fn ordered_clipboard(window: *Window, text: []const u8) {
   at: usize = 0
   for true {
-    count := #len(text) - at
+    count := text.len - at
     if count > 256 {
       count = 256
       for count > 0 && (text[at + count] & 0xc0) == 0x80 {
         count -= 1
       }
     }
-    if count == 0 && at < #len(text) {
+    if count == 0 && at < text.len {
       if window.events_enabled && window.events.dropped != 4294967295 {
         window.events.dropped += 1
       }
       return
     }
     value := ordered.Event{ kind: ordered.Kind.Clipboard, text_length: #cast(u32, count),
-      x: #cast(i32, at), width: #cast(i32, #len(text)) }
-    if at + count == #len(text) {
+      x: #cast(i32, at), width: #cast(i32, text.len) }
+    if at + count == text.len {
       value.button = 1
     }
     for i in 0..count {
@@ -165,6 +165,6 @@ fn ordered_clipboard(window: *Window, text: []const u8) {
     }
     ordered_push(window, value)
     at += count
-    if at == #len(text) { return }
+    if at == text.len { return }
   }
 }

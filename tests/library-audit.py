@@ -9,10 +9,10 @@ DYN = str(Path(os.environ.get("DYN", ROOT / "build/dyn-release")).resolve())
 CASES = {
     'json-format': r'''
 use "std/fail"
-use "std/encoding/json" json
-use "std/mem" memory
-use "std/fmt" fmt
-use "std/bytes" bytes
+use json "std/encoding/json"
+use memory "std/mem"
+use fmt "std/fmt"
+use bytes "std/bytes"
 fn expect_decimal(value:f64, precision:usize, expected:[]const u8) {
   output:[128 + memory.ArenaBufferOverhead]u8
   scratch:=memory.arena_from_buffer(output[..])
@@ -28,10 +28,10 @@ fn main() {
     encoded:[16 + memory.ArenaBufferOverhead]u8
     encoded_arena:=memory.arena_from_buffer(encoded[..])
     written:=json.write_string(encoded_arena,control[..])
-    if #len(written)==0 { #panic("control escape") }
+    if written.len==0 { #panic("control escape") }
     parsing:fail.Status
     root:=json.parse(arena,&parsing,written)
-    if parsing.failed || #len(root.text)!=1 || root.text[0]!=control[0] { #panic("control roundtrip") }
+    if parsing.failed || root.text.len!=1 || root.text[0]!=control[0] { #panic("control roundtrip") }
     roundtrip:[16 + memory.ArenaBufferOverhead]u8
     roundtrip_arena:=memory.arena_from_buffer(roundtrip[..])
     if !bytes.equal(json.encode(roundtrip_arena,root),written) { #panic("node encode") }
@@ -43,7 +43,7 @@ fn main() {
   source[6001]='"'
   parsing:fail.Status
   root:=json.parse(arena,&parsing,source[..])
-  if parsing.failed || #len(root.text)!=1000 || memory.arena_used(arena)!=#sizeof(json.Value)+1000 { #panic("retained string size") }
+  if parsing.failed || root.text.len!=1000 || memory.arena_used(arena)!=#sizeof(json.Value)+1000 { #panic("retained string size") }
   for byte in root.text { if byte!='a' { #panic("rewind changed retained bytes") } }
   expect_decimal(4503599627370497.0,0,"4503599627370497")
   expect_decimal(9007199254740991.0,0,"9007199254740991")
@@ -55,11 +55,11 @@ fn main() {
 }
 ''',
     'containers': r'''
-use "std/mem" mem
-use "std/container/hash" hash
-use "std/container/list" list
-use "std/container/slot_map" slots
-use "std/fmt" fmt
+use mem "std/mem"
+use hash "std/container/hash"
+use list "std/container/list"
+use slots "std/container/slot_map"
+use fmt "std/fmt"
 struct Entry {
   generation: u32,
   key: []const u8,
@@ -71,8 +71,8 @@ struct Entry {
 const nil_entry: Entry = Entry{}
 fn main() {
   owned := mem.arena_alloc(1000000)
-  table := hash.slots(Entry, owned, 8)
-  entries := mem.push_array(Entry, owned, 128)
+  table := hash.slots<Entry>(owned, 8)
+  entries := mem.push_array<Entry>(owned, 128)
   first_free: *Entry
   for i in 0..128 {
     list.free_push(&first_free, &entries[127 - i])

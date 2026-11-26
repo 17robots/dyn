@@ -22,11 +22,11 @@ pub fn inf() f64 {
 pub fn nan() f64 {
   return #bitcast(f64, bits_7ff8000000000000)
 }
-pub fn is_nan(x: $T) bool {
+pub fn is_nan<T>(x: T) bool {
   return x != x
 }
 // Inspect before widening: a hardware f32-to-f64 cast quiets signaling NaNs.
-fn signaling_nan(x: $T) bool {
+fn signaling_nan<T>(x: T) bool {
   if #sizeof(T) == 4 {
     b := #bitcast(u32, #cast(f32, x)) & 0x7fffffff
     return b > 0x7f800000 && (b & 0x00400000) == 0
@@ -34,93 +34,93 @@ fn signaling_nan(x: $T) bool {
   b := #bitcast(u64, #cast(f64, x)) & bits_7fffffffffffffff
   return b > bits_7ff0000000000000 && (b & 0x0008000000000000) == 0
 }
-pub fn is_inf(x: $T) bool {
+pub fn is_inf<T>(x: T) bool {
   wide := #cast(f64, x)
   return wide == inf() || wide == -inf()
 }
-pub fn is_finite(x: $T) bool {
+pub fn is_finite<T>(x: T) bool {
   return !is_nan(x) && !is_inf(x)
 }
 
-pub fn sqrt(x: $T) T {
+pub fn sqrt<T>(x: T) T {
   return #cast(T, sqrt64(#cast(f64, x)))
 }
-pub fn floor(x: $T) T {
+pub fn floor<T>(x: T) T {
   return #cast(T, floor64(#cast(f64, x)))
 }
-pub fn ceil(x: $T) T {
+pub fn ceil<T>(x: T) T {
   return #cast(T, ceil64(#cast(f64, x)))
 }
-pub fn trunc(x: $T) T {
+pub fn trunc<T>(x: T) T {
   return #cast(T, trunc64(#cast(f64, x)))
 }
 // Rounds half away from zero.
-pub fn round(x: $T) T {
+pub fn round<T>(x: T) T {
   return #cast(T, round64(#cast(f64, x)))
 }
 // x's magnitude with sign's sign.
-pub fn copysign(x, sign: $T) T {
+pub fn copysign<T>(x, sign: T) T {
   return #cast(T, copysign64(#cast(f64, x), #cast(f64, sign)))
 }
 // x * y + z with one rounding.
-pub fn fma(x, y, z: $T) T {
+pub fn fma<T>(x, y, z: T) T {
   return #fma(x, y, z)
 }
-pub fn sin(x: $T) T {
+pub fn sin<T>(x: T) T {
   return #cast(T, sin64(#cast(f64, x)))
 }
-pub fn cos(x: $T) T {
+pub fn cos<T>(x: T) T {
   return #cast(T, cos64(#cast(f64, x)))
 }
-pub fn tan(x: $T) T {
+pub fn tan<T>(x: T) T {
   return #cast(T, tan64(#cast(f64, x)))
 }
-pub fn asin(x: $T) T {
+pub fn asin<T>(x: T) T {
   return #cast(T, asin64(#cast(f64, x)))
 }
-pub fn acos(x: $T) T {
+pub fn acos<T>(x: T) T {
   return #cast(T, acos64(#cast(f64, x)))
 }
-pub fn atan(x: $T) T {
+pub fn atan<T>(x: T) T {
   return #cast(T, atan64(#cast(f64, x)))
 }
-pub fn atan2(y, x: $T) T {
+pub fn atan2<T>(y, x: T) T {
   return #cast(T, atan2_64(#cast(f64, y), #cast(f64, x)))
 }
-pub fn exp(x: $T) T {
+pub fn exp<T>(x: T) T {
   return #cast(T, exp64(#cast(f64, x)))
 }
-pub fn exp2(x: $T) T {
+pub fn exp2<T>(x: T) T {
   return #cast(T, exp2_64(#cast(f64, x)))
 }
-pub fn log(x: $T) T {
+pub fn log<T>(x: T) T {
   return #cast(T, log64(#cast(f64, x)))
 }
-pub fn log2(x: $T) T {
+pub fn log2<T>(x: T) T {
   return #cast(T, log2_64(#cast(f64, x)))
 }
-pub fn log10(x: $T) T {
+pub fn log10<T>(x: T) T {
   return #cast(T, log10_64(#cast(f64, x)))
 }
-pub fn pow(x, y: $T) T {
+pub fn pow<T>(x, y: T) T {
   if signaling_nan(x) || signaling_nan(y) { return #cast(T, nan()) }
   return #cast(T, pow64(#cast(f64, x), #cast(f64, y)))
 }
 // sqrt(x * x + y * y) without intermediate overflow.
-pub fn hypot(x, y: $T) T {
+pub fn hypot<T>(x, y: T) T {
   if signaling_nan(x) || signaling_nan(y) { return #cast(T, nan()) }
   return #cast(T, hypot64(#cast(f64, x), #cast(f64, y)))
 }
 // a + (b - a) * t.
-pub fn lerp(a, b, t: $T) T {
+pub fn lerp<T>(a, b, t: T) T {
   return a + (b - a) * t
 }
 // The t for which lerp(a, b, t) is value.
-pub fn unlerp(a, b, value: $T) T {
+pub fn unlerp<T>(a, b, value: T) T {
   return (value - a) / (b - a)
 }
 // Hermite step from 0 at edge0 to 1 at edge1.
-pub fn smoothstep(edge0, edge1, x: $T) T {
+pub fn smoothstep<T>(edge0, edge1, x: T) T {
   zero := #cast(T, 0)
   one := #cast(T, 1)
   t := (x - edge0) / (edge1 - edge0)
@@ -133,7 +133,7 @@ pub fn smoothstep(edge0, edge1, x: $T) T {
   return t * t * (#cast(T, 3) - #cast(T, 2) * t)
 }
 // x wrapped into [minimum, maximum).
-pub fn wrap(x, minimum, maximum: $T) T {
+pub fn wrap<T>(x, minimum, maximum: T) T {
   span := maximum - minimum
   return x - span * floor((x - minimum) / span)
 }

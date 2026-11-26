@@ -26,9 +26,9 @@ fn for_other(status: *fail.Status, response: *http.Response, request: *const htt
 CASES = {
     'good': ('''fn main() {
   app := App{}
-  typed := http.Typed(App){ state: &app, handler: for_app }
+  typed := http.Typed<App>{ state: &app, handler: for_app }
   _ = http.bind(&typed)
-  storage: [4]http.TypedRoute(App)
+  storage: [4]http.TypedRoute<App>
   router := http.typed_routes(storage[..], &app)
   status: fail.Status
   http.add(&status, &router, "GET", "/", for_app)
@@ -41,13 +41,13 @@ CASES = {
 ''', None),
     'typed handler': ('''fn main() {
   app := App{}
-  typed := http.Typed(App){ state: &app, handler: for_other }
+  typed := http.Typed<App>{ state: &app, handler: for_other }
   _ = http.bind(&typed)
 }
 ''', 'type mismatch'),
     'route handler': ('''fn main() {
   app := App{}
-  storage: [4]http.TypedRoute(App)
+  storage: [4]http.TypedRoute<App>
   router := http.typed_routes(storage[..], &app)
   status: fail.Status
   http.add(&status, &router, "GET", "/", for_other)

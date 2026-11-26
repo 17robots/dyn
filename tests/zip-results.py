@@ -19,11 +19,11 @@ with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
 data = buffer.getvalue()
 literal = '"' + "".join(f"\\x{byte:02x}" for byte in data) + '"'
 
-SOURCE = r'''use "std/archive/zip" zip
+SOURCE = r'''use zip "std/archive/zip"
 use "std/fail"
-use "std/io" io
-use "std/mem" mem
-use "std/bytes" bytes
+use io "std/io"
+use mem "std/mem"
+use bytes "std/bytes"
 fn check(ok: bool) { if !ok { #panic("zip fixture") } }
 struct Input { source: []const u8, offset: usize, fail: usize, calls: usize, native: isize }
 fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
@@ -35,9 +35,9 @@ fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
   fail.set(status, failure)
   return 0
  }
- take := #len(destination)
+ take := destination.len
  if take > s.fail - s.offset { take = s.fail - s.offset }
- if take > #len(s.source) - s.offset { take = #len(s.source) - s.offset }
+ if take > s.source.len - s.offset { take = s.source.len - s.offset }
  for i in 0..take { destination[i] = s.source[s.offset+i] }
  s.offset += take
  return take
@@ -68,7 +68,7 @@ fn stream_next(state: *zip.StreamReader) Streamed {
 fn extract_failure(arena: *mem.Arena, entry: zip.Entry) fail.Failure {
  status: fail.Status
  bytes_out := zip.extract(arena, &status, entry)
- check(status.failed && #len(bytes_out) == 0)
+ check(status.failed && bytes_out.len == 0)
  return status.failure
 }
 fn open_fails(data: []const u8) bool {
@@ -160,7 +160,7 @@ fn main() {
  eof := stream_next(&eof_stream)
  check(!eof.next.found && eof.failure.kind == fail.Kind.Ok)
  check(!stream_entry(&status, &eof_stream).found && eof_input.calls == 1)
- check(open_fails(data[#len(data)-22..]))
+ check(open_fails(data[data.len-22..]))
  empty_eocd: [22]u8
  empty_eocd[0] = 80
  empty_eocd[1] = 75
@@ -180,9 +180,9 @@ fn main() {
 }
 '''
 
-ARENA_SOURCE = r'''use "std/archive/zip" zip
+ARENA_SOURCE = r'''use zip "std/archive/zip"
 use "std/fail"
-use "std/mem" mem
+use mem "std/mem"
 fn main() {
  status: fail.Status
  storage: [1+mem.ArenaBufferOverhead]u8

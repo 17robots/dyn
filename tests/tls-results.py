@@ -48,8 +48,8 @@ int main(int argc, char **argv) {
 '''
 
 COMMON = r'''
-use "std/net/tls" tls
-use "std/mem" mem
+use tls "std/net/tls"
+use mem "std/mem"
 use "std/fail"
 fn check(ok: bool) { if !ok { #panic("TLS result contract") } }
 '''
@@ -69,7 +69,7 @@ fn main() {
   check(connection == nil && invalid.failure.kind == fail.Kind.InvalidInput && invalid.failure.native == 0)
   provider: fail.Status
   config := tls.server_config_create(arena, &provider, "/dyn/no-certificate.pem", "/dyn/no-key.pem")
-  check(config == nil && provider.failure.kind == fail.Kind.System && provider.failure.native != 0 && #len(fail.message_text(&provider.failure)) > 0)
+  check(config == nil && provider.failure.kind == fail.Kind.System && provider.failure.native != 0 && fail.message_text(&provider.failure).len > 0)
   bad: fail.Status
   wanted := tls.handshake(&bad, nil)
   check(wanted == tls.Want.Nothing && bad.failure.kind == fail.Kind.InvalidInput && bad.failure.native == 0)
@@ -82,18 +82,18 @@ fn main() {
   check(server.failed && closing.failed && alpn.failed)
   missing: fail.Status
   absent := tls.certificate_subject(arena, &missing, nil)
-  check(missing.failure.kind == fail.Kind.InvalidInput && missing.failure.native == 0 && #len(absent) == 0 && mem.arena_mark(arena) == mark)
+  check(missing.failure.kind == fail.Kind.InvalidInput && missing.failure.native == 0 && absent.len == 0 && mem.arena_mark(arena) == mark)
   for byte in prefix { check(byte == 165) }
   pem: []const u8 = PEM
-  bio := bio_new(&pem[0], #cast(i32, #len(pem)))
+  bio := bio_new(&pem[0], #cast(i32, pem.len))
   check(bio != nil)
   cert := read_cert(bio, nil, nil, nil)
   _ = bio_free(bio)
   check(cert != nil)
   status: fail.Status
   subject := tls.certificate_subject(arena, &status, cert)
-  check(!status.failed && #len(subject) > 1023 && mem.equal(subject, ORACLE))
-  check(mem.arena_mark(arena) == mark + #len(subject))
+  check(!status.failed && subject.len > 1023 && mem.equal(subject, ORACLE))
+  check(mem.arena_mark(arena) == mark + subject.len)
   tls.certificate_release(&cert)
   tls.certificate_release(&cert)
   check(cert == nil && mem.equal(subject, ORACLE))
@@ -130,7 +130,7 @@ fn main() {
   pending := tls.shutdown(&status, #cast(rawptr, 1))
   check(!status.failed && pending == tls.Want.Read)
   failed := tls.certificate_subject(arena, &status, #cast(rawptr, 1))
-  check(status.failure.kind == fail.Kind.System && status.failure.native == -1 && #len(failed) == 0 && mem.arena_used(arena) == 7)
+  check(status.failure.kind == fail.Kind.System && status.failure.native == -1 && failed.len == 0 && mem.arena_used(arena) == 7)
   for byte in storage { check(byte == 165) }
 }
 '''
@@ -210,7 +210,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-tls-results-') as temporary:
   skip := (16-(#cast(usize,&backing[0]) & 15)) & 15
   arena := mem.arena_from_buffer(backing[skip..skip+mem.ArenaHeader])
   pem: []const u8 = ''' + json.dumps(pem.read_text()) + '''
-  bio := bio_new(&pem[0], #cast(i32, #len(pem)))
+  bio := bio_new(&pem[0], #cast(i32, pem.len))
   check(bio != nil)
   cert := read_cert(bio, nil, nil, nil)
   _ = bio_free(bio)

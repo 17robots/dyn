@@ -1,9 +1,9 @@
-use "std/os/windows" native_windows
+use native_windows "std/os/windows"
 #target(kernel: windows)
 
-use "std/io" io
+use io "std/io"
 use "std/fail"
-use "std/sync" sync
+use sync "std/sync"
 
 // Console control events arrive on a thread that Windows creates. The handler
 // records them and signals an auto-reset event; the program reads them with

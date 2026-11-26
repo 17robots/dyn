@@ -18,15 +18,15 @@ fn failed(status: *fail.Status, kind: fail.Kind, operation: []const u8, message:
 pub fn compress(status: *fail.Status, destination: []u8, source: []const u8) usize {
   if status == nil { return compress(&fail.Status{}, destination, source) }
   if status.failed { return 0 }
-  if #len(source) > MaxInput || #len(destination) == 0 || #len(destination) > 2147483647 {
+  if source.len > MaxInput || destination.len == 0 || destination.len > 2147483647 {
     return failed(status, fail.Kind.InvalidInput, "compress", "bad buffer sizes", 0)
   }
   empty: [1]u8
   input: *const u8 = &empty[0]
-  if #len(source) != 0 {
+  if source.len != 0 {
     input = &source[0]
   }
-  code := native_compress(input, &destination[0], #cast(i32, #len(source)), #cast(i32, #len(destination)))
+  code := native_compress(input, &destination[0], #cast(i32, source.len), #cast(i32, destination.len))
   if code <= 0 { return failed(status, fail.Kind.Capacity, "compress", "the destination is too small", code) }
   return #cast(usize, code)
 }
@@ -35,15 +35,15 @@ pub fn compress(status: *fail.Status, destination: []u8, source: []const u8) usi
 pub fn decompress(status: *fail.Status, destination: []u8, source: []const u8) usize {
   if status == nil { return decompress(&fail.Status{}, destination, source) }
   if status.failed { return 0 }
-  if #len(source) == 0 || #len(source) > 2147483647 || #len(destination) > 2147483647 {
+  if source.len == 0 || source.len > 2147483647 || destination.len > 2147483647 {
     return failed(status, fail.Kind.InvalidInput, "decompress", "bad buffer sizes", -1)
   }
   empty: [1]u8
   output := &empty[0]
-  if #len(destination) != 0 {
+  if destination.len != 0 {
     output = &destination[0]
   }
-  code := native_decompress(&source[0], output, #cast(i32, #len(source)), #cast(i32, #len(destination)))
+  code := native_decompress(&source[0], output, #cast(i32, source.len), #cast(i32, destination.len))
   if code < 0 { return failed(status, fail.Kind.InvalidInput, "decompress", "malformed LZ4 block", code) }
   return #cast(usize, code)
 }

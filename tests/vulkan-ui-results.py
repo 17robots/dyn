@@ -7,11 +7,11 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "vendor/ui/vulkan" gpu
-use "std/ui" ui
-use "std/ui/software" software
-use "std/mem" mem
-use "std/io" errors
+SOURCE=r'''use gpu "vendor/ui/vulkan"
+use ui "std/ui"
+use software "std/ui/software"
+use mem "std/mem"
+use errors "std/io"
 use "std/fail"
 struct gpu_open_Outcome { failure: fail.Failure, kind: fail.Kind }
 fn gpu_open(p0: *gpu.Renderer, p1: gpu.Limits) gpu_open_Outcome {
@@ -64,13 +64,13 @@ fn main() {
  font := software.Font{data:&font_data,glyph:bitmap,line_height:3}
  pixels: [4224]u8
  actual: [4224]u8
- for i in 0..#len(pixels) { pixels[i] = #cast(u8,i*37+19)
+ for i in 0..pixels.len { pixels[i] = #cast(u8,i*37+19)
  actual[i] = pixels[i] }
  surface := software.Surface{pixels:pixels[..],width:32,height:32,stride:132}
  target := software.Surface{pixels:actual[..],width:32,height:32,stride:132}
  check(!failed(software_render(&surface,&commands[0],font).failure))
  check(!failed(gpu_render(&renderer,arena,&target,&commands[0],font).failure))
- for i in 0..#len(pixels) { check(pixels[i] == actual[i]) }
+ for i in 0..pixels.len { check(pixels[i] == actual[i]) }
  // Reuse persistent GPU buffer on a smaller frame.
  surface.width = 7
  surface.height = 5
@@ -78,7 +78,7 @@ fn main() {
  target.height = 5
  check(!failed(software_render(&surface,&commands[0],font).failure))
  check(!failed(gpu_render(&renderer,arena,&target,&commands[0],font).failure))
- for i in 0..#len(pixels) { check(pixels[i] == actual[i]) }
+ for i in 0..pixels.len { check(pixels[i] == actual[i]) }
  renderer.limits.draws = 0
  check(gpu_render(&renderer,arena,&target,&commands[0],font).kind == fail.Kind.Capacity)
  renderer.limits = gpu.Limits{coverage_bytes:0}

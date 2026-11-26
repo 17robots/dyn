@@ -22,7 +22,7 @@ fn append(status: *fail.Status, output: *fs.File, path: []const u8) {
 
 fn main() i32 {
   program := process.start()
-  if #len(program.args) < 3 {
+  if program.args.len < 3 {
     io.eprintln("concat: usage: concat OUTPUT INPUT...")
     return 1
   }

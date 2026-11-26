@@ -1,23 +1,23 @@
 use "std/mem"
 use "std/container/chunk"
-struct Pair(A, B) { first: A, second: B }
-struct Box(T) { value: T, failed: bool }
-struct Node(T) { next: *Node(T), value: T }
-struct Chunk(T) { next: *Chunk(T), count: usize, items: [4]T }
-struct List(T) { first: *Chunk(T), last: *Chunk(T), total: usize }
-type IntBox = Box(i32)
-#assert(#sizeof(Box(u8)) == 2, "layout")
-fn make(value: $T) Box(T) {
-  result: Box(T)
+struct Pair<A, B> { first: A, second: B }
+struct Box<T> { value: T, failed: bool }
+struct Node<T> { next: *Node<T>, value: T }
+struct Chunk<T> { next: *Chunk<T>, count: usize, items: [4]T }
+struct List<T> { first: *Chunk<T>, last: *Chunk<T>, total: usize }
+type IntBox = Box<i32>
+#assert(#sizeof(Box<u8>) == 2, "layout")
+fn make<T>(value: T) Box<T> {
+  result: Box<T>
   result.value = value
   return result
 }
-fn unwrap(box: Box($T)) T {
+fn unwrap<T>(box: Box<T>) T {
   return box.value
 }
-fn push(arena: *mem.Arena, list: *List($T), value: $T) {
+fn push<T>(arena: *mem.Arena, list: *List<T>, value: T) {
   if list.last == nil || list.last.count == 4 {
-    chunk_value := mem.push(Chunk(T), arena)
+    chunk_value := mem.push<Chunk<T>>(arena)
     if list.last == nil {
       list.first = chunk_value
     } else {
@@ -29,7 +29,7 @@ fn push(arena: *mem.Arena, list: *List($T), value: $T) {
   list.last.count += 1
   list.total += 1
 }
-fn sum(list: *const List(i64)) i64 {
+fn sum(list: *const List<i64>) i64 {
   total: i64 = 0
   chunk_value := list.first
   for chunk_value != nil {
@@ -41,39 +41,39 @@ fn sum(list: *const List(i64)) i64 {
   return total
 }
 fn main() {
-  a := Box(i32){ value: 7 }
+  a := Box<i32>{ value: 7 }
   b := make(2.5)
-  c := Pair(i32, []const u8){ first: 1, second: "abc" }
+  c := Pair<i32, []const u8>{ first: 1, second: "abc" }
   d: IntBox = make(9)
-  if a.value != 7 || unwrap(b) != 2.5 || c.first != 1 || #len(c.second) != 3 || d.value != 9 {
+  if a.value != 7 || unwrap(b) != 2.5 || c.first != 1 || c.second.len != 3 || d.value != 9 {
     #panic("values")
   }
   arena := mem.arena_alloc(0)
-  list: List(i64)
+  list: List<i64>
   for i in 0..10 {
     push(arena, &list, #cast(i64, i))
   }
   if sum(&list) != 45 || list.total != 10 {
     #panic("list")
   }
-  shared: chunk.List(i32)
+  shared: chunk.List<i32>
   for i in 0..100 {
     _ = chunk.push(arena, &shared, #cast(i32, i))
   }
   if shared.total != 100 || shared.first.next.items[0] != 64 {
     #panic("chunk list")
   }
-  counted := chunk.Chunk(i32){ count: 3 }
+  counted := chunk.Chunk<i32>{ count: 3 }
   if counted.count != 3 || counted.next != nil {
     #panic("imported generic literal")
   }
-  info := #typeof(Box(i32))
-  if #len(info.name) != 8 || info.name[3] != '(' {
+  info := #typeof(Box<i32>)
+  if info.name.len != 8 || info.name[3] != '<' {
     #panic("reflection name")
   }
-  node: Node(u32)
+  node: Node<u32>
   node.value = 3
-  other := Node(u32){ next: &node, value: 4 }
+  other := Node<u32>{ next: &node, value: 4 }
   if other.next.value + other.value != 7 {
     #panic("node")
   }

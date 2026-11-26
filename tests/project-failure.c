@@ -17,7 +17,7 @@ int main(void) {
   snprintf(lib_path, sizeof(lib_path), "%s/lib/module.dyn", root);
   snprintf(manifest, sizeof(manifest), "%s/dyn.project", root);
   write_source(manifest, "dependency fixture lib\n");
-  write_source(main_path, "use \"fixture\" lib\nfn main() { value := lib.answer() _ = value }\n");
+  write_source(main_path, "use lib \"fixture\"\nfn main() { value := lib.answer() _ = value }\n");
   write_source(lib_path, "pub fn answer() i32 { return 42 }\n");
   /* The first pass sets DYN_SDK, which once made loading resolve the SDK
      and cache it, so later iterations allocated less than the first. It

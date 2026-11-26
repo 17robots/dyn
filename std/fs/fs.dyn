@@ -1,5 +1,5 @@
-use "std/mem" memory
-use "std/io" io
+use memory "std/mem"
+use io "std/io"
 use "std/fail"
 // Files and directories. Every function that can fail takes a *fail.Status:
 // the first failure is recorded there with the operation, the path and the
@@ -19,6 +19,64 @@ pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16 }
 // One directory entry. name borrows the directory's storage until the next
 // call; kind uses dirent values: 4 directory, 8 regular file, 10 link.
 pub struct DirectoryEntry { name: []const u8, kind: u8 }
+
+// Structured filesystem error enum for T!FsErr APIs.
+pub enum FsErr {
+  NotFound,
+  PermissionDenied,
+  AlreadyExists,
+  IsDirectory,
+  NotDirectory,
+  InvalidInput,
+  Closed,
+  TooLarge,
+  Io(isize),
+}
+
+fn fs_err_from_status(status: *const fail.Status) FsErr {
+  case status.failure.kind {
+    .NotFound => { return FsErr.NotFound }
+    .PermissionDenied => { return FsErr.PermissionDenied }
+    .AlreadyExists => { return FsErr.AlreadyExists }
+    .InvalidInput => { return FsErr.InvalidInput }
+    .InvalidState => { return FsErr.Closed }
+    .Overflow => { return FsErr.TooLarge }
+    _ => { return FsErr.Io(status.failure.native) }
+  }
+}
+
+// Opens path for reading, returning File!FsErr.
+pub fn open_file(path: str) File!FsErr {
+  status: fail.Status
+  file := open(&status, path)
+  if status.failed { fail fs_err_from_status(&status) }
+  return file
+}
+
+// Creates path for writing (or truncates if existing), returning File!FsErr.
+pub fn create_file(path: str) File!FsErr {
+  status: fail.Status
+  file := create(&status, path)
+  if status.failed { fail fs_err_from_status(&status) }
+  return file
+}
+
+// Reads up to maximum bytes from path into arena storage, returning []u8!FsErr.
+pub fn read_file(arena: *memory.Arena, path: str, maximum: usize) []u8!FsErr {
+  status: fail.Status
+  bytes := read_all(arena, &status, path, maximum)
+  if status.failed { fail fs_err_from_status(&status) }
+  return bytes
+}
+
+// Writes source to a newly created or truncated file at path, returning !FsErr.
+pub fn write_file(path: str, source: str) !FsErr {
+  file := try create_file(path)
+  defer close(&file)
+  status: fail.Status
+  write(&status, &file, source)
+  if status.failed { fail fs_err_from_status(&status) }
+}
 
 fn owned_file(handle: isize) File {
   return File{ descriptor: handle, active: true }
@@ -107,7 +165,7 @@ pub fn close(file: *File) {
 // file (file.ended) and after a failure.
 pub fn read(status: *fail.Status, file: *File, destination: []u8) usize {
   if status == nil { return read(&fail.Status{}, file, destination) }
-  if #len(destination) == 0 || !usable(status, file, "read") { return 0 }
+  if destination.len == 0 || !usable(status, file, "read") { return 0 }
   value := native_read(file.descriptor, destination)
   for native_interrupted(value) {
     value = native_read(file.descriptor, destination)
@@ -133,7 +191,7 @@ pub fn write(status: *fail.Status, file: *File, source: []const u8) {
 fn write_count(status: *fail.Status, file: *File, source: []const u8) usize {
   if !usable(status, file, "write") { return 0 }
   written: usize = 0
-  for written < #len(source) {
+  for written < source.len {
     value := native_write(file.descriptor, source[written..])
     if native_interrupted(value) { continue }
     if value < 0 {
@@ -228,8 +286,8 @@ pub fn map(status: *fail.Status, file: *const File) []const u8 {
 // Releases a mapping and empties it. Unmapping an empty view does nothing.
 pub fn unmap(mapping: *[]const u8) {
   view := mapping.*
-  if #len(view) != 0 {
-    _ = native_unmap(#cast(usize, &view[0]), #len(view))
+  if view.len != 0 {
+    _ = native_unmap(#cast(usize, &view[0]), view.len)
   }
   empty: []const u8
   mapping.* = empty
@@ -267,7 +325,7 @@ pub fn read_contents(arena: *memory.Arena, status: *fail.Status, file: *File, ma
     hint = #cast(usize, info.size)
   }
   for {
-    capacity := #len(output) - total
+    capacity := output.len - total
     if capacity > 65536 {
       capacity = 65536
     }
@@ -321,7 +379,7 @@ pub fn read_contents(arena: *memory.Arena, status: *fail.Status, file: *File, ma
     memory.arena_rewind(arena, mark)
     return file_empty()
   }
-  if #len(output) != 0 {
+  if output.len != 0 {
     memory.arena_rewind(arena, output_mark + total)
   }
   return output[..total]
@@ -452,7 +510,7 @@ pub fn directory_next(status: *fail.Status, directory: *Directory) DirectoryEntr
   if !status.failed {
     check(status, "list", directory.path, native_directory_next(directory, &entry))
   }
-  if status.failed || #len(entry.name) == 0 {
+  if status.failed || entry.name.len == 0 {
     directory.ended = true
     return DirectoryEntry{}
   }
@@ -469,7 +527,7 @@ pub fn list(arena: *memory.Arena, status: *fail.Status, path: []const u8) []Dire
   defer close_directory(&directory)
   mark := memory.arena_mark(arena)
   capacity: usize = 16
-  entries := memory.push_array(DirectoryEntry, arena, capacity)
+  entries := memory.push_array<DirectoryEntry>(arena, capacity)
   count: usize = 0
   for {
     entry := directory_next(status, &directory)
@@ -479,14 +537,14 @@ pub fn list(arena: *memory.Arena, status: *fail.Status, path: []const u8) []Dire
     }
     if directory.ended { break }
     if count == capacity {
-      grown := memory.push_array(DirectoryEntry, arena, capacity * 2)
+      grown := memory.push_array<DirectoryEntry>(arena, capacity * 2)
       for i in 0..count {
         grown[i] = entries[i]
       }
       entries = grown
       capacity *= 2
     }
-    name := memory.push_bytes(arena, #len(entry.name))
+    name := memory.push_bytes(arena, entry.name.len)
     _ = memory.copy(name, entry.name)
     entries[count] = DirectoryEntry{ name: name, kind: entry.kind }
     count += 1

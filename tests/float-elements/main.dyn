@@ -14,7 +14,7 @@ fn check(ok: bool) {
   }
 }
 fn fill(values: []f64) {
-  for i in 0..#len(values) {
+  for i in 0..values.len {
     values[i] = 1.0 + #cast(f64, i) * 0.25
   }
 }

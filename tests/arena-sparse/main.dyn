@@ -11,12 +11,12 @@ fn resident_kib() u64 {
   defer mem.arena_release(arena)
   text := fs_read_file(arena, "/proc/self/statm", 4096)
   space: usize = 0
-  for space < #len(text) && text[space] != ' ' {
+  for space < text.len && text[space] != ' ' {
     space += 1
   }
   rest := text[space + 1..]
   end: usize = 0
-  for end < #len(rest) && rest[end] != ' ' {
+  for end < rest.len && rest[end] != ' ' {
     end += 1
   }
   status: fail.Status
@@ -30,7 +30,7 @@ fn main() {
   mem.advise_sparse(region)
   before := resident_kib()
   at: usize = 0
-  for at < #len(region) {
+  for at < region.len {
     region[at] = 1
     at += 2 * mem.MiB
   }

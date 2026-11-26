@@ -3,7 +3,7 @@ struct Slot { tid: u64, top: u64 }
 fn find(slots: []Slot, tid: u64, claim: bool, grows: *u64) *Slot {
   for true {
     empty: *Slot = nil
-    for i in 0..#len(slots) {
+    for i in 0..slots.len {
       slot := &slots[i]
       seen := slot.tid
       if seen == tid {

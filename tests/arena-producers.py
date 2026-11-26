@@ -19,16 +19,16 @@ def literal(data):
     return '"' + ''.join('\\x%02x' % b for b in data) + '"'
 
 
-SOURCE = f'''use "std/mem" mem
-use "std/strings" strings
+SOURCE = f'''use mem "std/mem"
+use strings "std/strings"
 use "std/bytes"
-use "std/fmt" fmt
+use fmt "std/fmt"
 use "std/fail"
-use "std/encoding/base64" base64
-use "std/encoding/json" json
-use "std/compress/deflate" deflate
-use "std/compress/gzip" gzip
-use "std/path" path
+use base64 "std/encoding/base64"
+use json "std/encoding/json"
+use deflate "std/compress/deflate"
+use gzip "std/compress/gzip"
+use path "std/path"
 fn check(ok: bool, message: []const u8) {{
   if !ok {{
     #panic(message)
@@ -63,10 +63,10 @@ fn main() {{
   check(bytes.equal(json.encode(arena, doc), "{{\\"name\\":\\"boss\\"}}"), "json encode")
   mark := mem.arena_used(arena)
   big := deflate.inflate(arena, &status, {literal(DEFLATED)})
-  check(#len(big.value) == {len(PAYLOAD)} && big.value[{len(PAYLOAD) - 1}] == {PAYLOAD[-1]}, "inflate grows")
+  check(big.value.len == {len(PAYLOAD)} && big.value[{len(PAYLOAD) - 1}] == {PAYLOAD[-1]}, "inflate grows")
   check(mem.arena_used(arena) == mark + {len(PAYLOAD)}, "retries leave only the output")
   member := gzip.decompress(arena, &status, {literal(GZIPPED)})
-  check(#len(member.value) == {len(PAYLOAD)} && member.consumed == {len(GZIPPED)}, "gunzip")
+  check(member.value.len == {len(PAYLOAD)} && member.consumed == {len(GZIPPED)}, "gunzip")
   check(inflate_fails(arena, "\\xff\\xff"), "corrupt inflate")
   joined := path.join(arena, "a/b", "c")
   check(bytes.equal(joined, "a/b/c"), "path join")
@@ -81,7 +81,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-arena-producers-') as temporary:
         subprocess.run([DYN, 'build', str(project), '--no-cache', '--quiet', '--output', str(output),
                         *(['--release'] if release else [])], check=True, timeout=120)
         subprocess.run([str(output)], check=True, timeout=20)
-    source.write_text('use "std/mem" mem\nuse "std/encoding/json" json\nfn main() {\n  storage: [8 + mem.ArenaBufferOverhead]u8\n  arena := mem.arena_from_buffer(storage[..])\n  _ = json.write_string(arena, "a long string that cannot fit")\n}\n')
+    source.write_text('use mem "std/mem"\nuse json "std/encoding/json"\nfn main() {\n  storage: [8 + mem.ArenaBufferOverhead]u8\n  arena := mem.arena_from_buffer(storage[..])\n  _ = json.write_string(arena, "a long string that cannot fit")\n}\n')
     subprocess.run([DYN, 'build', str(project), '--no-cache', '--quiet', '--output', str(output)], check=True, timeout=120)
     result = subprocess.run([str(output)], capture_output=True, text=True, timeout=10)
     assert result.returncode != 0 and 'arena exhausted' in result.stderr, result.stderr

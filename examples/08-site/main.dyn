@@ -28,7 +28,7 @@ struct Page {
 
 // The names of SOURCE/*.txt, in arena.
 fn list_pages(arena: *mem.Arena, status: *fail.Status, source: []const u8) [][]const u8 {
-  names: array.Array([]const u8)
+  names: array.Array<[]const u8>
   array.init(&names, arena)
   for entry in fs.list(arena, status, source) {
     if bytes.equal(path.extension(entry.name), ".txt") {
@@ -58,10 +58,10 @@ fn build_page(keep: *mem.Arena, scratch: *mem.Arena, status: *fail.Status, sourc
   // Escaping turns one byte into at most six ("&quot;"), plus room for tags.
   // Sized for the worst case of escaping, so status only fails here if the
   // read did.
-  writer := html.writer(status, mem.push_bytes(scratch, 6 * #len(read) + 1024))
+  writer := html.writer(status, mem.push_bytes(scratch, 6 * read.len + 1024))
   render_page(&writer, read)
 
-  stem := file_name[..#len(file_name) - #len(".txt")]
+  stem := file_name[..file_name.len - ".txt".len]
   page_name := strings.format(scratch, "{}.html", stem)
   target := path.join(keep, output, page_name)
   fs.write_all(status, target, html.output(&writer).bytes)
@@ -73,7 +73,7 @@ fn build_index(keep: *mem.Arena, scratch: *mem.Arena, status: *fail.Status, outp
   defer mem.arena_rewind(scratch, mark)
   size: usize = 1024
   for page in pages {
-    size += 6 * (#len(page.name) + #len(page.title)) + 64
+    size += 6 * (page.name.len + page.title.len) + 64
   }
   writer := html.writer(status, mem.push_bytes(scratch, size))
   header(&writer, "All pages")
@@ -93,7 +93,7 @@ fn build_index(keep: *mem.Arena, scratch: *mem.Arena, status: *fail.Status, outp
 
 fn main() i32 {
   program := process.start()
-  if #len(program.args) != 3 {
+  if program.args.len != 3 {
     io.eprintln("usage: site SOURCE OUTPUT")
     return 2
   }
@@ -108,7 +108,7 @@ fn main() i32 {
   status: fail.Status
   names := list_pages(keep, &status, source)
   fs.make_directory(&status, output)
-  pages: array.Array(Page)
+  pages: array.Array<Page>
   array.init(&pages, keep)
   for file_name in names {
     array.push(&pages, build_page(keep, scratch, &status, source, output, file_name))
@@ -124,6 +124,6 @@ fn main() i32 {
     io.println("{}.html  {}", page.name, page.title)
   }
   // Every function gave its scratch back, so nothing is left in it.
-  io.println("{} pages, {} scratch bytes left", #len(pages.items), mem.arena_used(scratch))
+  io.println("{} pages, {} scratch bytes left", pages.items.len, mem.arena_used(scratch))
   return 0
 }

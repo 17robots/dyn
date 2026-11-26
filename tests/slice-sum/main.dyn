@@ -42,7 +42,7 @@ fn plain_u64(xs: []u64) u64 {
 }
 fn indexed_i32(xs: []i32) i32 {
   t: i32 = 0
-  for i in 0..#len(xs) {
+  for i in 0..xs.len {
     t += xs[i]
   }
   return t

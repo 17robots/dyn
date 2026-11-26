@@ -1,7 +1,7 @@
 #target(arch: thumbv7em, kernel: none)
 // CMSDK UART0 on the QEMU mps2-an500 board: data register and state (bit 0:
 // transmit buffer full).
-use "std/embedded/uart" uart
+use uart "std/embedded/uart"
 
 fn uart_write(text: []const u8) {
   device := uart.cmsdk(0x40004000)

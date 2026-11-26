@@ -8,9 +8,9 @@ import sys
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "vendor/window/native" window
-use "std/text/edit" edit
-use "std/io" errors
+SOURCE=r'''use window "vendor/window/native"
+use edit "std/text/edit"
+use errors "std/io"
 use "std/fail"
 fn window_set_surrounding_text(p0: *window.Window, p1: window.Surrounding) fail.Failure {
   status: fail.Status

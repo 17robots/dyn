@@ -12,9 +12,9 @@ if sys.platform not in ('linux', 'darwin', 'win32'):
     print('SKIP WebSocket callback runtime: unsupported native host')
     raise SystemExit(0)
 
-SOURCE = r'''use "std/net/websocket" ws
+SOURCE = r'''use ws "std/net/websocket"
 use "std/fail"
-use "std/io" io
+use io "std/io"
 struct Trace { reads: usize, writes: usize, mode: usize, bytes: usize }
 fn trace_failure(status: *fail.Status, native: isize) usize {
   failure := fail.make(fail.Kind.System, "trace", "", "")
@@ -27,15 +27,15 @@ fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
   trace.reads += 1
   if trace.mode == 0 { return trace_failure(status, -71) }
   if trace.mode == 1 || trace.mode == 7 { return 0 }
-  if trace.mode == 2 { return #len(destination) + 1 }
+  if trace.mode == 2 { return destination.len + 1 }
   if trace.mode == 3 { return trace_failure(status, 0) }
   if trace.mode == 8 {
     // A valid length prefix whose payload exceeds the frame buffer.
-    for i in 0..#len(destination) { destination[i] = 0 }
+    for i in 0..destination.len { destination[i] = 0 }
     destination[0] = 130
     destination[1] = 126
     destination[3] = 126
-    return #len(destination)
+    return destination.len
   }
   if trace.mode == 9 {
     destination[0] = 129
@@ -65,7 +65,7 @@ fn write(data: rawptr, status: *fail.Status, source: []const u8) usize {
   trace.writes += 1
   if trace.mode == 10 { return trace_failure(status, -73) }
   if trace.mode == 11 { return 0 }
-  if trace.mode == 12 { return #len(source) + 1 }
+  if trace.mode == 12 { return source.len + 1 }
   if trace.mode == 13 { return trace_failure(status, 0) }
   if trace.mode == 14 {
     if trace.writes == 1 {
@@ -74,8 +74,8 @@ fn write(data: rawptr, status: *fail.Status, source: []const u8) usize {
     }
     return trace_failure(status, -74)
   }
-  trace.bytes += #len(source)
-  return #len(source)
+  trace.bytes += source.len
+  return source.len
 }
 fn failed_with(status: *const fail.Status, kind: fail.Kind, native: isize, offset: usize) {
   if !status.failed || status.failure.kind != kind || status.failure.native != native || status.failure.offset != offset { #panic("structured failure metadata") }
@@ -109,9 +109,9 @@ struct Wire { data: []const u8, at: usize, step: usize, calls: usize }
 fn wire_read(raw: rawptr, status: *fail.Status, destination: []u8) usize {
   wire := #cast(*Wire, raw)
   wire.calls += 1
-  count := #len(wire.data) - wire.at
+  count := wire.data.len - wire.at
   if count > wire.step { count = wire.step }
-  if count > #len(destination) { count = #len(destination) }
+  if count > destination.len { count = destination.len }
   for i in 0..count { destination[i] = wire.data[wire.at + i] }
   wire.at += count
   return count
@@ -135,22 +135,22 @@ fn coalesced() {
     sent := Trace{mode: 99}
     state := ws.connection(io.Reader{ data: &wire, read: wire_read }, io.Writer{ data: &sent, write: write }, frames[..], message[..], control[..], true)
     a := ws.connection_receive(&status, &state)
-    if a.detail != ws.WebSocketEventKind.Ready || #len(a.payload) != 1 || a.payload[0] != 'a' { #panic("coalesced first") }
+    if a.detail != ws.WebSocketEventKind.Ready || a.payload.len != 1 || a.payload[0] != 'a' { #panic("coalesced first") }
     ws.connection_pong(&status, &state, "p", 1)
     if sent.writes != 1 || a.payload[0] != 'a' { #panic("send with pending frames") }
     b := ws.connection_receive(&status, &state)
-    if b.detail != ws.WebSocketEventKind.Ready || #len(b.payload) != 1 || b.payload[0] != 'b' { #panic("coalesced second") }
+    if b.detail != ws.WebSocketEventKind.Ready || b.payload.len != 1 || b.payload[0] != 'b' { #panic("coalesced second") }
     closed := ws.connection_receive(&status, &state)
     if closed.detail != ws.WebSocketEventKind.Close { #panic("coalesced close") }
     if step == 32 && wire.calls != 1 { #panic("coalesced extra read") }
     wire = Wire{data: "\x01\x01a\x89\x01p\x80\x01b", step: #cast(usize, step)}
     state = ws.connection(io.Reader{ data: &wire, read: wire_read }, io.Writer{ data: &sent, write: write }, frames[..], message[..], control[..], true)
     ping := ws.connection_receive(&status, &state)
-    if ping.detail != ws.WebSocketEventKind.Ping || #len(ping.payload) != 1 || ping.payload[0] != 'p' { #panic("fragmented ping") }
+    if ping.detail != ws.WebSocketEventKind.Ping || ping.payload.len != 1 || ping.payload[0] != 'p' { #panic("fragmented ping") }
     ws.connection_pong(&status, &state, ping.payload, 1)
     if sent.writes != 2 || ping.payload[0] != 'p' { #panic("send with pending continuation") }
     ab := ws.connection_receive(&status, &state)
-    if ab.detail != ws.WebSocketEventKind.Ready || #len(ab.payload) != 2 || ab.payload[0] != 'a' || ab.payload[1] != 'b' { #panic("fragmented remainder") }
+    if ab.detail != ws.WebSocketEventKind.Ready || ab.payload.len != 2 || ab.payload[0] != 'a' || ab.payload[1] != 'b' { #panic("fragmented remainder") }
     if step == 32 && wire.calls != 1 { #panic("fragmented extra read") }
   }
 }

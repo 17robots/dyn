@@ -1,9 +1,9 @@
-use "std/parse" parse
-use "std/mem" memory
-use "std/strings" strings
+use parse "std/parse"
+use memory "std/mem"
+use strings "std/strings"
 use "std/fail"
-use "std/io" stream
-use "std/unicode/utf8" utf8
+use stream "std/io"
+use utf8 "std/unicode/utf8"
 use "std/bytes"
 use "std/encoding/json/scan"
 
@@ -55,7 +55,7 @@ pub fn token_next(state: *Tokenizer) Token {
   cursor := Cursor{ source: state.source, at: state.offset }
   skip(&cursor)
   start := cursor.at
-  if start == #len(state.source) {
+  if start == state.source.len {
     state.offset = start
     return Token{ kind: TokenKind.End, text: state.source[start..start], offset: start }
   }
@@ -98,7 +98,7 @@ pub fn token_next(state: *Tokenizer) Token {
 }
 
 fn node(arena: *memory.Arena, kind: u8) *Value {
-  result := memory.push(Value, arena)
+  result := memory.push<Value>(arena)
   result.kind = kind
   return result
 }
@@ -134,7 +134,7 @@ fn utf8_byte(value: usize, marker: u8) u8 {
 fn skip(cursor: *Cursor) {
   source := cursor.source
   at := cursor.at
-  for at < #len(source) {
+  for at < source.len {
     byte := source[at]
     if byte != ' ' && byte != '\n' && byte != '\r' && byte != '\t' { break }
     at += 1
@@ -143,18 +143,18 @@ fn skip(cursor: *Cursor) {
 }
 
 fn literal(cursor: *Cursor, content: []const u8) bool {
-  if cursor.at + #len(content) > #len(cursor.source) { return false }
-  for i in 0..#len(content) {
+  if cursor.at + content.len > cursor.source.len { return false }
+  for i in 0..content.len {
     if cursor.source[cursor.at + i] != content[i] { return false }
   }
-  cursor.at += #len(content)
+  cursor.at += content.len
   return true
 }
 
 fn string(cursor: *Cursor) bool {
-  if cursor.at >= #len(cursor.source) || cursor.source[cursor.at] != '"' { return false }
+  if cursor.at >= cursor.source.len || cursor.source[cursor.at] != '"' { return false }
   cursor.at += 1
-  for cursor.at < #len(cursor.source) {
+  for cursor.at < cursor.source.len {
     byte := cursor.source[cursor.at]
     cursor.at += 1
     if byte == '"' { return true }
@@ -165,12 +165,12 @@ fn string(cursor: *Cursor) bool {
       cursor.at += decoded.width - 1
     }
     if byte == '\\' {
-      if cursor.at >= #len(cursor.source) { return false }
+      if cursor.at >= cursor.source.len { return false }
       escaped := cursor.source[cursor.at]
       cursor.at += 1
       if escaped == 'u' {
         for count in 0..4 {
-          if cursor.at >= #len(cursor.source) || !hex(cursor.source[cursor.at]) { return false }
+          if cursor.at >= cursor.source.len || !hex(cursor.source[cursor.at]) { return false }
           cursor.at += 1
         }
       } else if escaped != '"' && escaped != '\\' && escaped != '/' && escaped != 'b' && escaped != 'f' && escaped != 'n' && escaped != 'r' && escaped != 't' {
@@ -182,33 +182,33 @@ fn string(cursor: *Cursor) bool {
 }
 
 fn number(cursor: *Cursor) bool {
-  if cursor.at < #len(cursor.source) && cursor.source[cursor.at] == '-' {
+  if cursor.at < cursor.source.len && cursor.source[cursor.at] == '-' {
     cursor.at += 1
   }
-  if cursor.at >= #len(cursor.source) { return false }
+  if cursor.at >= cursor.source.len { return false }
   if cursor.source[cursor.at] == '0' {
     cursor.at += 1
   } else {
     if cursor.source[cursor.at] < '1' || cursor.source[cursor.at] > '9' { return false }
-    for cursor.at < #len(cursor.source) && (cursor.source[cursor.at] >= '0' && cursor.source[cursor.at] <= '9') {
+    for cursor.at < cursor.source.len && (cursor.source[cursor.at] >= '0' && cursor.source[cursor.at] <= '9') {
       cursor.at += 1
     }
   }
-  if cursor.at < #len(cursor.source) && cursor.source[cursor.at] == '.' {
+  if cursor.at < cursor.source.len && cursor.source[cursor.at] == '.' {
     cursor.at += 1
     exponent_start := cursor.at
-    for cursor.at < #len(cursor.source) && (cursor.source[cursor.at] >= '0' && cursor.source[cursor.at] <= '9') {
+    for cursor.at < cursor.source.len && (cursor.source[cursor.at] >= '0' && cursor.source[cursor.at] <= '9') {
       cursor.at += 1
     }
     if cursor.at == exponent_start { return false }
   }
-  if cursor.at < #len(cursor.source) && (cursor.source[cursor.at] == 'e' || cursor.source[cursor.at] == 'E') {
+  if cursor.at < cursor.source.len && (cursor.source[cursor.at] == 'e' || cursor.source[cursor.at] == 'E') {
     cursor.at += 1
-    if cursor.at < #len(cursor.source) && (cursor.source[cursor.at] == '+' || cursor.source[cursor.at] == '-') {
+    if cursor.at < cursor.source.len && (cursor.source[cursor.at] == '+' || cursor.source[cursor.at] == '-') {
       cursor.at += 1
     }
     start := cursor.at
-    for cursor.at < #len(cursor.source) && (cursor.source[cursor.at] >= '0' && cursor.source[cursor.at] <= '9') {
+    for cursor.at < cursor.source.len && (cursor.source[cursor.at] >= '0' && cursor.source[cursor.at] <= '9') {
       cursor.at += 1
     }
     if cursor.at == start { return false }
@@ -220,7 +220,7 @@ const MaximumDepth: usize = 256
 
 fn validate_value(cursor: *Cursor, depth: usize) bool {
   skip(cursor)
-  if cursor.at >= #len(cursor.source) { return false }
+  if cursor.at >= cursor.source.len { return false }
   byte := cursor.source[cursor.at]
   if byte == '"' { return string(cursor) }
   if byte == 'n' { return literal(cursor, "null") }
@@ -230,14 +230,14 @@ fn validate_value(cursor: *Cursor, depth: usize) bool {
     if depth >= MaximumDepth { return false }
     cursor.at += 1
     skip(cursor)
-    if cursor.at < #len(cursor.source) && cursor.source[cursor.at] == ']' {
+    if cursor.at < cursor.source.len && cursor.source[cursor.at] == ']' {
       cursor.at += 1
       return true
     }
     for {
       if !validate_value(cursor, depth + 1) { return false }
       skip(cursor)
-      if cursor.at >= #len(cursor.source) { return false }
+      if cursor.at >= cursor.source.len { return false }
       if cursor.source[cursor.at] == ']' {
         cursor.at += 1
         return true
@@ -250,7 +250,7 @@ fn validate_value(cursor: *Cursor, depth: usize) bool {
     if depth >= MaximumDepth { return false }
     cursor.at += 1
     skip(cursor)
-    if cursor.at < #len(cursor.source) && cursor.source[cursor.at] == '}' {
+    if cursor.at < cursor.source.len && cursor.source[cursor.at] == '}' {
       cursor.at += 1
       return true
     }
@@ -258,11 +258,11 @@ fn validate_value(cursor: *Cursor, depth: usize) bool {
       skip(cursor)
       if !string(cursor) { return false }
       skip(cursor)
-      if cursor.at >= #len(cursor.source) || cursor.source[cursor.at] != ':' { return false }
+      if cursor.at >= cursor.source.len || cursor.source[cursor.at] != ':' { return false }
       cursor.at += 1
       if !validate_value(cursor, depth + 1) { return false }
       skip(cursor)
-      if cursor.at >= #len(cursor.source) { return false }
+      if cursor.at >= cursor.source.len { return false }
       if cursor.source[cursor.at] == '}' {
         cursor.at += 1
         return true
@@ -278,11 +278,11 @@ pub fn valid(source: []const u8) bool {
   cursor := Cursor{ source: source, at: 0 }
   if !validate_value(&cursor, 0) { return false }
   skip(&cursor)
-  return cursor.at == #len(source)
+  return cursor.at == source.len
 }
 
 fn write_string_into(destination: []u8, source: []const u8) []u8 {
-  if #len(destination) < 2 || !utf8.valid(source) { return destination[..0] }
+  if destination.len < 2 || !utf8.valid(source) { return destination[..0] }
   at: usize = 0
   destination[at] = '"'
   at += 1
@@ -304,13 +304,13 @@ fn write_string_into(destination: []u8, source: []const u8) []u8 {
       escaped = 'f'
     }
     if escaped != 0 {
-      if at + 2 >= #len(destination) { return destination[..0] }
+      if at + 2 >= destination.len { return destination[..0] }
       destination[at] = '\\'
       destination[at + 1] = escaped
       at += 2
     } else {
       if byte < 32 {
-        if #len(destination) - at <= 6 { return destination[..0] }
+        if destination.len - at <= 6 { return destination[..0] }
         digits := "0123456789abcdef"
         destination[at] = '\\'
         destination[at + 1] = 'u'
@@ -321,7 +321,7 @@ fn write_string_into(destination: []u8, source: []const u8) []u8 {
         at += 6
         continue
       }
-      if at + 1 >= #len(destination) { return destination[..0] }
+      if at + 1 >= destination.len { return destination[..0] }
       destination[at] = byte
       at += 1
     }
@@ -345,12 +345,12 @@ fn ascii_string_prefix(source: []const u8) usize {
 
 fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
   source := cursor.source
-  if cursor.at >= #len(source) || source[cursor.at] != '"' { return failed_string(cursor) }
+  if cursor.at >= source.len || source[cursor.at] != '"' { return failed_string(cursor) }
   cursor.at += 1
   start := cursor.at
   end := start
   // Amortize scanner setup, and leave a leading special byte to the decoder.
-  if #len(source) - start >= 16 {
+  if source.len - start >= 16 {
     first := source[start]
     if first >= 32 && first < 128 && first != '"' && first != '\\' {
       end += ascii_string_prefix(source[start..])
@@ -358,7 +358,7 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
   }
   has_escape: bool = false
   ascii: bool = true
-  for end < #len(source) {
+  for end < source.len {
     byte := source[end]
     if byte == '"' { break }
     if byte >= 128 {
@@ -367,7 +367,7 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
     if byte == '\\' {
       has_escape = true
       end += 1
-      if end >= #len(source) { return failed_string(cursor) }
+      if end >= source.len { return failed_string(cursor) }
       byte = source[end]
       if byte >= 128 {
         ascii = false
@@ -377,7 +377,7 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
     end += 1
   }
 
-  if end >= #len(source) { return failed_string(cursor) }
+  if end >= source.len { return failed_string(cursor) }
   if !ascii && !utf8.valid(source[start..end]) { return failed_string(cursor) }
   if end == start {
     cursor.at = end + 1
@@ -469,7 +469,7 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
 
 fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
   skip(cursor)
-  if cursor.at >= #len(cursor.source) { return nil }
+  if cursor.at >= cursor.source.len { return nil }
   byte := cursor.source[cursor.at]
   if byte == 'n' {
     if !literal(cursor, "null") { return nil }
@@ -506,7 +506,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
     if object {
       closing = '}'
     }
-    if cursor.at < #len(cursor.source) && cursor.source[cursor.at] == closing {
+    if cursor.at < cursor.source.len && cursor.source[cursor.at] == closing {
       cursor.at += 1
       return container
     }
@@ -516,7 +516,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
         key = decoded_string(arena, cursor)
         if cursor.error != fail.Kind.Ok { return nil }
         skip(cursor)
-        if cursor.at >= #len(cursor.source) || cursor.source[cursor.at] != ':' { return nil }
+        if cursor.at >= cursor.source.len || cursor.source[cursor.at] != ':' { return nil }
         cursor.at += 1
       }
       child := parse_node(arena, cursor, depth + 1)
@@ -524,7 +524,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
       child.key = key
       append(container, child)
       skip(cursor)
-      if cursor.at >= #len(cursor.source) { return nil }
+      if cursor.at >= cursor.source.len { return nil }
       if cursor.source[cursor.at] == closing {
         cursor.at += 1
         return container
@@ -553,7 +553,7 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *co
   cursor := Cursor{ source: source, at: 0 }
   root := parse_node(arena, &cursor, 0)
   skip(&cursor)
-  if root == nil || cursor.at != #len(source) {
+  if root == nil || cursor.at != source.len {
     memory.arena_rewind(arena, mark)
     message: []const u8 = "malformed JSON"
     if root != nil {
@@ -576,7 +576,7 @@ pub fn push_bool(arena: *memory.Arena, value: bool) *Value {
 // Retains text as a borrowed view; caller keeps it alive.
 pub fn push_number(arena: *memory.Arena, content: []const u8) *Value {
   cursor := Cursor{ source: content, at: 0 }
-  if !number(&cursor) || cursor.at != #len(content) { return nil }
+  if !number(&cursor) || cursor.at != content.len { return nil }
   result := node(arena, KindNumber)
   result.text = content
   return result
@@ -637,18 +637,18 @@ pub fn object_get(object: *const Value, key: []const u8) *const Value {
 // another kind, or a number that does not fit T or is not whole for an integer
 // T, is InvalidInput. The message names key: "\"port\" is missing". Read an
 // optional member with a status of its own. Another T panics.
-pub fn get(T: type, status: *fail.Status, object: *const Value, key: []const u8) T {
-  if status == nil { return get(T, &fail.Status{}, object, key) }
-  return read(T, status, object_get(object, key), key)
+pub fn get<T>(status: *fail.Status, object: *const Value, key: []const u8) T {
+  if status == nil { return get<T>(&fail.Status{}, object, key) }
+  return read<T>(status, object_get(object, key), key)
 }
 
 // Reads value itself as T, by the same rules as get.
-pub fn as(T: type, status: *fail.Status, value: *const Value) T {
-  if status == nil { return as(T, &fail.Status{}, value) }
-  return read(T, status, value, "")
+pub fn as<T>(status: *fail.Status, value: *const Value) T {
+  if status == nil { return as<T>(&fail.Status{}, value) }
+  return read<T>(status, value, "")
 }
 
-fn read(T: type, status: *fail.Status, value: *const Value, key: []const u8) T {
+fn read<T>(status: *fail.Status, value: *const Value, key: []const u8) T {
   result: T
   if status.failed {
     // A *const Value is then &nil_value, so lookups can chain on it.
@@ -661,7 +661,7 @@ fn read(T: type, status: *fail.Status, value: *const Value, key: []const u8) T {
     return result
   }
   problem := read_into(value, &result)
-  if #len(problem) != 0 {
+  if problem.len != 0 {
     empty: T
     _ = read_into(&nil_value, &empty)
     read_failed(status, fail.Kind.InvalidInput, key, problem)
@@ -675,7 +675,7 @@ fn read(T: type, status: *fail.Status, value: *const Value, key: []const u8) T {
 fn read_failed(status: *fail.Status, kind: fail.Kind, key: []const u8, problem: []const u8) {
   message: [160]u8
   used: usize = 0
-  if #len(key) != 0 {
+  if key.len != 0 {
     used = put_text(message[..], used, "\"")
     used = put_text(message[..], used, key)
     used = put_text(message[..], used, "\" ")
@@ -688,7 +688,7 @@ fn read_failed(status: *fail.Status, kind: fail.Kind, key: []const u8, problem: 
 fn put_text(storage: []u8, used: usize, text: []const u8) usize {
   at := used
   for byte in text {
-    if at == #len(storage) { return at }
+    if at == storage.len { return at }
     storage[at] = byte
     at += 1
   }
@@ -698,29 +698,29 @@ fn put_text(storage: []u8, used: usize, text: []const u8) usize {
 // Stores value into target; the problem when it is not that kind, else "".
 fn read_into(value: *const Value, target: any) []const u8 {
   case target {
-    *[]const u8 p => {
+    *[]const u8(p) => {
       if value.kind != KindString { return "is not a string" }
       p.* = value.text
     }
-    *bool p => {
+    *bool(p) => {
       if value.kind != KindBool { return "is not true or false" }
       p.* = value.boolean
     }
-    **const Value p => {
+    **const Value(p) => {
       p.* = value
     }
-    *f64 p => { return read_number(value, p) }
-    *f32 p => { return read_number(value, p) }
-    *i64 p => { return read_number(value, p) }
-    *i32 p => { return read_number(value, p) }
-    *i16 p => { return read_number(value, p) }
-    *i8 p => { return read_number(value, p) }
-    *isize p => { return read_number(value, p) }
-    *u64 p => { return read_number(value, p) }
-    *u32 p => { return read_number(value, p) }
-    *u16 p => { return read_number(value, p) }
-    *u8 p => { return read_number(value, p) }
-    *usize p => { return read_number(value, p) }
+    *f64(p) => { return read_number(value, p) }
+    *f32(p) => { return read_number(value, p) }
+    *i64(p) => { return read_number(value, p) }
+    *i32(p) => { return read_number(value, p) }
+    *i16(p) => { return read_number(value, p) }
+    *i8(p) => { return read_number(value, p) }
+    *isize(p) => { return read_number(value, p) }
+    *u64(p) => { return read_number(value, p) }
+    *u32(p) => { return read_number(value, p) }
+    *u16(p) => { return read_number(value, p) }
+    *u8(p) => { return read_number(value, p) }
+    *usize(p) => { return read_number(value, p) }
     _ => {
       #panic("json.get: T must be an integer, f32, f64, bool, []const u8 or *const Value")
     }
@@ -728,10 +728,10 @@ fn read_into(value: *const Value, target: any) []const u8 {
   return ""
 }
 
-fn read_number(value: *const Value, target: *$T) []const u8 {
+fn read_number<T>(value: *const Value, target: *T) []const u8 {
   if value.kind != KindNumber { return "is not a number" }
-  if !strings.valid(T, value.text) { return "does not fit the type, or is not a whole number" }
-  target.* = strings.parse(T, value.text)
+  if !strings.valid<T>(value.text) { return "does not fit the type, or is not a whole number" }
+  target.* = strings.parse<T>(value.text)
   return ""
 }
 
@@ -782,7 +782,7 @@ pub fn is_object(value: *const Value) bool {
 }
 
 fn copy(destination: []u8, at: *usize, data: []const u8) bool {
-  if at.* > #len(destination) || #len(data) > #len(destination) - at.* { return false }
+  if at.* > destination.len || data.len > destination.len - at.* { return false }
   for byte in data {
     destination[at.*] = byte
     at.* += 1
@@ -800,8 +800,8 @@ fn encode_value(destination: []u8, at: *usize, value: *const Value, depth: usize
   if value.kind == KindNumber { return copy(destination, at, value.text) }
   if value.kind == KindString {
     string_encoded := write_string_into(destination[at.*..], value.text)
-    if #len(string_encoded) == 0 { return false }
-    at.* += #len(string_encoded)
+    if string_encoded.len == 0 { return false }
+    at.* += string_encoded.len
     return true
   }
   opening: u8 = '['
@@ -810,7 +810,7 @@ fn encode_value(destination: []u8, at: *usize, value: *const Value, depth: usize
     opening = '{'
     closing = '}'
   }
-  if at.* >= #len(destination) { return false }
+  if at.* >= destination.len { return false }
   destination[at.*] = opening
   at.* += 1
   child := value.first
@@ -821,15 +821,15 @@ fn encode_value(destination: []u8, at: *usize, value: *const Value, depth: usize
     }
     if value.kind == KindObject {
       key_encoded := write_string_into(destination[at.*..], child.key)
-      if #len(key_encoded) == 0 { return false }
-      at.* += #len(key_encoded)
+      if key_encoded.len == 0 { return false }
+      at.* += key_encoded.len
       if !copy(destination, at, ":") { return false }
     }
     if !encode_value(destination, at, child, depth + 1) { return false }
     first = false
     child = child.next
   }
-  if at.* >= #len(destination) { return false }
+  if at.* >= destination.len { return false }
   destination[at.*] = closing
   at.* += 1
   return true
@@ -872,8 +872,8 @@ fn encode_pretty_value(destination: []u8, at: *usize, value: *const Value,
     if !pretty_indent(destination, at, depth + 1, width) { return false }
     if value.kind == KindObject {
       encoded := write_string_into(destination[at.*..], child.key)
-      if #len(encoded) == 0 { return false }
-      at.* += #len(encoded)
+      if encoded.len == 0 { return false }
+      at.* += encoded.len
       if !copy(destination, at, ": ") { return false }
     }
     if !encode_pretty_value(destination, at, child, depth + 1, width) { return false }
@@ -907,7 +907,7 @@ fn stream_string(status: *fail.Status, destination: stream.Writer, source: []con
   }
   stream.write(status, destination, "\"")
   start: usize = 0
-  for i in 0..#len(source) {
+  for i in 0..source.len {
     escaped: []const u8 = ""
     byte := source[i]
     if byte == '"' {
@@ -925,9 +925,9 @@ fn stream_string(status: *fail.Status, destination: stream.Writer, source: []con
     } else if byte == 9 {
       escaped = "\\t"
     }
-    if #len(escaped) == 0 && byte >= 32 { continue }
+    if escaped.len == 0 && byte >= 32 { continue }
     stream.write(status, destination, source[start..i])
-    if #len(escaped) == 0 {
+    if escaped.len == 0 {
       control: [6]u8 = ['\\', 'u', '0', '0', '0', '0']
       control[4] = hex_digit(byte / 16)
       control[5] = hex_digit(byte % 16)
@@ -1013,8 +1013,8 @@ fn encode_arena(arena: *memory.Arena, value: *const Value, indent: usize, string
     } else {
       output = encode_pretty_into(space, value, indent)
     }
-    if #len(output) > 0 {
-      memory.arena_rewind(arena, mark + #len(output))
+    if output.len > 0 {
+      memory.arena_rewind(arena, mark + output.len)
       return output
     }
     memory.arena_rewind(arena, mark)

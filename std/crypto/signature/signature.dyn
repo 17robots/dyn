@@ -1,5 +1,5 @@
-use "std/crypto/p256" p256
-use "std/crypto/ed25519" native
+use p256 "std/crypto/p256"
+use native "std/crypto/ed25519"
 use "std/bytes"
 use "std/fail"
 // Fixed-size keys and signatures use caller storage by exception. Successful
@@ -10,7 +10,7 @@ use "std/fail"
 // The output prefix, cleared and empty when the primitive failed.
 fn result(status: *fail.Status, destination: []u8) []u8 {
   if status.failed {
-    for i in 0..#len(destination) {
+    for i in 0..destination.len {
       destination[i] = 0
     }
     return destination[..0]
@@ -26,7 +26,7 @@ fn rejected(status: *fail.Status, destination: []u8, message: []const u8) []u8 {
 pub fn ed25519_public(status: *fail.Status, destination: []u8, private_key: []const u8) []u8 {
   if status == nil { return ed25519_public(&fail.Status{}, destination, private_key) }
   if status.failed { return destination[..0] }
-  if #len(destination) < 32 || #len(private_key) != 32 {
+  if destination.len < 32 || private_key.len != 32 {
     return rejected(status, destination, "bad key or destination length")
   }
   if bytes.overlaps(destination, private_key) {
@@ -38,7 +38,7 @@ pub fn ed25519_public(status: *fail.Status, destination: []u8, private_key: []co
 pub fn ed25519_sign(status: *fail.Status, destination: []u8, message: []const u8, private_key: []const u8) []u8 {
   if status == nil { return ed25519_sign(&fail.Status{}, destination, message, private_key) }
   if status.failed { return destination[..0] }
-  if #len(destination) < 64 || #len(private_key) != 32 {
+  if destination.len < 64 || private_key.len != 32 {
     return rejected(status, destination, "bad key or destination length")
   }
   if bytes.overlaps(destination, private_key) || bytes.overlaps(destination, message) {

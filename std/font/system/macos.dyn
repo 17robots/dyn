@@ -5,7 +5,7 @@ fn font_directories(arena: *mem.Arena, output: [][]const u8) usize {
   output[1] = "/Library/Fonts"
   count: usize = 2
   user := home(arena)
-  if #len(user) != 0 {
+  if user.len != 0 {
     parts: [2][]const u8 = [user, "Library/Fonts"]
     output[2] = strings.join(arena, parts[..], "/")
     count = 3

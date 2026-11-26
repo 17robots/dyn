@@ -16,9 +16,9 @@ use "std/strings"
 // carries nothing, so a zero Token is End.
 enum Token {
   End,
-  Number: f64,
-  Name: []const u8,
-  Symbol: u8,
+  Number(f64),
+  Name([]const u8),
+  Symbol(u8),
 }
 
 struct Lexeme {
@@ -48,11 +48,11 @@ struct Reference {
 
 enum Expr {
   Invalid,
-  Number: f64,
-  Variable: Reference,
-  Negate: *Expr,
-  Binary: Operation,
-  Call: FunctionCall,
+  Number(f64),
+  Variable(Reference),
+  Negate(*Expr),
+  Binary(Operation),
+  Call(FunctionCall),
 }
 
 // The parser records failures in its status, which keeps the first one.
@@ -76,35 +76,35 @@ fn reject(p: *Parser, offset: usize, message: []const u8) *Expr {
 }
 
 fn node(p: *Parser, value: Expr) *Expr {
-  result := mem.push(Expr, p.arena)
+  result := mem.push<Expr>(p.arena)
   result.* = value
   return result
 }
 
 // Reads the next token into p.current.
 fn advance(p: *Parser) {
-  for p.offset < #len(p.text) && strings.ascii_is_whitespace(p.text[p.offset]) {
+  for p.offset < p.text.len && strings.ascii_is_whitespace(p.text[p.offset]) {
     p.offset += 1
   }
   start := p.offset
-  if start == #len(p.text) {
+  if start == p.text.len {
     p.current = Lexeme{ offset: start }
     return
   }
   first := p.text[start]
   if strings.ascii_is_digit(first) || first == '.' {
-    for p.offset < #len(p.text) && (strings.ascii_is_digit(p.text[p.offset]) || p.text[p.offset] == '.') {
+    for p.offset < p.text.len && (strings.ascii_is_digit(p.text[p.offset]) || p.text[p.offset] == '.') {
       p.offset += 1
     }
     digits := p.text[start..p.offset]
-    if !strings.valid(f64, digits) {
+    if !strings.valid<f64>(digits) {
       _ = reject(p, start, "not a number")
     }
-    p.current = Lexeme{ token: Token.Number(strings.parse(f64, digits)), offset: start }
+    p.current = Lexeme{ token: Token.Number(strings.parse<f64>(digits)), offset: start }
     return
   }
   if is_name_byte(first) {
-    for p.offset < #len(p.text) && is_name_byte(p.text[p.offset]) {
+    for p.offset < p.text.len && is_name_byte(p.text[p.offset]) {
       p.offset += 1
     }
     p.current = Lexeme{ token: Token.Name(p.text[start..p.offset]), offset: start }
@@ -117,7 +117,7 @@ fn advance(p: *Parser) {
 // Whether the current token is the symbol wanted.
 fn at_symbol(p: *const Parser, wanted: u8) bool {
   case p.current.token {
-    Token.Symbol symbol => { return symbol == wanted }
+    Token.Symbol(symbol) => { return symbol == wanted }
     _ => { return false }
   }
 }
@@ -137,11 +137,11 @@ fn atom(p: *Parser) *Expr {
     Token.End => {
       return reject(p, at.offset, "expected a value")
     }
-    Token.Number value => {
+    Token.Number(value) => {
       advance(p)
       return node(p, Expr.Number(value))
     }
-    Token.Name name => {
+    Token.Name(name) => {
       advance(p)
       if !at_symbol(p, '(') {
         return node(p, Expr.Variable(Reference{ name: name, offset: at.offset }))
@@ -151,7 +151,7 @@ fn atom(p: *Parser) *Expr {
       expect_symbol(p, ')', "expected )")
       return node(p, Expr.Call(FunctionCall{ name: name, argument: argument, offset: at.offset }))
     }
-    Token.Symbol symbol => {
+    Token.Symbol(symbol) => {
       if symbol != '(' { return reject(p, at.offset, "expected a value") }
       advance(p)
       inside := sum(p)
@@ -216,11 +216,11 @@ fn parse_line(arena: *mem.Arena, status: *fail.Status, text: []const u8) Stateme
   advance(&p)
   statement: Statement
   case p.current.token {
-    Token.Name name => {
+    Token.Name(name) => {
       if bytes.equal(name, "let") {
         advance(&p)
         case p.current.token {
-          Token.Name target => {
+          Token.Name(target) => {
             statement.name = target
             advance(&p)
           }

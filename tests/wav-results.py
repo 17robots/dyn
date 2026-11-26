@@ -10,11 +10,11 @@ import tempfile
 import wave
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-source=r'''use "std/audio/wav" wav
-use "std/io" io
-use "std/mem" mem
+source=r'''use wav "std/audio/wav"
+use io "std/io"
+use mem "std/mem"
 use "std/fail"
-use "std/fs" fs
+use fs "std/fs"
 fn check(ok: bool) { if !ok { #panic("WAV contract") } }
 fn decode_fails(arena: *mem.Arena, data: []const u8) bool {
   status: fail.Status
@@ -33,13 +33,13 @@ fn main() {
     encoded := wav.encode(arena, &status, &audio, formats[i])
     check(fs_write_file(paths[i],encoded))
     decoded := wav.decode(arena, &status, encoded)
-    check(decoded.rate == 48000 && decoded.channels == 2 && #len(decoded.samples) == 6)
+    check(decoded.rate == 48000 && decoded.channels == 2 && decoded.samples.len == 6)
     for j in 0..6 {
       difference := decoded.samples[j] - samples[j]
       check(difference >= -0.008 && difference <= 0.008)
     }
     before := mem.arena_mark(arena)
-    for length in 0..#len(encoded) {
+    for length in 0..encoded.len {
       check(decode_fails(arena, encoded[..length]) && mem.arena_mark(arena) == before)
     }
   }
@@ -60,13 +60,13 @@ fn main() {
   reference := fs.read_all(arena, &reference_file, "reference.wav", 10000)
   check(!reference_file.failed)
   decoded = wav.decode(arena, &status, reference)
-  check(#len(decoded.samples) == 5)
+  check(decoded.samples.len == 5)
   expected: [5]f32 = [-1.0,-0.5,0.0,0.5,0.999969482421875]
   for i in 0..5 { check(decoded.samples[i] == expected[i]) }
   // Every individual header/data mutation must return or decode, never trap.
-  work := mem.push_array(u8,arena,#len(reference))
+  work := mem.push_array<u8>(arena, reference.len)
   _ = mem.copy(work,reference)
-  for at in 0..#len(work) {
+  for at in 0..work.len {
     for bit in 0..8 {
       saved := work[at]
       work[at] ^= #cast(u8,(1 << bit))
@@ -112,9 +112,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-wav-') as directory:
         with wave.open(str(work/'extended.wav'),'rb') as extended:
             assert extended.getnchannels()==2 and extended.getsampwidth()==3
     core = r'''use "std/fail"
-use "std/audio/wav" wav
-use "std/io" io
-use "std/mem" mem
+use wav "std/audio/wav"
+use io "std/io"
+use mem "std/mem"
 fn check(ok: bool) { if !ok { #panic("WAV portable") } }
 fn main() {
   status := fail.Status{ on_failure: fail.panic_on_failure }

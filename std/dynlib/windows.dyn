@@ -1,5 +1,5 @@
-use "std/os/windows" native_windows
-use "std/io" io
+use native_windows "std/os/windows"
+use io "std/io"
 #target(kernel: windows)
 
 extern fn native_open "dyn_win_load_library"(path: *const u8) rawptr

@@ -7,10 +7,10 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "std/image/pnm" pnm
+SOURCE=r'''use pnm "std/image/pnm"
 use "std/fail"
-use "std/mem" mem
-use "std/bytes" bytes
+use mem "std/mem"
+use bytes "std/bytes"
 fn check(ok: bool) { if !ok { #panic("PNM contract") } }
 fn decode_fails(arena: *mem.Arena, data: []const u8) bool {
  status: fail.Status
@@ -44,11 +44,11 @@ fn main() {
  check(decode_fails(arena,"P5\n1 1\n255\n") && mem.arena_mark(arena) == mark)
  check(decode_fails(arena,"P2\n2 1\n255\n1") && mem.arena_mark(arena) == mark)
  golden := "P6\n2 1\n255\n\xff\x00\x77\x00\xff\xff"
- for cut in 0..#len(golden) { check(decode_fails(arena,golden[..cut]) && mem.arena_mark(arena) == mark) }
- for i in 0..#len(golden) {
+ for cut in 0..golden.len { check(decode_fails(arena,golden[..cut]) && mem.arena_mark(arena) == mark) }
+ for i in 0..golden.len {
   for bit in 0..8 {
-   data := mem.push_array(u8,arena,#len(golden))
-   for j in 0..#len(data) { data[j] = golden[j] }
+   data := mem.push_array<u8>(arena, golden.len)
+   for j in 0..data.len { data[j] = golden[j] }
    data[i] ^= #cast(u8,1) << #cast(u8,bit)
    _ = decode_fails(arena,data)
    mem.arena_rewind(arena,mark)

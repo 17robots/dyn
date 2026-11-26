@@ -65,7 +65,7 @@ static int validate_compact_ref(Resolver *r, const DynSource *s, const ExpSnapsh
       }
       dyn_name_text_free(&name_text);
     }
-  } else if (node->kind == EXP_CALL) {
+  } else if (node->kind == EXP_CALL || (node->kind == EXP_GENERIC_TYPE && nodes[first].kind != EXP_FIELD_TYPE)) {
     uint32_t callee=compact_ref_unwrap(tree,first);
     if (callee==UINT32_MAX || nodes[callee].kind!=EXP_NAME) return 0;
     DynNameText name_text;
@@ -75,7 +75,8 @@ static int validate_compact_ref(Resolver *r, const DynSource *s, const ExpSnapsh
     if (!decl_named(r,directory,name,&pub) &&
         !dyn_scope_local_at(locals,nodes[callee].start,name) && imported_decl(r,targets,count,name)) {
       char message[512];
-      snprintf(message,sizeof(message),"imported function '%s' must be module-qualified",name);
+      snprintf(message,sizeof(message),"imported %s '%s' must be module-qualified",
+               node->kind == EXP_GENERIC_TYPE ? "symbol" : "function", name);
       dyn_diagnostic_source("error",s,nodes[callee].start,nodes[callee].end,message); ++errors;
     }
     dyn_name_text_free(&name_text);

@@ -10,8 +10,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = '''use "std/process/signal" signal
-use "std/io" io
+SOURCE = '''use signal "std/process/signal"
+use io "std/io"
 use "std/fail"
 
 fn check(ok: bool) {

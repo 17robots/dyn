@@ -9,8 +9,8 @@ pub fn secure_random(status: *fail.Status, destination: []u8) {
   }
   if status.failed { return }
   total: usize = 0
-  for total < #len(destination) {
-    got := #syscall(sys.Getrandom, &destination[total], #len(destination) - total, 0)
+  for total < destination.len {
+    got := #syscall(sys.Getrandom, &destination[total], destination.len - total, 0)
     if got == -4 { } else if got <= 0 {
       random_failed(status, got)
       return

@@ -36,9 +36,9 @@ fn parse(arena: *mem.Arena, source: []const u8) Parsed {
  root := json.parse(arena, &status, source)
  return Parsed{ root: root, offset: status.failure.offset, failure: status.failure }
 }'''
-lines=['use "std/fail"\nuse "std/encoding/json/read" json','use "std/encoding/json" mutable','use "std/mem" mem','use "std/io"','fn require(ok:bool,label:[]const u8) { if !ok { #panic(label) } }','fn more(it:*json.Iterator) bool {\n_=json.next(it)\nreturn !it.ended\n}','fn blocks(arena:*const mem.Arena) usize {\ncount:usize=0\nblock:=arena.current\nfor block!=nil {\ncount+=1\nblock=block.previous\n}\nreturn count\n}',HELPER,MUTABLE,'fn main() {','require(#sizeof(json.Value)==16,"compact value size")','arena:=mem.arena_alloc(mem.MiB)\ndefer mem.arena_release(arena)','_=mem.push_bytes(arena,3)\nprefix_mark:=mem.arena_mark(arena)']
+lines=['use "std/fail"\nuse json "std/encoding/json/read"','use mutable "std/encoding/json"','use mem "std/mem"','use "std/io"','fn require(ok:bool,label:[]const u8) { if !ok { #panic(label) } }','fn more(it:*json.Iterator) bool {\n_=json.next(it)\nreturn !it.ended\n}','fn blocks(arena:*const mem.Arena) usize {\ncount:usize=0\nblock:=arena.current\nfor block!=nil {\ncount+=1\nblock=block.previous\n}\nreturn count\n}',HELPER,MUTABLE,'fn main() {','require(#sizeof(json.Value)==16,"compact value size")','arena:=mem.arena_alloc(mem.MiB)\ndefer mem.arena_release(arena)','_=mem.push_bytes(arena,3)\nprefix_mark:=mem.arena_mark(arena)']
 for i,v in enumerate(values):
- raw=json.dumps(v,ensure_ascii=i%2==0,separators=(',',':')).encode();lines+=['if true {',f'original:={quote(raw)}','input:=mem.push_bytes(arena,#len(original))\n_=mem.copy(input,original)','mark:=mem.arena_mark(arena)','result:=parse(arena,input)','require(result.failure.kind==fail.Kind.Ok,"valid metadata")','for i in 0..#len(input) { input[i]=255 }']
+ raw=json.dumps(v,ensure_ascii=i%2==0,separators=(',',':')).encode();lines+=['if true {',f'original:={quote(raw)}','input:=mem.push_bytes(arena,original.len)\n_=mem.copy(input,original)','mark:=mem.arena_mark(arena)','result:=parse(arena,input)','require(result.failure.kind==fail.Kind.Ok,"valid metadata")','for i in 0..input.len { input[i]=255 }']
  # errors is not re-exported as Kind; use zero enum via cast.
  lines+=check('result.root',v,'value '+str(i));lines+=['mem.arena_rewind(arena,mark)','mem.arena_rewind(arena,prefix_mark)','}']
 invalid=[b'',b' ',b'01',b'1.',b'1e',b'-',b'true false',b'"x" trailing',b'{"a":}',b'[1,]',b'{"a" 1}',b'"unterminated',b'"bad\\q"',b'"bad\\"',b'"\\u12"',b'"\\u00xz"',b'"\\ud800"',b'"\\udc00"',b'"\\ud800\\u0041"',b'"\xc0\xaf"',b'"\xed\xa0\x80"',b'"\xf4\x90\x80\x80"',b'"\xe2\x82"',b'"\x80"',b'['*257+b'0'+b']'*257,b'1e9999']+[b'"a'+bytes([x])+b'b"' for x in range(32)]
@@ -109,7 +109,7 @@ chain_source = [
  'for preforced in [false,true] {',
  'chain: *mem.Arena = nil',
  'blocks_from:=mem.pages(0)\nif bounded { blocks_from.limit=256*mem.KiB }\nblocks_from.block_size=#cast(usize,block_size)\nchain=mem.arena_from_source(blocks_from)',
- 'prefix:=mem.push_array(u8,chain,8)',
+ 'prefix:=mem.push_array<u8>(chain, 8)',
  'mem.fill(prefix,91)',
  'if preforced { _=mem.push_bytes(chain,512)\n_=mem.push_bytes(chain,8)\nrequire(blocks(chain)>1,"pre-forced chain") }',
  'saved_mark:=mem.arena_mark(chain)',
@@ -150,7 +150,7 @@ for name,flags in [('debug',[]),('release',['--release'])]:
 # Required arena storage follows the ordinary panic contract, including peak
 # growth capacity rather than just the final retained tree size.
 for raw,size in [(b'{"a":0}',56),(b'[0,1,2,3,4,5]',16)]:
- (P/'main.dyn').write_text('use "std/encoding/json/read" json\nuse "std/fail"\nuse "std/mem" mem\nfn main() { status: fail.Status\nbacking:['+str(size)+'+mem.ArenaBufferOverhead]u8\npad:=(16-(#cast(usize,&backing[0])&15))&15\narena:=mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+'+str(size)+'])\n_=json.parse(arena,&status,'+quote(raw)+') }\n')
+ (P/'main.dyn').write_text('use json "std/encoding/json/read"\nuse "std/fail"\nuse mem "std/mem"\nfn main() { status: fail.Status\nbacking:['+str(size)+'+mem.ArenaBufferOverhead]u8\npad:=(16-(#cast(usize,&backing[0])&15))&15\narena:=mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+'+str(size)+'])\n_=json.parse(arena,&status,'+quote(raw)+') }\n')
  for name,flags in [('debug',[]),('release',['--release'])]:
   binary=W/('panic-'+name);subprocess.run([str(DYN),'build',str(P),'--no-cache','--quiet','--output',str(binary),*flags],env=env,check=True,timeout=120)
   result=subprocess.run([str(binary)],capture_output=True,timeout=10);assert result.returncode==101 and b'arena exhausted' in result.stderr,(name,result.returncode,result.stderr)
@@ -162,10 +162,10 @@ if '--cross' in sys.argv:
   exec(compile(ast.Module(body=[n for n in tree.body if isinstance(n,ast.FunctionDef)],type_ignores=[]),name,'exec'),ns)
   return ns
  arm=helpers('thumb-soft.py');rv=helpers('rv32-soft.py')
- cross_source=r'''use "std/encoding/json/read" json
+ cross_source=r'''use json "std/encoding/json/read"
 use "std/fail"
-use "std/io" io
-use "std/mem" mem
+use io "std/io"
+use mem "std/mem"
 struct Parsed { root: *const json.Value, offset: usize, failure: fail.Failure }
 fn parse(arena: *mem.Arena, source: []const u8) Parsed {
  status: fail.Status
@@ -215,7 +215,7 @@ fn main() {
 '''
  cross_chain = '\n'.join([
   'blocks_from:=mem.pages(128*mem.KiB)\nblocks_from.block_size=512\nchain:=mem.arena_from_source(blocks_from)',
-  'prefix:=mem.push_array(u8,chain,8)',
+  'prefix:=mem.push_array<u8>(chain, 8)',
   'mem.fill(prefix,91)',
   '_=mem.push_bytes(chain,512)',
   '_=mem.push_bytes(chain,8)',

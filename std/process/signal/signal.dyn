@@ -1,4 +1,4 @@
-use "std/io" io
+use io "std/io"
 use "std/fail"
 // Process signals as events, not handlers. watch routes the chosen signals to
 // a queue that the program reads at a safe point; no code runs inside a signal

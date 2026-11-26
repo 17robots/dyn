@@ -114,7 +114,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-font-kerning-') as directory:
     work = Path(directory)
     for name, table, ok, expected, relative_offset, borrowed in cases:
         data, locations, _ = fixture(table)
-        source = ('use "std/fail"\nuse "std/font" font\nuse "std/math" math\n'
+        source = ('use "std/fail"\nuse font "std/font"\nuse math "std/math"\n'
                   'data: []const u8 = "' + ''.join('\\x%02x' % byte for byte in data) + '"\n'
                   'fn main() {\n  status: fail.Status\n  face := font.open(&status, data)\n')
         source += f'  if (!status.failed) != {str(ok).lower()} {{ #panic("{name}: status") }}\n'
@@ -125,12 +125,12 @@ with tempfile.TemporaryDirectory(prefix='dyn-font-kerning-') as directory:
             if borrowed:
                 source += f'  if #cast(usize, &face.kern[0]) != #cast(usize, &data[{locations[b"kern"]}]) {{ #panic("{name}: borrowed table") }}\n'
             else:
-                source += f'  if #len(face.kern) != 0 {{ #panic("{name}: ignored table") }}\n'
+                source += f'  if face.kern.len != 0 {{ #panic("{name}: ignored table") }}\n'
             source += '  if font.kerning(&face, 4, 4, 16) != 0.0 || font.kerning(&face, 99, 1, 16) != 0.0 || font.kerning(&face, 1, 99, 16) != 0.0 || font.kerning(&face, 1, 2, 0) != 0.0 || font.kerning(&face, 1, 2, 257) != 0.0 { #panic("miss or invalid query") }\n'
         else:
             offset = locations[b'kern'] + relative_offset
             source += f'  if status.failure.kind != fail.Kind.InvalidInput || status.failure.offset != {offset} {{ #panic("{name}: error metadata") }}\n'
-            source += f'  if #len(face.data) != 0 || #len(face.kern) != 0 {{ #panic("{name}: failure value") }}\n'
+            source += f'  if face.data.len != 0 || face.kern.len != 0 {{ #panic("{name}: failure value") }}\n'
         source += '}\n'
         (work / 'main.dyn').write_text(source)
         for mode in ('--debug', '--release'):
@@ -143,7 +143,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-font-kerning-') as directory:
         at = records[b'kern']
         field_at = at + (8 if field == 'offset' else 12)
         data[field_at:field_at + 4] = u32(len(data) + 100)
-        (work / 'main.dyn').write_text('use "std/fail"\nuse "std/font" font\ndata: []const u8 = "' + ''.join('\\x%02x' % byte for byte in data) + '"\nfn main() {\n status: fail.Status\n _ = font.open(&status, data)\n if !status.failed || status.failure.kind != fail.Kind.InvalidInput || status.failure.offset != ' + str(at + 8) + ' { #panic("kern directory bounds") }\n}\n')
+        (work / 'main.dyn').write_text('use "std/fail"\nuse font "std/font"\ndata: []const u8 = "' + ''.join('\\x%02x' % byte for byte in data) + '"\nfn main() {\n status: fail.Status\n _ = font.open(&status, data)\n if !status.failed || status.failure.kind != fail.Kind.InvalidInput || status.failure.offset != ' + str(at + 8) + ' { #panic("kern directory bounds") }\n}\n')
         for mode in ('--debug', '--release'):
             output = work / 'program'
             subprocess.run([DYN, 'build', str(work), mode, '--quiet', '--no-cache', '--output', str(output)], check=True, timeout=300)

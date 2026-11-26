@@ -132,7 +132,7 @@ pub fn execute(status: *fail.Status, database: Database, sql: []const u8, buffer
       reading: fail.Status
       message = c.bytes_from_string(&reading, #cast(c.string, error), 160)
     }
-    if #len(message) == 0 {
+    if message.len == 0 {
       sqlite_failed(status, "execute", code)
     } else {
       failure := fail.make(kind_of(code), "execute", "", message)

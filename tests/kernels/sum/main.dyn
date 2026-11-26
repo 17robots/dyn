@@ -9,8 +9,8 @@ fn sum(xs: []i32) i32 {
 }
 fn main() {
   arena := mem.arena_alloc(0)
-  xs := mem.push_array(i32, arena, 100000)
-  for i in 0..#len(xs) {
+  xs := mem.push_array<i32>(arena, 100000)
+  for i in 0..xs.len {
     xs[i] = #cast(i32, i)
   }
   t: i32 = 0

@@ -1,6 +1,6 @@
-use "std/text/edit" edits
+use edits "std/text/edit"
 use "std/fail"
-use "std/unicode/utf8" edit_utf8
+use edit_utf8 "std/unicode/utf8"
 
 // Ordered GUI events. listen_events(window,true) opts in before polling.
 // next_event copies one event into caller storage; its

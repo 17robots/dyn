@@ -1,4 +1,4 @@
-use "std/mem" mem
+use mem "std/mem"
 use "std/fail"
 
 // A thread creator chosen by the caller, for code that starts threads on
@@ -15,14 +15,14 @@ pub struct Spawner {
 // *C the caller keeps alive and unmoved until join succeeds; the entry receives
 // it typed. Stack and context are borrowed until successful join. nil after
 // a failure.
-pub fn spawn(arena: *mem.Arena, status: *fail.Status, stack: []u8, entry: fn(*$C) isize, context: *$C) *Thread {
+pub fn spawn<C>(arena: *mem.Arena, status: *fail.Status, stack: []u8, entry: fn(*C) isize, context: *C) *Thread {
   if status == nil { return spawn(arena, &fail.Status{}, stack, entry, context) }
   if status.failed { return nil }
   return spawn_untyped(arena, status, stack, #cast(fn(rawptr) isize, entry), context)
 }
 
 // As spawn, with a stack of size bytes that the thread owns until join.
-pub fn spawn_with_size(arena: *mem.Arena, status: *fail.Status, size: usize, entry: fn(*$C) isize, context: *$C) *Thread {
+pub fn spawn_with_size<C>(arena: *mem.Arena, status: *fail.Status, size: usize, entry: fn(*C) isize, context: *C) *Thread {
   if status == nil { return spawn_with_size(arena, &fail.Status{}, size, entry, context) }
   if status.failed { return nil }
   return spawn_with_size_untyped(arena, status, size, #cast(fn(rawptr) isize, entry), context)

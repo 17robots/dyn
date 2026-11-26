@@ -1,6 +1,6 @@
 use "std/fail"
-use "std/crypto/der" der
-use "std/crypto/core" crypto_core
+use der "std/crypto/der"
+use crypto_core "std/crypto/core"
 
 // Borrowed DER envelope; parse alone does not establish trust. std/crypto/x509
 // validates explicit native paths. TLS retains its separate provider policy.
@@ -37,16 +37,16 @@ pub fn parse(status: *fail.Status, encoded: []const u8) Certificate {
   outer := element(status, &outer_cursor, 0, 48)
   if status.failed { return Certificate{} }
   if !der.finished(&outer_cursor) { return malformed(status, outer_cursor.offset) }
-  header := #len(outer.encoded) - #len(outer.content)
+  header := outer.encoded.len - outer.content.len
   children := der.enter(outer)
   tbs := element(status, &children, header, 48)
   algorithm := element(status, &children, header, 48)
   start := children.offset
   signature := element(status, &children, header, 3)
   if status.failed { return Certificate{} }
-  if #len(signature.content) < 1 { return malformed(status, header + start) }
+  if signature.content.len < 1 { return malformed(status, header + start) }
   if signature.content[0] != 0 {
-    return malformed(status, header + start + #len(signature.encoded) - #len(signature.content))
+    return malformed(status, header + start + signature.encoded.len - signature.content.len)
   }
   if !der.finished(&children) { return malformed(status, header + children.offset) }
   return Certificate{

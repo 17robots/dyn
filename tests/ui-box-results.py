@@ -7,14 +7,14 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/ui" ui
-use "std/ui/box" box
-use "std/mem" mem
-use "std/bytes" bytes
+SOURCE = r'''use ui "std/ui"
+use box "std/ui/box"
+use mem "std/mem"
+use bytes "std/bytes"
 
 fn measure(data: *u8, text: []const u8) f32 {
   _ = data
-  return 8.0 * #cast(f32, #len(text))
+  return 8.0 * #cast(f32, text.len)
 }
 
 fn check(ok: bool, message: []const u8) {

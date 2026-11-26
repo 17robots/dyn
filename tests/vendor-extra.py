@@ -20,8 +20,8 @@ env['SDL_VIDEODRIVER']='dummy'
 env['SDL_RENDER_DRIVER']='software'
 dyn=str(Path(env.get('DYN',BUILD/'dyn-release')).resolve())
 FIXTURES = {
-    'stb': r'''use "vendor/stb/rect_pack" atlas
-use "vendor/stb/image_resize" image
+    'stb': r'''use atlas "vendor/stb/rect_pack"
+use image "vendor/stb/image_resize"
 use "std/mem"
 use "std/fail"
 use "std/io"
@@ -95,13 +95,13 @@ fn main() {
   io.println("stb atlas and resize passed")
 }
 ''',
-    'microui-sdl3': r'''use "vendor/microui" ui
-use "vendor/sdl3" sdl
-use "vendor/sdl3/microui" backend
+    'microui-sdl3': r'''use ui "vendor/microui"
+use sdl "vendor/sdl3"
+use backend "vendor/sdl3/microui"
 use "std/fail"
 use "std/mem"
 use "std/os/linux"
-use "std/io" io
+use io "std/io"
 use "std/strings"
 use "std/bytes"
 use "std/time"
@@ -111,7 +111,7 @@ fn main() {
     mem.arena_release(arena)
   }
   args := linux.process_arguments(arena)
-  smoke := #len(args) == 2 && bytes.equal(args[1], "--smoke")
+  smoke := args.len == 2 && bytes.equal(args[1], "--smoke")
   status := fail.Status{ on_failure: fail.panic_on_failure }
   sdl.init_video(&status)
   defer sdl.quit()
@@ -174,11 +174,11 @@ fn main() {
   io.println("microui SDL rendering passed")
 }
 ''',
-    'audio-playback': r'''use "vendor/miniaudio" audio
+    'audio-playback': r'''use audio "vendor/miniaudio"
 use "std/fail"
 use "std/mem"
 use "std/os/linux"
-use "std/io" io
+use io "std/io"
 use "std/strings"
 use "std/bytes"
 use "std/time"
@@ -188,10 +188,10 @@ fn main() {
     mem.arena_release(arena)
   }
   args := linux.process_arguments(arena)
-  if #len(args) < 2 {
+  if args.len < 2 {
     #panic("usage: audio-playback-example FILE.wav [--offline]")
   }
-  offline := #len(args) == 3 && bytes.equal(args[2], "--offline")
+  offline := args.len == 3 && bytes.equal(args[2], "--offline")
   status := fail.Status{ on_failure: fail.panic_on_failure }
   engine := audio.engine_create(arena, &status, !offline)
   defer audio.engine_close(engine)
@@ -244,7 +244,7 @@ fn main() {
 ''',
     'lz4': r'''use "vendor/lz4"
 use "std/fail"
-use "std/io" io
+use io "std/io"
 use "std/bytes"
 fn rejected(compress: bool, destination: []u8, source: []const u8) bool {
   status: fail.Status
@@ -286,7 +286,7 @@ fn main() {
 }
 ''',
     'cgltf': r'''use "vendor/cgltf"
-use "std/io" io
+use io "std/io"
 use "std/bytes"
 use "std/mem"
 use "std/fail"
@@ -376,7 +376,7 @@ fn main() {
     mem.arena_release(backing)
   }
   args := linux.process_arguments(backing)
-  if #len(args) == 2 {
+  if args.len == 2 {
     file := fs.read_all(backing, &status, args[1], 1024 * 1024)
     binary := cgltf.parse_owned(&status, file)
     defer cgltf.destroy_owned(binary)
@@ -389,7 +389,7 @@ fn main() {
   io.println("cgltf embedded accessor passed")
 }
 ''',
-    'box2d': r'''use "vendor/box2d" physics
+    'box2d': r'''use physics "vendor/box2d"
 use "std/fail"
 use "std/io"
 fn stale(body: physics.Body) bool {
@@ -468,10 +468,10 @@ fn main() {
   io.println("Box2D falling box passed")
 }
 ''',
-    'microui': r'''use "vendor/microui" ui
+    'microui': r'''use ui "vendor/microui"
 use "std/fail"
 use "std/mem"
-use "std/io" io
+use io "std/io"
 use "std/bytes"
 fn rejected(step: fn(*fail.Status, ui.Context), context: ui.Context) bool {
   status: fail.Status
@@ -537,7 +537,7 @@ fn main() {
     'enet': r'''use "vendor/enet"
 use "std/fail"
 use "std/time"
-use "std/io" io
+use io "std/io"
 use "std/bytes"
 fn main() {
   status := fail.Status{ on_failure: fail.panic_on_failure }
@@ -624,7 +624,7 @@ fn main() {
   io.println("ENet reliable loopback passed")
 }
 ''',
-    'miniaudio': r'''use "vendor/miniaudio" audio
+    'miniaudio': r'''use audio "vendor/miniaudio"
 use "std/mem"
 use "std/os/linux"
 use "std/fs"
@@ -642,7 +642,7 @@ fn main() {
     mem.arena_release(storage)
   }
   args := linux.process_arguments(storage)
-  if #len(args) != 2 {
+  if args.len != 2 {
     #panic("WAV path required")
   }
   status := fail.Status{ on_failure: fail.panic_on_failure }
@@ -715,7 +715,7 @@ fn main() {
     mem.arena_release(storage)
   }
   args := linux.process_arguments(storage)
-  if #len(args) != 2 {
+  if args.len != 2 {
     #panic("WAV path required")
   }
   status := fail.Status{ on_failure: fail.panic_on_failure }

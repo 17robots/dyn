@@ -37,22 +37,22 @@
 // has no TLS dependency; std/net/http/evented/tls supplies an OpenSSL one.
 #target(pointer_bits: 64)
 
-use "std/bytes" bytes
-use "std/compress/gzip" gzip
-use "std/event" event
-use "std/fmt" format
+use bytes "std/bytes"
+use gzip "std/compress/gzip"
+use event "std/event"
+use format "std/fmt"
 use "std/fail"
-use "std/io" io
-use "std/log" log
-use "std/mem" mem
-use "std/net" network
-use "std/net/http" http
-use "std/net/websocket" websocket
-use "std/process/signal" signal
-use "std/sync" sync
-use "std/thread" threading
-use "std/thread/pool" tasks
-use "std/time" clock
+use io "std/io"
+use log "std/log"
+use mem "std/mem"
+use network "std/net"
+use http "std/net/http"
+use websocket "std/net/websocket"
+use signal "std/process/signal"
+use sync "std/sync"
+use threading "std/thread"
+use tasks "std/thread/pool"
+use clock "std/time"
 
 pub struct Config {
   // Connections each worker can hold open at once. Further accepts wait in
@@ -705,10 +705,10 @@ fn output_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
   }
   connection.body_reserved = false
   written: usize = 0
-  for written < #len(source) {
-    room := #len(connection.output) - connection.queued
-    if #len(source) - written > room && grow_output(connection) {
-      room = #len(connection.output) - connection.queued
+  for written < source.len {
+    room := connection.output.len - connection.queued
+    if source.len - written > room && grow_output(connection) {
+      room = connection.output.len - connection.queued
     }
     if room == 0 {
       if !flush_blocking(connection) {
@@ -716,9 +716,9 @@ fn output_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
         fail.set(status, fail.make(fail.Kind.WouldBlock, "write", "", "output could not be flushed"))
         return written
       }
-      room = #len(connection.output)
+      room = connection.output.len
     }
-    count := #len(source) - written
+    count := source.len - written
     if count > room {
       count = room
     }
@@ -738,10 +738,10 @@ fn reserve_body(data: rawptr, capacity: usize) []u8 {
     return connection.output[..0]
   }
   required := capacity + 8192
-  if required > #len(connection.output) {
+  if required > connection.output.len {
     _ = grow_output(connection)
   }
-  if required > #len(connection.output) { return connection.output[..0] }
+  if required > connection.output.len { return connection.output[..0] }
   connection.body_reserved = true
   return connection.output[8192..required]
 }
@@ -749,15 +749,15 @@ fn reserve_body(data: rawptr, capacity: usize) []u8 {
 fn commit_body(data: rawptr, status: *fail.Status, head: []const u8, length: usize) usize {
   connection := #cast(*Connection, data)
   if status.failed { return 0 }
-  if !connection.body_reserved || #len(head) > 8192 || length > #len(connection.output) - 8192 {
+  if !connection.body_reserved || head.len > 8192 || length > connection.output.len - 8192 {
     fail.set(status, fail.make(fail.Kind.InvalidState, "respond", "", "no body storage is reserved"))
     return 0
   }
-  connection.sent = 8192 - #len(head)
+  connection.sent = 8192 - head.len
   connection.queued = 8192 + length
   _ = mem.copy(connection.output[connection.sent..8192], head)
   connection.body_reserved = false
-  return #len(head) + length
+  return head.len + length
 }
 
 fn new_response(connection: *Connection) http.Response {
@@ -786,7 +786,7 @@ fn reject(connection: *Connection, status: u16, body: []const u8, input: []const
   if handler != nil {
     // What was read of the request: its head when the head fit.
     request := http.Request{}
-    head := http.frame_request_head(input, #len(input) + 1)
+    head := http.frame_request_head(input, input.len + 1)
     if head.status == http.FrameStatus.Ready {
       request = head.request
     }
@@ -895,7 +895,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
   if connection.fresh && connection.mode == Mode.Http && has_http2(worker.config) {
     // Prior knowledge (RFC 9113 3.3): the client starts with the preface.
     if preface_prefix(connection.input[..connection.used]) {
-      if connection.used < #len(Preface) { return true }
+      if connection.used < Preface.len { return true }
       connection.fresh = false
       _ = worker.config.http2.begin(worker, index)
       return worker.config.http2.serve(worker, index)
@@ -907,7 +907,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
     connection.used = 0
   }
   consumed: usize = 0
-  capacity := #len(connection.base_input)
+  capacity := connection.base_input.len
   if connection.uploads != nil && connection.uploads.block_size > capacity {
     capacity = connection.uploads.block_size
   }
@@ -967,7 +967,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
   }
   shift_input(connection, consumed)
   // A request larger than the receive buffer moves to an upload block.
-  if connection.mode == Mode.Http && !connection.close_after && wanted > #len(connection.input) &&
+  if connection.mode == Mode.Http && !connection.close_after && wanted > connection.input.len &&
     !grow_input(connection, wanted) {
     if wanted <= capacity {
       worker.rejected += 1
@@ -1024,7 +1024,7 @@ fn grow_input(connection: *Connection, total: usize) bool {
 // Back to the base buffer once what is left fits it. Never while a job's
 // request still borrows the block.
 fn release_input(connection: *Connection) {
-  if connection.input_slot == 0 || connection.job_running || connection.used > #len(connection.base_input) {
+  if connection.input_slot == 0 || connection.job_running || connection.used > connection.base_input.len {
     return
   }
   _ = mem.copy(connection.base_input[..connection.used], connection.input[..connection.used])
@@ -1086,12 +1086,12 @@ fn on_readable(worker: *Worker, index: usize) {
   // TLS may hold decrypted bytes the socket no longer signals, so a transport
   // reads until it would block. Plain TCP reads again only after a full read.
   for rounds in 0..16 {
-    if connection.used == #len(connection.input) {
+    if connection.used == connection.input.len {
       // Buffer full and nothing framed: serve_buffered already answered 413.
       close_connection(worker, index)
       return
     }
-    room := #len(connection.input) - connection.used
+    room := connection.input.len - connection.used
     received := connection_read(connection, connection.input[connection.used..])
     if received.status == TransportStatus.WouldRead {
       if !set_interest(worker, index, event.Readable) {
@@ -1188,7 +1188,7 @@ fn on_handshake(worker: *Worker, index: usize) {
 fn evict_idle(worker: *Worker, now: i64) bool {
   limit := worker.config.evict_idle_milliseconds
   if limit < 0 { return false }
-  oldest: usize = #len(worker.connections)
+  oldest: usize = worker.connections.len
   for i in 0..worker.slots_used {
     connection := &worker.connections[i]
     if !connection.active || connection.parked || connection.refusal || connection.mode != Mode.Http ||
@@ -1196,11 +1196,11 @@ fn evict_idle(worker: *Worker, now: i64) bool {
       connection.draining || connection.close_after || now - connection.last_active < limit {
       continue
     }
-    if oldest == #len(worker.connections) || connection.last_active < worker.connections[oldest].last_active {
+    if oldest == worker.connections.len || connection.last_active < worker.connections[oldest].last_active {
       oldest = i
     }
   }
-  if oldest == #len(worker.connections) { return false }
+  if oldest == worker.connections.len { return false }
   close_connection(worker, oldest)
   worker.evicted += 1
   return true
@@ -1248,15 +1248,15 @@ fn begin(worker: *Worker, index: usize) {
 // A regular slot is free: the longest parked client takes it.
 fn promote(worker: *Worker) {
   if worker.parked == 0 || worker.serving >= worker.config.connections_per_worker { return }
-  first: usize = #len(worker.connections)
+  first: usize = worker.connections.len
   for i in 0..worker.slots_used {
     connection := &worker.connections[i]
     if connection.active && connection.parked &&
-      (first == #len(worker.connections) || connection.last_active < worker.connections[first].last_active) {
+      (first == worker.connections.len || connection.last_active < worker.connections[first].last_active) {
       first = i
     }
   }
-  if first == #len(worker.connections) { return }
+  if first == worker.connections.len { return }
   worker.connections[first].parked = false
   worker.parked -= 1
   worker.serving += 1
@@ -1436,7 +1436,7 @@ fn worker_main(worker: *Worker) isize {
 
 fn valid_start(status: *fail.Status, workers: []Worker, config: Config, handler: http.Handler) bool {
   if status.failed { return false }
-  if #len(workers) == 0 || handler == nil || config.connections_per_worker == 0 ||
+  if workers.len == 0 || handler == nil || config.connections_per_worker == 0 ||
     config.receive_size < 512 || config.send_size < 512 || config.stack_size < 64 * mem.KiB ||
     (config.overflow_send_count == 0) != (config.overflow_send_size == 0) ||
     (config.overflow_send_count > 0 && config.overflow_send_size <= config.send_size) ||
@@ -1444,7 +1444,7 @@ fn valid_start(status: *fail.Status, workers: []Worker, config: Config, handler:
     config.compress_level > 9 || (has_http2(config) && !config.http2.valid(config)) ||
     (has_http3(config) && !config.http3.valid(config)) ||
     (config.transport != nil && config.transport.needs_native_threads && config.spawner == nil) ||
-    #len(workers) > 0xffffffff || config.connections_per_worker > 0xffffffff {
+    workers.len > 0xffffffff || config.connections_per_worker > 0xffffffff {
     fail.invalid(status, "start server", "", "invalid Config")
     return false
   }
@@ -1493,23 +1493,23 @@ fn start_worker(outer: *mem.Arena, status: *fail.Status, worker: *Worker) {
   // touch would otherwise make a whole 2 MiB page resident.
   // push_array on fresh pages leaves them untouched, and the worker's own
   // pushes then skip zeroing them, so only slots in use cost memory.
-  backing := mem.push_array(u8, outer, worker_storage(config))
+  backing := mem.push_array<u8>(outer, worker_storage(config))
   mem.advise_sparse(backing)
   arena := mem.arena_from_zeroed(backing)
-  worker.connections = mem.push_array(Connection, arena, count)
-  worker.free = mem.push_array(usize, arena, count)
-  worker.later = mem.push_array(usize, arena, count)
+  worker.connections = mem.push_array<Connection>(arena, count)
+  worker.free = mem.push_array<usize>(arena, count)
+  worker.later = mem.push_array<usize>(arena, count)
   worker.slot_input = mem.push_bytes(arena, count * config.receive_size)
   worker.slot_output = mem.push_bytes(arena, count * config.send_size)
   worker.send_pool.backing = mem.push_bytes(arena, config.overflow_send_count * config.overflow_send_size)
-  worker.send_pool.free = mem.push_array(usize, arena, config.overflow_send_count)
+  worker.send_pool.free = mem.push_array<usize>(arena, config.overflow_send_count)
   worker.send_pool.free_count = config.overflow_send_count
   worker.send_pool.block_size = config.overflow_send_size
   for i in 0..config.overflow_send_count {
     worker.send_pool.free[i] = config.overflow_send_count - 1 - i
   }
   worker.upload_pool.backing = mem.push_bytes(arena, config.upload_count * config.upload_size)
-  worker.upload_pool.free = mem.push_array(usize, arena, config.upload_count)
+  worker.upload_pool.free = mem.push_array<usize>(arena, config.upload_count)
   worker.upload_pool.free_count = config.upload_count
   worker.upload_pool.block_size = config.upload_size
   for i in 0..config.upload_count {
@@ -1525,14 +1525,14 @@ fn start_worker(outer: *mem.Arena, status: *fail.Status, worker: *Worker) {
   }
   worker.free_count = count
   for half in 0..2 {
-    worker.inbox.posts[half] = mem.push_array(Post, arena, config.inbox_messages)
+    worker.inbox.posts[half] = mem.push_array<Post>(arena, config.inbox_messages)
     worker.inbox.bytes[half] = mem.push_bytes(arena, config.inbox_bytes)
-    worker.inbox.done[half] = mem.push_array(usize, arena, count)
+    worker.inbox.done[half] = mem.push_array<usize>(arena, count)
   }
   worker.scratch = mem.arena_from_buffer(mem.push_bytes(arena, scratch_size(config)))
   worker.head_staging = mem.push_bytes(arena, 8 * mem.KiB)
   if config.compress_level > 0 {
-    worker.encoder = mem.push(gzip.Encoder, arena)
+    worker.encoder = mem.push<gzip.Encoder>(arena)
   }
   if has_http2(config) {
     config.http2.start(arena, worker)
@@ -1592,14 +1592,14 @@ pub fn start(arena: *mem.Arena, status: *fail.Status, workers: []Worker, listene
     fail.invalid(status, "start server", "", "the listener is not open")
     return 0
   }
-  for i in 0..#len(workers) {
+  for i in 0..workers.len {
     workers[i] = Worker{ listener: listener, handler: handler, context: context, config: config, id: #cast(u32, i), group: workers }
   }
-  for i in 0..#len(workers) {
+  for i in 0..workers.len {
     start_worker(arena, status, &workers[i])
     if status.failed { return abandon(workers, i) }
   }
-  return #len(workers)
+  return workers.len
 }
 
 // Like start, but every worker owns a listener on address with SO_REUSEPORT,
@@ -1611,10 +1611,10 @@ pub fn start_shared(arena: *mem.Arena, status: *fail.Status, workers: []Worker, 
   config: Config, handler: http.Handler, context: rawptr) usize {
   if status == nil { return start_shared(arena, &fail.Status{}, workers, address, backlog, config, handler, context) }
   if !valid_start(status, workers, config, handler) { return 0 }
-  for i in 0..#len(workers) {
+  for i in 0..workers.len {
     workers[i] = Worker{ handler: handler, context: context, config: config, id: #cast(u32, i), group: workers }
   }
-  for i in 0..#len(workers) {
+  for i in 0..workers.len {
     worker := &workers[i]
     worker.own_listener = network.tcp_listen_ipv4_shared(status, &address, backlog)
     if status.failed { return abandon(workers, i) }
@@ -1630,16 +1630,16 @@ pub fn start_shared(arena: *mem.Arena, status: *fail.Status, workers: []Worker, 
       }
     }
   }
-  for i in 0..#len(workers) {
+  for i in 0..workers.len {
     start_worker(arena, status, &workers[i])
     if status.failed { return abandon(workers, i) }
   }
-  return #len(workers)
+  return workers.len
 }
 
 // Local port of the first worker's listener, or 0.
 pub fn local_port(workers: []Worker) u16 {
-  if #len(workers) == 0 || workers[0].listener == nil { return 0 }
+  if workers.len == 0 || workers[0].listener == nil { return 0 }
   bound := network.Address{}
   status: fail.Status
   network.local_address(&status, workers[0].listener.descriptor, &bound)
@@ -1702,8 +1702,8 @@ fn connection_of(response: *http.Response) *Connection {
 }
 
 fn live_peer(workers: []Worker, peer: Peer) bool {
-  return peer.generation != 0 && #cast(usize, peer.worker) < #len(workers) &&
-    #cast(usize, peer.index) < #len(workers[peer.worker].connections)
+  return peer.generation != 0 && #cast(usize, peer.worker) < workers.len &&
+    #cast(usize, peer.index) < workers[peer.worker].connections.len
 }
 
 // Appends to the pending half. Fails with Capacity when it is full.
@@ -1712,16 +1712,16 @@ fn post(status: *fail.Status, worker: *Worker, item: Post, payload: []const u8) 
   inbox := &worker.inbox
   sync.lock(&inbox.lock)
   half := inbox.pending
-  if inbox.post_count[half] == #len(inbox.posts[half]) || #len(payload) > #len(inbox.bytes[half]) - inbox.byte_count[half] {
+  if inbox.post_count[half] == inbox.posts[half].len || payload.len > inbox.bytes[half].len - inbox.byte_count[half] {
     sync.unlock(&inbox.lock)
     fail.set(status, fail.make(fail.Kind.Capacity, "post", "", "the worker's inbox is full"))
     return
   }
   entry := item
   entry.offset = inbox.byte_count[half]
-  entry.length = #len(payload)
+  entry.length = payload.len
   _ = mem.copy(inbox.bytes[half][entry.offset..entry.offset + entry.length], payload)
-  inbox.byte_count[half] += #len(payload)
+  inbox.byte_count[half] += payload.len
   inbox.posts[half][inbox.post_count[half]] = entry
   inbox.post_count[half] += 1
   sync.unlock(&inbox.lock)
@@ -1778,12 +1778,12 @@ pub fn close_peer(status: *fail.Status, workers: []Worker, peer: Peer) {
 // Queues bytes without ever blocking: a peer too slow to take them closes.
 fn push_bytes(connection: *Connection, source: []const u8) bool {
   if connection.failed || connection.close_after { return false }
-  if #len(source) > #len(connection.output) - connection.queued {
+  if source.len > connection.output.len - connection.queued {
     _ = grow_output(connection)
   }
-  if #len(source) > #len(connection.output) - connection.queued { return false }
-  _ = mem.copy(connection.output[connection.queued..connection.queued + #len(source)], source)
-  connection.queued += #len(source)
+  if source.len > connection.output.len - connection.queued { return false }
+  _ = mem.copy(connection.output[connection.queued..connection.queued + source.len], source)
+  connection.queued += source.len
   return true
 }
 
@@ -1808,27 +1808,27 @@ fn frame_head(destination: []u8, opcode: u8, length: usize) []u8 {
 
 fn push_frame(connection: *Connection, opcode: u8, payload: []const u8) bool {
   head_storage: [10]u8
-  head := frame_head(head_storage[..], opcode, #len(payload))
-  if #len(head) + #len(payload) > #len(connection.output) - connection.queued {
+  head := frame_head(head_storage[..], opcode, payload.len)
+  if head.len + payload.len > connection.output.len - connection.queued {
     _ = grow_output(connection)
   }
   return push_bytes(connection, head) && push_bytes(connection, payload)
 }
 
 fn push_chunk(connection: *Connection, payload: []const u8) bool {
-  if #len(payload) == 0 { return true }
+  if payload.len == 0 { return true }
   size_storage: [24]u8
   digits := "0123456789abcdef"
-  at := #len(size_storage) - 2
+  at := size_storage.len - 2
   size_storage[at] = '\r'
   size_storage[at + 1] = '\n'
-  number := #len(payload)
+  number := payload.len
   for number > 0 {
     at -= 1
     size_storage[at] = digits[number & 15]
     number >>= 4
   }
-  if #len(payload) + 24 > #len(connection.output) - connection.queued {
+  if payload.len + 24 > connection.output.len - connection.queued {
     _ = grow_output(connection)
   }
   return push_bytes(connection, size_storage[at..]) && push_bytes(connection, payload) && push_bytes(connection, "\r\n")
@@ -2019,7 +2019,7 @@ pub fn serve(arena: *mem.Arena, status: *fail.Status, workers: []Worker, address
 // work needs into it. nil when response is not an evented response or a job
 // is already running. Panics when T is larger than Config.job_size, which no
 // request could change.
-pub fn job(T: type, response: *http.Response) *T {
+pub fn job<T>(response: *http.Response) *T {
   connection := connection_of(response)
   if connection != nil && #sizeof(T) > connection.worker.config.job_size {
     job_too_large(#typeof(T).name, #sizeof(T), connection.worker.config.job_size)
@@ -2028,7 +2028,7 @@ pub fn job(T: type, response: *http.Response) *T {
     jobs := connection.worker.config.http2.job(connection)
     if jobs == nil { return nil }
     mem.arena_reset(jobs)
-    return mem.push(T, jobs)
+    return mem.push<T>(jobs)
   }
   if connection == nil || connection.job_running || connection.worker.job_stride == 0 { return nil }
   // In Config.large_body, before receive_body: storage for the reader.
@@ -2040,7 +2040,7 @@ pub fn job(T: type, response: *http.Response) *T {
     connection.jobs = mem.arena_from_buffer(worker.job_bytes[at..at + worker.job_stride])
   }
   mem.arena_reset(connection.jobs)
-  return mem.push(T, connection.jobs)
+  return mem.push<T>(connection.jobs)
 }
 
 fn job_too_large(name: []const u8, size: usize, limit: usize) {
@@ -2061,7 +2061,7 @@ fn job_failure(status: *fail.Status, kind: fail.Kind, message: []const u8) {
   fail.set(status, fail.make(kind, "defer request", "", message))
 }
 
-pub fn run(status: *fail.Status, response: *http.Response, data: *$J, work: fn(*$J), finish: fn(*fail.Status, *http.Response, *const http.Request, *$J)) {
+pub fn run<J>(status: *fail.Status, response: *http.Response, data: *J, work: fn(*J), finish: fn(*fail.Status, *http.Response, *const http.Request, *J)) {
   if status == nil {
     run(&fail.Status{}, response, data, work, finish)
     return
@@ -2118,7 +2118,7 @@ pub fn run(status: *fail.Status, response: *http.Response, data: *$J, work: fn(*
 // requests this way, such as one database transaction for many writes. data
 // must outlive finish (see job). InvalidState on HTTP/2 and HTTP/3 streams,
 // outside a handler, or with a job already running.
-pub fn later(status: *fail.Status, response: *http.Response, data: *$J, finish: fn(*fail.Status, *http.Response, *const http.Request, *$J)) {
+pub fn later<J>(status: *fail.Status, response: *http.Response, data: *J, finish: fn(*fail.Status, *http.Response, *const http.Request, *J)) {
   if status == nil {
     later(&fail.Status{}, response, data, finish)
     return
@@ -2135,7 +2135,7 @@ pub fn later(status: *fail.Status, response: *http.Response, data: *$J, finish: 
     return
   }
   worker := connection.worker
-  if worker.later_count == #len(worker.later) {
+  if worker.later_count == worker.later.len {
     // Requests deferred while finish_later runs: drop the finished prefix.
     pending := worker.later_count - worker.later_done
     for i in 0..pending {
@@ -2229,8 +2229,7 @@ fn job_done(worker: *Worker, index: usize) {
 // it may hand slow work to run with the same data. data must point into job
 // storage (see job) or other memory that outlives finish. The client gets
 // 100 Continue now if it asked for it. InvalidState outside the large_body handler.
-pub fn receive_body(status: *fail.Status, response: *http.Response, data: *$J, chunk: fn(*$J, []const u8) bool,
-  finish: fn(*fail.Status, *http.Response, *const http.Request, *$J, BodyEnd)) {
+pub fn receive_body<J>(status: *fail.Status, response: *http.Response, data: *J, chunk: fn(*J, []const u8) bool, finish: fn(*fail.Status, *http.Response, *const http.Request, *J, BodyEnd)) {
   if status == nil {
     receive_body(&fail.Status{}, response, data, chunk, finish)
     return
@@ -2352,7 +2351,7 @@ fn body_feed(worker: *Worker, index: usize) bool {
       at += count
       ended = connection.body_left == 0
     }
-    if #len(piece) > 0 && !connection.body_chunk(connection.body_data, piece) {
+    if piece.len > 0 && !connection.body_chunk(connection.body_data, piece) {
       outcome = BodyEnd.Stopped
       ended = true
     }
@@ -2464,11 +2463,11 @@ pub fn upgrade(status: *fail.Status, response: *http.Response, request: *const h
   if status.failed { return Peer{} }
   accept_storage: [64]u8
   accepted := websocket.accept(accept_storage[..], key)
-  if #len(accepted) == 0 { return peer_failure(status, fail.Kind.InvalidInput, "invalid Sec-WebSocket-Key") }
+  if accepted.len == 0 { return peer_failure(status, fail.Kind.InvalidInput, "invalid Sec-WebSocket-Key") }
   head_storage: [256]u8
   head := append_text(head_storage[..], 0, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ")
-  head = append_text(head_storage[..], #len(head), accepted)
-  head = append_text(head_storage[..], #len(head), "\r\n\r\n")
+  head = append_text(head_storage[..], head.len, accepted)
+  head = append_text(head_storage[..], head.len, "\r\n\r\n")
   if !push_bytes(connection, head) { return peer_failure(status, fail.Kind.Capacity, "no room for the 101 response") }
   response.started = true
   response.finished = true
@@ -2481,8 +2480,8 @@ pub fn upgrade(status: *fail.Status, response: *http.Response, request: *const h
 }
 
 fn append_text(destination: []u8, at: usize, piece: []const u8) []u8 {
-  end := at + #len(piece)
-  if end > #len(destination) { return destination[..at] }
+  end := at + piece.len
+  if end > destination.len { return destination[..at] }
   _ = mem.copy(destination[at..end], piece)
   return destination[..end]
 }
@@ -2504,7 +2503,7 @@ fn websocket_frames(worker: *Worker, index: usize) bool {
     start := connection.frames.used
     frame := websocket.parse_frame(&worker.io, connection.input[start..connection.used])
     if !worker.io.failed && !frame.complete {
-      if connection.used == #len(connection.input) {
+      if connection.used == connection.input.len {
         // The message cannot fit the receive buffer.
         close_with(connection, 1009)
       }

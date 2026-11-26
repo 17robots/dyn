@@ -25,7 +25,7 @@ fn main() {
   workers: [1]evented.Worker
   config := evented.default_config()
   LARGE
-  arena := mem.arena_alloc(evented.storage_size(config, #len(workers)) + mem.MiB)
+  arena := mem.arena_alloc(evented.storage_size(config, workers.len) + mem.MiB)
   defer mem.arena_release(arena)
   evented.serve(arena, &status, workers[..], net.ipv4(127, 0, 0, 1, 18099), config, hello, nil)
 }

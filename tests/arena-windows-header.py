@@ -15,23 +15,23 @@ fn main() {
     source := mem.pages(12288)
     source.block_size = 4096
     arena := mem.arena_from_source(source)
-    first := mem.push_array(u8, arena, 3952)
+    first := mem.push_array<u8>(arena, 3952)
     first[0] = 91
     mark := mem.arena_mark(arena)
-    second := mem.push_array(u8, arena, 3952)
+    second := mem.push_array<u8>(arena, 3952)
     second[0] = 72
     expect(arena.current != arena && arena.current.previous == arena)
     expect(first[0] == 91 && second[0] == 72)
     mem.arena_rewind(arena, mark)
     expect(arena.current == arena && first[0] == 91)
-    second = mem.push_array(u8, arena, 3952)
+    second = mem.push_array<u8>(arena, 3952)
     expect(second[0] == 0 && first[0] == 91)
-    _ = mem.push_array(u8, arena, 3952)
+    _ = mem.push_array<u8>(arena, 3952)
     expect(arena.backing == 12288 && first[0] == 91)
     mem.arena_reset(arena)
     expect(arena.current == arena && mem.arena_used(arena) == 0)
-    _ = mem.push_array(u8, arena, 3952)
-    _ = mem.push_array(u8, arena, 3952)
+    _ = mem.push_array<u8>(arena, 3952)
+    _ = mem.push_array<u8>(arena, 3952)
     mem.arena_release(arena)
   }
 }

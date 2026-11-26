@@ -11,7 +11,7 @@ const MaxFileBytes: usize = 1 << 20
 
 // Loads the list at path into tasks. A missing file is not a failure: it is
 // an empty list. A line that is not a task fails with its line number.
-fn load(tasks: *array.Array(Task), arena: *mem.Arena, status: *fail.Status, path: []const u8) {
+fn load(tasks: *array.Array<Task>, arena: *mem.Arena, status: *fail.Status, path: []const u8) {
   // Reading gets its own status, so that "not found" can mean an empty list
   // while any other failure goes on to the caller.
   reading: fail.Status
@@ -28,7 +28,7 @@ fn load(tasks: *array.Array(Task), arena: *mem.Arena, status: *fail.Status, path
     line := strings.scan_line(&scan)
     if scan.ended { break }
     line_number += 1
-    if #len(line) == 0 { continue }
+    if line.len == 0 { continue }
     // Each line gets a status of its own, so the message can name the line.
     parsing: fail.Status
     task := parse_task(&parsing, line)
@@ -46,7 +46,7 @@ fn load(tasks: *array.Array(Task), arena: *mem.Arena, status: *fail.Status, path
 // write fails, the rename does nothing: it takes the same status. (On Linux,
 // fs.write_atomic does both steps and can also make them durable.)
 fn save(tasks: []const Task, arena: *mem.Arena, status: *fail.Status, path: []const u8) {
-  text: array.Array(u8)
+  text: array.Array<u8>
   array.init(&text, arena)
   for task in tasks {
     array.push_all(&text, marker(task.state))

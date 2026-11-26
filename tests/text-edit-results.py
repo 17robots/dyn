@@ -8,11 +8,11 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "std/text/edit" edit
-use "std/mem" mem
-use "std/bytes" bytes
+SOURCE=r'''use edit "std/text/edit"
+use mem "std/mem"
+use bytes "std/bytes"
 use "std/fail"
-use "vendor/window/events" events
+use events "vendor/window/events"
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
 fn broken(failure: fail.Failure) bool { return failure.kind != fail.Kind.Ok }
 struct Snap { value: edit.Context, failure: fail.Failure }
@@ -89,7 +89,7 @@ fn main() {
   event.button = 1
   complete := collect(&collector,&event)
   event.text[0] = 'z'
-  check(!broken(complete.failure) && complete.ready && #len(complete.value.text)==260 && complete.value.token == 8589934609 && complete.value.text[256] == 0xf0,"owned complete transaction")
+  check(!broken(complete.failure) && complete.ready && complete.value.text.len==260 && complete.value.token == 8589934609 && complete.value.text[256] == 0xf0,"owned complete transaction")
   large: [512]u8
   _ = mem.copy(large[..3],"old")
   buffer = edit.Buffer{storage:large[..],length:3,cursor:3,anchor:3,token:complete.value.token}

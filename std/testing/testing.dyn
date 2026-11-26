@@ -1,6 +1,6 @@
-use "std/time" clock
-use "std/io" io
-use "std/bytes" bytes
+use clock "std/time"
+use io "std/io"
+use bytes "std/bytes"
 pub fn expect(condition: bool, message: []const u8) {
   if !condition {
     #panic(message)

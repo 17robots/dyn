@@ -458,7 +458,7 @@ OpenSSL internal names beginning with `_` are excluded.
 ### Calling and storage
 
 ```dyn
-use "vendor/box2d/raw" box
+use box "vendor/box2d/raw"
 
 fn main() {
   if !box.verify_layout() { #panic("binding/header mismatch") }

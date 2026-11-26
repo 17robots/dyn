@@ -130,7 +130,7 @@ pointers borrow storage; they do not own it.
 storage: [64]u8
 whole := storage[..]
 prefix := whole[..8]
-length := #len(prefix)
+length := prefix.len
 ```
 
 Use arrays for fixed-size owned values and slices for views or API boundaries. Prefer slices over a
@@ -215,8 +215,8 @@ Three rules cover every std and vendor call:
 
    ```dyn
    status: fail.Status
-   port := json.get(i64, &status, root, "port")   // required
-   debug := json.get(bool, nil, root, "debug")    // false when missing
+   port := json.get<i64>(&status, root, "port")   // required
+   debug := json.get<bool>(nil, root, "debug")    // false when missing
    ```
 
    `nil` works for every std and vendor call that takes a status: the call
@@ -274,7 +274,7 @@ pub fn load(arena: *mem.Arena, status: *fail.Status, path: []const u8) Config {
 Other outcomes are values, not failures:
 
 - **Absence in memory you own:** `map.get` returns `nil`, tree navigation
-  returns an empty stub, and every byte `find*` returns `#len(text)` on a
+  returns an empty stub, and every byte `find*` returns `text.len` on a
   miss. Lookups into input (JSON, INI, HTTP, the environment) record
   `NotFound` instead (rule 2).
 - **The end of an iterator** is `ended` on its state, set by the call that
@@ -327,12 +327,12 @@ Prefer early returns for invalid input and failure. Use `case` when modeling a c
 must be exhaustive. Use a kind enum beside a struct when the alternatives carry different data.
 
 ```dyn
-enum State { Pending, Complete: usize }
+enum State { Pending, Complete(usize) }
 
 fn describe(state: State) []const u8 {
   case state {
     State.Pending => { return "pending" }
-    State.Complete _ => { return "complete" }
+    State.Complete(_) => { return "complete" }
   }
 }
 ```

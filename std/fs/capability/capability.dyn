@@ -1,7 +1,7 @@
 #target(kernel: linux)
 
-use "std/observe" observe
-use "std/io" io
+use observe "std/observe"
+use io "std/io"
 use "std/fail"
 use "std/os/linux/sys"
 // A borrowed directory descriptor limits file lookup through this interface.
@@ -26,9 +26,9 @@ pub fn read(status: *fail.Status, directory: *const Directory, path: []const u8,
   if status.failed { return 0 }
   if directory == nil { return failure(status, path, -22) }
   if !directory.active { return failure(status, path, -9) }
-  if #len(path) == 0 || #len(path) > 4095 || path[0] == '/' { return failure(status, path, -22) }
+  if path.len == 0 || path.len > 4095 || path[0] == '/' { return failure(status, path, -22) }
   name: [4096]u8
-  for i in 0..#len(path) {
+  for i in 0..path.len {
     if path[i] == 0 { return failure(status, path, -22) }
     name[i] = path[i]
   }
@@ -47,8 +47,8 @@ pub fn read(status: *fail.Status, directory: *const Directory, path: []const u8,
       observe.Event{kind: observe.Kind.ResourceOpened, resource: directory.resource, source: "std/fs/capability"})
   }
   value: isize = 0
-  if #len(destination) != 0 {
-    value = #syscall(sys.Read, descriptor, &destination[0], #len(destination))
+  if destination.len != 0 {
+    value = #syscall(sys.Read, descriptor, &destination[0], destination.len)
   }
   closed := #syscall(sys.Close, descriptor)
   if directory.events != nil {

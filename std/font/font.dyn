@@ -1,6 +1,6 @@
 use "std/fail"
-use "std/mem" mem
-use "std/math" math
+use mem "std/mem"
+use math "std/math"
 
 // A face borrows immutable font bytes. Keep them alive for every lookup/raster.
 // This initial reader supports SFNT TrueType outlines and Unicode cmap 4/12.
@@ -22,7 +22,7 @@ fn u32be(bytes: []const u8, at: usize) u32 {
   return (#cast(u32, u16be(bytes, at)) << 16) | #cast(u32, u16be(bytes, at + 2))
 }
 fn fits(bytes: []const u8, at, length: usize) bool {
-  return at <= #len(bytes) && length <= #len(bytes) - at
+  return at <= bytes.len && length <= bytes.len - at
 }
 fn table(data: []const u8, tag: u32) Table {
   count := #cast(usize, u16be(data, 4))
@@ -42,7 +42,7 @@ fn table(data: []const u8, tag: u32) Table {
 pub fn open(status: *fail.Status, data: []const u8) Face {
   if status == nil { return open(&fail.Status{}, data) }
   if status.failed { return Face{} }
-  if #len(data) < 12 {
+  if data.len < 12 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "open font", "", "malformed font"))
     return Face{}
   }
@@ -55,7 +55,7 @@ pub fn open(status: *fail.Status, data: []const u8) Face {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "open font", "", "malformed font"))
     return Face{}
   }
-  if #cast(usize, u16be(data, 4)) > (#len(data) - 12) / 16 {
+  if #cast(usize, u16be(data, 4)) > (data.len - 12) / 16 {
     fail.at(status, fail.Kind.InvalidInput, "open font", "malformed font", 4)
     return Face{}
   }
@@ -67,7 +67,7 @@ pub fn open(status: *fail.Status, data: []const u8) Face {
   glyf := table(data, 0x676c7966)
   cmap := table(data, 0x636d6170)
   if !head.ok || !maxp.ok || !hhea.ok || !hmtx.ok || !loca.ok || !glyf.ok || !cmap.ok ||
-    #len(head.value) < 54 || #len(maxp.value) < 6 || #len(hhea.value) < 36 || #len(cmap.value) < 4 {
+    head.value.len < 54 || maxp.value.len < 6 || hhea.value.len < 36 || cmap.value.len < 4 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "open font", "", "malformed font"))
     return Face{}
   }
@@ -83,8 +83,8 @@ pub fn open(status: *fail.Status, data: []const u8) Face {
   if format == 1 {
     stride = 4
   }
-  if (#cast(usize, glyphs) + 1) > #len(loca.value) / stride ||
-    #cast(usize, metrics) * 4 + (#cast(usize, glyphs) - #cast(usize, metrics)) * 2 > #len(hmtx.value) {
+  if (#cast(usize, glyphs) + 1) > loca.value.len / stride ||
+    #cast(usize, metrics) * 4 + (#cast(usize, glyphs) - #cast(usize, metrics)) * 2 > hmtx.value.len {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "open font", "", "malformed font"))
     return Face{}
   }
@@ -94,14 +94,14 @@ pub fn open(status: *fail.Status, data: []const u8) Face {
   previous: usize = 0
   for i in 0..#cast(usize, glyphs) + 1 {
     current := location(&face, i)
-    if current < previous || current > #len(face.glyf) {
+    if current < previous || current > face.glyf.len {
       fail.at(status, fail.Kind.InvalidInput, "open font", "malformed font", loca.offset + i * stride)
       return Face{}
     }
     previous = current
   }
   count := #cast(usize, u16be(cmap.value, 2))
-  if count > (#len(cmap.value) - 4) / 8 {
+  if count > (cmap.value.len - 4) / 8 {
     fail.at(status, fail.Kind.InvalidInput, "open font", "malformed font", cmap.offset + 2)
     return Face{}
   }
@@ -119,19 +119,19 @@ pub fn open(status: *fail.Status, data: []const u8) Face {
     }
     sub := cmap.value[offset..]
     kind := u16be(sub, 0)
-    if (kind == 4 || kind == 12) && #len(sub) < 16 {
+    if (kind == 4 || kind == 12) && sub.len < 16 {
       fail.at(status, fail.Kind.InvalidInput, "open font", "malformed font", cmap.offset + offset)
       return Face{}
     }
     length: usize = 0
-    if kind == 4 && #len(sub) >= 16 {
+    if kind == 4 && sub.len >= 16 {
       length = u16be(sub, 2)
-    } else if kind == 12 && #len(sub) >= 16 {
+    } else if kind == 12 && sub.len >= 16 {
       length = u32be(sub, 4)
     } else {
       continue
     }
-    if length < 16 || length > #len(sub) {
+    if length < 16 || length > sub.len {
       fail.at(status, fail.Kind.InvalidInput, "open font", "malformed font", cmap.offset + offset)
       return Face{}
     }
@@ -200,7 +200,7 @@ pub fn open(status: *fail.Status, data: []const u8) Face {
       fail.at(status, fail.Kind.InvalidInput, "open font", "malformed font", kern.offset + checked.offset)
       return Face{}
     }
-    if #len(kern.value) >= 4 && u16be(kern.value, 0) == 0 {
+    if kern.value.len >= 4 && u16be(kern.value, 0) == 0 {
       face.kern = kern.value
     }
   }
@@ -213,7 +213,7 @@ fn location(face: *const Face, index: usize) usize {
 }
 // Zero is the font's missing-glyph slot. Invalid Unicode also maps to zero.
 pub fn glyph_index(face: *const Face, codepoint: u32) u16 {
-  if codepoint > 1114111 || (codepoint >= 55296 && codepoint <= 57343) || #len(face.cmap) < 16 {
+  if codepoint > 1114111 || (codepoint >= 55296 && codepoint <= 57343) || face.cmap.len < 16 {
     return 0
   }
   sub := face.cmap
@@ -247,7 +247,7 @@ pub fn glyph_index(face: *const Face, codepoint: u32) u16 {
     value := #cast(u16, codepoint)
     if range != 0 {
       skip := #cast(usize, (codepoint - start)) * 2
-      if range > #len(sub) - at || !fits(sub, at + range, skip + 2) { return 0 }
+      if range > sub.len - at || !fits(sub, at + range, skip + 2) { return 0 }
       value = u16be(sub, at + range + skip)
       if value == 0 { return 0 }
     }
@@ -286,7 +286,7 @@ pub fn raster(arena: *mem.Arena, status: *fail.Status, face: *const Face, index:
   bitmap := Bitmap{ advance: advance }
   if start == end { return bitmap }
   data := face.glyf[start..end]
-  if #len(data) < 10 {
+  if data.len < 10 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "raster glyph", "", "malformed glyph"))
     return Bitmap{}
   }
@@ -326,7 +326,7 @@ pub fn raster(arena: *mem.Arena, status: *fail.Status, face: *const Face, index:
   }
   // Component-selected phantom origins can shift fractional pixel alignment.
   // Reserve one extra row/column before allocating the temporary outline.
-  bitmap.pixels = mem.push_array(u8, arena, (width + 1) * (height + 1))
+  bitmap.pixels = mem.push_array<u8>(arena, (width + 1) * (height + 1))
   scratch := mem.arena_mark(arena)
   defer {
     if success {
@@ -352,7 +352,7 @@ pub fn raster(arena: *mem.Arena, status: *fail.Status, face: *const Face, index:
   bitmap.advance = #cast(i32, math.floor64(outline.advance.x * scale + 0.5))
   points := outline.points
   ends := outline.ends
-  count := #len(points)
+  count := points.len
   if count == 0 {
     // No output allocation survives. Let the failure-cleanup branch rewind
     // all scratch; rewinding here would invalidate the later scratch mark.
@@ -385,7 +385,7 @@ pub fn raster(arena: *mem.Arena, status: *fail.Status, face: *const Face, index:
     fail.set(status, fail.make(fail.Kind.Capacity, "raster glyph", "", "the glyph exceeds the limits"))
     return Bitmap{}
   }
-  edges := mem.push_array(Edge, arena, count * 129 + #len(ends))
+  edges := mem.push_array<Edge>(arena, count * 129 + ends.len)
   used: usize = 0
   first: usize = 0
   for last in ends {
@@ -480,11 +480,11 @@ pub struct Atlas { pixels: []u8, width: usize, height: usize, line_height: i32, 
 pub fn atlas(arena: *mem.Arena, status: *fail.Status, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: usize) Atlas {
   if status == nil { return atlas(arena, &fail.Status{}, face, codepoints, pixels_per_em, width, height) }
   if status.failed { return Atlas{} }
-  if width == 0 || height == 0 || width > 4096 || height > 4096 || face.units_per_em == 0 || pixels_per_em == 0 || pixels_per_em > 256 || #len(codepoints) > 65536 {
+  if width == 0 || height == 0 || width > 4096 || height > 4096 || face.units_per_em == 0 || pixels_per_em == 0 || pixels_per_em > 256 || codepoints.len > 65536 {
     fail.set(status, fail.make(fail.Kind.InvalidInput, "build atlas", "", "malformed atlas"))
     return Atlas{}
   }
-  for i in 0..#len(codepoints) {
+  for i in 0..codepoints.len {
     cp := codepoints[i]
     if cp > 1114111 || (cp >= 55296 && cp <= 57343) || (i != 0 && cp <= codepoints[i - 1]) {
       fail.set(status, fail.make(fail.Kind.InvalidInput, "build atlas", "", "malformed atlas"))
@@ -505,16 +505,16 @@ pub fn atlas(arena: *mem.Arena, status: *fail.Status, face: *const Face, codepoi
     }
   }
   value := Atlas{ width: width, height: height, line_height: #cast(i32, math.ceil64(line * scale)),
-    pixels: mem.push_array(u8, arena, width * height),
-    glyphs: mem.push_array(AtlasGlyph, arena, #len(codepoints) + 1) }
+    pixels: mem.push_array<u8>(arena, width * height),
+    glyphs: mem.push_array<AtlasGlyph>(arena, codepoints.len + 1) }
   scratch := mem.arena_mark(arena)
   x: usize = 0
   y: usize = 0
   row: usize = 0
-  for i in 0..#len(value.glyphs) {
+  for i in 0..value.glyphs.len {
     cp: u32 = 0
     index: u16 = 0
-    if i < #len(codepoints) {
+    if i < codepoints.len {
       cp = codepoints[i]
       index = glyph_index(face, cp)
     }
@@ -559,15 +559,15 @@ pub fn atlas(arena: *mem.Arena, status: *fail.Status, face: *const Face, codepoi
 }
 pub nil_glyph: AtlasGlyph
 pub fn atlas_glyph(value: *const Atlas, codepoint: u32) *const AtlasGlyph {
-  if #len(value.glyphs) == 0 { return &nil_glyph }
+  if value.glyphs.len == 0 { return &nil_glyph }
   low: usize = 0
-  high := #len(value.glyphs) - 1
+  high := value.glyphs.len - 1
   for low < high {
     mid := low + (high - low) / 2
     if value.glyphs[mid].codepoint < codepoint { low = mid + 1 } else { high = mid }
   }
-  if low < #len(value.glyphs) - 1 && value.glyphs[low].codepoint == codepoint {
+  if low < value.glyphs.len - 1 && value.glyphs[low].codepoint == codepoint {
     return &value.glyphs[low]
   }
-  return &value.glyphs[#len(value.glyphs) - 1]
+  return &value.glyphs[value.glyphs.len - 1]
 }

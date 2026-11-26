@@ -8,10 +8,10 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 ENV = dict(os.environ, DYN_SDK=str(ROOT))
-SOURCE = r'''use "std/mem" mem
-use "std/bytes/builder" builder
+SOURCE = r'''use mem "std/mem"
+use builder "std/bytes/builder"
 use "std/fail"
-use "std/bytes" bytes
+use bytes "std/bytes"
 fn require(ok: bool) { if !ok { #panic("builder chain contract") } }
 fn moving(block: usize, bounded: bool) {
   arena: *mem.Arena
@@ -27,13 +27,13 @@ fn moving(block: usize, bounded: bool) {
   require(!appended.failed)
   old := state.storage
   first := arena.current
-  for i in mem.ArenaHeader + 8..#len(first.data) { first.data[i] = 85 }
+  for i in mem.ArenaHeader + 8..first.data.len { first.data[i] = 85 }
   mark := mem.arena_mark(arena)
   builder.reserve(arena, &state, 64)
   if &state.storage[0] == &old[0] { #panic("builder move required") }
   require(bytes.equal(builder.bytes(&state), "abcdefgh"))
   require(bytes.equal(old, "abcdefgh"))
-  for i in mem.ArenaHeader + 8..#len(first.data) { require(first.data[i] == 85) }
+  for i in mem.ArenaHeader + 8..first.data.len { require(first.data[i] == 85) }
   for i in 0..56 { state.storage[8+i] = #cast(u8, i) }
   state.length = 64
   before := state.storage
@@ -41,7 +41,7 @@ fn moving(block: usize, bounded: bool) {
   require(state.length == 128 && &state.storage[0] != &before[0])
   require(bytes.equal(state.storage[..64], before) && bytes.equal(state.storage[64..128], before))
   require(bytes.equal(old, "abcdefgh"))
-  for i in mem.ArenaHeader + 8..#len(first.data) { require(first.data[i] == 85) }
+  for i in mem.ArenaHeader + 8..first.data.len { require(first.data[i] == 85) }
   mem.arena_rewind(arena, mark)
   require(mem.arena_mark(arena) == mark && arena.current == arena)
   require(bytes.equal(old, "abcdefgh"))
@@ -150,7 +150,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-builder-chain-') as temporary:
             build(project, output, mode, env)
             subprocess.run([str(output)], env=env, check=True, timeout=15)
             for name, body in PANICS.items():
-                (project / 'main.dyn').write_text('use "std/mem" mem\nuse "std/bytes/builder" builder\nfn main() {\n  ' + body + '\n}\n')
+                (project / 'main.dyn').write_text('use mem "std/mem"\nuse builder "std/bytes/builder"\nfn main() {\n  ' + body + '\n}\n')
                 build(project, output, mode, env)
                 result = subprocess.run([str(output)], env=env, capture_output=True, timeout=15)
                 assert result.returncode != 0 and b'arena exhausted' in result.stderr, (name, mode, tree, result)

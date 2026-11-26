@@ -57,6 +57,10 @@ typedef struct {
   /* Debug builds with --check-overflow: + - * << and negation in the
      program's own modules panic on overflow instead of wrapping. */
   bool check_overflow;
+  /* --check-lifetimes: enables hardened arena diagnostics (PROT_NONE, poison, thread affinity). */
+  bool check_lifetimes;
+  /* --race: instruments shared memory reads/writes for dynamic data-race detection. */
+  bool race;
   unsigned level; /* Zero preserves the default O2 release policy. */
   const char *sample_profile;
   uint64_t profile_hash; /* Computed once per command, shared by module workers. */
@@ -94,6 +98,8 @@ typedef struct {
   /* Batch commands: a handwritten-parser syntax error ends source loading.
      Editors keep partial trees for recovery. */
   bool strict_syntax;
+  /* When true (e.g. `dyn test`, `dyn bench`, `dyn fuzz`), include `*_test.dyn` files. */
+  bool include_tests;
 } DynContext;
 static inline bool dyn_work_step(const DynContext *context, uint64_t units) {
   DynWork *w = context ? context->work : NULL;
@@ -114,7 +120,8 @@ static inline const DynTarget *dyn_context_target(const DynContext *context) {
    and supports the program, otherwise LLVM. Release always uses LLVM. */
 typedef enum { DYN_BACKEND_AUTO, DYN_BACKEND_NATIVE, DYN_BACKEND_LLVM } DynBackend;
 typedef struct {
-  const char *command, *input, *output, *target;
+  const char *command, *input, *output, *target, *filter;
+  uint64_t iterations;
   DynOptimization optimization;
   bool vet_unsafe, release, debug_info, debug_info_set, overflow_set, no_check_overflow, quiet, verbose, runtime_support, emit_object, emit_asm, emit_ir, no_link, shared, timings, no_cache;
   DynBackend backend;

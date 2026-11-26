@@ -8,7 +8,7 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 ORACLE=r'''#target(kernel: linux)
-use "std/io" errors
+use errors "std/io"
 use "std/fail"
 pub fn clipboard_inject_wake(reader: *Window) { ordered_push(reader, ordered.Event{kind:ordered.Kind.Wake}) }
 pub fn clipboard_inject(reader: *Window, kind: usize, format: i32, data: *const u8, count: i32, notify: bool) {
@@ -23,11 +23,11 @@ pub fn clipboard_inject(reader: *Window, kind: usize, format: i32, data: *const 
  if polling.failed { #panic("clipboard injection poll") }
 }
 '''
-SOURCE=r'''use "probe" window
-use "vendor/window/events" events
-use "std/mem" mem
-use "std/bytes" bytes
-use "std/io" errors
+SOURCE=r'''use window "probe"
+use events "vendor/window/events"
+use mem "std/mem"
+use bytes "std/bytes"
+use errors "std/io"
 use "std/fail"
 fn window_paste_status(p0: *const window.Window) fail.Failure {
   status: fail.Status
@@ -80,7 +80,7 @@ fn main() {
  arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  large := mem.push_bytes(arena, 1200000)
- for i in 0..#len(large) { large[i] = #cast(u8, 32 + i % 90) }
+ for i in 0..large.len { large[i] = #cast(u8, 32 + i % 90) }
  check(window_try_set_clipboard(&owner,large).kind == fail.Kind.Ok,34)
  window.request_paste(&owner)
  check(!window.paste_pending(&owner) && window_paste_status(&owner).kind == fail.Kind.Ok && bytes.equal(window.clipboard(&owner),large),36)
@@ -133,7 +133,7 @@ fn main() {
  check(window_try_set_clipboard(&owner,"").kind == fail.Kind.Ok,65)
  window.request_paste(&reader)
  complete(&owner,&reader)
- check(#len(window.clipboard(&reader))==0,68)
+ check(window.clipboard(&reader).len==0,68)
  found := false
  for window.next_event(&reader,&event) {
    if event.kind==events.Kind.Clipboard { check(event.text_length==0 && event.width==0 && event.button==1,71)

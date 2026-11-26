@@ -27,10 +27,10 @@ def literal(data):
     return '"' + "".join(f"\\x{byte:02x}" for byte in data) + '"'
 
 
-SOURCE = r'''use "std/archive/tar" tar
+SOURCE = r'''use tar "std/archive/tar"
 use "std/fail"
-use "std/io" io
-use "std/bytes" bytes
+use io "std/io"
+use bytes "std/bytes"
 fn check(ok: bool) { if !ok { #panic("tar fixture") } }
 struct Input { source: []const u8, offset: usize, fail: usize, calls: usize, native: isize }
 fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
@@ -42,9 +42,9 @@ fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
   fail.set(status, failure)
   return 0
  }
- take := #len(destination)
+ take := destination.len
  if take > s.fail - s.offset { take = s.fail - s.offset }
- if take > #len(s.source) - s.offset { take = #len(s.source) - s.offset }
+ if take > s.source.len - s.offset { take = s.source.len - s.offset }
  for i in 0..take { destination[i] = s.source[s.offset+i] }
  s.offset += take
  return take
@@ -99,7 +99,7 @@ fn main() {
    check(first.found)
    check(bytes.equal(first.entry.data,"hello") && first.entry.kind == '0')
    empty := entry_next(&status, &state)
-   check(empty.found && #len(empty.entry.data) == 0)
+   check(empty.found && empty.entry.data.len == 0)
    end := entry_next(&status, &state)
    check(!end.found)
    check(!entry_next(&status, &state).found)
@@ -128,7 +128,7 @@ fn main() {
    stream := tar.stream_reader(io.cursor_reader(&cursor),header[..],header[..0])
    item := item_next(&status, &stream)
    for item.found { item = item_next(&status, &stream) }
-   check(item.offset == #len(source))
+   check(item.offset == source.len)
    check(item_next(&status, &stream).offset == item.offset)
  }
  // A reader failure stays on the stream, with its native code, even zero.
@@ -194,9 +194,9 @@ fn main() {
  bad := tar.reader(bad_header[..])
  result := next(&bad)
  check(result.failure.kind == fail.Kind.InvalidInput && result.failure.offset == 0 && bad.offset == 0)
- invalid := tar.ArchiveReader{ source: data, offset: #len(data)+1 }
+ invalid := tar.ArchiveReader{ source: data, offset: data.len+1 }
  invalid_result := next(&invalid)
- check(invalid_result.failure.kind == fail.Kind.InvalidInput && invalid_result.failure.offset == #len(data)+1)
+ check(invalid_result.failure.kind == fail.Kind.InvalidInput && invalid_result.failure.offset == data.len+1)
  checksum_input := Input{ source: bad_header[..], fail: 9999 }
  checksum_storage: [512]u8
  checksum_stream := tar.stream_reader(io.Reader{ data: &checksum_input, read: read },checksum_storage[..],checksum_storage[..0])

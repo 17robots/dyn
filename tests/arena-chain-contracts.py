@@ -25,15 +25,15 @@ fn chain() {
   source.block_size = 192
   arena := mem.arena_from_source(source)
   alias := arena
-  first := mem.push_array(u8, arena, 31)
+  first := mem.push_array<u8>(arena, 31)
   for i in 0..31 { first[i] = #cast(u8, i + 17) }
   mark := mem.arena_mark(arena)
   first_backing := arena.backing
-  second := mem.push_array(u8, alias, 96)
+  second := mem.push_array<u8>(alias, 96)
   check(mem.arena_mark(alias) == mem.arena_mark(arena), "aliases share cursor")
   check(blocks(arena) == 2, "tiny arena chains")
   for i in 0..96 { second[i] = 77 }
-  third := mem.push_array(u8, arena, 200)
+  third := mem.push_array<u8>(arena, 200)
   check(blocks(arena) == 3, "third block")
   for byte in third { check(byte == 0, "new chain allocation zeroed") }
   for i in 0..31 { check(first[i] == #cast(u8, i + 17), "earlier content stable") }
@@ -44,7 +44,7 @@ fn chain() {
   arena.poison_on_rewind = true
   mem.arena_reset(arena)
   check(mem.arena_used(arena) == 0 && blocks(arena) == 1, "reset keeps initial block")
-  reused := mem.push_array(u8, arena, 31)
+  reused := mem.push_array<u8>(arena, 31)
   check(&reused[0] == &first[0], "reset reuses initial payload")
   for byte in reused { check(byte == 0, "reuse zeroes poisoned bytes") }
   mem.arena_release(arena)
@@ -52,7 +52,7 @@ fn chain() {
 fn zero_sized() {
   arena := mem.arena_from_source(mem.pages(192))
   before := mem.arena_mark(arena)
-  check(#len(mem.push_array(u64, arena, 0)) == 0 && #len(mem.push_bytes(arena, 0)) == 0, "zero pushes are empty")
+  check(mem.push_array<u64>(arena, 0).len == 0 && mem.push_bytes(arena, 0).len == 0, "zero pushes are empty")
   check(mem.arena_mark(arena) == before, "zero pushes take nothing")
   mem.arena_release(arena)
 }
@@ -65,8 +65,8 @@ fn buffers() {
     begin := #cast(usize, &storage[16+offset])
     check(address % 16 == 0 && address >= begin && address - begin <= 15, "caller header alignment")
     check(mem.arena_used(arena) == 0, "header excluded from used")
-    small := mem.push(u8, arena)
-    wide := mem.push(u64, arena)
+    small := mem.push<u8>(arena)
+    wide := mem.push<u64>(arena)
     before := mem.arena_mark(arena)
     bytes := mem.push_bytes(arena, 7)
     check(#cast(usize, wide) % 8 == 0 && mem.arena_mark(arena) == before + 7, "payload alignment")
@@ -145,7 +145,7 @@ PANICS = [
     ('small-limit', 'arena_from_source(mem.pages(1))', 'arena limit cannot hold the arena header'),
     ('bounded', 'arena_from_source(mem.pages(192))\n  _ = mem.push_bytes(arena, 20)\n  _ = mem.push_bytes(arena, 100)', 'arena exhausted: it reached its limit'),
     ('buffer', 'arena_from_buffer(storage[..])\n  _ = mem.push_bytes(arena, 1400)', 'arena exhausted: its buffer is full'),
-    ('overflow', 'arena_alloc(0)\n  _ = mem.push_array(u64, arena, #max(usize))', 'arena size overflow'),
+    ('overflow', 'arena_alloc(0)\n  _ = mem.push_array<u64>(arena, #max(usize))', 'arena size overflow'),
 ]
 
 

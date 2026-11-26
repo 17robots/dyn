@@ -8,7 +8,7 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 import random
-SOURCE=r'''use "std/crypto/poly1305" poly
+SOURCE=r'''use poly "std/crypto/poly1305"
 use "std/fail"
 fn check(ok: bool) { if !ok { #panic("Poly1305 contract") } }
 fn vector(key: []const u8, message: []const u8, expected: []const u8) {
@@ -22,13 +22,13 @@ fn vector(key: []const u8, message: []const u8, expected: []const u8) {
  }
  check(!poly.equal(tag[..15],expected) && !poly.equal(tag[..],expected[..15]))
  byte_state := poly.init(&status, key)
- for i in 0..#len(message) {
+ for i in 0..message.len {
   poly.update(&byte_state,"")
   poly.update(&byte_state,message[i..i+1])
  }
  bytewise := poly.finish(&status, &byte_state)
  check(poly.equal(bytewise[..],expected))
- for split in 0..#len(message)+1 {
+ for split in 0..message.len+1 {
   state := poly.init(&status, key)
   poly.update(&state,message[..split])
   poly.update(&state,message[split..])
