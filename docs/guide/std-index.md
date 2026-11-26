@@ -102,7 +102,7 @@ Layer: core
 
 - `struct Pattern { needle: []const u8, table: []const usize }`: Prepared, allocation-free KMP search.
 - `fn prepare(needle: []const u8, table: []usize) Pattern!`: A table shorter than needle fails and is left untouched.
-- `fn find(pattern: Pattern, text: []const u8) usize`: First byte offset, or #len(text) on a miss.
+- `fn find(pattern: Pattern, text: []const u8) usize`: First byte offset, or text.len on a miss.
 
 ## std/c
 
@@ -370,7 +370,7 @@ Layer: core
 - `fn init(length: usize, key: []const u8) State`: A state for a length-byte digest (1-64), keyed when key is not empty (at most 64 bytes).
 - `fn update(state: *State, input: []const u8)`
 - `fn finish(state: *State, destination: []u8) []u8`: Writes the digest into the first length bytes of destination;
-- `fn sum(destination: []u8, input: []const u8) []u8`: One-shot digest of input, #len(destination) bytes long (1-64), unkeyed.
+- `fn sum(destination: []u8, input: []const u8) []u8`: One-shot digest of input, destination.len bytes long (1-64), unkeyed.
 
 ## std/crypto/certificate
 
@@ -1982,7 +1982,7 @@ Layer: core
 - `struct Table { storage: []u8, start: usize, end: usize, entries: []Entry, first: usize, count: usize, size: usize, max_size: usize, limit: usize, }`: Entry bytes live in storage[start..end], oldest first;
 - `struct Decoder { table: Table, // A field was decoded since decode_begin: size updates must come first. fields: bool, }`
 - `struct Field { name: []const u8, value: []const u8, consumed: usize, update: bool, // A never-indexed literal: intermediaries must not compress it. sensitive: bool, }`: One decoded representation.
-- `fn decoder(storage: []u8, entries: []Entry) Decoder`: Storage bounds the table: limit is #len(storage) bytes, and at most EntryOverhead bytes per entry (see entries_for).
+- `fn decoder(storage: []u8, entries: []Entry) Decoder`: Storage bounds the table: limit is storage.len bytes, and at most EntryOverhead bytes per entry (see entries_for).
 - `fn entries_for(storage_size: usize) usize`: Entries a decoder needs for storage bytes of table.
 - `fn decode_begin(decoder: *Decoder)`: Starts a header block: a size update is allowed again before its first field.
 - `struct Decoded { length: usize, valid: bool }`
@@ -2679,7 +2679,7 @@ Layer: std
 
 - `struct FuzzOptions { seed: u64, cases: usize, shrink_checks: usize }`
 - `struct FuzzResult { passed: bool, seed: u64, iteration: usize, corpus_entry: usize, example: []const u8, checks: usize, shrink_exhausted: bool, }`: iteration counts corpus replays first, then generated cases.
-- `fn fuzz(options: FuzzOptions, corpus: []const []const u8, work: []u8, predicate: fn(rawptr, []const u8) bool, context: rawptr) FuzzResult`: Runs predicate over the corpus and then options.cases mutated inputs of at most #len(work) / 2 bytes.
+- `fn fuzz(options: FuzzOptions, corpus: []const []const u8, work: []u8, predicate: fn(rawptr, []const u8) bool, context: rawptr) FuzzResult`: Runs predicate over the corpus and then options.cases mutated inputs of at most work.len / 2 bytes.
 - `struct Source { data: []const u8, at: usize }`: Decodes structured values from fuzz input, front to back.
 - `fn source(data: []const u8) Source`
 - `fn remaining(state: *const Source) usize`
@@ -3006,7 +3006,7 @@ Layer: heap
 - `fn graphemes(source: []const u8) Graphemes`
 - `fn next_grapheme(state: *Graphemes) []const u8!parse.ParseErr`: Extended grapheme clusters, UAX #29 Unicode 17 default rules.
 - `struct LineBreak { offset: usize, mandatory: bool }`
-- `fn word_breaks(arena: *mem.Arena, text: []const u8) []usize!parse.ParseErr`: Word boundaries as byte offsets, excluding 0 and including #len(text) when text is not empty.
+- `fn word_breaks(arena: *mem.Arena, text: []const u8) []usize!parse.ParseErr`: Word boundaries as byte offsets, excluding 0 and including text.len when text is not empty.
 - `fn line_breaks(arena: *mem.Arena, text: []const u8) []LineBreak!parse.ParseErr`: Line break opportunities as byte offsets where a line may start, excluding 0.
 - `const UnicodeVersion: []const u8 = "17.0.0"`
 - `enum Form { NFD, NFC, NFKD, NFKC }`

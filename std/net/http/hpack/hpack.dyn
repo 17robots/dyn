@@ -49,7 +49,7 @@ pub struct Field {
   sensitive: bool,
 }
 
-// Storage bounds the table: limit is #len(storage) bytes, and at most
+// Storage bounds the table: limit is storage.len bytes, and at most
 // EntryOverhead bytes per entry (see entries_for). Advertise it as
 // SETTINGS_HEADER_TABLE_SIZE; it must be at least DefaultTableSize, which a
 // peer may use before it sees the setting.

@@ -51,7 +51,7 @@ pub fn write(target: *Logger, level: Level, message: []const u8, fields: []const
   try stream.write(target.output, "\n")
 }
 
-// Appends text at length, or returns more than #len(line) once it no longer fits.
+// Appends text at length, or returns more than line.len once it no longer fits.
 fn put(line: []u8, length: usize, text: []const u8) usize {
   if length > line.len || text.len > line.len - length { return line.len + 1 }
   for i in 0..text.len {

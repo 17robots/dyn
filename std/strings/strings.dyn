@@ -6,7 +6,7 @@ use io "std/io"
 
 // Byte search and comparison live in std/bytes: bytes.equal, find, find_byte,
 // find_last, find_last_byte, contains, starts_with and ends_with. A miss
-// returns #len(text), always a safe slice bound.
+// returns text.len, always a safe slice bound.
 
 pub fn strip_prefix(text: []const u8, prefix: []const u8) []const u8 {
   if byte_ops.starts_with(text, prefix) { return text[prefix.len..] }

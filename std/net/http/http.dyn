@@ -127,7 +127,7 @@ fn token_byte(byte: u8) bool {
   if byte >= 64 { return ((TokenHigh >> #cast(u64, byte - 64)) & 1) != 0 }
   return ((TokenLow >> #cast(u64, byte)) & 1) != 0
 }
-// The next "\r\n" at or after from, found with find_byte; #len(input) - 1
+// The next "\r\n" at or after from, found with find_byte; input.len - 1
 // (or from, near the end) when there is none.
 fn crlf_at(input: []const u8, from: usize) usize {
   at := from
@@ -140,7 +140,7 @@ fn crlf_at(input: []const u8, from: usize) usize {
 }
 
 // Where value first holds a byte a field value may not (a control byte other
-// than tab, or DEL), or #len(value): eight bytes at a time while none of
+// than tab, or DEL), or value.len: eight bytes at a time while none of
 // them is below 0x20 or DEL.
 fn value_invalid_at(value: []const u8) usize {
   at: usize = 0

@@ -149,7 +149,7 @@ pub fn finish(state: *State, destination: []u8) []u8 {
   return destination[..state.length]
 }
 
-// One-shot digest of input, #len(destination) bytes long (1-64), unkeyed.
+// One-shot digest of input, destination.len bytes long (1-64), unkeyed.
 pub fn sum(destination: []u8, input: []const u8) []u8 {
   state := init(destination.len, "")
   update(&state, input)

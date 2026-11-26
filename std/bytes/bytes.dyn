@@ -29,7 +29,7 @@ pub fn ends_with(value: []const u8, suffix: []const u8) bool {
   return suffix.len <= value.len && equal(value[value.len - suffix.len..], suffix)
 }
 
-// Positions are usize. A miss returns #len(value), which is always a safe
+// Positions are usize. A miss returns value.len, which is always a safe
 // slice bound: value[..at] is the whole input and value[at..] is empty.
 
 pub fn find_byte(value: []const u8, byte: u8) usize {

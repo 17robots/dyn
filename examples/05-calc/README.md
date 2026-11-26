@@ -17,9 +17,9 @@ Errors point at the problem:
 
 ## What it teaches
 
-- **Tagged enums.** A variant can carry one value: `Token.Number: f64`,
-  `Token.Name: []const u8`. `case` binds the payload,
-  `Token.Number value => {...}`, and must handle every variant, so adding one
+- **Tagged enums.** A variant can carry one value: `Number(f64)`,
+  `Name([]const u8)`. `case` binds the payload,
+  `Token.Number(value) => {...}`, and must handle every variant, so adding one
   to `Expr` makes every unfinished `case` fail to compile.
 - **Trees in an arena.** `Expr.Binary` carries an `Operation` whose `left`
   and `right` are `*Expr` nodes pushed onto the frame arena. The whole tree
@@ -36,7 +36,7 @@ Errors point at the problem:
 - **A result type of your own.** Evaluation can fail in ways a parser
   cannot (unknown names, division by zero), so `eval.dyn` defines
   `Value { number, problem, offset }`. The zero `Problem` means success.
-- **Maps.** `map.Map([]const u8, f64)` holds the variables. `map.get` returns
+- **Maps.** `map.Map<[]const u8, f64>` holds the variables. `map.get` returns
   a pointer, or `nil` when the key is absent. Keys must outlive the map, so a
   new variable's name is copied into the permanent arena.
 - **Generic functions from std.** `math.sqrt`, `math.pow` and `math.min`

@@ -3,7 +3,7 @@
 | Need | Use | Moves items | Allocates on add |
 | --- | --- | --- | --- |
 | Bytes or text | `std/bytes/builder` | Yes, when it grows | Only `append_grow` |
-| Everyday growing list | `array.Array(T)` (`std/container/array`) | Yes, when it grows | Yes |
+| Everyday growing list | `array.Array<T>` (`std/container/array`) | Yes, when it grows | Yes |
 | Long list with stable items | Chunk list | Never | One chunk at a time |
 | Links through your own nodes | Intrusive list or tree | Never | No |
 | Lookup by key | `std/container/map` | Yes, when it grows | Yes |
@@ -41,17 +41,17 @@ fn main() {
 - Do not independently mutate copies of a builder sharing storage. No internal locking.
 
 Most collections are slices and plain structs that you declare, and std supplies
-generic functions that work on them. `array.Array(T)`, `chunk.List(T)` and
-`map.Map(K, V)` are the generic types. Each job has one
+generic functions that work on them. `array.Array<T>`, `chunk.List<T>` and
+`map.Map<K, V>` are the generic types. Each job has one
 shape:
 
 | Job | Shape |
 | --- | --- |
 | Fixed list | a slice from `mem.push_array(T, &arena, n)` |
-| Growing list | `array.Array(T)` with `array.init` (`std/container/array`) |
+| Growing list | `array.Array<T>` with `array.init` (`std/container/array`) |
 | Growing list on a shared arena | a chunk list (`std/container/chunk`) |
 | Trees, free lists, an item in several lists | intrusive links (`std/container/list`) |
-| Lookup by key | `map.Map(K, V)` with `map.init` (`std/container/map`) |
+| Lookup by key | `map.Map<K, V>` with `map.init` (`std/container/map`) |
 | Lookup through your own nodes | hash slots chained through `hash_next` (`std/container/hash`) |
 | References that survive deletion | generation handles (`std/container/slot_map`) |
 

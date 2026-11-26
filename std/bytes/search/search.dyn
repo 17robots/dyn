@@ -24,7 +24,7 @@ pub fn prepare(needle: []const u8, table: []usize) Pattern! {
   return Pattern{ needle: needle, table: table[..needle.len] }
 }
 
-// First byte offset, or #len(text) on a miss. Empty needle matches at zero.
+// First byte offset, or text.len on a miss. Empty needle matches at zero.
 // No allocations.
 pub fn find(pattern: Pattern, text: []const u8) usize {
   if pattern.needle.len == 0 { return 0 }

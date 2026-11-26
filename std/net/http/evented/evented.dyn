@@ -1546,7 +1546,7 @@ fn abandon(workers: []Worker, started: usize) usize {
 }
 
 // Starts one event loop per worker, all accepting from listener (made
-// nonblocking here). arena must hold storage_size(config, #len(workers)) and
+// nonblocking here). arena must hold storage_size(config, workers.len) and
 // stay alive, unrewound, until join returns. Workers must be zeroed or joined.
 // Every Request carries context; workers share it, so synchronize mutable state.
 // After a failure the workers that started before it are stopped again. A
@@ -1931,7 +1931,7 @@ pub fn worker_index(response: *http.Response) usize {
 // start_shared on address, waits for a signal, then stops and joins them.
 // Where the kernel cannot balance SO_REUSEPORT listeners (macOS, Windows),
 // the workers share one listener through start instead.
-// arena must hold storage_size(config, #len(workers)).
+// arena must hold storage_size(config, workers.len).
 pub fn serve(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address, config: Config, handler: http.Handler,
   context: rawptr) !io.IoErr {
   signals := try signal.watch(signal.Set{ interrupt: true, terminate: true })

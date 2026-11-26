@@ -26,7 +26,7 @@ exit code when it is not 0.
 | [04-journal](04-journal/README.md) | an interactive note keeper | arenas and lifetimes: permanent, per-command frame, undo by rewinding, `bufio` input |
 | [05-calc](05-calc/README.md) | a calculator with variables | tagged enums, recursive descent parsing, trees in an arena, sticky failures, `map.Map` |
 | [06-ledger](06-ledger/README.md) | an expense report from CSV | `distinct type`, `std/encoding/csv`, totals in a map, `sort.sort_by`, function values, tables |
-| [07-editor](07-editor/README.md) | a line editor with undo and redo | writing a generic type, `$T`, a local module, edits as data |
+| [07-editor](07-editor/README.md) | a line editor with undo and redo | writing a generic type, `<T>`, a local module, edits as data |
 | [08-site](08-site/README.md) | a static site generator | directories, paths, HTML escaping, scratch memory per page |
 | [09-primes](09-primes/README.md) | a multi-threaded prime counter | threads with typed context, atomics, sharing work without locks, `join` |
 

@@ -21,7 +21,7 @@ Tasks are saved in `./todo.txt`, or the file named by `TODO_FILE`. See
   a zero `Task` is an open task. `case` must name every variant.
 - **`case` on text** compares bytes: `case command { "list" => {...} _ => {...} }`.
   A text case always needs `_`.
-- **A growing array.** `array.Array(Task)` keeps its items in an arena;
+- **A growing array.** `array.Array<Task>` keeps its items in an arena;
   `array.push` adds, `array.pop` removes the last one and says whether it found one.
 - **A parser that fails.** `parse_task` returns `Task!parse.ParseErr`, like
   the std parsers: `fail .Invalid(offset)` gives the byte where the line went

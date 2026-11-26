@@ -7,7 +7,7 @@
 pub struct FuzzOptions { seed: u64, cases: usize, shrink_checks: usize }
 
 // iteration counts corpus replays first, then generated cases. corpus_entry is
-// the corpus index of a failing replay, or #len(corpus) for generated input.
+// the corpus index of a failing replay, or corpus.len for generated input.
 pub struct FuzzResult {
   passed: bool, seed: u64, iteration: usize, corpus_entry: usize,
   example: []const u8, checks: usize, shrink_exhausted: bool,
@@ -99,7 +99,7 @@ fn failure(options: FuzzOptions, iteration: usize, entry: usize, sample: []u8, t
 }
 
 // Runs predicate over the corpus and then options.cases mutated inputs of at
-// most #len(work) / 2 bytes. Longer corpus entries are truncated. A failure's
+// most work.len / 2 bytes. Longer corpus entries are truncated. A failure's
 // minimized example borrows work. The same seed, corpus, work capacity and
 // deterministic predicate reproduce a run.
 pub fn fuzz(options: FuzzOptions, corpus: []const []const u8, work: []u8,

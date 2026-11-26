@@ -32,7 +32,8 @@ files, one merged module to 256 MiB, and syntax nesting to 1024 levels. Exceedin
 failure or compiler crash.
 
 `use "std/terminal"` binds `terminal`; `use raw_io "std/io"` binds `raw_io`; `use io "std/io",
-"std/fs" fs` imports several modules in one `use`. `as` is invalid. Relative
+files "std/fs", "std/mem"` imports several modules in one `use`. An alias always comes before its
+path; `as` is invalid. Relative
 imports use `./` or `../` but cannot escape project root. Other paths resolve from project
 root; `std/` and `vendor/` resolve only inside the SDK. Third-party libraries
 are copied into the project (see [style](style.md#third-party-code)) and must use
@@ -41,7 +42,8 @@ relative paths for their own modules. `DYN_SDK` may name an SDK root containing
 Import paths are canonicalized. Declarations across
 same module see each other regardless of file/source order. `pub` controls imported access.
 Imported functions and types must currently be module-qualified; imports never inject names into
-the local namespace. Qualified enum construction and patterns use `module.Enum.Variant`.
+the local namespace. Qualified enum construction and patterns use `module.Enum.Variant`, or the
+`.Variant` shorthand where one enum type is expected (see [enums](#values-and-types)).
 
 Top-level variable syntax also declares globals. Globals are zero-initialized before optional
 runtime initialization and may be mutated; imported globals require `pub` and qualified access.
@@ -96,41 +98,53 @@ operation.
 
 ## Generic functions
 
-A function takes a type in one of two ways, and which one is not a choice:
-
-- **Inferred.** When an argument supplies the type, write `$T` inside that parameter's type, at
-  every parameter that supplies it: `a: $T`, `p: *$T`, `s: []$T`, `box: Box($T)`,
-  `entry: fn(*$C) isize`. The call passes only values, as in `sort.sort(values)`. Arguments must
-  agree exactly, with no implicit widening; a number literal or `nil` takes the type the other
-  arguments give, so `thread.spawn(arena, stack, worker, nil)` infers `C` from `worker`.
-- **Passed.** When no argument supplies it, because only the result or the body uses it, write
-  `T: type`, or `K, V: type` for several. The call passes the type first, as in
-  `mem.push(Node, &arena)`.
-
-`T: type` for a type that a parameter's type also contains is an error, and so is a plain `T` in
-a parameter type where `T` is inferred: each generic has one spelling and each call one form.
-`$` appears only in parameter types; the result type and the body write plain `T`.
+A function, struct or enum takes type parameters in angle brackets after its name:
 
 ```dyn
 fn max<T>(a: T, b: T) T {
   if a > b { return a }
   return b
 }
+
+fn first<T>(items: []T) T {
+  return items[0]
+}
 ```
 
-`max(x, y)` with `x: i32` and `y: i64` is an error (`T is both i32 and i64`); cast one argument. Each distinct set of type arguments makes
-one instance, and the compiler checks each instance's body as ordinary code: a body that is invalid
-for a type is an error at the call that created the instance. There are no constraints, traits,
-interfaces, operator overloading or compile-time execution, and types are inferred only from
-arguments, never from the expected result, with one exception below. The
-[generics design](../internals/generics-design.md) records the rules and what is deliberately left
-out.
+A call infers the type arguments from its arguments when every type parameter appears in a
+parameter's type: `max(x, y)`, `sort.sort(values)`. Arguments must agree exactly, with no implicit
+widening; a number literal or `nil` takes the type the other arguments give, so
+`thread.spawn(arena, stack, worker, nil)` infers `C` from `worker`. `max(x, y)` with `x: i32` and
+`y: i64` is an error (`T is both i32 and i64`); cast one argument. When a type parameter appears
+only in the result or the body, the call writes the arguments: `mem.push<Node>(arena)`,
+`size<u8>()`. Explicit arguments are always allowed, as in `max<i64>(1, 2)`.
 
-A generic function used as a value, where a function type is expected, takes its type arguments
-from that type: with `key_hash` declared as `fn(seed: u64, key: $K) u64`,
-`hash: fn(u64, u32) u64 = key_hash` is the `u32` instance, and passing `key_hash` to a parameter of
-type `fn(u64, u32) u64` does the same. A function with a `T: type` parameter shows no `T` in its
-signature, so name its instance with `#instance(f, T)`. A call `f(...)` always runs the function.
+Each distinct set of type arguments makes one instance, and the compiler checks each instance's
+body as ordinary code: a body that is invalid for a type is an error at the call that created the
+instance. There are no constraints, traits, interfaces, operator overloading or compile-time
+execution, and types are inferred only from arguments, never from the expected result, with one
+exception below. The [generics design](../internals/generics-design.md) records the rules and what
+is deliberately left out.
+
+A generic function used as a value names its instance: `hash := key_hash<u32>`. Where a function
+type is expected, the instance comes from that type instead: with
+`fn key_hash<K>(seed: u64, key: K) u64`, `hash: fn(u64, u32) u64 = key_hash` is the `u32`
+instance, and so is passing `key_hash` to a parameter of that type. A call `f(...)` always runs
+the function.
+
+`case T` chooses code by type, at compile time, inside a generic body. Its arms are types and `_`;
+only the matching arm is compiled for an instance, so the other arms may use operations that type
+does not have:
+
+```dyn
+fn width<T>() usize {
+  case T {
+    u8 => { return 1 }
+    u16 => { return 2 }
+    _ => { return #sizeof(T) }
+  }
+}
+```
 
 `#assert` also works in a function body, where it is checked when the body is: in a generic
 function, once per instance. With `#typeof`, whose scalar fields (`kind`, `size`, `id`,
@@ -146,12 +160,13 @@ fn bits<K>(key: K) u64 {
 When an `#assert` in a body fails, that function's other errors are not reported: they would only
 restate that its type arguments are wrong. An `if` whose condition is a compile-time constant
 compiles to the branch it takes; both branches must still type-check for the instance, so this
-removes dead code but never chooses code by type.
+removes dead code but never chooses code by type. `case T` is the way to choose by type.
 
-A struct may take type parameters, and each set of arguments makes one concrete struct:
+A struct or enum may take type parameters, and each set of arguments makes one concrete type:
 
 ```dyn
 struct Box<T> { value: T, failed: bool }
+enum Slot<T> { Empty, Full(T) }
 type IntBox = Box<i32>
 
 fn wrap<T>(value: T) Box<T> {
@@ -160,17 +175,18 @@ fn wrap<T>(value: T) Box<T> {
   return result
 }
 
-fn read<T>(box: Box<T>) T {
-  return box.value
-}
-
 a := Box<f64>{ value: 1.5 }
+b := IntBox{ value: 1 }
+s := Slot<i32>.Full(7)
 ```
 
-A struct or enum lists its type parameters as bare names, `List(T)` or `Map(K, V)`: its parentheses
-hold only types, so they need no `: type`, and they are always passed. Type arguments are always written, and parameters are types only. A literal names its instance
-directly, `Box(i32){value: 1}`, with the brace right after the arguments; an alias works too,
-`IntBox{value: 1}`. `mem.push(Box(i32), arena)` passes the instance as a type.
+Type arguments are always written where a generic struct or enum is named, as in `Box<i32>{...}`,
+`Slot<i32>.Full(7)` and `case` arms such as `Slot<i32>.Full(v)`; inside a generic function they are
+the function's parameters, `Box<T>`. A module-level alias gives an instance a short name.
+`mem.push<Box<i32>>(arena)` passes the instance as a type argument.
+
+The older spellings are errors with a fix in the message: `$T` in a parameter type, `T: type`
+parameters, `Box(T)` declarations and `#instance(f, T)`.
 
 ## Values and types
 
@@ -180,10 +196,15 @@ and bytes read from files, sockets, or the OS arrive unchecked. Text APIs that r
 say so and validate; check external input with `utf8.valid` from `std/unicode/utf8` before
 treating it as text. `const` prevents writes through this view only: another `[]u8` alias of the
 same memory can still change the bytes. Character literals are untyped integer constants holding a Unicode scalar value:
-they take any expected integer type the value fits, and default to `u32`.
+they take any expected integer type the value fits, and default to `u32`. `str` is a built-in
+alias for `[]const u8`, so `names: []str` and `fn greet(name: str)` read well.
 
-`distinct`, `packed`, `union` and `type` are reserved keywords and cannot be names. `union` is
-reserved but declares nothing; Dyn has no union types.
+A backtick string, `` `C:\temp\n` ``, is raw: no escape is processed and it may span lines, so
+`` `a\nb` `` is four bytes and a multi-line template keeps its newlines.
+
+`distinct`, `packed`, `union`, `nocopy` and `type` are reserved keywords and cannot be names.
+`union` declares nothing; the one union Dyn has is a union of error enums, written `A | B`
+(see [errors](#errors)).
 
 `type` creates module-level transparent aliases; aliases may be forward-referenced and
 alias cycles fail. There are no local aliases; declare them at module scope.
@@ -208,7 +229,8 @@ An integer literal in a float context is that float when it is exact (up to 2^24
 2^53 for `f64`), so `x * 2` works for any numeric `T`. Integer overflow
 wraps in every build; `--check-overflow` makes it panic instead (see [numeric rules](#numeric-rules)). Floats use IEEE-754. Expression evaluation is left-to-right.
 A float literal with no float context is `f64`, so `x := 1.5` is `f64`.
-Float literals accept trailing dots (`2.`); lexical lookahead keeps `2..3` an integer range.
+A float literal needs a digit after the dot: write `2.0`, not `2.`, which is an error. `2..3` is an
+integer range.
 Explicit locals without initializers start at zero, or at their struct's field defaults.
 Inferred locals require an initializer. Names never shadow: a local cannot reuse the name of
 another local, parameter or loop variable that is still in scope, in the same block or a nested
@@ -245,9 +267,9 @@ has the range's type and must be positive; a constant zero or negative step is a
 zero step at run time divides by zero. Bounds and step evaluate once, in order, and the counter
 never passes the type's limit, so `#step(250..=255, 2)` on a `u8` stops at 254. `continue` moves
 to the next value. `#reverse(#step(0..10, 3))` visits the same values from the last: 9, 6, 3, 0.
-`break` and `continue` act on the innermost loop; loops have no labels. To leave nested loops, set a
-flag and break again, or move the inner loop into a function and return. Transfers run defers for
-every exited scope.
+`break` and `continue` act on the innermost loop. A label before a loop lets them name an outer
+one: `outer: for row in rows { for cell in row { if cell == 0 { continue outer } } }`. Transfers run
+defers for every exited scope.
 
 Struct field order determines layout. Packed structs preserve order, remove inter-field padding,
 and have alignment 1. Construction gives every field its default (zero when it declares none), then
@@ -256,8 +278,19 @@ applies explicit literal members. A literal always names its type:
 by-value recursion and aggregate comparison fail. Empty structs have size and alignment 1 so arrays
 have stable element stride and distinct elements have distinct addresses.
 
-Dyn has no union types. Reinterpret a number's bits with `#bitcast`, and store one of several
-shapes in a payload enum. To match a C union's layout, declare a field of the largest member's
+An `if`, `for` or `case` header cannot hold a bare struct literal, since its `{` would read as the
+body: write `if p == (Point{ x: 1 }) { ... }`.
+
+`nocopy struct File { ... }` makes a type that owns something, such as a handle or an arena, and
+must not be duplicated. Copying a value of it is a compile error: binding it to a new name,
+passing it by value, assigning it, or reading it through a pointer with `p.*`. The rule carries
+over to every struct, array or enum that contains one. Pass `&file` to borrow it. `#take(&file)`
+moves the value out and leaves `file` fresh, as a declaration without an initializer would, so the
+old name can no longer close the same handle. A function may still return a `nocopy` value it made.
+`mem.Arena`, `heap.Heap` (`std/mem/heap`), `sync.Channel<T>`, `thread.Scope` and `fiber.Fiber` are `nocopy`.
+
+Dyn has no general union types. Reinterpret a number's bits with `#bitcast`, and store one of
+several shapes in a payload enum. To match a C union's layout, declare a field of the largest member's
 size and alignment, such as `[4]u32` for a 16-byte, 4-aligned union.
 
 Functions may accept and return primitive or struct values. Arguments evaluate left-to-right and
@@ -274,25 +307,29 @@ increase, and the first must be 0, so zeroed storage (`x: Color`, omitted struct
 `mem.push`) always holds the first variant; make that variant mean empty, `Null` or `Ok`. Enums
 with payloads keep automatic tags. `enums.from_int(Errno, n)` turns an external number into the
 variant with that tag, or the first variant when none has it; dense enums check a range and enums
-with set tags search their variants. Variants are written `Enum.Variant`; the type is always written,
-never inferred. Enums support equality and copy by value. `#cast(u8, op)` gives the tag. An integer
+with set tags search their variants. Variants are written `Enum.Variant`. Where exactly one enum type is expected, in an assignment,
+a return, a struct literal field, an argument, a comparison with an enum value, `fail` or a
+`case` arm, `.Variant` is enough:
+`c: Color = .Green`, `fail .NotFound`. On a union `A | B` the enum is always written. Enums support
+equality and copy by value. `#cast(u8, op)` gives the tag. An integer
 becomes an enum only through `enums.from_int(Op, byte)`, which gives the first variant for a tag
 that names none; `#cast(Op, byte)` is an error. An exhaustive `case` that meets a tag matching no
 variant panics with `enum.tag.ok`. Enums without payloads have the size and alignment of the
 backing integer.
 
-A variant may hold one typed value: `enum Node { Null, Number: f64, Link: *Node }`. Build one with
-`Node.Number(2.5)`. The first variant takes no payload, so zeroed storage stays valid. A `case` arm
-is the only way to reach a payload: `Node.Number value` copies it, and `Node.Number *value` aliases
-it and needs a mutable subject. Replacing the enum while an alias is live leaves the alias on the
+A variant may hold one typed value: `enum Node { Null, Number(f64), Link(*Node) }`. Build one with
+`Node.Number(2.5)`. The first variant may carry a payload too; zeroed storage holds the first
+variant with a zero payload. A `case` arm is the only way to reach a payload:
+`Node.Number(value)` copies it, and `Node.Number(*value)` binds a real `*f64` to it, written through
+with `value.* = ...`, and needs a mutable subject. Replacing the enum while an alias is live leaves the alias on the
 old variant's storage, the same class of error as a dangling pointer. Enums with payloads have
 no `#cast` and no `==`; they are laid out as the tag followed by the largest payload.
 
-An enum can take type parameters: `enum Slot(T) { Empty, Full: T }`. Write the arguments
-everywhere the enum is named: `Slot(i32).Full(7)` builds one, and a `case` arm reads
-`Slot(i32).Full value`. Inside a generic function, use `Slot(T)`. `type IntSlot = Slot(i32)` gives
-a shorter name, and `IntSlot.Full(7)` works. A generic function can infer `T` from a parameter such
-as `slot: Slot($T)`.
+An enum can take type parameters: `enum Slot<T> { Empty, Full(T) }`. Write the arguments
+everywhere the enum is named: `Slot<i32>.Full(7)` builds one, and a `case` arm reads
+`Slot<i32>.Full(value)`. Inside a generic function, use `Slot<T>`. `type IntSlot = Slot<i32>` gives
+a shorter name, and `IntSlot.Full(7)` works. A generic function infers `T` from a parameter such
+as `slot: Slot<T>`.
 
 Bit masks use distinct unsigned integer types, not special flag-enum syntax. Values explicitly
 cast into the mask type; ordinary integer `|`, `&`, `^`, and `~` then preserve its nominal type.
@@ -330,7 +367,9 @@ bounds. Thin pointers cannot be indexed or sliced with `[..]`. `#slice(pointer, 
 from a pointer and a length the compiler cannot verify, so a wrong count reads out of bounds. Slices are `{data, len}` descriptors and are
 never comparable. Fixed arrays copy by value; omitted literal elements zero-fill, including typed
 `[]`. Array/slice indexing is bounds-checked. Indexes and slice bounds accept any integer type no wider than `usize`, as in C; a negative signed value fails the bounds check like any other out-of-range index. Use `#cast` for wider types, such as `i64` on 32-bit targets. Exclusive ranges support `[..]`, `[..end]`,
-`[start..]`, and `[start..end]`, checking `start <= end <= len`. `#len` returns `usize`.
+`[start..]`, and `[start..end]`, checking `start <= end <= len`. `xs.len` is the length of an array
+or slice, a `usize`. Slices are not comparable with `==`; `slice.eql<T>(a, b)` from `std/slice` and
+`bytes.equal` compare contents.
 `rawptr` has no direct indexing or slicing. Cast it explicitly to `*T`, then use
 `#slice`: `#slice(#cast(*T, memory), count)`.
 `rawptr` has native pointer size/alignment, zero-initializes to `nil`, and supports equality and
@@ -340,7 +379,9 @@ ownership, lifetime, arithmetic, indexing, or dereference operation.
 
 ## Control flow and cleanup
 
-Each statement starts on its own line; two statements on one line are a syntax error. A block
+Each statement starts on its own line; two statements on one line are a syntax error. A newline
+ends a statement except inside `(...)` and `[...]` and right after a `,`, a `{` or a binary
+operator, so a long expression continues after `+` or `&&`, or inside parentheses. A block
 with a single statement may stay on one line, as in `if done { return }`, and so may an `if` whose
 two branches are one statement each: `if wide { return 8 } else { return 4 }`. `case` arms are not
 separated by commas; each arm's body is a block:
@@ -372,14 +413,14 @@ fn command(word: []const u8) i32 {
 ```
  Integer and enum patterns use literals or constants; text patterns are string literals. Arm
 order is irrelevant; duplicates,
-overlaps, unreachable `_`, and redundant `_` fail. `Variant payload` copies its payload.
-`Variant *payload` aliases payload storage and permits assignment or field mutation; it requires a
-mutable assignable case subject. The alias exists only inside its arm.
+overlaps, unreachable `_`, and redundant `_` fail. `Variant(payload)` copies its payload.
+`Variant(*payload)` binds a pointer to the payload storage, used as `payload.*` or for field
+mutation; it requires a mutable assignable case subject. The pointer is valid only inside its arm.
 Enum cases may be exhaustive by listing every variant. Integer cases may be exhaustive by covering
 the whole representable interval. Because the set of Dyn types is open, an `any` type case always
-requires `_`. Type patterns are written as the type, then an optional binding:
-`i64 n => { ... }`, `[]const u8 text => { ... }`, `Point p => { ... }`; a pattern that names a type
-is a type pattern. They neither implicitly cast nor match aliases by spelling: they compare the
+requires `_`. Type patterns are written as the type with an optional binding in parentheses:
+`i64(n) => { ... }`, `[]const u8(text) => { ... }`, `Point(p) => { ... }`; a pattern that names a
+type is a type pattern. They neither implicitly cast nor match aliases by spelling: they compare the
 boxed concrete type identity and bind a copied value of that exact type. A literal boxed into
 `any` takes a default type, as in Go and Odin: an integer is `i32`, a float `f64`, a string
 `[]const u8`, a character `u32`.
@@ -404,7 +445,8 @@ function.
 
 `defer` runs at enclosing-block exit in LIFO order. Direct-call arguments evaluate at defer
 site. Deferred blocks observe captured storage at execution. Deferred statements exclude
-`return`, `break`, `continue`, declarations, and nested `defer`.
+`return`, `break`, `continue`, declarations, and nested `defer`. `errdefer` is a `defer` that runs
+only when the function leaves by failing (see [errors](#errors)).
 
 A panic does not run defers. It runs the handler that `std/panic` installs with
 `panic.set_handler(report)`, prints the message and a stack trace, and exits with status 101. The
@@ -412,6 +454,47 @@ handler runs once, for work the operating system will not do at exit, such as re
 terminal's mode, logging or flushing a crash report; it cannot resume the program. The operating
 system frees memory and closes files when the process ends. There is no recovery mechanism: a
 panic is a bug, and expected failures are values.
+
+## Errors
+
+A function that can fail says so in its result type. `T!E` returns a `T` or fails with an `E`;
+`!E` returns nothing or fails with an `E`. `T!` and `!` fail with no value, for code that has only
+one way to fail, such as a cipher given a bad key:
+
+```dyn
+fn port(text: str) u16!parse.ParseErr {
+  value := try parse.u64_decimal(text)
+  if value > 65535 { fail .TooLarge(0) }
+  return #cast(u16, value)
+}
+```
+
+`E` is an enum, usually with payloads (`io.IoErr`, `parse.ParseErr`, or one of the program's own),
+or a union of enums, `A | B`, written in parentheses in a result type, `!(io.IoErr | StoreErr)`, and
+nameable with a module-level alias: `type AppErr = io.IoErr | ParseErr`.
+A union is flat and unordered: `A | B` is `B | A`, `(A | B) | C` is `A | B | C`, and `A | A` is `A`.
+Failure is a return value with no unwinding and no allocation: a fallible result is the value or
+the error and one flag.
+
+- `fail value` returns the error. `fail .Variant` uses the shorthand when the error type is one
+  enum; a union needs the enum written, `fail StoreErr.BadLine(n)`. In a `T!` or `!` function,
+  `fail` takes no value.
+- `try call()` passes a failure on to the caller, running `defer` and `errdefer` on the way. It is
+  allowed only in a fallible function, and the callee's error must fit the caller's: an `E` widens
+  to any union that contains it, with no conversion code.
+- `call() catch fallback` gives a value of the result type instead of failing; the fallback is
+  evaluated only on failure. `call() catch {}` ignores the failure of a call that returns nothing.
+- `call() catch err { ... }` handles the failure with `err` bound to the error. On a call that
+  returns a value, the block must leave the enclosing code: `return`, `fail`, `break`, `continue`
+  or `#panic`. To make a value from a failure, return it from a small function.
+- `case err` matches the error: variants such as `.NotFound`, payloads such as `.Invalid(at)`,
+  and on a union whole constituents, `io.IoErr(read) =>`, or single variants, `StoreErr.BadLine(n) =>`.
+- `errdefer statement` runs when the function fails after it, and not when it returns normally.
+  Use it to release what a constructor acquired before a later step failed.
+
+A fallible result must be handled: a call whose failure is neither passed on with `try` nor
+handled with `catch` is an error, and so is discarding it with `_ =`. In an `if` or `for` header,
+put a `catch` fallback in parentheses: `if (sqlite.first(lookup, id) catch false) { ... }`.
 
 ## Numeric rules
 
@@ -515,7 +598,8 @@ collections, and ordinary algorithms belong in libraries.
 - Arithmetic that wraps on purpose: `#wrapping(expr)`.
 - Layout and reflection: `#sizeof`, `#alignof`, `#offsetof`, and `#typeof`.
 - Integer limits: `#max` and `#min`.
-- Representation and pointers: `#len`, `#slice` and `#init`.
+- Representation and pointers: `#slice` and `#init`.
+- Ownership: `#take(&value)` moves a `nocopy` value out and leaves `value` fresh.
 - Validation and termination: compile-time `#assert` and runtime `#panic`.
 - Build input and OS boundary: `#load` and `#syscall`.
 - Iteration: `#reverse` and `#step`, valid only in a `for` iterable.
@@ -546,7 +630,7 @@ operations, such as `#cast(*T, memory).field`. The old `#cast(T) value` and
 
 
 `#sizeof(type_or_value)` and `#alignof(type_or_value)` return `usize` constants without evaluating
-value operands. `#len` accepts arrays and slices. `#cast(T, value)` performs explicit numeric conversion
+value operands. `#cast(T, value)` performs explicit numeric conversion
 or compatible pointer conversion; explicit integer-pointer casts serve OS ABI boundaries. Narrowing follows destination representation. `#bitcast(T, value)`
 requires numbers of equal size; it never takes pointers.
 `#max(T)` and `#min(T)` are the largest and smallest values of integer type `T`, as constants of
@@ -556,7 +640,9 @@ Linux x86-64. It does not depend on `std`. The number may be a named constant: `
 and `std/os/macos/sys` name each call std makes, as in `#syscall(sys.Getpid)`.
 `#offsetof(Type, field)` is a field's byte offset as a `usize` constant.
 `#init(pointer)` is a statement that sets `*T` to a fresh `T`, as a declaration without an
-initializer would: zero, then field defaults. It works for every type.
+initializer would: zero, then field defaults. It works for every type. `#take(&value)` returns
+`value` and then does `#init(&value)`; it is how a `nocopy` value changes owner.
+`#len(x)` and `#instance(f, T)` were removed; write `x.len` and `f<T>`.
 `#assert(condition, "message")` fails compilation when a constant condition is false, at top level
 or in a function body.
 `#load("file")` embeds a file's bytes as a `[]const u8`; the path is relative to the module directory and may not contain `..`.
@@ -592,12 +678,16 @@ is not a supported-feature claim:
 | Local type alias inside a function | Reserved; diagnosed as unsupported |
 | Enum declaration-order tags | Supported |
 | Explicit enum values | Supported for enums without payloads |
-| `.Variant` without the enum type | Not planned; write `Enum.Variant` |
+| `.Variant` where one enum type is expected | Supported |
 | `.{ ... }` without the struct type | Removed; write `Type{ ... }` |
-| Several imports in one `use`, comma-separated | Supported |
-| Optional import alias followed by a new global | Supported; alias stays on the import line |
+| Several imports in one `use`, comma-separated | Supported, each alias before its path |
+| Import alias after the path, `use "std/fs" fs` | Removed; write `use fs "std/fs"` |
+| `Variant: T` payloads, `Variant name =>` bindings | Removed; write `Variant(T)` and `Variant(name) =>` |
+| `$T`, `T: type`, `Box(T)` generics, `#instance` | Removed; write `<T>` |
+| Trailing-dot floats such as `2.` | Removed; write `2.0` |
+| `#len(x)` | Removed; write `x.len` |
 
-`tests/expect/` checks the reserved forms (`bare-variant.dyn`, `local-type-alias.dyn`). See
+`tests/expect/` checks these forms (`bare-variant.dyn`, `local-type-alias.dyn`). See
 [toolchain and grammar provenance](tools.md) for generation/release checks.
 
 ## Build modes and syntax stability

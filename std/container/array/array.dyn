@@ -85,7 +85,7 @@ pub fn get<T>(a: *const Array<T>, index: usize) *T {
 }
 
 // The last element, removed, or the zero value when the array is empty.
-// Check #len(a.items) first where empty is possible.
+// Check a.items.len first where empty is possible.
 pub fn pop<T>(a: *Array<T>) T {
   result: T
   count := a.items.len

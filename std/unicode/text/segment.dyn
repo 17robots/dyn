@@ -148,7 +148,7 @@ fn mid_num_q(class: u8) bool {
   return class == WMidNum || class == WMidNumLet || class == WSingleQuote
 }
 
-// Word boundaries as byte offsets, excluding 0 and including #len(text) when
+// Word boundaries as byte offsets, excluding 0 and including text.len when
 // text is not empty. Invalid UTF-8 fails with Invalid at its offset and
 // allocates nothing.
 pub fn word_breaks(arena: *mem.Arena, text: []const u8) []usize!parse.ParseErr {
@@ -399,7 +399,7 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
 }
 
 // Line break opportunities as byte offsets where a line may start, excluding
-// 0. The last entry is #len(text) and is always mandatory. Mandatory breaks
+// 0. The last entry is text.len and is always mandatory. Mandatory breaks
 // follow hard line breaks (BK, CR, LF, NL).
 // Invalid UTF-8 fails as for word_breaks.
 pub fn line_breaks(arena: *mem.Arena, text: []const u8) []LineBreak!parse.ParseErr {

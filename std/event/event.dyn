@@ -61,7 +61,7 @@ fn slot_start(queue: *const Queue, descriptor: isize) usize {
   hashed := #wrapping(#cast(u64, descriptor) * 11400714819323198485)
   return #cast(usize, hashed >> 32) & (queue.table.len - 1)
 }
-// Table slot holding descriptor, or #len(queue.table).
+// Table slot holding descriptor, or queue.table.len.
 fn find_slot(queue: *const Queue, descriptor: isize) usize {
   mask := queue.table.len - 1
   at := slot_start(queue, descriptor)
