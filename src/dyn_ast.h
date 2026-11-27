@@ -130,23 +130,30 @@ typedef enum {
 } DynOperator;
 
 typedef struct {
-  DynExprKind kind;
+  uint8_t kind;
+  uint8_t op;
+  bool boolean : 1;
+  bool boolean_reflection : 1; /* a #typeof(T) result: its fields are compile-time values */
+  bool instance : 1; /* f<T>: names a generic instance as a function value */
+  bool wrap : 1; /* Set during lowering for integer +, -, *, unary - and <<. */
   DynType type;
   DynSpan span;
-  DynOperator op;
   DynExprId left, right;
-  uint64_t integer;
-  double floating;
-  bool boolean;
-  bool boolean_reflection; /* a #typeof(T) result: its fields are compile-time values */
-  bool instance; /* f<T>: names a generic instance as a function value */
-  uint32_t item_start, item_count, type_arg_count;
-  /* For DYN_EXPR_CATCH block form: optional error binding name and local id. */
-  DynSpan catch_name;
-  uint32_t catch_local;
-  /* Set during lowering for integer +, -, *, unary - and <<. */
-  bool wrap;
+  uint32_t item_start, item_count;
+  union {
+    uint64_t integer;
+    double floating;
+    DynSpan catch_name;
+  };
+  /* type_arg_count for calls/structs/functions; catch_local for DYN_EXPR_CATCH block form. */
+  union {
+    uint32_t type_arg_count;
+    uint32_t catch_local;
+  };
 } DynAstExpr;
+_Static_assert(sizeof(DynAstExpr) <= 48, "DynAstExpr grew past 48 bytes");
+_Static_assert(DYN_EXPR_TAKE <= UINT8_MAX, "DynExprKind no longer fits uint8_t");
+_Static_assert(DYN_OP_SHR <= UINT8_MAX, "DynOperator no longer fits uint8_t");
 typedef struct {
   DynSpan name;
   DynExprId expression;
@@ -303,27 +310,26 @@ typedef enum {
   DYN_STMT_ERRDEFER
 } DynStmtKind;
 typedef struct {
-  DynStmtKind kind;
-  DynSpan span, name, label, control_label;
+  uint8_t kind;
+  uint8_t assignment_op;
+  /* Range for-in stores the first bound in target and the last in expression. */
+  bool defer_block : 1, for_pointer : 1, is_const : 1, for_range : 1, for_inclusive : 1, for_reverse : 1;
+  /* for x, i in xs: the index local is local_id + 1. */
+  bool for_index : 1;
+  /* `{ ... }` as a statement: an if on literal true that ends when its body does. */
+  bool bare_block : 1;
+  /* for i in #step(range, n): step holds n until sema rewrites the loop. */
+  bool for_step : 1;
+  /* A for loop that some break leaves; sema sets it. */
+  bool for_broken : 1;
   DynType declared_type;
-  DynExprId expression, target;
-  DynOperator assignment_op;
+  DynSpan span, name, label, control_label, index_name;
+  DynExprId expression, target, step;
   uint32_t local_id;
   uint32_t body_start, body_count, else_start, else_count, loop_depth, loop_id,
       target_loop_id, case_arm_start, case_arm_count;
-  /* Range for-in stores the first bound in target and the last in expression. */
-  bool defer_block, for_pointer, is_const, for_range, for_inclusive, for_reverse;
-  /* for x, i in xs: the index local is local_id + 1. */
-  bool for_index;
-  /* `{ ... }` as a statement: an if on literal true that ends when its body does. */
-  bool bare_block;
-  /* for i in #step(range, n): step holds n until sema rewrites the loop. */
-  bool for_step;
-  /* A for loop that some break leaves; sema sets it. */
-  bool for_broken;
-  DynExprId step;
-  DynSpan index_name;
 } DynAstStmt;
+_Static_assert(DYN_STMT_ERRDEFER <= UINT8_MAX, "DynStmtKind no longer fits uint8_t");
 /* A text case with more string patterns than this dispatches through integer
    cases on its length and chosen bytes instead of testing each pattern in
    turn. Sema then gives it a second hidden u32 local, local_id + 1, that holds

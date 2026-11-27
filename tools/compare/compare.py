@@ -105,7 +105,7 @@ def write_dyn(root, modules, roots):
         for index, (loops, (limit, modulus), calls) in enumerate(functions):
             out += [f'fn f{index}(s: *State, a: i64) i64 {{', '  t: i64 = a']
             for bound, factor in loops:
-                out += [f'  for i in 0..{bound} {{', f'    t += s.values[i % #len(s.values)] * {factor} + #cast(i64, i)', '  }']
+                out += [f'  for i in 0..{bound} {{', f'    t += s.values[i % s.values.len] * {factor} + #cast(i64, i)', '  }']
             out += [f'  if t > {limit} {{', '    s.hits += 1', f'    t = t % {modulus}', '  } else {', '    s.misses += 1', '  }']
             out += [f'  t += f{c}(s, t % 17)' for c in calls]
             out += ['  return t', '}', '']

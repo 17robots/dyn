@@ -18,12 +18,15 @@ fn sift<T>(values: []T, root_value, length: usize) {
 fn insertion<T>(values: []T) {
   for i in 1..values.len {
     value := values[i]
-    j := i
-    for j > 0 && value < values[j - 1] {
-      values[j] = values[j - 1]
-      j -= 1
+    if value < values[i - 1] {
+      values[i] = values[i - 1]
+      j := i - 1
+      for j > 0 && value < values[j - 1] {
+        values[j] = values[j - 1]
+        j -= 1
+      }
+      values[j] = value
     }
-    values[j] = value
   }
 }
 
@@ -44,73 +47,351 @@ fn heap<T>(values: []T) {
   }
 }
 
-fn introsort<T>(input: []T, depth_value: usize) {
-  values := input
-  depth := depth_value
-  for values.len >= 16 {
-    if depth == 0 {
-      heap(values)
-      return
+fn sort2<T>(values: []T, a, b: usize) {
+  va := values[a]
+  vb := values[b]
+  lo := va
+  hi := vb
+  if vb < va {
+    lo = vb
+    hi = va
+  }
+  values[a] = lo
+  values[b] = hi
+}
+
+fn sort3<T>(values: []T, a, b, c: usize) {
+  sort2(values, a, b)
+  sort2(values, b, c)
+  sort2(values, a, b)
+}
+
+fn sort4<T>(values: []T, a, b, c, d: usize) {
+  sort2(values, a, b)
+  sort2(values, c, d)
+  sort2(values, a, c)
+  sort2(values, b, d)
+  sort2(values, b, c)
+}
+
+fn sort5<T>(values: []T) {
+  if values.len < 5 { return }
+  sort2(values, 0, 1)
+  sort2(values, 3, 4)
+  sort2(values, 2, 4)
+  sort2(values, 2, 3)
+  sort2(values, 0, 3)
+  sort2(values, 0, 2)
+  sort2(values, 1, 4)
+  sort2(values, 1, 3)
+  sort2(values, 1, 2)
+}
+
+fn sort6<T>(values: []T) {
+  if values.len < 6 { return }
+  sort2(values, 1, 2)
+  sort2(values, 4, 5)
+  sort2(values, 0, 2)
+  sort2(values, 3, 5)
+  sort2(values, 0, 1)
+  sort2(values, 3, 4)
+  sort2(values, 2, 5)
+  sort2(values, 0, 3)
+  sort2(values, 1, 4)
+  sort2(values, 2, 4)
+  sort2(values, 1, 3)
+  sort2(values, 2, 3)
+}
+
+fn sort7<T>(values: []T) {
+  if values.len < 7 { return }
+  sort2(values, 1, 2)
+  sort2(values, 3, 4)
+  sort2(values, 5, 6)
+  sort2(values, 0, 2)
+  sort2(values, 3, 5)
+  sort2(values, 4, 6)
+  sort2(values, 0, 1)
+  sort2(values, 4, 5)
+  sort2(values, 2, 6)
+  sort2(values, 0, 4)
+  sort2(values, 1, 5)
+  sort2(values, 0, 3)
+  sort2(values, 2, 5)
+  sort2(values, 1, 3)
+  sort2(values, 2, 4)
+  sort2(values, 2, 3)
+}
+
+fn sort8<T>(values: []T) {
+  if values.len < 8 { return }
+  sort2(values, 0, 1)
+  sort2(values, 2, 3)
+  sort2(values, 0, 2)
+  sort2(values, 1, 3)
+  sort2(values, 1, 2)
+  sort2(values, 4, 5)
+  sort2(values, 6, 7)
+  sort2(values, 4, 6)
+  sort2(values, 5, 7)
+  sort2(values, 5, 6)
+  sort2(values, 0, 4)
+  sort2(values, 1, 5)
+  sort2(values, 2, 6)
+  sort2(values, 3, 7)
+  sort2(values, 2, 4)
+  sort2(values, 3, 5)
+  sort2(values, 1, 2)
+  sort2(values, 3, 4)
+  sort2(values, 5, 6)
+}
+
+fn merge_small<T>(values: []T, mid: usize) {
+  n := values.len
+  if n > 16 || mid == 0 || mid >= n { return }
+  buf: [16]T
+  l1: usize = 0
+  r1 := mid
+  for k in 0..mid {
+    vl := values[l1]
+    vr := values[r1]
+    take_r := vr < vl
+    picked := vl
+    next_l1 := l1 + 1
+    next_r1 := r1
+    if take_r {
+      picked = vr
+      next_l1 = l1
+      next_r1 = r1 + 1
     }
-    depth -= 1
-    last := values.len - 1
-    middle := values.len / 2
-    if values[middle] < values[0] {
-      temporary := values[0]
-      values[0] = values[middle]
-      values[middle] = temporary
+    l1 = next_l1
+    r1 = next_r1
+    buf[k] = picked
+  }
+  l2_p1 := mid
+  r2 := n - 1
+  for k in 0..mid {
+    bl := values[l2_p1 - 1]
+    br := values[r2]
+    take_l := br < bl
+    bpicked := br
+    next_l2 := l2_p1
+    next_r2 := r2 - 1
+    if take_l {
+      bpicked = bl
+      next_l2 = l2_p1 - 1
+      next_r2 = r2
     }
-    if values[last] < values[middle] {
-      temporary := values[middle]
-      values[middle] = values[last]
-      values[last] = temporary
+    l2_p1 = next_l2
+    r2 = next_r2
+    buf[n - 1 - k] = bpicked
+  }
+  if mid * 2 < n {
+    mid_val := values[r1]
+    if l1 < mid && l1 + 1 == l2_p1 {
+      mid_val = values[l1]
     }
-    if values[middle] < values[0] {
-      temporary := values[0]
-      values[0] = values[middle]
-      values[middle] = temporary
-    }
-    pivot := values[middle]
-    lower: usize = 0
-    cursor: usize = 0
-    upper := values.len
-    // [0, lower) is below pivot; [lower, cursor) is equivalent;
-    // [upper, length) is above pivot. Only < is required.
-    for cursor < upper {
-      if values[cursor] < pivot {
-        temporary := values[lower]
-        values[lower] = values[cursor]
-        values[cursor] = temporary
-        lower += 1
-        cursor += 1
-      } else if pivot < values[cursor] {
-        upper -= 1
-        temporary := values[upper]
-        values[upper] = values[cursor]
-        values[cursor] = temporary
-      } else {
-        cursor += 1
-      }
-    }
-    // Recurse only into the smaller side, bounding stack depth.
-    if lower < values.len - upper {
-      introsort(values[..lower], depth)
-      values = values[upper..]
-    } else {
-      introsort(values[upper..], depth)
-      values = values[..lower]
-    }
+    buf[mid] = mid_val
+  }
+  for i in 0..n {
+    values[i] = buf[i]
+  }
+}
+
+fn sort_small<T>(values: []T) {
+  n := values.len
+  if n <= 1 { return }
+  if n == 2 {
+    sort2(values, 0, 1)
+    return
+  }
+  if n == 3 {
+    sort3(values, 0, 1, 2)
+    return
+  }
+  if n == 4 {
+    sort4(values, 0, 1, 2, 3)
+    return
+  }
+  if n == 5 {
+    sort5(values)
+    return
+  }
+  if n == 6 {
+    sort6(values)
+    return
+  }
+  if n == 7 {
+    sort7(values)
+    return
+  }
+  if n == 8 {
+    sort8(values)
+    return
+  }
+  if n <= 16 {
+    mid := n / 2
+    sort_small(values[..mid])
+    sort_small(values[mid..])
+    merge_small(values, mid)
+    return
   }
   insertion(values)
 }
 
-// Sorts in place without allocating. Introsort uses three-way partitioning,
-// insertion sort for small slices, and a heap fallback for O(n log n) worst
-// case comparisons. Stack usage is O(log n). Not stable. Elements must support
-// < with a strict weak ordering; unordered floating NaNs have no sort order.
+// Moves all elements equivalent to pivot (i.e. !(pivot < x)) to the left.
+// Returns the index of the first element strictly greater than pivot.
+fn partition_equal<T>(values: []T, pivot: T) usize {
+  l: usize = 0
+  r := values.len
+  for {
+    for l < r && !(pivot < values[l]) {
+      l += 1
+    }
+    for l < r && pivot < values[r - 1] {
+      r -= 1
+    }
+    if l >= r { break }
+    r -= 1
+    tmp := values[l]
+    values[l] = values[r]
+    values[r] = tmp
+    l += 1
+  }
+  return l
+}
+
+// Cyclic branchless Lomuto partition (Alexandrescu / ipnsort): avoids both
+// data-dependent branches and the store-to-load forwarding stall on values[w]
+// when elem >= pivot.
+fn partition_small<T>(values: []T) usize {
+  pivot := values[0]
+  length := values.len
+  if length <= 1 { return 0 }
+  gap_val := values[1]
+  left: usize = 1
+  for right in 2..length {
+    elem := values[right]
+    moved := values[left + 1]
+    values[left] = elem
+    to_right := elem
+    next_left := left
+    if elem < pivot {
+      to_right = moved
+      next_left = left + 1
+    }
+    values[right] = to_right
+    left = next_left
+  }
+  values[left] = gap_val
+  if gap_val < pivot {
+    left += 1
+  }
+  pos := left - 1
+  values[0] = values[pos]
+  values[pos] = pivot
+  return pos
+}
+
+fn choose_ninther<T>(values: []T) {
+  length := values.len
+  if length < 128 { return }
+  mid := length / 2
+  step := length / 8
+  sort3(values, 0, step, step * 2)
+  sort3(values, mid - step, mid, mid + step)
+  sort3(values, length - 1 - step * 2, length - 1 - step, length - 1)
+  sort3(values, step, mid, length - 1 - step)
+  tmp := values[0]
+  values[0] = values[mid]
+  values[mid] = tmp
+}
+
+fn pdqsort<T>(input: []T, bad_limit: usize, is_leftmost: bool, pred_value: T) {
+  values := input
+  bad_allowed := bad_limit
+  leftmost := is_leftmost
+  pred := pred_value
+  for values.len > 16 {
+    if bad_allowed == 0 {
+      heap(values)
+      return
+    }
+    length := values.len
+    if length >= 128 {
+      choose_ninther(values)
+    } else {
+      sort3(values, length / 2, 0, length - 1)
+    }
+    if !leftmost && !(pred < values[0]) {
+      eq := partition_equal(values, values[0])
+      values = values[eq..]
+      leftmost = false
+      continue
+    }
+    pivot := values[0]
+    pivot_pos := partition_small(values)
+    left_len := pivot_pos
+    right_len := length - 1 - pivot_pos
+    highly_unbalanced := left_len < length / 8 || right_len < length / 8
+    if highly_unbalanced {
+      if bad_allowed == 0 {
+        heap(values)
+        return
+      }
+      bad_allowed -= 1
+      if left_len > 24 {
+        t := values[0]
+        values[0] = values[left_len / 4]
+        values[left_len / 4] = t
+        t2 := values[pivot_pos - 1]
+        values[pivot_pos - 1] = values[pivot_pos - left_len / 4]
+        values[pivot_pos - left_len / 4] = t2
+      }
+      if right_len > 24 {
+        rstart := pivot_pos + 1
+        t := values[rstart]
+        values[rstart] = values[rstart + right_len / 4]
+        values[rstart + right_len / 4] = t
+        t2 := values[length - 1]
+        values[length - 1] = values[length - 1 - right_len / 4]
+        values[length - 1 - right_len / 4] = t2
+      }
+    }
+    if left_len < right_len {
+      pdqsort(values[..pivot_pos], bad_allowed, leftmost, pred)
+      values = values[pivot_pos + 1..]
+      leftmost = false
+      pred = pivot
+    } else {
+      pdqsort(values[pivot_pos + 1..], bad_allowed, false, pivot)
+      values = values[..pivot_pos]
+    }
+  }
+  sort_small(values)
+}
+
+fn introsort<T>(input: []T, depth_value: usize) {
+  if input.len <= 16 {
+    sort_small(input)
+    return
+  }
+  pdqsort(input, depth_value, true, input[0])
+}
+
+// Sorts in place without allocating. Uses pattern-defeating branchless
+// cyclic Lomuto quicksort with branchless small-sort networks and merge,
+// linear handling of monotone and duplicate-heavy inputs, and a heap
+// fallback for O(n log n) worst-case comparisons. Stack usage is O(log n).
+// Not stable. Elements must support < with a strict weak ordering; unordered
+// floating NaNs have no sort order.
 pub fn sort<T>(values: []T) {
   #assert(#typeof(T).kind == TypeKind.Integer || #typeof(T).kind == TypeKind.Float ||
       #typeof(T).kind == TypeKind.Pointer, "sort.sort: elements must support <; use sort.sort_by for other types")
+  if values.len <= 16 {
+    sort_small(values)
+    return
+  }
   // Stop scanning as soon as both monotone orders are disproved. Random
   // inputs pay only a short prefix; already ordered slices take linear time.
   ascending := true
@@ -139,12 +420,12 @@ pub fn sort<T>(values: []T) {
     return
   }
   remaining := values.len
-  depth: usize = 0
+  bad_allowed: usize = 0
   for remaining > 1 {
-    depth += 2
+    bad_allowed += 1
     remaining /= 2
   }
-  introsort(values, depth)
+  pdqsort(values, bad_allowed, true, values[0])
 }
 
 // Binary search in sorted values: the index of target, or len(values) when it

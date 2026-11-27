@@ -22,11 +22,13 @@ _start:
 .type dyn_panic,%function
 dyn_panic:
     stp x0, x1, [sp, #-16]!
+#ifndef DYN_RELEASE
     // The trace begins at the caller: its return address and frame pointer.
     mov x0, x30
     mov x1, x29
     bl dyn_trace_capture
     ldp x0, x1, [sp]
+#endif
     bl dyn_unwind_begin
     ldp x0, x1, [sp], #16
     cbz x1, 1f

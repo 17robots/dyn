@@ -14,6 +14,9 @@
 #include "native_asm.h"
 #include <assert.h>
 #include <limits.h>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -115,6 +118,9 @@ static int codegen_prepare(const DynSource *source,
     return 2;
   }
   dyn_ast_program_free(&ast);
+#ifdef __GLIBC__
+  malloc_trim(0);
+#endif
   if (!local_facts_build(ir)) {
     dyn_ir_free(ir);
     return 2;

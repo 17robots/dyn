@@ -1,4 +1,3 @@
-use memory "std/mem"
 use format "std/fmt"
 // Byte streams. A Reader or Writer is a data pointer and one function that
 // fails with an IoErr. Adapters borrow their state and never own or close it.
@@ -93,11 +92,17 @@ pub fn write(writer: Writer, source: []const u8) !IoErr {
 }
 
 fn print_value(writer: Writer, value: any) !IoErr {
-  storage: [64 + memory.ArenaBufferOverhead]u8
-  scratch := memory.arena_from_buffer(storage[..])
+  storage: [64]u8
+  buf := format.buffer(storage[..])
   case value {
-    f32(item) => { try write(writer, format.f64_decimal(scratch, item, 6)) }
-    f64(item) => { try write(writer, format.f64_decimal(scratch, item, 6)) }
+    f32(item) => {
+      format.write_f64(&buf, item)
+      try write(writer, format.bytes(&buf))
+    }
+    f64(item) => {
+      format.write_f64(&buf, item)
+      try write(writer, format.bytes(&buf))
+    }
     bool(item) => {
       if item {
         try write(writer, "true")
@@ -105,16 +110,46 @@ fn print_value(writer: Writer, value: any) !IoErr {
         try write(writer, "false")
       }
     }
-    i8(item) => { try write(writer, format.i64_decimal(scratch, item)) }
-    i16(item) => { try write(writer, format.i64_decimal(scratch, item)) }
-    i32(item) => { try write(writer, format.i64_decimal(scratch, item)) }
-    i64(item) => { try write(writer, format.i64_decimal(scratch, item)) }
-    isize(item) => { try write(writer, format.i64_decimal(scratch, item)) }
-    u8(item) => { try write(writer, format.u64_decimal(scratch, item)) }
-    u16(item) => { try write(writer, format.u64_decimal(scratch, item)) }
-    u32(item) => { try write(writer, format.u64_decimal(scratch, item)) }
-    u64(item) => { try write(writer, format.u64_decimal(scratch, item)) }
-    usize(item) => { try write(writer, format.u64_decimal(scratch, item)) }
+    i8(item) => {
+      format.write_i64(&buf, item)
+      try write(writer, format.bytes(&buf))
+    }
+    i16(item) => {
+      format.write_i64(&buf, item)
+      try write(writer, format.bytes(&buf))
+    }
+    i32(item) => {
+      format.write_i64(&buf, item)
+      try write(writer, format.bytes(&buf))
+    }
+    i64(item) => {
+      format.write_i64(&buf, item)
+      try write(writer, format.bytes(&buf))
+    }
+    isize(item) => {
+      format.write_i64(&buf, item)
+      try write(writer, format.bytes(&buf))
+    }
+    u8(item) => {
+      format.write_u64(&buf, item)
+      try write(writer, format.bytes(&buf))
+    }
+    u16(item) => {
+      format.write_u64(&buf, item)
+      try write(writer, format.bytes(&buf))
+    }
+    u32(item) => {
+      format.write_u64(&buf, item)
+      try write(writer, format.bytes(&buf))
+    }
+    u64(item) => {
+      format.write_u64(&buf, item)
+      try write(writer, format.bytes(&buf))
+    }
+    usize(item) => {
+      format.write_u64(&buf, item)
+      try write(writer, format.bytes(&buf))
+    }
     []u8(item) => { try write(writer, item) }
     []const u8(item) => { try write(writer, item) }
     IoErr(item) => { try write(writer, text(item)) }

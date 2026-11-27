@@ -23,6 +23,30 @@ _start:
 .global dyn_panic
 .type dyn_panic,@function
 dyn_panic:
+#ifdef DYN_RELEASE
+    # Release panics run the panic handler, report the message, and exit
+    # without dumping a stack trace, so avoid pulling trace/unwind tables in.
+    push %rdi
+    push %rsi
+    sub $8, %rsp
+    call dyn_unwind_begin
+    add $8, %rsp
+    pop %rsi
+    pop %rdi
+    test %rsi, %rsi
+    jz .Ldyn_panic_exit
+    mov %rsi, %rdx
+    mov %rdi, %rsi
+    mov $2, %edi
+    mov $1, %eax
+    syscall
+    lea .Ldyn_panic_newline(%rip), %rsi
+    mov $1, %edx
+    mov $2, %edi
+    mov $1, %eax
+    syscall
+    jmp .Ldyn_panic_exit
+#else
     # Capture the caller's registers so the trace starts at the panicking
     # frame, run the panic handler, then report and exit.
     push %rdi
@@ -43,21 +67,6 @@ dyn_panic:
     add $88, %rsp
     pop %rsi
     pop %rdi
-#ifdef DYN_RELEASE
-    test %rsi, %rsi
-    jz .Ldyn_panic_exit
-    mov %rsi, %rdx
-    mov %rdi, %rsi
-    mov $2, %edi
-    mov $1, %eax
-    syscall
-    lea .Ldyn_panic_newline(%rip), %rsi
-    mov $1, %edx
-    mov $2, %edi
-    mov $1, %eax
-    syscall
-    jmp .Ldyn_panic_exit
-#else
     test %rsi, %rsi
     jz .Ldyn_panic_stack
     mov %rsi, %rdx

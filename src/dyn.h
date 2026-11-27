@@ -249,6 +249,7 @@ void dyn_source_free(DynSource *source);
 void dyn_source_position(const DynSource *, size_t, const char **, const char **, size_t *, size_t *);
 void dyn_source_location(const DynSource *source, size_t byte, const char **path, unsigned *line, unsigned *column);
 DynCheckResult dyn_check_sources(const DynSources *sources, const char *main_path, bool require_main);
+DynCheckResult dyn_check_sources_owned(DynSources *sources, const char *main_path, bool require_main);
 /* dyn vet: dyn_check_sources plus the cross-target cast confirmation
    (DynVetCasts); input is the module directory to reload per target. */
 DynCheckResult dyn_vet_sources(const DynSources *sources, const char *main_path, const char *input);

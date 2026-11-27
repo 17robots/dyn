@@ -18,12 +18,14 @@ dyn_panic:
     addi sp, sp, -16
     sd a0, 0(sp)
     sd a1, 8(sp)
+#ifndef DYN_RELEASE
     // The trace begins at the caller: its return address and frame pointer.
     mv a0, ra
     mv a1, s0
     call dyn_trace_capture
     ld a0, 0(sp)
     ld a1, 8(sp)
+#endif
     call dyn_unwind_begin
     ld a1, 0(sp)
     ld a2, 8(sp)

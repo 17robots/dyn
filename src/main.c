@@ -890,7 +890,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
   }
   DynCheckResult checked = {0};
   if (vet) checked = dyn_vet_sources(&sources, main_path, options->input);
-  else if (!build) checked = dyn_check_sources(&sources, main_path, false);
+  else if (!build) checked = dyn_check_sources_owned(&sources, main_path, false);
   if (checked.errors || vet_findings) {
     dyn_sources_free(&sources);
     free(main_path);
@@ -975,6 +975,8 @@ static int execute_command(DynOptions *options, const char *compiler) {
   if (!restored) {
     DynSource module_source = {0};
     result = dyn_sources_merge(&sources, main_path, &module_source);
+    if (!result && (!cacheable || options->no_cache))
+      dyn_sources_free(&sources);
     module_source.context = context;
     DynIrProgram prepared;
     bool have_ir = false;

@@ -19,6 +19,23 @@ DynCheckResult dyn_check_sources(const DynSources *sources,
   return (DynCheckResult){result.has_main, result.main_valid, result.errors};
 }
 
+DynCheckResult dyn_check_sources_owned(DynSources *sources,
+                                       const char *main_path, bool require_main) {
+  DynSource merged = {0};
+  if (dyn_sources_merge(sources, main_path, &merged))
+    return (DynCheckResult){.errors = 1};
+  dyn_sources_free(sources);
+  DynAstProgram ast = {0};
+  DynAnalysisResult result =
+      dyn_analyze(&merged, &ast,
+                  (DynAnalysisOptions){.main_path = main_path,
+                                       .require_main = require_main,
+                                       .lazy_library = true});
+  dyn_ast_program_free(&ast);
+  dyn_source_free(&merged);
+  return (DynCheckResult){result.has_main, result.main_valid, result.errors};
+}
+
 static void vet_ignore(const char *severity, const char *path, unsigned line, unsigned column,
                        unsigned end_line, unsigned end_column, const char *message, void *data) {
   (void)severity, (void)path, (void)line, (void)column, (void)end_line, (void)end_column,

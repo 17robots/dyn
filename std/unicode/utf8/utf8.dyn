@@ -68,6 +68,17 @@ pub fn codepoint_count(text: []const u8) usize {
   offset: usize = 0
   total: usize = 0
   for offset < text.len {
+    // Eight ASCII bytes at a time: none has its high bit set.
+    if text.len - offset >= 8 && (binary.load_u64_le(text[offset..offset + 8]) & 0x8080808080808080) == 0 {
+      offset += 8
+      total += 8
+      continue
+    }
+    if text[offset] < 128 {
+      offset += 1
+      total += 1
+      continue
+    }
     decoded := decode(text, offset)
     if decoded.valid {
       offset += decoded.width
