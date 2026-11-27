@@ -174,6 +174,10 @@ static void lsp_binding_index(LspUsage *usage) {
             ? ast->globals[i - ast->local_count].name
             : ast->functions[i - ast->local_count - ast->global_count].name;
     LspBinding *binding = &usage->bindings[i];
+    if (span.end_byte <= span.start_byte) {
+      binding->path = "";
+      continue;
+    }
     dyn_source_location(&usage->semantic.source, span.start_byte,
                         &binding->path, &binding->line, &binding->column);
     binding->path = binding->path ? lsp_file_path(binding->path) : "";
@@ -200,7 +204,12 @@ static void lsp_binding_index(LspUsage *usage) {
     else if (!ast->expansions[i].global && target < ast->local_count)
       usage->bindings[target].used = true;
   }
-  qsort(usage->bindings, count, sizeof(*usage->bindings), lsp_binding_compare);
+  size_t live = 0;
+  for (size_t i = 0; i < count; ++i)
+    if (usage->bindings[i].path[0])
+      usage->bindings[live++] = usage->bindings[i];
+  usage->binding_count = live;
+  qsort(usage->bindings, live, sizeof(*usage->bindings), lsp_binding_compare);
 }
 
 static LspUsage lsp_usage_build(LspDocument *documents, size_t count,
@@ -290,16 +299,22 @@ static bool lsp_binding_used(const LspUsage *usage, LspDocument *document,
   size_t first = 0, end = usage->binding_count;
   while (first < end) {
     size_t middle = first + (end - first) / 2;
-    int order = lsp_binding_compare(&usage->bindings[middle], &key);
-    if (!order)
-      return usage->bindings[middle].used;
-    if (order < 0)
+    if (lsp_binding_compare(&usage->bindings[middle], &key) < 0)
       first = middle + 1;
     else
       end = middle;
   }
-  return true; /* No resolved declaration is evidence against an unused warning.
-                */
+  if (first == usage->binding_count ||
+      lsp_binding_compare(&usage->bindings[first], &key) != 0)
+    return true; /* No resolved declaration is evidence against an unused warning.
+                  */
+  for (size_t i = first;
+       i < usage->binding_count &&
+       lsp_binding_compare(&usage->bindings[i], &key) == 0;
+       ++i)
+    if (usage->bindings[i].used)
+      return true;
+  return false;
 }
 
 static void lsp_unused_nodes(const ExpSnapshotTree *tree, LspDocument *document,

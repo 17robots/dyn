@@ -2903,6 +2903,10 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
     a->expressions[id].left = DYN_NO_EXPR;
     if (variant == UINT32_MAX) {
       error_span(a->expressions[id].span, s, errors, "unknown enum variant");
+      /* An unknown .Variant keeps the enum it was checked against, so the
+         language server can list the variants it could have named. */
+      if (shorthand_enum)
+        a->expressions[id].integer = DYN_TYPE_ENUM_BASE + eid;
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     DynAstVariant *v = &a->variants[variant];

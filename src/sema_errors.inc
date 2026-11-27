@@ -1298,6 +1298,7 @@ static bool el_relocate_fn_locals(DynAstProgram *a, uint32_t fn_id) {
   for (uint32_t i = 0; i < old_count; ++i) {
     if (!reserve_local(a)) return false;
     a->locals[a->local_count++] = a->locals[old_start + i];
+    a->locals[old_start + i] = (DynAstLocal){0};
   }
   fn->local_start = new_start;
   if (old_count) {
@@ -1309,6 +1310,11 @@ static bool el_relocate_fn_locals(DynAstProgram *a, uint32_t fn_id) {
     if (fn->variadic && fn->variadic_local_id != UINT32_MAX &&
         fn->variadic_local_id >= old_start && fn->variadic_local_id - old_start < old_count)
       fn->variadic_local_id = fn->variadic_local_id - old_start + new_start;
+    for (size_t i = 0; i < a->expansion_count; ++i) {
+      if (!a->expansions[i].global && a->expansions[i].target >= old_start &&
+          a->expansions[i].target - old_start < old_count)
+        a->expansions[i].target = a->expansions[i].target - old_start + new_start;
+    }
     el_shift_block_locals(a, fn->body_start, fn->body_count, old_start, old_count, new_start, 0);
   }
   return true;

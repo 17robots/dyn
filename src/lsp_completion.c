@@ -60,7 +60,7 @@ static void lsp_completion_struct_fields(LspDocument *documents, size_t count,
                                          bool *comma);
 static void lsp_completion_enum_variants(LspDocument *documents, size_t count,
                                          LspDocument *requested,
-                                         const char *name, bool qualify,
+                                         const char *name, const char *prefix,
                                          char *body, size_t capacity,
                                          size_t *at, bool *comma);
 static void lsp_completion_expected_enum(LspDocument *documents, size_t count,
@@ -68,6 +68,11 @@ static void lsp_completion_expected_enum(LspDocument *documents, size_t count,
                                          size_t character, char *body,
                                          size_t capacity, size_t *at,
                                          bool *comma);
+static bool lsp_completion_shorthand_enum(LspDocument *documents, size_t count,
+                                          LspDocument *requested, size_t line,
+                                          size_t character, char *body,
+                                          size_t capacity, size_t *at,
+                                          bool *comma);
 static bool lsp_type_name(DynNode node, const char *text, char *out,
                           size_t capacity);
 static bool lsp_expected_enum_name(LspDocument *documents, size_t count,
@@ -564,12 +569,16 @@ void lsp_completion(long id, LspDocument *documents, size_t count,
         imported = true;
         break;
       }
+    if (!imported && !qualifier[0] && requested)
+      imported = lsp_completion_shorthand_enum(documents, count, requested, line,
+                                               character, body, capacity, &at,
+                                               &comma);
     if (!imported) {
       lsp_completion_expression_fields(documents, count, requested, line,
                                        character, body, capacity, &at, &comma);
       if (!comma)
         lsp_completion_enum_variants(documents, count, requested, qualifier,
-                                     false, body, capacity, &at, &comma);
+                                     "", body, capacity, &at, &comma);
       if (!comma)
         lsp_completion_fields(documents, count, qualifier, body, capacity, &at,
                               &comma);
@@ -611,8 +620,10 @@ void lsp_completion(long id, LspDocument *documents, size_t count,
     if (requested)
       lsp_completion_auto_imports(requested, word_prefix, body, capacity, &at,
                                   &comma);
-    const char *words[] = {"pub",    "type", "const", "else",
-                           "return", "true", "false", "nil"};
+    const char *words[] = {"pub",      "type",     "const", "else",
+                           "return",   "true",     "false", "nil",
+                           "try",      "catch",    "fail",  "errdefer",
+                           "nocopy",   "str",      "break", "continue"};
     for (size_t i = 0; i < sizeof(words) / sizeof(words[0]); ++i)
       at += (size_t)lsp_bounded_printf(
           body + at, capacity - at,
@@ -625,6 +636,14 @@ void lsp_completion(long id, LspDocument *documents, size_t count,
         {"#cast", "#cast(type, value) -> type", "#cast(${1:type}, ${2:value})"},
         {"#bitcast", "#bitcast(type, value) -> type",
          "#bitcast(${1:type}, ${2:value})"},
+        {"#take", "#take(&value) -> value", "#take(&${1:value})"},
+        {"#slice", "#slice(pointer, length) -> []T",
+         "#slice(${1:pointer}, ${2:length})"},
+        {"#init", "#init(pointer) -> void", "#init(${1:pointer})"},
+        {"#instance", "#instance(generic, types...)",
+         "#instance(${1:generic}, ${2:type})"},
+        {"#offset", "#offset(struct_type, field) -> usize",
+         "#offset(${1:struct_type}, ${2:field})"},
         {"#reverse", "for item in #reverse(range_or_collection)",
          "#reverse(${1:range_or_collection})"},
         {"#step", "for i in #step(first..last, step)", "#step(${1:first..last}, ${2:step})"},
@@ -645,7 +664,7 @@ void lsp_completion(long id, LspDocument *documents, size_t count,
         {"#fma", "#fma(x, y, z: f32 or f64) -> same type", "#fma(${1:x}, ${2:y}, ${3:z})"},
         {"#syscall", "#syscall(number, arguments...) -> isize",
          "#syscall(${1:number}${2:, arguments})"},
-        {"#panic", "#panic(message: []const u8) -> never",
+        {"#panic", "#panic(message: str) -> never",
          "#panic(${1:message})"},
         {"#target", "#target(condition)", "#target(${1:condition})"},
         {"#link", "#link(\\\"library\\\")", "#link(\\\"${1:library}\\\")"},
@@ -659,8 +678,9 @@ void lsp_completion(long id, LspDocument *documents, size_t count,
           comma ? "," : "", builtins[i].label, builtins[i].signature,
           builtins[i].signature, builtins[i].snippet),
           comma = true;
-    const char *labels[] = {"fn",     "main", "if",  "for",  "case",
-                            "struct", "enum", "use", "defer"};
+    const char *labels[] = {"fn",     "main", "if",       "for",   "case",
+                            "struct", "enum", "use",      "defer", "errdefer",
+                            "catch"};
     const char *snippets[] = {
         "fn ${1:name}(${2}) {\\n\\t$0\\n}",
         "fn main() {\\n\\t$0\\n}",
@@ -670,7 +690,9 @@ void lsp_completion(long id, LspDocument *documents, size_t count,
         "struct ${1:Name} {\\n\\t${2:field}: ${3:type},\\n}",
         "enum ${1:Name} {\\n\\t${2:Value},\\n}",
         "use \\\"${1:std/package}\\\"$0",
-        "defer {\\n\\t$0\\n}"};
+        "defer {\\n\\t$0\\n}",
+        "errdefer {\\n\\t$0\\n}",
+        "catch ${1:err} {\\n\\t$0\\n}"};
     for (size_t i = 0; i < sizeof(labels) / sizeof(labels[0]); ++i)
       if (!lsp_completion_has_label(body, at, labels[i], strlen(labels[i])))
         at += (size_t)lsp_bounded_printf(
@@ -703,7 +725,7 @@ static void lsp_completion_type_fields(LspSemantic *semantic, DynType type,
   for (uint32_t i = 0; i < s->field_count; ++i) {
     DynAstField *field = &semantic->ast.fields[s->field_start + i];
     char field_type[128];
-    dyn_type_format(&semantic->ast, field->type, &semantic->source, field_type,
+    lsp_type_format(semantic, field->type, field_type,
                     sizeof(field_type));
     *at += (size_t)lsp_bounded_printf(
         body + *at, capacity - *at,
@@ -985,7 +1007,7 @@ static void lsp_completion_locals(LspDocument *documents, size_t count,
       if (!visible)
         continue;
       char type[128];
-      dyn_type_format(&semantic.ast, local->type, &semantic.source, type,
+      lsp_type_format(&semantic, local->type, type,
                       sizeof(type));
       if (!lsp_completion_has_label(body, *at, name, length)) {
         *at += (size_t)lsp_bounded_printf(
@@ -1077,9 +1099,40 @@ static void lsp_completion_struct_fields(LspDocument *documents, size_t count,
   lsp_semantic_free(&semantic);
 }
 
+/* One completion item per variant of enum `index`. prefix leads each
+   insertion: "" after a typed dot, "." where the enum is expected. */
+static void lsp_completion_enum_items(LspSemantic *semantic, uint32_t index,
+                                      const char *prefix, char *body,
+                                      size_t capacity, size_t *at,
+                                      bool *comma) {
+  DynAstEnum *value = &semantic->ast.enums[index];
+  for (uint32_t j = 0; j < value->variant_count; ++j) {
+    DynAstVariant *variant = &semantic->ast.variants[value->variant_start + j];
+    size_t length = variant->name.end_byte - variant->name.start_byte;
+    const char *label = semantic->source.text + variant->name.start_byte;
+    if (variant->payload_type == DYN_TYPE_VOID)
+      *at += (size_t)lsp_bounded_printf(
+          body + *at, capacity - *at,
+          "%s{\"label\":\"%.*s\",\"kind\":20,\"detail\":\"enum "
+          "variant\",\"insertText\":\"%s%.*s\"}",
+          *comma ? "," : "", (int)length, label, prefix, (int)length, label);
+    else {
+      char type[128];
+      lsp_type_format(semantic, variant->payload_type, type, sizeof(type));
+      *at += (size_t)lsp_bounded_printf(
+          body + *at, capacity - *at,
+          "%s{\"label\":\"%.*s\",\"kind\":20,\"detail\":\"%s\","
+          "\"insertText\":\"%s%.*s(${1:value})\",\"insertTextFormat\":2}",
+          *comma ? "," : "", (int)length, label, type, prefix, (int)length,
+          label);
+    }
+    *comma = true;
+  }
+}
+
 static void lsp_completion_enum_variants(LspDocument *documents, size_t count,
                                          LspDocument *requested,
-                                         const char *name, bool qualify,
+                                         const char *name, const char *prefix,
                                          char *body, size_t capacity,
                                          size_t *at, bool *comma) {
   LspSemantic semantic =
@@ -1091,34 +1144,78 @@ static void lsp_completion_enum_variants(LspDocument *documents, size_t count,
       if (strlen(name) != n ||
           memcmp(semantic.source.text + value->name.start_byte, name, n))
         continue;
-      for (uint32_t j = 0; j < value->variant_count; ++j) {
-        DynAstVariant *variant =
-            &semantic.ast.variants[value->variant_start + j];
-        size_t length = variant->name.end_byte - variant->name.start_byte;
-        const char *label = semantic.source.text + variant->name.start_byte;
-        if (variant->payload_type == DYN_TYPE_VOID)
-          *at += (size_t)lsp_bounded_printf(
-              body + *at, capacity - *at,
-              "%s{\"label\":\"%.*s\",\"kind\":20,\"detail\":\"enum "
-              "variant\",\"insertText\":\"%s%s%.*s\"}",
-              *comma ? "," : "", (int)length, label, qualify ? name : "",
-              qualify ? "." : "", (int)length, label);
-        else {
-          char type[128];
-          dyn_type_format(&semantic.ast, variant->payload_type,
-                          &semantic.source, type, sizeof(type));
-          *at += (size_t)lsp_bounded_printf(
-              body + *at, capacity - *at,
-              "%s{\"label\":\"%.*s\",\"kind\":20,\"detail\":\"%s\","
-              "\"insertText\":\"%s%s%.*s(${1:value})\",\"insertTextFormat\":2}",
-              *comma ? "," : "", (int)length, label, type, qualify ? name : "",
-              qualify ? "." : "", (int)length, label);
-        }
-        *comma = true;
-      }
+      lsp_completion_enum_items(&semantic, i, prefix, body, capacity, at,
+                                comma);
       break;
     }
   lsp_semantic_free(&semantic);
+}
+
+/* `.` with nothing before it is the .Variant shorthand. The checker resolves
+   the enum from context (fail, case arms, ==, assignments, arguments, returns),
+   so the dot is completed by checking a probe variant in its place and reading
+   back the enum the probe was checked against. */
+static bool lsp_completion_shorthand_enum(LspDocument *documents, size_t count,
+                                          LspDocument *requested, size_t line,
+                                          size_t character, char *body,
+                                          size_t capacity, size_t *at,
+                                          bool *comma) {
+  const char *row = requested->text;
+  for (size_t i = 0; i < line && row; ++i) {
+    row = strchr(row, '\n');
+    if (row)
+      ++row;
+  }
+  if (!row)
+    return false;
+  const char *row_end = strchr(row, '\n');
+  if (!row_end)
+    row_end = row + strlen(row);
+  const char *cursor = row + (character > (size_t)(row_end - row)
+                                  ? (size_t)(row_end - row)
+                                  : character),
+             *start = cursor;
+  while (start > row && (isalnum((unsigned char)start[-1]) || start[-1] == '_'))
+    --start;
+  if (start <= row || start[-1] != '.')
+    return false;
+  const char *dot = start - 1;
+  if (dot > row && (isalnum((unsigned char)dot[-1]) || dot[-1] == '_' ||
+                    dot[-1] == ')' || dot[-1] == ']' || dot[-1] == '.' ||
+                    dot[-1] == '"' || dot[-1] == '\''))
+    return false;
+  const char marker[] = "__dyn_completion_variant";
+  const char *end = cursor;
+  while (end < row_end && (isalnum((unsigned char)*end) || *end == '_'))
+    ++end;
+  size_t before = (size_t)(start - requested->text), after = strlen(end);
+  char *patched = malloc(before + sizeof(marker) - 1 + after + 1);
+  if (!patched)
+    return false;
+  memcpy(patched, requested->text, before);
+  memcpy(patched + before, marker, sizeof(marker) - 1);
+  memcpy(patched + before + sizeof(marker) - 1, end, after + 1);
+  LspSemantic semantic =
+      lsp_semantic_project(documents, count, requested, patched);
+  free(patched);
+  bool found = false;
+  if (semantic.ok)
+    for (size_t i = 0; i < semantic.ast.expression_count && !found; ++i) {
+      DynAstExpr *e = &semantic.ast.expressions[i];
+      size_t n = e->span.end_byte - e->span.start_byte;
+      if (e->kind != DYN_EXPR_ENUM || e->type != DYN_TYPE_ERROR ||
+          n != sizeof(marker) - 1 ||
+          memcmp(semantic.source.text + e->span.start_byte, marker, n) ||
+          !dyn_type_is_enum((DynType)e->integer) ||
+          e->integer - DYN_TYPE_ENUM_BASE >= semantic.ast.enum_count)
+        continue;
+      lsp_completion_enum_items(&semantic,
+                                (uint32_t)(e->integer - DYN_TYPE_ENUM_BASE), "",
+                                body, capacity, at, comma);
+      found = true;
+    }
+  lsp_semantic_free(&semantic);
+  return found;
 }
 
 static void lsp_completion_expected_enum(LspDocument *documents, size_t count,
@@ -1129,7 +1226,7 @@ static void lsp_completion_expected_enum(LspDocument *documents, size_t count,
   char name[128];
   if (lsp_expected_enum_name(documents, count, requested, line, character, name,
                              sizeof(name)))
-    lsp_completion_enum_variants(documents, count, requested, name, true, body,
+    lsp_completion_enum_variants(documents, count, requested, name, ".", body,
                                  capacity, at, comma);
 }
 
