@@ -1,20 +1,14 @@
-use "std/fail"
 // Prepared, allocation-free KMP search. Preparation O(needle length); each
 // search O(text length). Both slices remain borrowed and immutable until reuse.
 // The table must not overlap needle storage. Re-prepare after changing either.
 pub struct Pattern { needle: []const u8, table: []const usize }
 
-// A table shorter than needle fails with Capacity and is left untouched.
-// Empty needles need no storage.
-pub fn prepare(status: *fail.Status, needle: []const u8, table: []usize) Pattern {
-  if status == nil { return prepare(&fail.Status{}, needle, table) }
-  if status.failed { return Pattern{} }
-  if #len(table) < #len(needle) {
-    fail.set(status, fail.make(fail.Kind.Capacity, "prepare search", "", "the table is shorter than the needle"))
-    return Pattern{}
-  }
+// A table shorter than needle fails and is left untouched. Empty needles
+// need no storage.
+pub fn prepare(needle: []const u8, table: []usize) Pattern! {
+  if table.len < needle.len { fail }
   matched: usize = 0
-  for index in 0..#len(needle) {
+  for index in 0..needle.len {
     if index == 0 {
       table[index] = 0
     } else {
@@ -27,23 +21,23 @@ pub fn prepare(status: *fail.Status, needle: []const u8, table: []usize) Pattern
       table[index] = matched
     }
   }
-  return Pattern{ needle: needle, table: table[..#len(needle)] }
+  return Pattern{ needle: needle, table: table[..needle.len] }
 }
 
-// First byte offset, or #len(text) on a miss. Empty needle matches at zero.
+// First byte offset, or text.len on a miss. Empty needle matches at zero.
 // No allocations.
 pub fn find(pattern: Pattern, text: []const u8) usize {
-  if #len(pattern.needle) == 0 { return 0 }
-  if #len(pattern.needle) > #len(text) { return #len(text) }
+  if pattern.needle.len == 0 { return 0 }
+  if pattern.needle.len > text.len { return text.len }
   matched: usize = 0
-  for index in 0..#len(text) {
+  for index in 0..text.len {
     for matched > 0 && text[index] != pattern.needle[matched] {
       matched = pattern.table[matched - 1]
     }
     if text[index] == pattern.needle[matched] {
       matched += 1
     }
-    if matched == #len(pattern.needle) { return index + 1 - matched }
+    if matched == pattern.needle.len { return index + 1 - matched }
   }
-  return #len(text)
+  return text.len
 }

@@ -1,15 +1,12 @@
-use "std/fail"
-use "std/io" io
-use "std/process" process
-use "std/mem" mem
+use io "std/io"
+use process "std/process"
+use mem "std/mem"
 fn main() {
   arena := mem.arena_alloc(0)
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  // Unset in the parent: an optional variable gets its own status.
-  child: fail.Status
-  child_mode := process.environment(arena, &child, "DYN_PROCESS_CHILD")
-  if !child.failed {
-    if #len(child_mode) != 3 || child_mode[0] != 'y' { #panic("child environment") }
+  // Unset in the parent.
+  child_mode := process.environment_or(arena, "DYN_PROCESS_CHILD", "")
+  if child_mode.len != 0 {
+    if child_mode.len != 3 || child_mode[0] != 'y' { #panic("child environment") }
     return
   }
   allocation := mem.arena_alloc(1024*1024)
@@ -20,9 +17,8 @@ fn main() {
   options.environment = environment[..]
   output: [8]u8
   errors: [8]u8
-  result := process.capture(allocation, &status, executable(), argv[..], options, process.CaptureOptions{timeout_milliseconds: 5000})
-  if result.exit.code != 0 || #len(result.output) != 0 || #len(result.errors) != 0 { #panic("native process capture") }
-  missing: fail.Status
-  _ = process.spawn(allocation, &missing, "no-such-dyn-process-executable", argv[..], options)
-  if !missing.failed { #panic("missing executable") }
+  result := process.capture(allocation, executable(), argv[..], options, process.CaptureOptions{timeout_milliseconds: 5000}) catch { #panic("native process capture failed") }
+  if result.exit.code != 0 || result.output.len != 0 || result.errors.len != 0 { #panic("native process capture") }
+  _ = process.spawn(allocation, "no-such-dyn-process-executable", argv[..], options) catch { return }
+  #panic("missing executable")
 }

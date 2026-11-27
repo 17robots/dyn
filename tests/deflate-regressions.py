@@ -11,18 +11,17 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
-SOURCE = r'''use "std/compress/deflate" deflate
-use "std/compress/gzip" gzip
-use "std/io" io
-use "std/fail"
-use "std/fs" fs
-use "std/mem" memory
+SOURCE = r'''use deflate "std/compress/deflate"
+use gzip "std/compress/gzip"
+use io "std/io"
+use fs "std/fs"
+use memory "std/mem"
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 struct Source { bytes: []const u8, at: usize, chunk: usize }
-fn source_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn source_read(data: rawptr, destination: []u8) usize!io.IoErr {
   source := #cast(*Source, data)
-  amount := #len(source.bytes) - source.at
-  if amount > #len(destination) { amount = #len(destination) }
+  amount := source.bytes.len - source.at
+  if amount > destination.len { amount = destination.len }
   if amount > source.chunk { amount = source.chunk }
   for i in 0..amount { destination[i] = source.bytes[source.at + i] }
   source.at += amount
@@ -37,32 +36,27 @@ fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool
   state := deflate.decoder(reader, compressed[..], history[..history_size])
   if wrapped { state = gzip.decoder(reader, compressed[..], history[..history_size]) }
   decoder := deflate.decoder_reader(&state)
-  empty: fail.Status
-  require(io.read(&empty, decoder, output[..0]) == 0 && source.at == 0, "zero destination")
+  empty := io.read(decoder, output[..0]) catch { #panic("zero destination") }
+  require(empty == 0 && source.at == 0, "zero destination")
   total: usize = 0
   for {
-    status: fail.Status
-    count := io.read(&status, decoder, output[..chunk])
-    if status.failed {
-      require(corrupt && status.failure.native != 0, "unexpected decode error")
+    count := io.read(decoder, output[..chunk]) catch {
+      require(corrupt, "unexpected decode error")
       return
     }
-    require(total + count <= #len(expected), "extra output")
+    require(total + count <= expected.len, "extra output")
     for i in 0..count { require(output[i] == expected[total + i], "output mismatch") }
     total += count
     if count == 0 {
-      require(!corrupt && total == #len(expected), "unexpected end")
+      require(!corrupt && total == expected.len, "unexpected end")
       return
     }
   }
 }
 fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, corrupt: bool) {
   owned := memory.arena_alloc(4000000)
-  encoded_file: fail.Status
-  encoded := fs.read_all(owned, &encoded_file, encoded_path, 1000000)
-  expected_file: fail.Status
-  expected := fs.read_all(owned, &expected_file, expected_path, 1000000)
-  require(!encoded_file.failed && !expected_file.failed, "read fixture")
+  encoded := fs.read_all(owned, encoded_path, 1000000) catch { #panic("cannot read a fixture") }
+  expected := fs.read_all(owned, expected_path, 1000000) catch { #panic("cannot read a fixture") }
   chunks: [5]usize = [1, 257, 258, 33025, 65536]
   for chunk in chunks {
     check(encoded, expected, wrapped, corrupt, chunk, 7, 33026)
@@ -72,22 +66,21 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
     if chunk != 1 { check(encoded, expected, wrapped, corrupt, chunk, 1024, 65536) }
   }
   if !wrapped && !corrupt {
-    inflating: fail.Status
-    inflated := deflate.inflate(owned, &inflating, encoded)
-    require(!inflating.failed && #len(inflated.value) == #len(expected), "one-shot inflate")
-    for i in 0..#len(inflated.value) { require(inflated.value[i] == expected[i], "one-shot output") }
-    destination := memory.push_bytes(owned, #len(expected))
+    inflated := deflate.inflate(owned, encoded) catch { #panic("one-shot inflate") }
+    require(inflated.value.len == expected.len, "one-shot inflate")
+    for i in 0..inflated.value.len { require(inflated.value[i] == expected[i], "one-shot output") }
+    destination := memory.push_bytes(owned, expected.len)
     result: deflate.Result
     progressive := deflate.InflateState{}
     prefix: usize = 0
-    for prefix < #len(encoded) {
+    for prefix < encoded.len {
       prefix += 1024
-      if prefix > #len(encoded) { prefix = #len(encoded) }
+      if prefix > encoded.len { prefix = encoded.len }
       result = deflate.resume(&progressive, destination, encoded[..prefix])
       require(progressive.error == 0, "linear resume error")
     }
-    require(result.done && result.written == #len(expected), "linear resume completion")
-    for i in 0..#len(destination) { require(destination[i] == expected[i], "linear resume output") }
+    require(result.done && result.written == expected.len, "linear resume completion")
+    for i in 0..destination.len { require(destination[i] == expected[i], "linear resume output") }
     tiny: [1]u8
     capacity := deflate.InflateState{}
     result = deflate.resume(&capacity, tiny[..], encoded)

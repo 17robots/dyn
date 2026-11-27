@@ -11,7 +11,6 @@
 // Run: dyn run examples/03-todo -- add learn Dyn
 
 use "std/container/array"
-use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/parse"
@@ -24,7 +23,7 @@ fn usage() i32 {
 }
 
 fn show(tasks: []const Task) {
-  if #len(tasks) == 0 {
+  if tasks.len == 0 {
     io.println("nothing to do")
     return
   }
@@ -36,9 +35,8 @@ fn show(tasks: []const Task) {
 // Task numbers start at 1 on the command line and at 0 in the array.
 // parse.u64_decimal fails instead of guessing at bad text.
 fn task_index(text: []const u8, count: usize) usize {
-  status: fail.Status
-  number := parse.u64_decimal(&status, text)
-  if status.failed || number == 0 || number > count {
+  number := parse.u64_decimal(text) catch 0
+  if number == 0 || number > count {
     return count       // the miss value: one past the end, as find does
   }
   return #cast(usize, number - 1)
@@ -46,7 +44,7 @@ fn task_index(text: []const u8, count: usize) usize {
 
 // The task named by "todo done N", or count after reporting why not.
 fn chosen(args: [][]const u8, count: usize) usize {
-  if #len(args) != 3 {
+  if args.len != 3 {
     _ = usage()
     return count
   }
@@ -57,8 +55,8 @@ fn chosen(args: [][]const u8, count: usize) usize {
   return index
 }
 
-fn remove_at(tasks: *array.Array(Task), index: usize) {
-  for i in index + 1..#len(tasks.items) {
+fn remove_at(tasks: *array.Array<Task>, index: usize) {
+  for i in index + 1..tasks.items.len {
     tasks.items[i - 1] = tasks.items[i]
   }
   _ = array.pop(tasks)
@@ -68,17 +66,16 @@ fn main() i32 {
   program := process.start()
   arena := program.arena
   args := program.args
-  if #len(args) < 2 { return usage() }
+  if args.len < 2 { return usage() }
 
   path := process.environment_or(arena, "TODO_FILE", "todo.txt")
 
-  tasks: array.Array(Task)
+  tasks: array.Array<Task>
   array.init(&tasks, arena)
-  // Loading and saving can fail; both take this status. Check it before
-  // acting on what load returned.
-  status: fail.Status
-  load(&tasks, arena, &status, path)
-  if status.failed { return report(status) }
+  // Loading can fail. catch handles it before anything acts on the list.
+  load(&tasks, arena, path) catch err {
+    return report(path, err)
+  }
 
   changed := false
   command := args[1]
@@ -88,23 +85,23 @@ fn main() i32 {
       show(tasks.items)
     }
     "add" => {
-      if #len(args) < 3 { return usage() }
+      if args.len < 3 { return usage() }
       text := strings.join(arena, args[2..], " ")
       array.push(&tasks, Task{ text: text })
-      io.println("added {}. {}", #len(tasks.items), text)
+      io.println("added {}. {}", tasks.items.len, text)
       changed = true
     }
     "done" => {
-      index := chosen(args, #len(tasks.items))
-      if index == #len(tasks.items) { return 1 }
+      index := chosen(args, tasks.items.len)
+      if index == tasks.items.len { return 1 }
       task := &tasks.items[index]     // a pointer into the array
       task.state = State.Done
       io.println("done {}. {}", index + 1, task.text)
       changed = true
     }
     "remove" => {
-      index := chosen(args, #len(tasks.items))
-      if index == #len(tasks.items) { return 1 }
+      index := chosen(args, tasks.items.len)
+      if index == tasks.items.len { return 1 }
       io.println("removed {}. {}", index + 1, tasks.items[index].text)
       remove_at(&tasks, index)
       changed = true
@@ -117,8 +114,8 @@ fn main() i32 {
           kept += 1
         }
       }
-      io.println("cleared {} done", #len(tasks.items) - kept)
-      for #len(tasks.items) > kept {
+      io.println("cleared {} done", tasks.items.len - kept)
+      for tasks.items.len > kept {
         _ = array.pop(&tasks)
       }
       changed = true
@@ -129,15 +126,19 @@ fn main() i32 {
   }
 
   if changed {
-    save(tasks.items, arena, &status, path)
-    if status.failed { return report(status) }
+    save(tasks.items, arena, path) catch err {
+      io.eprintln("todo: save {}: {}", path, err)
+      return 1
+    }
   }
   return 0
 }
 
-// Prints what failed, such as "todo: open todo.txt: permission denied".
-fn report(status: fail.Status) i32 {
-  storage: [512]u8
-  io.eprintln("todo: {}", fail.describe(storage[..], status.failure))
+// Prints what failed, such as "todo: todo.txt: permission denied".
+fn report(path: []const u8, err: io.IoErr | StoreErr) i32 {
+  case err {
+    StoreErr.BadLine(line) => { io.eprintln("todo: {}: line {} is not a task", path, line) }
+    io.IoErr(read) => { io.eprintln("todo: {}: {}", path, read) }
+  }
   return 1
 }

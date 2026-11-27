@@ -12,7 +12,6 @@
 
 use "./stack"
 use "std/bufio"
-use "std/fail"
 use "std/bytes"
 use "std/container/array"
 use "std/io"
@@ -21,14 +20,14 @@ use "std/parse"
 use "std/strings"
 
 struct Editor {
-  lines: array.Array([]const u8),
-  undo: stack.Stack(Edit),       // an instance of the generic type
-  redo: stack.Stack(Edit),
+  lines: array.Array<[]const u8>,
+  undo: stack.Stack<Edit>,       // an instance of the generic type
+  redo: stack.Stack<Edit>,
   text: *mem.Arena,              // every line's text, kept for undo
 }
 
 fn print_document(editor: *const Editor) {
-  io.println("--- {} lines, {} to undo, {} to redo", #len(editor.lines.items),
+  io.println("--- {} lines, {} to undo, {} to redo", editor.lines.items.len,
     stack.count(&editor.undo), stack.count(&editor.redo))
   for line, i in editor.lines.items {
     io.println("{} | {}", i + 1, line)
@@ -73,16 +72,15 @@ fn arguments(rest: []const u8, wants_line: bool, wants_text: bool) Arguments {
   result := Arguments{ text: rest, valid: true }
   if wants_line {
     space := bytes.find_byte(rest, ' ')
-    status: fail.Status
-    number := parse.u64_decimal(&status, rest[..space])
-    if status.failed || number == 0 { return Arguments{} }
+    number := parse.u64_decimal(rest[..space]) catch 0
+    if number == 0 { return Arguments{} }
     result.line = #cast(usize, number)
     result.text = ""
-    if space < #len(rest) {
+    if space < rest.len {
       result.text = rest[space + 1..]
     }
   }
-  if wants_text != (#len(result.text) > 0) { return Arguments{} }
+  if wants_text != (result.text.len > 0) { return Arguments{} }
   return result
 }
 
@@ -91,10 +89,10 @@ fn run(editor: *Editor, line: []const u8) {
   space := bytes.find_byte(text, ' ')
   name := text[..space]
   rest: []const u8 = ""
-  if space < #len(text) {
+  if space < text.len {
     rest = strings.trim(text[space + 1..])
   }
-  count := #len(editor.lines.items)
+  count := editor.lines.items.len
   case name {
     "" => {
       return
@@ -160,12 +158,9 @@ fn main() {
 
   input_storage: [4096]u8
   reader := bufio.reader(io.stdin(), input_storage[..])
-  input: fail.Status
   for {
-    line := bufio.read_line(&input, &reader)
-    if input.failed {
-      storage: [512]u8
-      io.eprintln("editor: {}", fail.describe(storage[..], input.failure))
+    line := bufio.read_line(&reader) catch err {
+      io.eprintln("editor: {}", err)
       return
     }
     if reader.ended { return }

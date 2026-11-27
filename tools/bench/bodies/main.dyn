@@ -13,7 +13,7 @@ fn energy(b: Body, scale: f64) f64 {
 }
 
 fn main() {
-  for i in 0..#len(bodies) {
+  for i in 0..bodies.len {
     v := #cast(f64, i % 13)
     bodies[i] = Body{ x: v, y: v * 2, z: v * 3, vx: v * 0.5, vy: v * 0.25, vz: v * 0.125, mass: 1 + v, charge: 0.5 }
   }

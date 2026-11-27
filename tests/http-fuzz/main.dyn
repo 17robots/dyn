@@ -5,7 +5,6 @@
 use "std/bytes"
 use "std/fmt"
 use "std/html"
-use "std/fail"
 use "std/io"
 use "std/net/http"
 use "std/parse"
@@ -20,11 +19,11 @@ fn framing(context: rawptr, input: []const u8) bool {
   whole := http.frame_request(input, capacity)
   if whole.status == http.FrameStatus.Ready {
     request := whole.request
-    if whole.consumed == 0 || whole.consumed > #len(input) || #len(request.method) == 0 {
+    if whole.consumed == 0 || whole.consumed > input.len || request.method.len == 0 {
       return false
     }
-    if #len(request.body) != whole.consumed - request.header_length { return false }
-    if #len(request.path) + #len(request.query) > #len(request.target) { return false }
+    if request.body.len != whole.consumed - request.header_length { return false }
+    if request.path.len + request.query.len > request.target.len { return false }
     for cut in 0..whole.consumed {
       prefix := http.frame_request(input[..cut], capacity)
       if prefix.status == http.FrameStatus.Ready { return false }
@@ -42,27 +41,25 @@ fn hex_digit(value: u8) u8 {
 // input never writes past the destination.
 fn form_round_trip(context: rawptr, input: []const u8) bool {
   encoded: [3 * 256]u8
-  if #len(input) > 256 { return true }
-  for i in 0..#len(input) {
+  if input.len > 256 { return true }
+  for i in 0..input.len {
     encoded[3 * i] = '%'
     encoded[3 * i + 1] = hex_digit(input[i] >> 4)
     encoded[3 * i + 2] = hex_digit(input[i] & 15)
   }
   decoded: [256]u8
-  status: fail.Status
-  value := http.form_decode(&status, decoded[..], encoded[..3 * #len(input)])
-  if status.failed || !bytes.equal(value, input) { return false }
+  value := http.form_decode(decoded[..], encoded[..3 * input.len]) catch { return false }
+  if !bytes.equal(value, input) { return false }
   small: [8]u8
-  raw_status: fail.Status
-  raw := http.form_decode(&raw_status, small[..], input)
-  return raw_status.failed || #len(raw) <= #len(input)
+  raw := http.form_decode(small[..], input) catch { return true }
+  return raw.len <= input.len
 }
 
 // Splits input at the first zero byte into pattern and path. Captures must be
 // nonempty slices of path, and a match must be repeatable.
 fn path_match(context: rawptr, input: []const u8) bool {
   split := bytes.find_byte(input, 0)
-  if split == #len(input) { return true }
+  if split == input.len { return true }
   pattern := input[..split]
   path := input[split + 1..]
   request := http.Request{}
@@ -71,7 +68,7 @@ fn path_match(context: rawptr, input: []const u8) bool {
   if request.param_count > http.MaxParams { return false }
   for i in 0..request.param_count {
     value := request.params[i].value
-    if #len(value) == 0 || bytes.find_byte(value, '/') != #len(value) { return false }
+    if value.len == 0 || bytes.find_byte(value, '/') != value.len { return false }
   }
   again := http.Request{}
   return http.match_path(pattern, path, &again) && again.param_count == request.param_count
@@ -79,16 +76,16 @@ fn path_match(context: rawptr, input: []const u8) bool {
 
 struct Capture { bytes: [4096]u8, length: usize }
 
-fn capture_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+fn capture_write(data: rawptr, source: []const u8) usize!io.IoErr {
   capture := #cast(*Capture, data)
-  room := #len(capture.bytes) - capture.length
-  count := #len(source)
+  room := capture.bytes.len - capture.length
+  count := source.len
   if count > room {
     count = room
   }
   _ = mem.copy(capture.bytes[capture.length..capture.length + count], source[..count])
   capture.length += count
-  return #len(source)
+  return source.len
 }
 
 // Input becomes a header name and value. Either respond refuses it before
@@ -96,20 +93,18 @@ fn capture_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
 // data can never add a header line.
 fn header_injection(context: rawptr, input: []const u8) bool {
   split := bytes.find_byte(input, ':')
-  if split == #len(input) { return true }
+  if split == input.len { return true }
   capture := Capture{}
   response := http.Response{ output: io.Writer{ data: &capture, write: capture_write } }
   headers: [1]http.Header = [http.Header{ name: input[..split], value: input[split + 1..] }]
-  sent: fail.Status
-  http.respond(&sent, &response, "", http.ResponseOptions{ content_type: "text/plain", headers: headers[..] })
-  if sent.failed { return capture.length == 0 }
+  http.respond(&response, "", http.ResponseOptions{ content_type: "text/plain", headers: headers[..] }) catch { return capture.length == 0 }
   head := capture.bytes[..capture.length]
   lines: usize = 0
-  for i in 0..#len(head) {
+  for i in 0..head.len {
     if head[i] == '\n' {
       lines += 1
     }
-    if head[i] == '\r' && (i + 1 >= #len(head) || head[i + 1] != '\n') { return false }
+    if head[i] == '\r' && (i + 1 >= head.len || head[i + 1] != '\n') { return false }
   }
   // Status, Content-Type, Content-Length, Date, the header, Connection, blank.
   return lines == 7
@@ -119,21 +114,20 @@ fn header_injection(context: rawptr, input: []const u8) bool {
 // accounted for.
 fn escaping(context: rawptr, input: []const u8) bool {
   storage: [8 * 256]u8
-  if #len(input) > 256 { return true }
-  page_status: fail.Status
-  page := html.writer(&page_status, storage[..])
+  if input.len > 256 { return true }
+  page := html.writer(storage[..])
   html.text(&page, input)
   output := html.output(&page).bytes
   expected: usize = 0
   for byte in input {
     entity := html.entity(byte)
-    if #len(entity) == 0 {
+    if entity.len == 0 {
       expected += 1
     } else {
-      expected += #len(entity)
+      expected += entity.len
     }
   }
-  if #len(output) != expected { return false }
+  if output.len != expected { return false }
   for byte in output {
     if byte == '<' || byte == '>' || byte == '"' || byte == '\'' { return false }
   }
@@ -146,8 +140,7 @@ fn run(name: []const u8, cases: usize, corpus: []const []const u8, predicate: fn
   if !result.passed {
     io.eprintln("fuzz failure in {}", name)
     storage: [8 * 1024]u8
-    quoted_status: fail.Status
-    quoted := fmt.buffer(&quoted_status, storage[..])
+    quoted := fmt.buffer(storage[..])
     fmt.write_quoted(&quoted, result.example)
     io.eprintln("example: {}", fmt.bytes(&quoted))
     #panic("fuzz property failed")
@@ -158,12 +151,10 @@ fn main() {
   arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
   scale: u64 = 1
-  arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
-  if !arguments_status.failed && #len(arguments) > 1 {
-    parsing: fail.Status
-    parsed := parse.u64_decimal(&parsing, arguments[1])
-    if !parsing.failed && parsed > 0 {
+  arguments := process.arguments(arena) catch { #panic("cannot read arguments") }
+  if arguments.len > 1 {
+    parsed := parse.u64_decimal(arguments[1]) catch 0
+    if parsed > 0 {
       scale = parsed
     }
   }

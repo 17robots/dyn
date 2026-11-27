@@ -6,9 +6,9 @@ fn kern_supported(bytes: []const u8, at: usize) bool {
   return u16be(bytes, at) == 0 && (coverage & 0xfff7) == 1
 }
 fn validate_kern(bytes: []const u8, glyphs: u16) KernCheck {
-  if #len(bytes) < 2 { return KernCheck{} }
+  if bytes.len < 2 { return KernCheck{} }
   if u16be(bytes, 0) != 0 { return KernCheck{ ok: true } }
-  if #len(bytes) < 4 { return KernCheck{} }
+  if bytes.len < 4 { return KernCheck{} }
   count := #cast(usize, u16be(bytes, 2))
   at: usize = 4
   for i in 0..count {
@@ -39,7 +39,7 @@ fn validate_kern(bytes: []const u8, glyphs: u16) KernCheck {
 // Requires the immutable face returned by open. No allocation or rounding.
 pub fn kerning(face: *const Face, left, right: u16, pixels_per_em: u16) f64 {
   bytes := face.kern
-  if #len(bytes) < 4 || face.units_per_em == 0 || left >= face.glyphs || right >= face.glyphs || pixels_per_em == 0 || pixels_per_em > 256 {
+  if bytes.len < 4 || face.units_per_em == 0 || left >= face.glyphs || right >= face.glyphs || pixels_per_em == 0 || pixels_per_em > 256 {
     return 0.0
   }
   key := (#cast(u32, left) << 16) | #cast(u32, right)

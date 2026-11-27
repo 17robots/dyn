@@ -1,4 +1,3 @@
-use "std/fail"
 pub struct Ring {
   data: []u8,
   read: usize,
@@ -12,18 +11,10 @@ pub fn length(state: *const Ring) usize {
   return state.length
 }
 
-// A full ring fails with Capacity and keeps its bytes.
-pub fn push(status: *fail.Status, state: *Ring, byte: u8) {
-  if status == nil {
-    push(&fail.Status{}, state, byte)
-    return
-  }
-  if status.failed { return }
-  if state.length == #len(state.data) || #len(state.data) == 0 {
-    fail.set(status, fail.make(fail.Kind.Capacity, "push", "", "the ring is full"))
-    return
-  }
-  state.data[(state.read + state.length) % #len(state.data)] = byte
+// A full ring fails and keeps its bytes.
+pub fn push(state: *Ring, byte: u8) ! {
+  if state.length == state.data.len || state.data.len == 0 { fail }
+  state.data[(state.read + state.length) % state.data.len] = byte
   state.length += 1
 }
 
@@ -32,7 +23,7 @@ pub fn push(status: *fail.Status, state: *Ring, byte: u8) {
 pub fn pop(state: *Ring) u8 {
   if state.length == 0 { return 0 }
   value := state.data[state.read]
-  state.read = (state.read + 1) % #len(state.data)
+  state.read = (state.read + 1) % state.data.len
   state.length -= 1
   return value
 }

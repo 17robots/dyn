@@ -4,25 +4,24 @@
 //
 // Usage: box-viewer [FONT.ttf] [--frames N] [--screenshot OUT.png]
 
-use "vendor/window" window
-use "vendor/opengl" gl
-use "vendor/ui/opengl" gpu
-use "std/ui" ui
-use "std/ui/box" box
-use "std/ui/software" software
-use "std/font" font
-use "std/font/system" system_fonts
-use "std/font/ui" font_ui
-use "std/fail"
-use "std/fs" fs
-use "std/io" io
-use "std/mem" mem
-use "std/process" process
-use "std/strings" strings
-use "std/bytes" bytes
-use "std/fmt" fmt
-use "std/time" time
-use "std/image/png" png
+use window "vendor/window"
+use gl "vendor/opengl"
+use gpu "vendor/ui/opengl"
+use ui "std/ui"
+use box "std/ui/box"
+use software "std/ui/software"
+use font "std/font"
+use system_fonts "std/font/system"
+use font_ui "std/font/ui"
+use fs "std/fs"
+use io "std/io"
+use mem "std/mem"
+use process "std/process"
+use strings "std/strings"
+use bytes "std/bytes"
+use fmt "std/fmt"
+use time "std/time"
+use png "std/image/png"
 
 const row_count: usize = 100000
 
@@ -50,7 +49,7 @@ const levels: [4][]const u8 = ["INFO ", "WARN ", "DEBUG", "ERROR"]
 
 // A row fits its 96 bytes, so the buffer needs no status.
 fn row_text(storage: []u8, index: usize) []const u8 {
-  state := fmt.buffer(nil, storage)
+  state := fmt.buffer(storage)
   fmt.write(&state, levels[index % 4])
   fmt.write(&state, "  request ")
   fmt.write_u64(&state, index)
@@ -66,7 +65,7 @@ fn refilter(app: *App) {
   storage: [96]u8
   count: usize = 0
   for i in 0..row_count {
-    if #len(needle) == 0 || bytes.find(row_text(storage[..], i), needle) != #len(row_text(storage[..], i)) {
+    if needle.len == 0 || bytes.find(row_text(storage[..], i), needle) != row_text(storage[..], i).len {
       app.matches[count] = #cast(u32, i)
       count += 1
     }
@@ -93,7 +92,7 @@ fn build(state: *box.State, app: *App) {
     refilter(app)
   }
   storage: [64]u8
-  count_text := fmt.buffer(nil, storage[..])
+  count_text := fmt.buffer(storage[..])
   fmt.write_u64(&count_text, app.match_count)
   fmt.write(&count_text, " rows###status")
   _ = box.label(state, fmt.bytes(&count_text))
@@ -107,7 +106,7 @@ fn build(state: *box.State, app: *App) {
     index := #cast(usize, app.matches[i])
     row := box.build_key(state, box.Clickable | box.DrawText | box.DrawBackground | box.HotAnimation, box.key(list.key, "row") + index, "")
     shown := row_text(text[..], index)
-    copied := mem.push_bytes(state.frame, #len(shown))
+    copied := mem.push_bytes(state.frame, shown.len)
     _ = mem.copy(copied, shown)
     row.text = copied
     row.width = box.percent(1.0, 0.0)
@@ -129,16 +128,19 @@ fn build(state: *box.State, app: *App) {
 // Writes the back buffer as a PNG, flipped to top-down rows.
 fn save(api: *const gl.Api, arena: *mem.Arena, path: []const u8, width, height: i32) {
   size := #cast(usize, width) * #cast(usize, height) * 4
-  raw := mem.push_array(u8, arena, size)
+  raw := mem.push_array<u8>(arena, size)
   api.read_pixels(0, 0, width, height, gl.Rgba, gl.UnsignedByte, &raw[0])
-  rows := mem.push_array(u8, arena, size)
+  rows := mem.push_array<u8>(arena, size)
   stride := #cast(usize, width) * 4
   for y in 0..#cast(usize, height) {
     _ = mem.copy(rows[y * stride..(y + 1) * stride], raw[(#cast(usize, height) - 1 - y) * stride..(#cast(usize, height) - y) * stride])
   }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  encoded := png.encode(arena, &status, rows, #cast(u32, width), #cast(u32, height), 4)
-  fs.write_all(&status, path, encoded)
+  encoded := png.encode(arena, rows, #cast(usize, width), #cast(usize, height), 4) catch { #panic("cannot encode the screenshot") }
+  fs.write_all(path, encoded) catch { #panic("cannot write the file") }
+}
+
+fn poll(host: *window.Window) {
+  window.poll(host) catch { #panic("cannot read window events") }
 }
 
 fn main() {
@@ -148,17 +150,16 @@ fn main() {
     mem.arena_release(frame_arena)
     mem.arena_release(persistent)
   }
-  failures := fail.Status{ on_failure: fail.panic_on_failure }
-  arguments := process.arguments(persistent, &failures)
+  arguments := process.arguments(persistent) catch { #panic("cannot read arguments") }
   path: []const u8 = ""
   frames: usize = 0
   screenshot: []const u8 = ""
   i: usize = 1
-  for i < #len(arguments) {
-    if bytes.equal(arguments[i], "--frames") && i + 1 < #len(arguments) {
-      frames = strings.parse(usize, arguments[i + 1])
+  for i < arguments.len {
+    if bytes.equal(arguments[i], "--frames") && i + 1 < arguments.len {
+      frames = strings.parse<usize>(arguments[i + 1])
       i += 2
-    } else if bytes.equal(arguments[i], "--screenshot") && i + 1 < #len(arguments) {
+    } else if bytes.equal(arguments[i], "--screenshot") && i + 1 < arguments.len {
       screenshot = arguments[i + 1]
       i += 2
     } else {
@@ -166,42 +167,41 @@ fn main() {
       i += 1
     }
   }
-  if #len(path) == 0 {
+  if path.len == 0 {
     installed := system_fonts.scan(persistent, 4096)
     selected := system_fonts.sans(installed)
     path = selected.path
-    if #len(path) == 0 {
+    if path.len == 0 {
       #panic("no supported system font; pass a TrueType file")
     }
   }
-  // A demo: any failure here ends it, with the failure's description.
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  data := fs.read_all(persistent, &status, path, 67108864)
-  face := font.open(&status, data)
+  // A demo: any failure here ends it.
+  data := fs.read_all(persistent, path, 67108864) catch { #panic("cannot read the file") }
+  face := font.open(data) catch { #panic("cannot open the font") }
   codepoints: [95]u32
   for c in 0..95 {
     codepoints[c] = #cast(u32, c + 32)
   }
   host := window.Window{}
-  window.open(&status, &host, "Dyn box viewer", 1100, 700)
+  window.open(&host, "Dyn box viewer", 1100, 700) catch { #panic("cannot open a window") }
   defer {
     window.close(&host)
   }
   scale := window.scale(&host)
-  atlas := mem.push(font.Atlas, persistent)
-  atlas.* = font.atlas(persistent, &status, &face, codepoints[..], #cast(u16, 16.0 * scale + 0.5), 1024, 1024)
-  api := gl.load(&status, window.gl_proc)
-  batch := mem.push(gpu.Batch, persistent)
-  gpu.open_batch(&status, batch, api)
+  atlas := mem.push<font.Atlas>(persistent)
+  atlas.* = font.atlas(persistent, &face, codepoints[..], #cast(u16, 16.0 * scale + 0.5), 1024, 1024) catch { #panic("cannot build the glyph atlas") }
+  api := gl.load(window.gl_proc) catch { #panic("cannot load OpenGL") }
+  batch := mem.push<gpu.Batch>(persistent)
+  gpu.open_batch(batch, api) catch { #panic("cannot start the renderer") }
   defer {
     gpu.close_batch(batch)
   }
-  vertices := mem.push_array(f32, persistent, #cast(usize, 14 * 6 * 16384))
-  app := mem.push(App, persistent)
+  vertices := mem.push_array<f32>(persistent, #cast(usize, 14 * 6 * 16384))
+  app := mem.push<App>(persistent)
   app.atlas = atlas
   app.zoom = 1.0
   app.selected = 0
-  app.matches = mem.push_array(u32, persistent, row_count)
+  app.matches = mem.push_array<u32>(persistent, row_count)
   refilter(app)
   state := box.push_state(persistent, measure, atlas, #cast(f32, atlas.line_height))
   state.scale = scale
@@ -214,10 +214,10 @@ fn main() {
   shown_height: i32 = 0
   for !host.close_requested && !app.quit {
     // Sleep until input that changes the frame; motion inside a box is free.
-    window.poll(&status, &host)
+    poll(&host)
     for frames == 0 && drawn != 0 && !box.animating(state) && !box.needs_frame(state, window.box_input(&host)) && !host.close_requested && host.width == shown_width && host.height == shown_height {
       window.wait(&host, -1)
-      window.poll(&status, &host)
+      poll(&host)
     }
     now := time.monotonic_now()
     dt := #cast(f32, time.elapsed(last, now)) / 1000000000.0
@@ -245,17 +245,17 @@ fn main() {
     rect := state.text_input_rect
     window.set_text_input(&host, state.text_input, #cast(i32, rect[0]), #cast(i32, rect[1]), #cast(i32, rect[2]), #cast(i32, rect[3]))
     ui.end(&context)
-    if #len(state.copied) != 0 {
+    if state.copied.len != 0 {
       window.set_clipboard(&host, state.copied)
     }
     api.clear_color(0.08, 0.09, 0.11, 1.0)
     api.clear(gl.ColorBufferBit)
-    gpu.render_batch(&status, batch, ui.first(&context), width, height, glyphs, vertices)
+    gpu.render_batch(batch, ui.first(&context), width, height, glyphs, vertices) catch { #panic("cannot draw the frame") }
     drawn += 1
-    if frames != 0 && drawn >= frames && #len(screenshot) != 0 {
+    if frames != 0 && drawn >= frames && screenshot.len != 0 {
       save(&api, frame_arena, screenshot, width, height)
     }
-    window.swap(&status, &host)
+    window.swap(&host) catch { #panic("cannot show the frame") }
     if frames != 0 && drawn >= frames { break }
   }
 }

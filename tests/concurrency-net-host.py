@@ -10,97 +10,104 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build'/('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve())
 SOURCE = r'''use "std/net"
 use "std/thread"
-use "std/fail"
-use "std/mem" mem
+use mem "std/mem"
 use "std/sync"
 use "std/bytes"
 struct Context { listener: net.Listener, ready: sync.AtomicU32, count: sync.AtomicU64 }
 fn worker(shared: *Context) isize {
   for sync.load_u32(&shared.ready) == 0 { thread.yield_now() }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  connection := net.listener_accept(&status, &shared.listener)
+  connection := net.listener_accept(&shared.listener) catch { #panic("net.listener_accept") }
   defer { net.connection_close(&connection) }
   buffer: [4]u8
   at: usize = 0
   for at < 4 {
-    part := net.connection_read(&status, &connection, buffer[at..])
+    part := net.connection_read(&connection, buffer[at..]) catch { #panic("net.connection_read") }
     if part == 0 { #panic("server read") }
     at += part
   }
   if !bytes.equal(buffer[..], "ping") { #panic("request") }
-  _ = net.connection_write(&status, &connection, "pong")
+  _ = net.connection_write(&connection, "pong") catch { #panic("net.connection_write") }
   for i in 0..10000 { _ = sync.fetch_add_u64(&shared.count, 1) }
   return 0
+}
+fn receive_would_block(udp: isize, buffer: []u8, address: []u8, length: *u32) bool {
+  _ = net.receive_from(udp, buffer, 0, address, length) catch err { return net.would_block(err) }
+  return false
+}
+// Whether a spawn with too small a stack fails with InvalidInput.
+fn short_stack_rejected(arena: *mem.Arena, stack: []u8) bool {
+  _ = thread.spawn(arena, stack, worker, nil) catch err {
+    case err {
+      .InvalidInput => { return true }
+      _ => { return false }
+    }
+  }
+  return false
 }
 fn main() {
   arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   idle := thread.Thread{}
-  thread.join(&status, &idle)
+  thread.join(&idle) catch { #panic("unexpected failure") }
   if thread.id(&idle) != 0 { #panic("empty join") }
   stack: [131072]u8
   mark:=mem.arena_mark(arena)
-  short: fail.Status
-  rejected:=thread.spawn(arena, &short, stack[..0], worker, nil)
-  if short.failure.kind!=fail.Kind.InvalidInput || short.failure.native!=0 || rejected!=nil || mem.arena_mark(arena)!=mark { #panic("short stack") }
+  if !short_stack_rejected(arena, stack[..0]) || mem.arena_mark(arena)!=mark { #panic("short stack") }
   address := net.ipv4(127, 0, 0, 1, 0)
-  shared := Context{ listener: net.tcp_listen_ipv4(&status, &address, 4) }
+  shared := Context{ listener: net.tcp_listen_ipv4(&address, 4) catch { #panic("listen") } }
   defer { net.listener_close(&shared.listener) }
   local := net.Address{}
-  net.local_address(&status, shared.listener.descriptor, &local)
+  net.local_address(shared.listener.descriptor, &local) catch { #panic("net.local_address") }
   if local.length != 16 { #panic("local address") }
   port := (#cast(u16, local.bytes[2]) << 8) | #cast(u16, local.bytes[3])
   if port == 0 { #panic("ephemeral port") }
-  active:=thread.spawn(arena, &status, stack[..], worker, &shared)
+  active:=thread.spawn(arena, stack[..], worker, &shared) catch { #panic("unexpected failure") }
   if active==nil || thread.id(active)==0 { #panic("active ownership") }
   sync.store_u32(&shared.ready, 1)
   address = net.ipv4(127, 0, 0, 1, port)
-  connection := net.tcp_connect_ipv4(&status, &address)
-  net.send_timeout(&status, connection.descriptor, 2000)
-  net.receive_timeout(&status, connection.descriptor, 2000)
-  net.socket_error(&status, connection.descriptor)
+  connection := net.tcp_connect_ipv4(&address) catch { #panic("net.tcp_connect_ipv4") }
+  net.send_timeout(connection.descriptor, 2000) catch { #panic("net.send_timeout") }
+  net.receive_timeout(connection.descriptor, 2000) catch { #panic("net.receive_timeout") }
+  net.socket_error(connection.descriptor) catch { #panic("net.socket_error") }
   peer := net.Address{}
-  net.peer_address(&status, connection.descriptor, &peer)
+  net.peer_address(connection.descriptor, &peer) catch { #panic("net.peer_address") }
   if peer.bytes[2] != local.bytes[2] || peer.bytes[3] != local.bytes[3] { #panic("peer address") }
-  _ = net.connection_write(&status, &connection, "ping")
+  _ = net.connection_write(&connection, "ping") catch { #panic("net.connection_write") }
   item := net.PollDescriptor{ descriptor: #cast(net.Descriptor, connection.descriptor), events: net.PollReadable | net.PollError | net.PollHangup }
-  if net.poll(&status, #slice(&item, 1), 2000) != 1 || !net.poll_has(&item, net.PollReadable) || item.events != 25 { #panic("poll") }
+  if (net.poll(#slice(&item, 1), 2000) catch 0) != 1 || !net.poll_has(&item, net.PollReadable) || item.events != 25 { #panic("poll") }
   buffer: [4]u8
   at: usize = 0
   for at < 4 {
-    part := net.connection_read(&status, &connection, buffer[at..])
+    part := net.connection_read(&connection, buffer[at..]) catch { #panic("net.connection_read") }
     if part == 0 { #panic("client read") }
     at += part
   }
   if !bytes.equal(buffer[..], "pong") { #panic("response") }
   net.connection_close(&connection)
   net.connection_close(&connection)
-  thread.join(&status, active)
-  thread.join(&status, active)
+  thread.join(active) catch { #panic("unexpected failure") }
+  thread.join(active) catch { #panic("unexpected failure") }
   if thread.id(active) != 0 || sync.load_u64(&shared.count) != 10000 { #panic("join visibility") }
-  udp := net.socket(&status, net.AddressFamilyIpv4, net.SocketDatagram, 0)
+  udp := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0) catch { #panic("net.socket") }
   defer { net.close(udp) }
   address = net.ipv4(127, 0, 0, 1, 0)
-  net.bind_ipv4(&status, udp, &address)
-  net.local_address(&status, udp, &local)
-  net.nonblocking(&status, udp, true)
+  net.bind_ipv4(udp, &address) catch { #panic("net.bind_ipv4") }
+  net.local_address(udp, &local) catch { #panic("net.local_address") }
+  net.nonblocking(udp, true) catch { #panic("net.nonblocking") }
   length: u32 = 0
-  pending: fail.Status
-  _ = net.receive_from(&pending, udp, buffer[..], 0, peer.bytes[..], &length)
-  if !net.would_block(&pending.failure) { #panic("would block") }
-  _ = net.send_to(&status, udp, buffer[..0], 0, local.bytes[..local.length])
-  if net.wait(&status, udp, net.PollReadable, 2000) == 0 { #panic("udp readiness") }
-  packet := net.receive_from(&status, udp, buffer[..], 0, peer.bytes[..], &length)
+  if !receive_would_block(udp, buffer[..], peer.bytes[..], &length) { #panic("would block") }
+  _ = net.send_to(udp, buffer[..0], 0, local.bytes[..local.length]) catch { #panic("net.send_to") }
+  if (net.wait(udp, net.PollReadable, 2000) catch 0) == 0 { #panic("udp readiness") }
+  packet := net.receive_from(udp, buffer[..], 0, peer.bytes[..], &length) catch { #panic("net.receive_from") }
   if packet != 0 || length != 16 { #panic("empty datagram delivery") }
-  net.nonblocking(&status, udp, false)
+  net.nonblocking(udp, false) catch { #panic("net.nonblocking") }
   loopback: [16]u8
   loopback[15] = 1
   ipv6 := net.ipv6(loopback, 0, 0)
-  v6 := net.socket(&status, net.AddressFamilyIpv6, net.SocketDatagram, 0)
+  v6 := net.socket(net.AddressFamilyIpv6, net.SocketDatagram, 0) catch { #panic("net.socket") }
   defer { net.close(v6) }
-  net.bind_ipv6(&status, v6, &ipv6)
-  net.local_address(&status, v6, &local)
+  net.bind_ipv6(v6, &ipv6) catch { #panic("net.bind_ipv6") }
+  net.local_address(v6, &local) catch { #panic("net.local_address") }
   if local.length != 28 { #panic("ipv6 bind") }
 }
 '''

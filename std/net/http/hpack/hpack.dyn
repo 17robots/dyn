@@ -6,7 +6,7 @@
 // field the simple way: a static-table index when one matches, otherwise a
 // literal the peer does not index, Huffman-coded when that is shorter. The
 // encoder never uses a dynamic table, so it needs no state.
-use "std/fail"
+use parse "std/parse"
 
 // The table size both sides start with (SETTINGS_HEADER_TABLE_SIZE).
 pub const DefaultTableSize: usize = 4096
@@ -49,15 +49,15 @@ pub struct Field {
   sensitive: bool,
 }
 
-// Storage bounds the table: limit is #len(storage) bytes, and at most
+// Storage bounds the table: limit is storage.len bytes, and at most
 // EntryOverhead bytes per entry (see entries_for). Advertise it as
 // SETTINGS_HEADER_TABLE_SIZE; it must be at least DefaultTableSize, which a
 // peer may use before it sees the setting.
 pub fn decoder(storage: []u8, entries: []Entry) Decoder {
   // An entry takes at least EntryOverhead bytes of size.
-  limit := #len(storage)
-  if limit > #len(entries) * EntryOverhead {
-    limit = #len(entries) * EntryOverhead
+  limit := storage.len
+  if limit > entries.len * EntryOverhead {
+    limit = entries.len * EntryOverhead
   }
   size := limit
   if size > DefaultTableSize {
@@ -77,28 +77,24 @@ pub fn decode_begin(decoder: *Decoder) {
   decoder.fields = false
 }
 
-// Malformed or truncated input fails with InvalidInput, a field larger than
-// scratch with Capacity, at the offending offset in the block.
-fn failed(status: *fail.Status, kind: fail.Kind, offset: usize) Field {
-  message: []const u8 = "malformed HPACK field"
-  if kind == fail.Kind.Capacity {
-    message = "the field does not fit scratch"
-  }
-  fail.at(status, kind, "decode HPACK", message, offset)
-  return Field{}
+// Malformed or truncated input fails with Invalid, a field larger than
+// scratch with TooLarge, at the offending offset in the block.
+fn failed(too_large: bool, offset: usize) parse.ParseErr {
+  if too_large { return parse.ParseErr.TooLarge(offset) }
+  return parse.ParseErr.Invalid(offset)
 }
 
 struct Integer { value: usize, consumed: usize, valid: bool }
 
 // An integer with an N-bit prefix (RFC 7541 5.1), at most 2^28 or so.
 fn read_integer(block: []const u8, prefix: u8) Integer {
-  if #len(block) == 0 { return Integer{} }
+  if block.len == 0 { return Integer{} }
   mask := (#cast(usize, 1) << #cast(usize, prefix)) - 1
   value := block[0] & mask
   if value < mask { return Integer{ value: value, consumed: 1, valid: true } }
   shift: usize = 0
   at: usize = 1
-  for at < #len(block) {
+  for at < block.len {
     byte := block[at]
     at += 1
     value += (#cast(usize, byte) & 127) << shift
@@ -113,17 +109,17 @@ struct Text { length: usize, consumed: usize, valid: bool }
 
 // A string literal (RFC 7541 5.2) decoded into destination.
 fn read_string(block: []const u8, destination: []u8) Text {
-  if #len(block) == 0 { return Text{} }
+  if block.len == 0 { return Text{} }
   huffman := (block[0] & 0x80) != 0
   length := read_integer(block, 7)
-  if !length.valid || length.value > #len(block) - length.consumed { return Text{} }
+  if !length.valid || length.value > block.len - length.consumed { return Text{} }
   encoded := block[length.consumed..length.consumed + length.value]
   if !huffman {
-    if #len(encoded) > #len(destination) { return Text{} }
-    for i in 0..#len(encoded) {
+    if encoded.len > destination.len { return Text{} }
+    for i in 0..encoded.len {
       destination[i] = encoded[i]
     }
-    return Text{ length: #len(encoded), consumed: length.consumed + length.value, valid: true }
+    return Text{ length: encoded.len, consumed: length.consumed + length.value, valid: true }
   }
   decoded := huffman_decode(encoded, destination)
   if !decoded.valid { return Text{} }
@@ -146,7 +142,7 @@ pub fn huffman_decode(source: []const u8, destination: []u8) Decoded {
       first := FirstCode[length]
       if count != 0 && code >= first && code - first < count {
         symbol := DecodeSymbols[#cast(usize, FirstIndex[length]) + #cast(usize, code - first)]
-        if symbol == 256 || written == #len(destination) { return Decoded{} }
+        if symbol == 256 || written == destination.len { return Decoded{} }
         destination[written] = #cast(u8, symbol)
         written += 1
         code = 0
@@ -202,7 +198,7 @@ fn static_value(index: usize) []const u8 {
 
 // Dynamic entry index (1 is the newest).
 fn dynamic_entry(table: *const Table, index: usize) Entry {
-  position := (table.first + table.count - index) % #len(table.entries)
+  position := (table.first + table.count - index) % table.entries.len
   return table.entries[position]
 }
 
@@ -210,7 +206,7 @@ fn evict_oldest(table: *Table) {
   oldest := table.entries[table.first]
   table.size -= oldest.name_length + oldest.value_length + EntryOverhead
   table.start = oldest.offset + oldest.name_length + oldest.value_length
-  table.first = (table.first + 1) % #len(table.entries)
+  table.first = (table.first + 1) % table.entries.len
   table.count -= 1
   if table.count == 0 {
     table.start = 0
@@ -226,35 +222,35 @@ fn shrink(table: *Table, size: usize) {
 
 // Adds a field (RFC 7541 4.4); one larger than the table empties it.
 fn insert(table: *Table, name: []const u8, value: []const u8) {
-  bytes := #len(name) + #len(value)
+  bytes := name.len + value.len
   if bytes + EntryOverhead > table.max_size {
     shrink(table, 0)
     return
   }
   shrink(table, table.max_size - bytes - EntryOverhead)
-  if table.end + bytes > #len(table.storage) {
+  if table.end + bytes > table.storage.len {
     // Compact: live bytes are contiguous, oldest first.
     live := table.end - table.start
     for i in 0..live {
       table.storage[i] = table.storage[table.start + i]
     }
     for i in 0..table.count {
-      position := (table.first + i) % #len(table.entries)
+      position := (table.first + i) % table.entries.len
       table.entries[position].offset -= table.start
     }
     table.start = 0
     table.end = live
   }
   at := table.end
-  for i in 0..#len(name) {
+  for i in 0..name.len {
     table.storage[at + i] = name[i]
   }
-  for i in 0..#len(value) {
-    table.storage[at + #len(name) + i] = value[i]
+  for i in 0..value.len {
+    table.storage[at + name.len + i] = value[i]
   }
   table.end += bytes
-  position := (table.first + table.count) % #len(table.entries)
-  table.entries[position] = Entry{ offset: at, name_length: #len(name), value_length: #len(value) }
+  position := (table.first + table.count) % table.entries.len
+  table.entries[position] = Entry{ offset: at, name_length: name.len, value_length: value.len }
   table.count += 1
   table.size += bytes + EntryOverhead
 }
@@ -275,8 +271,8 @@ fn lookup(table: *const Table, index: usize) Named {
 }
 
 fn copy_into(destination: []u8, source: []const u8) bool {
-  if #len(source) > #len(destination) { return false }
-  for i in 0..#len(source) {
+  if source.len > destination.len { return false }
+  for i in 0..source.len {
     destination[i] = source[i]
   }
   return true
@@ -284,30 +280,26 @@ fn copy_into(destination: []u8, source: []const u8) bool {
 
 // Decodes the representation at the start of block. Name and value are
 // copied or decoded into scratch, so a table change cannot move them. Fails
-// with Syntax for malformed input (a COMPRESSION_ERROR) and Capacity when
+// with Invalid for malformed input (a COMPRESSION_ERROR) and TooLarge when
 // scratch is too small.
-pub fn decode_field(status: *fail.Status, decoder: *Decoder, block: []const u8, scratch: []u8) Field {
-  if status == nil { return decode_field(&fail.Status{}, decoder, block, scratch) }
-  if status.failed { return Field{} }
-  if #len(block) == 0 { return failed(status, fail.Kind.InvalidInput, 0) }
+pub fn decode_field(decoder: *Decoder, block: []const u8, scratch: []u8) Field!parse.ParseErr {
+  if block.len == 0 { fail failed(false, 0) }
   first := block[0]
   table := &decoder.table
   if (first & 0x80) != 0 {
     index := read_integer(block, 7)
     named := lookup(table, index.value)
-    if !index.valid || !named.found { return failed(status, fail.Kind.InvalidInput, 0) }
-    if !copy_into(scratch, named.name) || !copy_into(scratch[#len(named.name)..], named.value) {
-      return failed(status, fail.Kind.Capacity, 0)
+    if !index.valid || !named.found { fail failed(false, 0) }
+    if !copy_into(scratch, named.name) || !copy_into(scratch[named.name.len..], named.value) {
+      fail failed(true, 0)
     }
     decoder.fields = true
-    name_length := #len(named.name)
-    return Field{ name: scratch[..name_length], value: scratch[name_length..name_length + #len(named.value)], consumed: index.consumed }
+    name_length := named.name.len
+    return Field{ name: scratch[..name_length], value: scratch[name_length..name_length + named.value.len], consumed: index.consumed }
   }
   if (first & 0xe0) == 0x20 {
     size := read_integer(block, 5)
-    if !size.valid || size.value > table.limit || decoder.fields {
-      return failed(status, fail.Kind.InvalidInput, 0)
-    }
+    if !size.valid || size.value > table.limit || decoder.fields { fail failed(false, 0) }
     table.max_size = size.value
     shrink(table, size.value)
     return Field{ consumed: size.consumed, update: true }
@@ -318,22 +310,22 @@ pub fn decode_field(status: *fail.Status, decoder: *Decoder, block: []const u8, 
     prefix = 6
   }
   index := read_integer(block, prefix)
-  if !index.valid { return failed(status, fail.Kind.InvalidInput, 0) }
+  if !index.valid { fail failed(false, 0) }
   at := index.consumed
   name_length: usize = 0
   if index.value == 0 {
     name := read_string(block[at..], scratch)
-    if !name.valid { return failed(status, fail.Kind.InvalidInput, at) }
+    if !name.valid { fail failed(false, at) }
     at += name.consumed
     name_length = name.length
   } else {
     named := lookup(table, index.value)
-    if !named.found { return failed(status, fail.Kind.InvalidInput, 0) }
-    if !copy_into(scratch, named.name) { return failed(status, fail.Kind.Capacity, 0) }
-    name_length = #len(named.name)
+    if !named.found { fail failed(false, 0) }
+    if !copy_into(scratch, named.name) { fail failed(true, 0) }
+    name_length = named.name.len
   }
   value := read_string(block[at..], scratch[name_length..])
-  if !value.valid { return failed(status, fail.Kind.InvalidInput, at) }
+  if !value.valid { fail failed(false, at) }
   at += value.consumed
   name := scratch[..name_length]
   text := scratch[name_length..name_length + value.length]
@@ -349,7 +341,7 @@ pub fn decode_field(status: *fail.Status, decoder: *Decoder, block: []const u8, 
 // Appends an integer with an N-bit prefix; the prefix bits of destination[0]
 // above it are kept from flags. 0 when it does not fit.
 fn write_integer(destination: []u8, flags: u8, prefix: u8, value: usize) usize {
-  if #len(destination) == 0 { return 0 }
+  if destination.len == 0 { return 0 }
   mask := (#cast(usize, 1) << #cast(usize, prefix)) - 1
   if value < mask {
     destination[0] = flags | #cast(u8, value)
@@ -359,12 +351,12 @@ fn write_integer(destination: []u8, flags: u8, prefix: u8, value: usize) usize {
   rest := value - mask
   at: usize = 1
   for rest >= 128 {
-    if at == #len(destination) { return 0 }
+    if at == destination.len { return 0 }
     destination[at] = #cast(u8, rest & 127) | 128
     rest >>= 7
     at += 1
   }
-  if at == #len(destination) { return 0 }
+  if at == destination.len { return 0 }
   destination[at] = #cast(u8, rest)
   return at + 1
 }
@@ -379,29 +371,29 @@ fn lower(byte: u8) u8 {
 fn write_string(destination: []u8, text: []const u8, lowercase: bool) usize {
   folded: [256]u8
   source := text
-  if lowercase && #len(text) <= #len(folded) {
-    for i in 0..#len(text) {
+  if lowercase && text.len <= folded.len {
+    for i in 0..text.len {
       folded[i] = lower(text[i])
     }
-    source = folded[..#len(text)]
+    source = folded[..text.len]
   }
   coded := huffman_length(source)
-  if coded < #len(source) {
+  if coded < source.len {
     head := write_integer(destination, 0x80, 7, coded)
-    if head == 0 || coded > #len(destination) - head { return 0 }
+    if head == 0 || coded > destination.len - head { return 0 }
     return head + huffman_encode(source, destination[head..])
   }
-  head := write_integer(destination, 0, 7, #len(source))
-  if head == 0 || #len(source) > #len(destination) - head { return 0 }
-  for i in 0..#len(source) {
+  head := write_integer(destination, 0, 7, source.len)
+  if head == 0 || source.len > destination.len - head { return 0 }
+  for i in 0..source.len {
     destination[head + i] = source[i]
   }
-  return head + #len(source)
+  return head + source.len
 }
 
 fn equal_folded(name: []const u8, known: []const u8) bool {
-  if #len(name) != #len(known) { return false }
-  for i in 0..#len(name) {
+  if name.len != known.len { return false }
+  for i in 0..name.len {
     if lower(name[i]) != known[i] { return false }
   }
   return true
@@ -418,7 +410,7 @@ pub fn encode_field(destination: []u8, name: []const u8, value: []const u8) usiz
       name_index = index
     }
     known := static_value(index)
-    if #len(known) > 0 && #len(known) == #len(value) && copy_equal(known, value) {
+    if known.len > 0 && known.len == value.len && copy_equal(known, value) {
       return write_integer(destination, 0x80, 7, index)
     }
   }
@@ -436,7 +428,7 @@ pub fn encode_field(destination: []u8, name: []const u8, value: []const u8) usiz
 }
 
 fn copy_equal(left: []const u8, right: []const u8) bool {
-  for i in 0..#len(left) {
+  for i in 0..left.len {
     if left[i] != right[i] { return false }
   }
   return true

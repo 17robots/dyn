@@ -1,4 +1,3 @@
-use "std/fail"
 // std pieces that keep web apps short: json.object_of/array_of, html.print,
 // std/net/http/session, http.assets_of, process.environment_or and one-write
 // log lines.
@@ -8,12 +7,27 @@ use "std/io"
 use "std/log"
 use "std/mem"
 use "std/net/http"
-use "std/net/http/session" sessions
+use sessions "std/net/http/session"
 use "std/process"
 
 struct Post { id: i64, author: []const u8, body: []const u8, created: i64, ok: bool, score: f64, small: u8, count: usize }
 
 struct Nested { inner: Post }
+
+// Whether the cache holds token at now.
+// The JSON a writer finished, or "" when it failed.
+fn finished(w: *const json.Writer) []const u8 {
+  return json.finish(w) catch ""
+}
+// Whether finishing the writer fails.
+fn finish_failed(w: *const json.Writer) bool {
+  _ = json.finish(w) catch { return true }
+  return false
+}
+fn cached(cache: *sessions.Cache, shared: *sessions.Shared, token: []const u8, now: i64) bool {
+  _ = sessions.cached(cache, shared, token, now) catch { return false }
+  return true
+}
 
 fn main() {
   arena := mem.arena_alloc(mem.MiB)
@@ -23,53 +37,38 @@ fn main() {
     Post{ id: 1, author: "ann", body: "hi \"there\"", created: 99, ok: true, score: 1.5, small: 7, count: 3 },
     Post{ id: -2, author: "bo", body: "x\n", score: -0.25 },
   ]
-  out_status: fail.Status
-  out := json.writer(&out_status, storage[..])
+  out := json.writer(storage[..])
   json.array_of(&out, posts[..])
-  io.println("{}", json.output(&out))
-  single_status: fail.Status
-  single := json.writer(&single_status, storage[..])
+  io.println("{}", finished(&out))
+  single := json.writer(storage[..])
   json.object_of(&single, posts[1])
-  io.println("{}", json.output(&single))
-  nested_status: fail.Status
-  nested := json.writer(&nested_status, storage[..])
+  io.println("{}", finished(&single))
+  nested := json.writer(storage[..])
   json.object_of(&nested, Nested{})
-  io.println("nested fails {}", nested_status.failed)
+  io.println("nested fails {}", finish_failed(&nested))
 
   inner_storage: [128]u8
-  inner_status: fail.Status
-  inner := html.writer(&inner_status, inner_storage[..])
+  inner := html.writer(inner_storage[..])
   html.print(&inner, "<i>{}</i>", "a&b")
-  page_status: fail.Status
-  page := html.writer(&page_status, storage[..])
+  page := html.writer(storage[..])
   html.print(&page, "<p id=\"{}\" class=\"{}\">{} {} {}</p><style>p {{ color: red }}</style>{} [{}] {}", 42, "x\"y", "<b>", true,
     html.output(&inner), -7, html.trusted("<br>"))
   io.println("{}", html.output(&page).bytes)
 
   cache: sessions.Cache
   shared := sessions.Shared{}
-  random: fail.Status
-  started := sessions.start(arena, &random, 3600)
-  io.println("start {} {} {} {}", !random.failed, #len(started.token), #len(started.csrf), started.cookie.name)
-  cold: fail.Status
-  _ = sessions.cached(&cold, &cache, &shared, started.token, 100)
-  io.println("cold {}", !cold.failed)
-  remembering: fail.Status
-  kept := sessions.remember(&remembering, &cache, started.token, 7, started.csrf, "ann", 200)
-  looking: fail.Status
-  hit := sessions.cached(&looking, &cache, &shared, started.token, 100)
-  io.println("remembered {} hit {} user {} data {} csrf {} {}", !remembering.failed && kept.user == 7, !looking.failed, hit.user,
+  started := sessions.start(arena, 3600) catch { #panic("session start") }
+  io.println("start {} {} {} {}", true, started.token.len, started.csrf.len, started.cookie.name)
+  io.println("cold {}", cached(&cache, &shared, started.token, 100))
+  kept := sessions.remember(&cache, started.token, 7, started.csrf, "ann", 200) catch { #panic("remember") }
+  hit := sessions.cached(&cache, &shared, started.token, 100) catch { #panic("cached") }
+  io.println("remembered {} hit {} user {} data {} csrf {} {}", kept.user == 7, true, hit.user,
     hit.data, sessions.csrf_ok(&hit, started.csrf), sessions.csrf_ok(&hit, "nope"))
-  expired: fail.Status
-  _ = sessions.cached(&expired, &cache, &shared, started.token, 200)
-  io.println("expired {}", !expired.failed)
+  io.println("expired {}", cached(&cache, &shared, started.token, 200))
   cleared := sessions.forget(&shared)
   cookie_text: [128]u8
-  formatting: fail.Status
-  io.println("forget {}", http.set_cookie(&formatting, cookie_text[..], cleared))
-  forgotten: fail.Status
-  _ = sessions.cached(&forgotten, &cache, &shared, started.token, 100)
-  io.println("after forget {}", !forgotten.failed)
+  io.println("forget {}", http.set_cookie(cookie_text[..], cleared) catch cookie_text[..0])
+  io.println("after forget {}", cached(&cache, &shared, started.token, 100))
 
   assets := http.assets_of(arena, "app.js", "let x = 1", "app.css", "p { }", "dangling")
   js := http.find_asset(&assets, "app.js")
@@ -79,9 +78,5 @@ fn main() {
   io.println("env {} {}", process.environment_or(arena, "WEB_BATTERIES_SET", "unset"), process.environment_or(arena, "WEB_BATTERIES_NONE", "fallback"))
   logger := log.logger(io.stdout(), log.Level.Info)
   fields: [2]log.Field = [log.Field{ name: "a", value: "1" }, log.Field{ name: "b", value: "two" }]
-  status: fail.Status
-  log.write(&status, &logger, log.Level.Info, "hello", fields[..])
-  if status.failed {
-    #panic("log write")
-  }
+  log.write(&logger, log.Level.Info, "hello", fields[..]) catch { #panic("log write") }
 }

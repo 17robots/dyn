@@ -22,14 +22,23 @@ fn main() {
 ''')
     command = [DYN, 'check', str(project), '--no-cache', '--diagnostics', 'json']
     normal = subprocess.run(command, capture_output=True, text=True, timeout=30)
-    assert normal.returncode == 0, normal.stderr
+    assert normal.returncode == 1 and 'cannot copy nocopy type' in normal.stderr, normal.stderr
+    source.write_text('''use "std/mem"
+fn main() {
+  storage: [64 + mem.ArenaBufferOverhead]u8
+  original := mem.arena_from_buffer(storage[..])
+  _ = original
+}
+''')
+    ok_check = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert ok_check.returncode == 0, ok_check.stderr
     for removed in ('--warnings-as-errors', '--no-warnings'):
         rejected = subprocess.run([*command, removed], capture_output=True, text=True, timeout=30)
         assert rejected.returncode == 2, (removed, rejected.stderr)
-    (project / 'other.dyn').write_text('use "std/mem" memory\n')
+    (project / 'other.dyn').write_text('use memory "std/mem"\n')
     aliases = subprocess.run([DYN, 'vet', str(project), '--no-cache'], capture_output=True, text=True, timeout=30)
     assert 'imported more than once' not in aliases.stderr, aliases.stderr
-    (project / 'other.dyn').write_text('use \"std/mem\" memory\nuse \"std/mem\" another\n')
+    (project / 'other.dyn').write_text('use memory \"std/mem\"\nuse another \"std/mem\"\n')
     aliases = subprocess.run([DYN, 'vet', str(project), '--no-cache'], capture_output=True, text=True, timeout=30)
     assert aliases.returncode == 1 and 'imported more than once' in aliases.stderr, aliases.stderr
     assert 'imported more than once' not in subprocess.run(command, capture_output=True, text=True, timeout=30).stderr
@@ -37,7 +46,7 @@ fn main() {
     source.write_text('''use "std/mem"
 fn main() {
   created := mem.arena_alloc(mem.KiB)
-  pointer := mem.push(u8, created)
+  pointer := mem.push<u8>(created)
   pointer.* = 42
   moved := created
   created = nil

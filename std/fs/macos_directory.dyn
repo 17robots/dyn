@@ -7,7 +7,7 @@ use "std/os/macos/sys"
 pub struct Directory { file: File, storage: []u8, offset: usize, used: usize, base: i64, path: []const u8, ended: bool }
 
 fn native_open_directory(path: []const u8, storage: []u8, directory: *Directory) isize {
-  if #len(storage) < 1048 { return -22 }
+  if storage.len < 1048 { return -22 }
   space: [4096]u8
   name := terminated(path, space[..])
   if name == nil { return -63 }
@@ -23,9 +23,9 @@ fn native_directory_next(directory: *Directory, entry: *DirectoryEntry) isize {
   if !is_open(&directory.file) { return -9 }
   for true {
     if directory.offset >= directory.used {
-      value := #syscall(sys.Getdirentries64, directory.file.descriptor, &directory.storage[0], #len(directory.storage), &directory.base)
+      value := #syscall(sys.Getdirentries64, directory.file.descriptor, &directory.storage[0], directory.storage.len, &directory.base)
       for value == -4 {
-        value = #syscall(sys.Getdirentries64, directory.file.descriptor, &directory.storage[0], #len(directory.storage), &directory.base)
+        value = #syscall(sys.Getdirentries64, directory.file.descriptor, &directory.storage[0], directory.storage.len, &directory.base)
       }
       if value < 0 { return value }
       if value == 0 { return 0 }
@@ -40,8 +40,8 @@ fn native_directory_next(directory: *Directory, entry: *DirectoryEntry) isize {
     kind := directory.storage[at + 20]
     name := directory.storage[at + 21..at + 21 + length]
     directory.offset += record
-    dot := #len(name) == 1 && name[0] == '.'
-    dot_dot := #len(name) == 2 && name[0] == '.' && name[1] == '.'
+    dot := name.len == 1 && name[0] == '.'
+    dot_dot := name.len == 2 && name[0] == '.' && name[1] == '.'
     if !dot && !dot_dot {
       entry.* = DirectoryEntry{ name: name, kind: kind }
       return 0

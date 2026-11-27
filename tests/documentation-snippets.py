@@ -11,7 +11,8 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 # Historical "before" code and proposals for syntax Dyn does not have.
 SKIP = ('docs/migrations/', 'docs/internals/generics-design.md',
         'docs/internals/std-standardization.md',
-        'docs/internals/result-shape-std.md')
+        'docs/internals/result-shape-std.md',
+        'docs/internals/next-design.md')
 
 
 def parses(directory, source):
@@ -31,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-doc-snippets-') as directory:
         for match in re.finditer(r'```dyn\n(.*?)```', document.read_text(), re.S):
             block = match.group(1)
             checked += 1
-            if re.search(r'^fn main\(\)', block, re.M) and 'use "vendor/' not in block:
+            if re.search(r'^fn main\(\)', block, re.M) and '"vendor/' not in block:
                 (Path(directory) / 'main.dyn').write_text(block)
                 result = subprocess.run([DYN, 'check', directory], capture_output=True, text=True, timeout=30,
                                         env={**os.environ, 'DYN_SDK': str(ROOT)})

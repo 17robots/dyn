@@ -13,7 +13,7 @@ fn expect(ok: bool) { if !ok { #panic("memory ergonomics contract") } }
 fn main() {
   created := mem.arena_alloc(mem.KiB)
   defer { mem.arena_release(created) }
-  items := mem.push_array(Item, created, 7)
+  items := mem.push_array<Item>(created, 7)
   for *item in items {
     expect(item.tag == 0 && item.value == 0)
     item.value = 42
@@ -25,10 +25,10 @@ fn main() {
   source.block_size = 512
   chain := mem.arena_from_source(source)
   defer { mem.arena_release(chain) }
-  first := mem.push(u64, chain)
+  first := mem.push<u64>(chain)
   first.* = 42
   _ = mem.push_bytes(chain, 400)
-  second := mem.push(u64, chain)
+  second := mem.push<u64>(chain)
   second.* = 17
   _ = mem.push_bytes(chain, 400)
   expect(chain.current != chain && mem.arena_used(chain) >= 816)
@@ -42,7 +42,7 @@ fn main() {
     expect(chain.current == chain)
   }
   tight := mem.arena_from_source(mem.pages(mem.ArenaHeader))
-  expect(#len(mem.push_bytes(tight, 0)) == 0 && tight.current == tight)
+  expect(mem.push_bytes(tight, 0).len == 0 && tight.current == tight)
   mem.arena_release(tight)
   unbounded := mem.arena_alloc(0)
   _ = mem.push_bytes(unbounded, 4096)

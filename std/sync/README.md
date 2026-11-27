@@ -5,19 +5,18 @@ protected predicate after a successful return:
 ```dyn
 sync.lock(&mutex)
 for !ready {
-  waited := sync.condition_wait_timeout(&condition, &mutex, 250000000)
-  if waited.failure.kind != fail.Kind.Ok { break }
-  if waited.status == sync.ConditionWaitStatus.TimedOut { break }
+  waited := sync.condition_wait_timeout(&condition, &mutex, 250000000) catch { break }
+  if waited == sync.Wait.TimedOut { break }
 }
 sync.unlock(&mutex)
 ```
 
-`ConditionWaitResult` contains `ok`, `status`, `kind` and the native `error`.
-`Signaled` and `TimedOut` are both successful outcomes. Signaled may represent a
-spurious wake. Timeout does not mean that the predicate is false: a signal can
-race with expiration. Zero returns TimedOut without unlocking. Negative
-nanoseconds return InvalidInput without unlocking. All other returns reacquire
-the mutex, including native or clock errors. Scheduling and mutex reacquisition
+The call returns `Wait.Signaled` or `Wait.TimedOut`, or fails with
+`io.IoErr`. Signaled may represent a spurious wake. Timeout does not mean that
+the predicate is false: a signal can race with expiration. Zero returns
+TimedOut without unlocking. Negative nanoseconds fail with InvalidInput
+without unlocking. All other returns reacquire the mutex, including native
+failures. Scheduling and mutex reacquisition
 can extend the total call duration beyond the timeout.
 
 Interrupted waits retry using the original monotonic deadline. Windows rounds

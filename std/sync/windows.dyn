@@ -43,8 +43,8 @@ fn native_wait_timeout(address: *AtomicU32, expected: u32, duration: i64) isize 
   if code == 1460 { return 1 }
   return 0 - #cast(isize, code)
 }
-fn native_sync_failure(code: isize) fail.Failure {
-  return io.from_windows("wait", "", code)
+fn native_sync_failure(code: isize) io.IoErr {
+  return io.windows_err(code)
 }
 
 fn native_wait_interrupted(_code: isize) bool {

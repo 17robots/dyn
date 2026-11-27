@@ -91,13 +91,13 @@ pub fn agg_slice(a: u64, b: u64) u64 {
   s := data[a % 8..8 + b % 8]
   total: u64 = 0
   for p in s { total += p }
-  return total + #cast(u64, #len(s))
+  return total + #cast(u64, s.len)
 }
 pub fn agg_index(a: u64) u64 { data: [4]u64 = [10, 20, 30, 40]
 return data[a] }
 pub fn agg_string(a: u64) u64 { text := "hello, native arm"
 part := text[a % 5..]
-return #cast(u64, part[0]) + #cast(u64, #len(part)) }
+return #cast(u64, part[0]) + #cast(u64, part.len) }
 fn shape_area(s: Shape) i64 {
   case s.kind {
     ShapeKind.Square => { return s.side * s.side }
@@ -115,10 +115,10 @@ pub fn agg_enum(a: i64, b: u64) i64 {
 }
 fn any_kind(v: any) u64 {
   case v {
-    i64 n => { return #cast(u64, (n % 100)) + 1000 }
-    f64 n => { _ = n
+    i64(n) => { return #cast(u64, (n % 100)) + 1000 }
+    f64(n) => { _ = n
     return 2000 }
-    Pair p => { return #cast(u64, (p.x % 10)) + 3000 }
+    Pair(p) => { return #cast(u64, (p.x % 10)) + 3000 }
     _ => { return 9 }
   }
 }
@@ -401,7 +401,6 @@ def build_program(rng, per_function):
     dispatch_source = '\n'.join(dispatchers)
     arms = '\n'.join(dispatch_arms)
     program = f'''use "std/io"
-use "std/fail"
 use "std/mem"
 use "std/process"
 use "std/strings"
@@ -410,11 +409,10 @@ use "std/strings"
 fn main() {{
   backing: [65536]u8
   arena := mem.arena_from_buffer(backing[..])
-  arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
-  if arguments_status.failed || #len(arguments) < 2 {{ #panic("case index required") }}
-  if !strings.valid(u64, arguments[1]) {{ #panic("bad case index") }}
-  index := strings.parse(u64, arguments[1])
+  arguments := process.arguments(arena) catch {{ #panic("case index required") }}
+  if arguments.len < 2 {{ #panic("case index required") }}
+  if !strings.valid<u64>(arguments[1]) {{ #panic("bad case index") }}
+  index := strings.parse<u64>(arguments[1])
   case index / 128 {{
 {arms}
     _ => {{ #panic("unknown case") }}

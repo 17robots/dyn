@@ -17,7 +17,7 @@ programs = [(path, source) for path in documents
             for source in re.findall(r'^```dyn\n(.*?)^```', path.read_text(), re.M | re.S)
             if re.search(r'\bfn main\s*\(', source)
             # Raw vendor bindings are generated per machine by `just vendor-bindings`.
-            and not re.search(r'^use "vendor/[^"]*/raw"', source, re.M)]
+            and not re.search(r'^use (?:[A-Za-z_][A-Za-z0-9_]* )?"vendor/[^"]*/raw"', source, re.M)]
 assert sum(path == ROOT / 'docs/guide/memory-patterns.md' for path, _ in programs) == 5
 with tempfile.TemporaryDirectory(prefix='dyn-doc-examples-') as temporary:
     for index, (document, source) in enumerate(programs):

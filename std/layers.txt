@@ -42,7 +42,6 @@ core std/embedded/uart
 core std/encoding/binary
 core std/encoding/json/scan
 core std/enums
-core std/fail
 core std/hash
 core std/image
 core std/image/color
@@ -57,6 +56,7 @@ core std/progress
 core std/rand
 core std/reflect
 core std/simd
+core std/slice
 core std/text/scanner
 core std/unicode/utf16
 core std/unicode/utf8
@@ -67,6 +67,7 @@ heap std/audio/wav
 heap std/bufio
 heap std/bytes/builder
 heap std/c
+heap std/collections
 heap std/compress/deflate
 heap std/compress/gzip
 heap std/container/array
@@ -107,6 +108,7 @@ heap std/io
 heap std/log
 heap std/math/big
 heap std/mem
+heap std/mem/heap
 heap std/net/url
 heap std/path
 heap std/semver
@@ -127,6 +129,7 @@ std std/compress/zstd
 std std/crypto/random
 std std/dynlib
 std std/event
+std std/fiber
 std std/font/system
 std std/fs
 std std/fs/capability

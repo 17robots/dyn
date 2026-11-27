@@ -8,9 +8,8 @@ def digits(n,b):
  sign='-' if n<0 else '';n=abs(n);out=''
  while n:out='0123456789abcdefghijklmnopqrstuvwxyz'[n%b]+out;n//=b
  return sign+(out or '0')
-header='''use "std/io" io
+header='''use io "std/io"
 use "std/strings"
-use "std/fail"
 use "std/fs"
 use "std/mem"
 fn require(ok: bool) { if !ok { #panic("integer parsing oracle") } }
@@ -49,19 +48,19 @@ with tempfile.TemporaryDirectory(prefix='dyn-string-integers-') as tmp:
   fn='test_'+name
   functions.append(f'''fn {fn}(data: []const u8) {{
  at: usize
- for at < #len(data) {{
+ for at < data.len {{
   base := #cast(u8,word(data,&at))
   length := #cast(usize,word(data,&at))
   expected := #cast({name},word(data,&at))
   valid := word(data,&at) != 0
   text := data[at..at+length]
   at += length
-  require(strings.parse_base({name},text,base) == expected)
-  if base == 10 {{ require(strings.valid({name},text) == valid)\n   require(strings.parse({name},text) == expected) }}
+  require(strings.parse_base<{name}>(text, base) == expected)
+  if base == 10 {{ require(strings.valid<{name}>(text) == valid)\n   require(strings.parse<{name}>(text) == expected) }}
  }}
 }}
 ''')
-  calls.append(f'if true {{ arena := mem.arena_alloc(16*mem.MiB)\n input_file: fail.Status\n input := fs.read_all(arena, &input_file, "{fixture}", 16*mem.MiB)\n  require(!input_file.failed)\n {fn}(input)\n mem.arena_release(arena) }}');count+=len(rows)
+  calls.append(f'if true {{ arena := mem.arena_alloc(16*mem.MiB)\n input := fs.read_all(arena, "{fixture}", 16*mem.MiB) catch {{ #panic("fixture") }}\n {fn}(input)\n mem.arena_release(arena) }}');count+=len(rows)
  (p/'main.dyn').write_text(header+'\n'.join(functions)+'\nfn main() {\n'+'\n'.join(calls)+'\n}\n')
  for mode in ('debug','release'):
   binary=p/mode;subprocess.run([DYN,'build',str(p),'--'+mode,'--no-cache','--quiet','--output',str(binary)],check=True,timeout=120)

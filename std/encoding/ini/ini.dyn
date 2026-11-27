@@ -1,8 +1,9 @@
-use "std/fail"
-use "std/bytes" byte_ops
+use io "std/io"
+use parse "std/parse"
+use byte_ops "std/bytes"
 use "std/mem"
 // Allocation-free INI scanner. Names and values borrow the input.
-// The first malformed line stops scanning: next fails with InvalidInput at
+// The first malformed line stops scanning: next fails with Invalid at
 // its offset, and the scanner remembers the line in error_line. Later calls
 // fail the same way.
 pub enum Kind { Section, Pair }
@@ -20,7 +21,7 @@ fn space(byte: u8) bool {
 }
 fn trim(source: []const u8) []const u8 {
   first: usize = 0
-  last := #len(source)
+  last := source.len
   for first < last && space(source[first]) {
     first += 1
   }
@@ -35,64 +36,63 @@ fn ended(state: *Scanner) Entry {
   return Entry{}
 }
 
-fn record(status: *fail.Status, state: *Scanner, line: usize, offset: usize) Entry {
+// A line without a section name or key: the scanner stays failed there.
+fn record(state: *Scanner, line: usize, offset: usize) parse.ParseErr {
   if !state.failed {
     state.failed = true
     state.error_offset = offset
     state.error_line = line
   }
-  fail.at(status, fail.Kind.InvalidInput, "parse INI", "a line without a section name or key", state.error_offset)
-  return ended(state)
+  state.ended = true
+  return parse.ParseErr.Invalid(state.error_offset)
 }
 
-pub fn next(status: *fail.Status, state: *Scanner) Entry {
-  if status == nil { return next(&fail.Status{}, state) }
-  if status.failed { return ended(state) }
-  if state.failed { return record(status, state, state.error_line, state.error_offset) }
-  for state.offset < #len(state.source) {
+pub fn next(state: *Scanner) Entry!parse.ParseErr {
+  if state.failed { fail record(state, state.error_line, state.error_offset) }
+  for state.offset < state.source.len {
     start := state.offset
     finish := start
-    for finish < #len(state.source) && state.source[finish] != '\n' && state.source[finish] != '\r' {
+    for finish < state.source.len && state.source[finish] != '\n' && state.source[finish] != '\r' {
       finish += 1
     }
     state.offset = finish
-    if state.offset < #len(state.source) && state.source[state.offset] == '\r' {
+    if state.offset < state.source.len && state.source[state.offset] == '\r' {
       state.offset += 1
     }
-    if state.offset < #len(state.source) && state.source[state.offset] == '\n' {
+    if state.offset < state.source.len && state.source[state.offset] == '\n' {
       state.offset += 1
     }
     state.line += 1
     line_number := state.line
     line := trim(state.source[start..finish])
-    if #len(line) == 0 || line[0] == ';' || line[0] == '#' { } else if line[0] == '[' {
+    if line.len == 0 || line[0] == ';' || line[0] == '#' { } else if line[0] == '[' {
       section_name := line[..0]
-      if #len(line) >= 3 && line[#len(line) - 1] == ']' {
-        section_name = trim(line[1..#len(line) - 1])
+      if line.len >= 3 && line[line.len - 1] == ']' {
+        section_name = trim(line[1..line.len - 1])
       }
-      if #len(section_name) == 0 {
-        return record(status, state, line_number, start)
+      if section_name.len == 0 {
+        fail record(state, line_number, start)
       } else {
         state.section = section_name
         return Entry{ section: section_name, kind: Kind.Section, line: line_number }
       }
     } else {
-      separator := #len(line)
+      separator := line.len
       scan: usize = 0
-      for scan < #len(line) {
+      for scan < line.len {
         if line[scan] == '=' {
           separator = scan
-          scan = #len(line)
+          scan = line.len
         } else {
           scan += 1
         }
       }
       key_name := line[..0]
-      if separator < #len(line) {
+      if separator < line.len {
         key_name = trim(line[..separator])
       }
-      if #len(key_name) == 0 {
-        return record(status, state, line_number, start)
+      if key_name.len == 0 {
+        fail record(state, line_number, start)
       } else {
         pair_value := trim(line[separator + 1..])
         return Entry{ section: state.section, key: key_name, value: pair_value, kind: Kind.Pair, line: line_number }
@@ -102,61 +102,42 @@ pub fn next(status: *fail.Status, state: *Scanner) Entry {
   return ended(state)
 }
 
-// The value of key in section, borrowing source; "" when it cannot be read,
-// and then the status says why: an absent key is NotFound, malformed text up
-// to the key InvalidInput at its offset, as next reports it. Read an optional
-// key with a status of its own.
-pub fn find(status: *fail.Status, source: []const u8, section: []const u8, key: []const u8) []const u8 {
-  if status == nil { return find(&fail.Status{}, source, section, key) }
-  if status.failed { return source[..0] }
+// The value of key in section, borrowing source. An absent key fails with
+// NotFound, malformed text up to the key with InvalidInput. Read an optional
+// key with catch and a default.
+pub fn find(source: []const u8, section: []const u8, key: []const u8) []const u8!io.IoErr {
   state := scanner(source)
   for {
-    item := next(status, &state)
-    if status.failed { return source[..0] }
+    item := next(&state) catch { fail .InvalidInput }
     if state.ended { break }
     if item.kind == Kind.Pair && byte_ops.equal(item.section, section) && byte_ops.equal(item.key, key) {
       return item.value
     }
   }
-  // "\"host\" is missing", leaving the path for the caller's file.
-  message: [160]u8
-  used: usize = 0
-  parts: [3][]const u8 = ["\"", key, "\" is missing"]
-  for part in parts {
-    for byte in part {
-      if used < #len(message) {
-        message[used] = byte
-        used += 1
-      }
-    }
-  }
-  fail.set(status, fail.make(fail.Kind.NotFound, "find INI key", "", message[..used]))
-  return source[..0]
+  fail .NotFound
 }
 
 // A materialized entry table. Entries still borrow source bytes, including
-// section names. Any malformed line fails the whole parse with InvalidInput
-// at its offset.
+// section names. Any malformed line fails the whole parse with Invalid at
+// its offset.
 // Ownership: table borrows the arena; entry text separately borrows source.
 // Invalidation: arena rewind, reset or release; keep source alive and unchanged.
 // Allocation: two scans, one exact-size table allocation; no hidden scratch.
 // Failure: stops at the first syntax error before allocating; a full fixed arena panics.
-pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) []Entry {
-  if status == nil { return parse(arena, &fail.Status{}, source) }
+pub fn parse(arena: *mem.Arena, source: []const u8) []Entry!parse.ParseErr {
   empty: []Entry
-  if status.failed { return empty }
   state := scanner(source)
   count: usize = 0
   for {
-    _ = next(status, &state)
+    _ = try next(&state)
     if state.ended { break }
     count += 1
   }
-  if status.failed || count == 0 { return empty }
-  entries := mem.push_array(Entry, arena, count)
+  if count == 0 { return empty }
+  entries := mem.push_array<Entry>(arena, count)
   state = scanner(source)
   for i in 0..count {
-    entries[i] = next(status, &state)
+    entries[i] = try next(&state)
   }
   return entries
 }

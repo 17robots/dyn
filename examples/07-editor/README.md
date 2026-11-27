@@ -12,9 +12,9 @@ Commands: `add TEXT`, `insert N TEXT`, `delete N`, `change N TEXT`, `undo`,
 ## What it teaches
 
 - **Writing a generic type.** [stack/stack.dyn](stack/stack.dyn) defines
-  `Stack(T)`, a stack for any element type. `pub struct Stack(T)` names the
-  parameter; `fn push(s: *Stack($T), value: $T)` infers `T` from its
-  arguments. Each use, like `stack.Stack(Edit)`, is checked as ordinary code
+  `Stack<T>`, a stack for any element type. `pub struct Stack<T>` names the
+  parameter; `fn push<T>(s: *Stack<T>, value: T)` infers `T` from its
+  arguments. Each use, like `stack.Stack<Edit>`, is checked as ordinary code
   for that type.
 - **A local module.** `use "./stack"` imports the `stack` directory next to
   `main.dyn`. Only `pub` declarations are visible outside it, and they are
@@ -37,6 +37,6 @@ Commands: `add TEXT`, `insert N TEXT`, `delete N`, `change N TEXT`, `undo`,
 
 1. Add `join N`, which joins line N and the next one. What does its inverse
    need to remember?
-2. Limit the undo history to 100 edits. Which part of `Stack(T)` changes?
-3. Write a generic `fn last(s: *const Stack($T)) *T` that returns `nil` for
+2. Limit the undo history to 100 edits. Which part of `Stack<T>` changes?
+3. Write a generic `fn last<T>(s: *const Stack<T>) *T` that returns `nil` for
    an empty stack, and use it to show the edit `undo` would reverse.

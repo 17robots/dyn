@@ -15,35 +15,35 @@ even where the kernel would otherwise back them with 2 MiB huge pages. Handlers 
 ordinary `http.Handler` shape and run on the worker that owns the connection.
 
 ```dyn
-use "std/fail"
+use "std/io"
 use "std/mem"
 use "std/net"
 use "std/net/http"
 use "std/net/http/evented"
 
 struct App {
-  router: http.Routes(App),
-  routes: [16]http.TypedRoute(App),
+  router: http.Routes<App>,
+  routes: [16]http.TypedRoute<App>,
 }
 
-fn health(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
-  http.text(status, response, 200, "ok\n")
+fn health(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
+  try http.text(response, 200, "ok\n")
 }
 
-fn handle(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
-  http.serve_routes(status, &app.router, response, request)
+fn handle(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
+  try http.serve_routes(&app.router, response, request)
 }
 
-fn run(status: *fail.Status, app: *App, workers: []evented.Worker) {
+fn run(app: *App, workers: []evented.Worker) !io.IoErr {
   app.router = http.typed_routes(app.routes[..], app)
-  http.add(status, &app.router, "GET", "/health", health)
-  typed := http.Typed(App){ state: app, handler: handle }
+  try http.add(&app.router, "GET", "/health", health)
+  typed := http.Typed<App>{ state: app, handler: handle }
   binding := http.bind(&typed)
   config := evented.default_config()
-  arena := mem.arena_alloc(evented.storage_size(config, #len(workers)) + mem.MiB)
+  arena := mem.arena_alloc(evented.storage_size(config, workers.len) + mem.MiB)
   defer mem.arena_release(arena)
   // Serves until SIGINT or SIGTERM, then stops and joins the workers.
-  evented.serve(arena, status, workers, net.ipv4(127, 0, 0, 1, 8080), config, binding.handler, binding.context)
+  try evented.serve(arena, workers, net.ipv4(127, 0, 0, 1, 8080), config, binding.handler, binding.context)
 }
 ```
 
@@ -55,9 +55,9 @@ text, JSON with `Cache-Control: no-store`, and a 303 that can set cookies.
 
 A handler that fails before it responds gets a `500 internal server error`
 from the server, and the failure goes to `Config.access_log`; the connection
-closes after. So a handler never has to answer its own failures: it passes
-its status to every call, and the first failure ends the request. A second
-response to the same request fails with `InvalidState`, "already responded".
+closes after. So a handler never has to answer its own failures: it puts
+`try` on every call, and the first failure ends the request. A second
+response to the same request fails with `InvalidInput`.
 `Config.on_too_large` and `Config.on_busy` replace the server's own 413 and
 503 replies with your handlers, such as a JSON error body for an API.
 
@@ -78,9 +78,9 @@ Every response carries `Date`, formatted once per loop pass by the server.
 `1xx`, `204` and `304` heads carry no `Content-Type` or `Content-Length`, and
 `respond` rejects a body for them.
 
-A handler records any failure in its `status`; the server then closes the
-connection after the response. A response whose write fails is finished:
-later writes fail with `InvalidState` rather than send a broken message.
+When a handler fails, the server closes the connection after the response.
+A response whose write fails is finished: later writes fail with
+`InvalidInput` rather than send a broken message.
 
 `evented` is the one server. Outside it, `http.serve_stream` runs a handler
 over any `io.Reader` and `io.Writer` pair, one request at a time on the
@@ -92,23 +92,22 @@ calling thread: for a single-threaded or embedded server, or a test.
 such as a SQLite table:
 
 ```dyn
-use "std/fail"
 use "std/net/http"
-use "std/net/http/session" sessions
+use sessions "std/net/http/session"
 
 // cache is this worker's; shared is one for the whole server.
 fn current(cache: *sessions.Cache, shared: *sessions.Shared, request: *const http.Request, now: i64) sessions.Session {
   token := sessions.token(request)
-  missing: fail.Status
-  session := sessions.cached(&missing, cache, shared, token, now)
-  if !missing.failed || #len(token) == 0 { return session }
-  // Look token up in the store; on a hit, keep the answer:
-  // return sessions.remember(&status, cache, token, user, csrf, name, expires)
+  session := sessions.cached(cache, shared, token, now) catch {
+    // Look token up in the store; on a hit, keep the answer:
+    // return sessions.remember(cache, token, user, csrf, name, expires) catch ...
+    return sessions.Session{}
+  }
   return session
 }
 ```
 
-`sessions.start(arena, &status, seconds)` makes a token, a CSRF secret and the
+`sessions.start(arena, seconds)` makes a token, a CSRF secret and the
 cookie (`sid`, HttpOnly, SameSite=Lax) for a new session to store: pass
 `started.cookie` in `ResponseOptions.cookies` or to `http.redirect`. After
 deleting one from the store, `sessions.forget(&shared)` empties every worker's
@@ -145,7 +144,7 @@ in per-connection storage from `evented.job` (`Config.job_size` bytes):
 
 ```dyn
 use "std/crypto/password"
-use "std/fail"
+use "std/io"
 use "std/mem"
 use "std/net/http"
 use "std/net/http/evented"
@@ -157,43 +156,41 @@ fn check(job: *Login) {
   _ = job
 }
 
-fn answer(status: *fail.Status, response: *http.Response, request: *const http.Request, job: *Login) {
+fn answer(response: *http.Response, request: *const http.Request, job: *Login) !io.IoErr {
   if !job.valid {
-    http.respond(status, response, "bad credentials\n", http.ResponseOptions{ status: http.StatusUnauthorized })
+    try http.respond(response, "bad credentials\n", http.ResponseOptions{ status: http.StatusUnauthorized })
     return
   }
-  http.respond(status, response, "welcome\n", http.ResponseOptions{})
+  try http.respond(response, "welcome\n", http.ResponseOptions{})
 }
 
-fn login(status: *fail.Status, response: *http.Response, request: *const http.Request) {
-  job := evented.job(Login, response)
-  if job == nil || #len(request.body) > #len(job.password) {
-    http.respond(status, response, "too large\n", http.ResponseOptions{ status: http.StatusPayloadTooLarge })
+fn login(response: *http.Response, request: *const http.Request) !io.IoErr {
+  job := evented.job<Login>(response)
+  if job == nil || request.body.len > job.password.len {
+    try http.respond(response, "too large\n", http.ResponseOptions{ status: http.StatusPayloadTooLarge })
     return
   }
   job.length = mem.copy(job.password[..], request.body)
   // A full pool queue fails the hand-off; answer 503 instead.
-  handed: fail.Status
-  evented.run(&handed, response, job, check, answer)
-  if handed.failed {
-    http.respond(status, response, "busy\n", http.ResponseOptions{ status: http.StatusServiceUnavailable })
+  evented.run(response, job, check, answer) catch {
+    try http.respond(response, "busy\n", http.ResponseOptions{ status: http.StatusServiceUnavailable })
   }
 }
 ```
 
 Work that calls C libraries, such as SQLite, needs a pool on threads with
-libc state: `pool.start_spawned(arena, &status, threads, capacity, stack, &posix.spawner())`.
+libc state: `pool.start_spawned(arena, threads, capacity, stack, &posix.spawner())`.
 Pass it as `Config.pool`. `join` waits for running jobs.
 
 ## Grouping work: later
 
-`evented.later(&status, response, data, finish)` answers a request after the worker
+`evented.later(response, data, finish)` answers a request after the worker
 has handled every connection that is ready now, on the same thread, before
 it waits again. Requests that arrive together can share work, such as one
 database transaction for many writes: each handler queues its row and calls
 `later`; the first `finish` of the pass commits them all, and each `finish`
 then replies. `data` lives in job storage (`evented.job`), like `run`.
-HTTP/2 and HTTP/3 streams get InvalidState, so call `finish` yourself there.
+HTTP/2 and HTTP/3 streams get InvalidInput, so call `finish` yourself there.
 Chirp creates posts this way: 2.3 times as many per second, with a quarter
 of the p99 latency.
 
@@ -233,22 +230,21 @@ container left open).
 `Trusted` markup as it is:
 
 ```dyn
-use "std/fail"
 use "std/html"
-use "std/mem"
+use "std/io"
 use "std/net/http"
 
-fn greet(status: *fail.Status, response: *http.Response, storage: []u8, name: []const u8) {
-  out := http.page_writer(status, response, storage)
+fn greet(response: *http.Response, storage: []u8, name: []const u8) !io.IoErr {
+  out := http.page_writer(response, storage)
   html.print(&out, "<!doctype html><title>Hi</title><p>Hello, <b>{}</b>!</p>", name)
-  http.page(status, response, 200, &out)
+  try http.page(response, 200, &out)
 }
 ```
 
 `http.page_writer` renders into the send buffer when it is free, so the page
 goes out without a copy, and `http.page` sends it as HTML, not cached, with
 `Content-Security-Policy: default-src 'self'` and `nosniff`. A page too large
-for its storage fails the status, and the server answers 500.
+for its storage fails with Capacity, and the server answers 500.
 
 ## Static files
 
@@ -265,7 +261,7 @@ past the end gets 416. Fingerprinted
 names can use `"public, max-age=31536000, immutable"`.
 
 For dynamic responses, set `Config.compress_level` (1 is fast, 6 matches
-zlib's default size) and answer with `evented.respond_compressed(status, response,
+zlib's default size) and answer with `evented.respond_compressed(response,
 request, body, options)`. It gzips straight into the send buffer when the
 content type compresses, the body has at least `http.CompressMinimum` (1 KiB)
 bytes, the client accepts gzip and the result is smaller, and sends `Vary:
@@ -286,38 +282,40 @@ decoded in place once complete.
 Bodies larger than any block go to the handler set with
 `config.large_body = evented.large_bodies(large_body)`, with the head alone.
 It answers from the head, or reads the body as it arrives with
-`evented.receive_body(&status, response, data, chunk, finish)`. Without
+`evented.receive_body(response, data, chunk, finish)`. Without
 `large_bodies` such requests get 413, and the streaming code is not linked:
 
 ```dyn
-use "std/fail"
+use "std/io"
 use "std/net/http"
 use "std/net/http/evented"
 
 struct Upload { count: usize }
 
 fn piece(job: *Upload, bytes: []const u8) bool {
-  job.count += #len(bytes)
+  job.count += bytes.len
   return job.count <= 100 * 1024 * 1024
 }
 
-fn done(status: *fail.Status, response: *http.Response, request: *const http.Request, job: *Upload, end: evented.BodyEnd) {
+fn done(response: *http.Response, request: *const http.Request, job: *Upload, end: evented.BodyEnd) !io.IoErr {
   if end != evented.BodyEnd.Complete {
-    http.respond(status, response, "upload failed\n", http.ResponseOptions{ status: http.StatusBadRequest })
+    try http.respond(response, "upload failed\n", http.ResponseOptions{ status: http.StatusBadRequest })
     return
   }
-  http.respond(status, response, "stored\n", http.ResponseOptions{})
+  try http.respond(response, "stored\n", http.ResponseOptions{})
 }
 
-fn large_body(status: *fail.Status, response: *http.Response, request: *const http.Request) {
-  job := evented.job(Upload, response)
-  reading: fail.Status
-  if job != nil {
-    evented.receive_body(&reading, response, job, piece, done)
+fn busy(response: *http.Response) !io.IoErr {
+  try http.respond(response, "busy\n", http.ResponseOptions{ status: http.StatusServiceUnavailable })
+}
+
+fn large_body(response: *http.Response, request: *const http.Request) !io.IoErr {
+  job := evented.job<Upload>(response)
+  if job == nil {
+    try busy(response)
+    return
   }
-  if job == nil || reading.failed {
-    http.respond(status, response, "busy\n", http.ResponseOptions{ status: http.StatusServiceUnavailable })
-  }
+  evented.receive_body(response, job, piece, done) catch { try busy(response) }
 }
 ```
 
@@ -337,10 +335,10 @@ handler returns, such as `text/event-stream`; format events with
 `http.sse_event`. `evented.upgrade` switches a request to a WebSocket. Both
 return a `Peer`, valid from any thread:
 
-- `evented.send(&status, workers, peer, payload, binary)` queues one message.
-- `evented.publish(&status, workers, topic, payload, binary)` reaches every stream and
+- `evented.send(workers, peer, payload, binary)` queues one message.
+- `evented.publish(workers, topic, payload, binary)` reaches every stream and
   socket opened with that topic, on every worker.
-- `evented.close_peer(&status, workers, peer)` ends a stream or sends a close frame.
+- `evented.close_peer(workers, peer)` ends a stream or sends a close frame.
 
 Messages pass through each worker's inbox (`Config.inbox_messages`,
 `Config.inbox_bytes`); a full inbox fails the post, so the caller decides
@@ -369,7 +367,7 @@ their SQL, and runs them in one call each. Open one connection per worker
 and pick it with `evented.worker_index`; then no handler shares a statement.
 
 ```dyn
-use "std/fail"
+use "std/io"
 use "std/mem"
 use "std/net/http"
 use "std/net/http/evented"
@@ -377,18 +375,18 @@ use "vendor/sqlite"
 
 struct Database { handle: sqlite.Database, statements: sqlite.Cache }
 
-fn name_of(status: *fail.Status, databases: []Database, response: *http.Response, id: i64) []const u8 {
+fn name_of(databases: []Database, response: *http.Response, id: i64) []const u8!io.IoErr {
   statements := &databases[evented.worker_index(response)].statements
-  lookup := sqlite.cached(status, statements, "SELECT name FROM user WHERE id=?1")
-  if !sqlite.first(status, lookup, id) { return "" }
+  lookup := try sqlite.cached(statements, "SELECT name FROM user WHERE id=?1")
+  if !(try sqlite.first(lookup, id)) { return "" }
   defer sqlite.done(lookup)
   return sqlite.text(evented.arena(response), lookup, 0)
 }
 ```
 
-`sqlite.run(&status, statement, values...)` binds, steps to the end and
-resets; a failure lands on the status, so `sqlite.constraint(&status.failure)`
-tells a duplicate key from other errors. `first` stops at the first row,
+`sqlite.run(statement, values...)` binds, steps to the end and resets, and
+`sqlite.constraint(err)` on its failure tells a duplicate key from other
+errors. `first` stops at the first row,
 `query` and `next` walk rows, and `integer`, `bytes` (borrowed) and `text`
 (copied into an arena) read columns. Copy borrowed bytes before the next
 step. See [sqlite.md](sqlite.md).
@@ -447,7 +445,7 @@ pool started earlier cannot take the signal.
 
 Set `Config.http2 = evented.http2()` and every connection may speak HTTP/2 (RFC 9113): TLS
 clients that pick `h2` through ALPN, which browsers do once
-`https.offer_http2(&status, context)` offers it, and cleartext clients that start with
+`https.offer_http2(context)` offers it, and cleartext clients that start with
 the connection preface (prior knowledge, as `curl --http2-prior-knowledge`
 and reverse proxies do). Others keep HTTP/1.1 on the same port.
 
@@ -502,7 +500,7 @@ HTTP/2 over TLS for production; most deployments put a proxy in front for
 HTTP/3 anyway.
 
 Set `Config.http3 = evented.http3()` (with `Config.http2`) and give `Config.quic` a QUIC stack:
-`https.quic(https.quic_context(arena, "cert.pem", "key.pem").value)` from
+`https.quic(try https.quic_context(arena, "cert.pem", "key.pem"))` from
 `std/net/http/evented/tls`, which uses OpenSSL's QUIC server (OpenSSL 3.5 or
 later). Each worker then opens a UDP socket at the TCP listener's address
 with SO_REUSEPORT, and every TCP response carries
@@ -512,7 +510,7 @@ request.
 ```dyn
 use "std/mem"
 use "std/net/http/evented"
-use "std/net/http/evented/tls" https
+use https "std/net/http/evented/tls"
 
 fn http3_config(quic: *const evented.Quic) evented.Config {
   config := evented.default_config()

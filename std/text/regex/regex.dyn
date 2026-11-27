@@ -1,5 +1,7 @@
-use "std/mem" mem
-use "std/fail"
+use mem "std/mem"
+use parse "std/parse"
+// What stopped the compiler.
+enum Problem { None, Invalid, TooLarge }
 // Where a group matched, as a half-open interval. A group that took no part in
 // the match is Span{}.
 pub struct Span { start: usize, end: usize }
@@ -12,7 +14,7 @@ struct Instruction { op: u8, byte: u8, x: usize, y: usize, z: usize }
 // Copies share mutable workspace: serialize find/next calls on a program and its
 // copies. Compile separately for concurrent use. Reset/release invalidates all.
 // A program from a failed compile matches nothing.
-pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Span, error: fail.Kind, valid: bool }
+pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Span, error: Problem, valid: bool }
 
 const Char: u8 = 1
 const Any: u8 = 2
@@ -41,7 +43,7 @@ fn token(state: *CompileState, op: u8, byte: u8, x: usize, y: usize) bool {
     state.used += 1
     return true
   }
-  if state.used >= #len(state.tokens) {
+  if state.used >= state.tokens.len {
     state.capacity = true
     state.ok = false
     return false
@@ -56,7 +58,7 @@ fn closing(pattern: []const u8, at: usize, close: u8) usize {
   i := at
   escaped := false
   in_class := false
-  for i < #len(pattern) {
+  for i < pattern.len {
     b := pattern[i]
     if escaped {
       escaped = false
@@ -76,7 +78,7 @@ fn closing(pattern: []const u8, at: usize, close: u8) usize {
     }
     i += 1
   }
-  return #len(pattern)
+  return pattern.len
 }
 
 fn expression(state: *CompileState, lo: usize, hi: usize) bool {
@@ -333,15 +335,15 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       in_class = false
     } else if !in_class && byte == '(' {
       nesting += 1
-      if nesting > 128 { return Program{ error: fail.Kind.Capacity } }
+      if nesting > 128 { return Program{ error: Problem.TooLarge } }
     } else if !in_class && byte == ')' && nesting > 0 {
       nesting -= 1
     }
   }
   state := CompileState{ pattern: pattern, tokens: workspace, ok: true }
-  if #len(pattern) == 0 || !expression(&state, 0, #len(pattern)) || !state.ok {
-    if state.capacity { return Program{ error: fail.Kind.Capacity } }
-    return Program{ error: fail.Kind.InvalidInput }
+  if pattern.len == 0 || !expression(&state, 0, pattern.len) || !state.ok {
+    if state.capacity { return Program{ error: Problem.TooLarge } }
+    return Program{ error: Problem.Invalid }
   }
   top: usize = 0
   used: usize = 0
@@ -349,8 +351,8 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
   for i < state.used {
     item := workspace[i]
     if item.op < ConcatToken {
-      if used >= #len(storage) || top * 2 + 1 >= #len(scratch) {
-        return Program{ error: fail.Kind.Capacity }
+      if used >= storage.len || top * 2 + 1 >= scratch.len {
+        return Program{ error: Problem.TooLarge }
       }
       storage[used] = item
       part: usize = 0
@@ -364,7 +366,7 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       used += 1
       top += 1
     } else if item.op == ConcatToken {
-      if top < 2 { return Program{ error: fail.Kind.InvalidInput } }
+      if top < 2 { return Program{ error: Problem.Invalid } }
       right := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       left := Fragment{ start: scratch[(top - 2) * 2], out: scratch[(top - 2) * 2 + 1] }
       patch_list(storage, left.out, right.start)
@@ -372,8 +374,8 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       scratch[(top - 1) * 2] = left.start
       scratch[(top - 1) * 2 + 1] = right.out
     } else if item.op == AlternateToken {
-      if top < 2 { return Program{ error: fail.Kind.InvalidInput } }
-      if used >= #len(storage) { return Program{ error: fail.Kind.Capacity } }
+      if top < 2 { return Program{ error: Problem.Invalid } }
+      if used >= storage.len { return Program{ error: Problem.TooLarge } }
       right2 := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       left2 := Fragment{ start: scratch[(top - 2) * 2], out: scratch[(top - 2) * 2 + 1] }
       storage[used] = Instruction{ op: Split, x: left2.start, y: right2.start }
@@ -383,8 +385,8 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       scratch[(top - 1) * 2 + 1] = joined
       used += 1
     } else if item.op == StarToken || item.op == PlusToken || item.op == OptionalToken {
-      if top < 1 { return Program{ error: fail.Kind.InvalidInput } }
-      if used >= #len(storage) { return Program{ error: fail.Kind.Capacity } }
+      if top < 1 { return Program{ error: Problem.Invalid } }
+      if used >= storage.len { return Program{ error: Problem.TooLarge } }
       value := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       storage[used] = Instruction{ op: Split, x: value.start }
       if item.op == StarToken {
@@ -402,25 +404,23 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
     }
     i += 1
   }
-  if top != 1 { return Program{ error: fail.Kind.InvalidInput } }
-  if used >= #len(storage) { return Program{ error: fail.Kind.Capacity } }
+  if top != 1 { return Program{ error: Problem.Invalid } }
+  if used >= storage.len { return Program{ error: Problem.TooLarge } }
   start := scratch[0]
   storage[used] = Instruction{ op: Accept }
   patch_list(storage, scratch[1], used)
   used += 1
-  return Program{ pattern: pattern, code: storage[..used], start: start, groups: state.groups, error: fail.Kind.Ok, valid: true }
+  return Program{ pattern: pattern, code: storage[..used], start: start, groups: state.groups, error: Problem.None, valid: true }
 }
 
 // Arena exhaustion/size overflow panics, like other arena producers. A
-// malformed pattern fails with InvalidInput at the offending byte. Nesting is
+// malformed pattern fails with Invalid at the offending byte. Nesting is
 // limited to 128.
-pub fn compile(arena: *mem.Arena, status: *fail.Status, pattern: []const u8) Program {
-  if status == nil { return compile(arena, &fail.Status{}, pattern) }
-  if status.failed { return Program{} }
+pub fn compile(arena: *mem.Arena, pattern: []const u8) Program!parse.ParseErr {
   depth: usize = 0
   escaped := false
   in_class := false
-  for i in 0..#len(pattern) {
+  for i in 0..pattern.len {
     b := pattern[i]
     if escaped {
       escaped = false
@@ -432,34 +432,31 @@ pub fn compile(arena: *mem.Arena, status: *fail.Status, pattern: []const u8) Pro
       in_class = false
     } else if !in_class && b == '(' {
       depth += 1
-      if depth > 128 {
-        fail.at(status, fail.Kind.InvalidInput, "compile pattern", "nesting too deep", i)
-        return Program{}
-      }
+      // Nesting too deep.
+      if depth > 128 { fail parse.ParseErr.Invalid(i) }
     } else if !in_class && b == ')' && depth > 0 {
       depth -= 1
     }
   }
   count := CompileState{ pattern: pattern, counting: true, ok: true }
-  if #len(pattern) == 0 || !expression(&count, 0, #len(pattern)) || !count.ok {
+  if pattern.len == 0 || !expression(&count, 0, pattern.len) || !count.ok {
     if count.capacity {
       #panic("regex compile size overflow")
     }
-    fail.at(status, fail.Kind.InvalidInput, "compile pattern", "malformed pattern", count.offset)
-    return Program{}
+    fail parse.ParseErr.Invalid(count.offset)
   }
   if count.used > (NoPatch - 1) / 2 {
     #panic("regex compile size overflow")
   }
-  retained := mem.push_array(u8, arena, #len(pattern))
-  for i in 0..#len(pattern) {
+  retained := mem.push_array<u8>(arena, pattern.len)
+  for i in 0..pattern.len {
     retained[i] = pattern[i]
   }
-  storage := mem.push_array(Instruction, arena, count.used + 1)
+  storage := mem.push_array<Instruction>(arena, count.used + 1)
   // Temporary compiler allocations are rewound after code generation.
   mark := mem.arena_mark(arena)
-  tokens := mem.push_array(Instruction, arena, count.used)
-  scratch := mem.push_array(usize, arena, count.used * 2)
+  tokens := mem.push_array<Instruction>(arena, count.used)
+  scratch := mem.push_array<usize>(arena, count.used * 2)
   program := compile_into(retained, storage, tokens, scratch)
   mem.arena_rewind(arena, mark)
   if !program.valid {
@@ -469,8 +466,8 @@ pub fn compile(arena: *mem.Arena, status: *fail.Status, pattern: []const u8) Pro
   if required == 0 {
     #panic("regex match size overflow")
   }
-  program.workspace = mem.push_array(usize, arena, required)
-  program.captures = mem.push_array(Span, arena, program.groups)
+  program.workspace = mem.push_array<usize>(arena, required)
+  program.captures = mem.push_array<Span>(arena, program.groups)
   return program
 }
 
@@ -481,7 +478,7 @@ fn class_matches(program: Program, instruction: Instruction, byte: u8) bool {
 // Thread rows contain a program counter and start/end offsets per capture.
 // An unset end marks a capture as incomplete. Lists retain leftmost-first order.
 fn copy_thread(destination: []usize, source: []usize) {
-  for i in 0..#len(destination) {
+  for i in 0..destination.len {
     destination[i] = source[i]
   }
 }
@@ -495,7 +492,7 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
     row := pending[top * stride..(top + 1) * stride]
     for true {
       pc := row[0]
-      if pc >= #len(program.code) || seen[pc] != 0 { break }
+      if pc >= program.code.len || seen[pc] != 0 { break }
       seen[pc] = 1
       instruction := program.code[pc]
       if instruction.op == Split {
@@ -521,7 +518,7 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
         if at != 0 { break }
         row[0] = instruction.x
       } else if instruction.op == End {
-        if at != #len(text) { break }
+        if at != text.len { break }
         row[0] = instruction.x
       } else {
         copy_thread(output[used.* * stride..(used.* + 1) * stride], row)
@@ -535,14 +532,14 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
 // Private workspace sizing. Zero means invalid
 // program or size overflow. Space depends on the program, never on input length.
 fn workspace_size(program: Program, capture_count: usize) usize {
-  if !program.valid || #len(program.code) == 0 { return 0 }
+  if !program.valid || program.code.len == 0 { return 0 }
   groups := capture_count
   if groups > program.groups {
     groups = program.groups
   }
   if groups > (NoPatch - 1) / 2 { return 0 }
   stride := groups * 2 + 1
-  n := #len(program.code)
+  n := program.code.len
   if n > (NoPatch - 1) / 3 { return 0 }
   rows := n * 3 + 1
   if stride > (NoPatch - n) / rows { return 0 }
@@ -554,26 +551,26 @@ fn workspace_size(program: Program, capture_count: usize) usize {
 // and therefore retains the existing worst-case quadratic search behavior.
 // Returns whether it matched, with the whole match in whole.
 fn execute(program: Program, text: []const u8, captures: []Span, workspace: []usize, from: usize, whole: *Span) bool {
-  for i in 0..#len(captures) {
+  for i in 0..captures.len {
     captures[i] = Span{}
   }
-  required := workspace_size(program, #len(captures))
+  required := workspace_size(program, captures.len)
   if !program.valid { return false }
-  if required == 0 || #len(workspace) < required {
+  if required == 0 || workspace.len < required {
     #panic("regex workspace invariant")
   }
-  groups := #len(captures)
+  groups := captures.len
   if groups > program.groups {
     groups = program.groups
   }
   stride := groups * 2 + 1
-  n := #len(program.code)
+  n := program.code.len
   current := workspace[..n * stride]
   following := workspace[n * stride..2 * n * stride]
   pending := workspace[2 * n * stride..(3 * n + 1) * stride]
   seen := workspace[(3 * n + 1) * stride..required]
   start := from
-  for start <= #len(text) {
+  for start <= text.len {
     for i in 0..n {
       seen[i] = 0
     }
@@ -604,7 +601,7 @@ fn execute(program: Program, text: []const u8, captures: []Span, workspace: []us
           }
           break
         }
-        if at < #len(text) {
+        if at < text.len {
           consumes := instruction.op == Any ||
             (instruction.op == Char && instruction.byte == text[at]) ||
             (instruction.op == Class && class_matches(program, instruction, text[at]))
@@ -629,24 +626,16 @@ fn execute(program: Program, text: []const u8, captures: []Span, workspace: []us
   return false
 }
 
-// The first match in text. NotFound when there is none; InvalidState for a
-// program from a failed compile. Reuses arena-reserved workspace: matching
-// itself allocates nothing.
-pub fn find(status: *fail.Status, program: Program, text: []const u8) Match {
-  if status == nil { return find(&fail.Status{}, program, text) }
-  if status.failed { return Match{} }
-  return find_from(status, program, text, 0)
+// The first match in text; fails when there is none. A program that did not
+// come from compile panics. Reuses arena-reserved workspace: matching itself
+// allocates nothing.
+pub fn find(program: Program, text: []const u8) Match! {
+  return try find_from(program, text, 0)
 }
-fn find_from(status: *fail.Status, program: Program, text: []const u8, from: usize) Match {
-  if !program.valid {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "find match", program.pattern, "the pattern did not compile"))
-    return Match{}
-  }
+fn find_from(program: Program, text: []const u8, from: usize) Match! {
+  if !program.valid { #panic("regex.find: the program did not come from compile") }
   whole := Span{}
-  if !execute(program, text, program.captures, program.workspace, from, &whole) {
-    fail.set(status, fail.make(fail.Kind.NotFound, "find match", program.pattern, "no match"))
-    return Match{}
-  }
+  if !execute(program, text, program.captures, program.workspace, from, &whole) { fail }
   return Match{ start: whole.start, end: whole.end, captures: program.captures }
 }
 // Whether pattern matches anywhere in text.
@@ -657,22 +646,22 @@ pub fn matches(program: Program, text: []const u8) bool {
 
 fn atom(pattern: []const u8, at: usize, byte: u8) bool {
   if pattern[at] == '.' { return true }
-  if pattern[at] == '\\' && at + 1 < #len(pattern) { return pattern[at + 1] == byte }
+  if pattern[at] == '\\' && at + 1 < pattern.len { return pattern[at + 1] == byte }
   if pattern[at] == '[' {
     i := at + 1
     inverted := false
-    if i < #len(pattern) && pattern[i] == '^' {
+    if i < pattern.len && pattern[i] == '^' {
       inverted = true
       i += 1
     }
     found := false
-    for i < #len(pattern) && pattern[i] != ']' {
+    for i < pattern.len && pattern[i] != ']' {
       first := pattern[i]
-      if first == '\\' && i + 1 < #len(pattern) {
+      if first == '\\' && i + 1 < pattern.len {
         i += 1
         first = pattern[i]
       }
-      if i + 2 < #len(pattern) && pattern[i + 1] == '-' && pattern[i + 2] != ']' {
+      if i + 2 < pattern.len && pattern[i + 1] == '-' && pattern[i + 2] != ']' {
         last := pattern[i + 2]
         if byte >= first && byte <= last {
           found = true
@@ -692,11 +681,11 @@ fn atom(pattern: []const u8, at: usize, byte: u8) bool {
 }
 
 fn width(pattern: []const u8, at: usize) usize {
-  if pattern[at] == '\\' && at + 1 < #len(pattern) { return 2 }
+  if pattern[at] == '\\' && at + 1 < pattern.len { return 2 }
   if pattern[at] == '[' {
     i := at + 1
-    for i < #len(pattern) {
-      if pattern[i] == '\\' && i + 1 < #len(pattern) {
+    for i < pattern.len {
+      if pattern[i] == '\\' && i + 1 < pattern.len {
         i += 2
       } else if pattern[i] == ']' {
         return i - at + 1
@@ -709,11 +698,11 @@ fn width(pattern: []const u8, at: usize) usize {
 }
 
 fn counted(pattern: []const u8, at: usize, minimum: *usize, maximum: *usize, unbounded: *bool, after: *usize) bool {
-  if at >= #len(pattern) || pattern[at] != '{' { return false }
+  if at >= pattern.len || pattern[at] != '{' { return false }
   i := at + 1
   min: usize = 0
   digits: usize = 0
-  for i < #len(pattern) && pattern[i] >= '0' && pattern[i] <= '9' {
+  for i < pattern.len && pattern[i] >= '0' && pattern[i] <= '9' {
     digit := #cast(usize, (pattern[i] - '0'))
     if min > (NoPatch - digit) / 10 { return false }
     min = min * 10 + digit
@@ -723,13 +712,13 @@ fn counted(pattern: []const u8, at: usize, minimum: *usize, maximum: *usize, unb
   if digits == 0 { return false }
   max := min
   unlimited := false
-  if i < #len(pattern) && pattern[i] == ',' {
+  if i < pattern.len && pattern[i] == ',' {
     i += 1
     unlimited = true
-    if i < #len(pattern) && pattern[i] >= '0' && pattern[i] <= '9' {
+    if i < pattern.len && pattern[i] >= '0' && pattern[i] <= '9' {
       max = 0
       unlimited = false
-      for i < #len(pattern) && pattern[i] >= '0' && pattern[i] <= '9' {
+      for i < pattern.len && pattern[i] >= '0' && pattern[i] <= '9' {
         digit2 := #cast(usize, (pattern[i] - '0'))
         if max > (NoPatch - digit2) / 10 { return false }
         max = max * 10 + digit2
@@ -737,7 +726,7 @@ fn counted(pattern: []const u8, at: usize, minimum: *usize, maximum: *usize, unb
       }
     }
   }
-  if i >= #len(pattern) || pattern[i] != '}' || (!unlimited && max < min) { return false }
+  if i >= pattern.len || pattern[i] != '}' || (!unlimited && max < min) { return false }
   minimum.* = min
   maximum.* = max
   unbounded.* = unlimited
@@ -755,18 +744,16 @@ pub fn iterator(program: Program, text: []const u8) Iterator {
 // After an empty match the search moves on one byte.
 pub fn next(state: *Iterator) Match {
   if state.ended { return Match{} }
-  if !state.program.valid || state.offset > #len(state.text) {
+  if !state.program.valid || state.offset > state.text.len {
     state.ended = true
     return Match{}
   }
-  missing: fail.Status
-  result := find_from(&missing, state.program, state.text, state.offset)
-  if missing.failed {
+  result := find_from(state.program, state.text, state.offset) catch {
     state.ended = true
     return Match{}
   }
   state.offset = result.end
-  if result.end == result.start || result.end == #len(state.text) {
+  if result.end == result.start || result.end == state.text.len {
     state.offset = result.end + 1
   }
   return result

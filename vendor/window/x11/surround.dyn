@@ -4,37 +4,18 @@
 // the libX11 protocol transport currently audited. Do not register a callback
 // that only works under a synthetic test: see the source evidence in
 // docs/internals/xim-surrounding-support.md. Preedit remains independent.
-pub fn set_surrounding_text(status: *fail.Status, window: *Window, text: []const u8, cursor, anchor: usize, token: u64) {
-  if status == nil {
-    set_surrounding_text(&fail.Status{}, window, text, cursor, anchor, token)
-    return
+pub fn set_surrounding_text(window: *Window, text: []const u8, cursor, anchor: usize, token: u64) !io.IoErr {
+  if window.display == nil || window.handle == 0 { fail .InvalidInput }
+  if text.len > 4096 { fail .Capacity }
+  if token == 0 || cursor > text.len || anchor > text.len || !utf8.valid(text) {
+    fail .InvalidInput
   }
-  if status.failed { return }
-  if window.display == nil || window.handle == 0 {
-    window_failed(status, fail.Kind.InvalidState, "set surrounding text")
-    return
-  }
-  if #len(text) > 4096 {
-    window_failed(status, fail.Kind.Capacity, "set surrounding text")
-    return
-  }
-  if token == 0 || cursor > #len(text) || anchor > #len(text) || !utf8.valid(text) {
-    window_failed(status, fail.Kind.InvalidInput, "set surrounding text")
-    return
-  }
-  if (cursor < #len(text) && (text[cursor] & 0xc0) == 0x80) || (anchor < #len(text) && (text[anchor] & 0xc0) == 0x80) {
-    window_failed(status, fail.Kind.InvalidInput, "set surrounding text")
-    return
+  if (cursor < text.len && (text[cursor] & 0xc0) == 0x80) || (anchor < text.len && (text[anchor] & 0xc0) == 0x80) {
+    fail .InvalidInput
   }
   for byte in text {
-    if byte == 0 {
-      window_failed(status, fail.Kind.InvalidInput, "set surrounding text")
-      return
-    }
+    if byte == 0 { fail .InvalidInput }
   }
-  if !window.events_enabled {
-    window_failed(status, fail.Kind.InvalidState, "set surrounding text")
-    return
-  }
-  window_failed(status, fail.Kind.Unsupported, "set surrounding text")
+  if !window.events_enabled { fail .InvalidInput }
+  fail .Unsupported
 }

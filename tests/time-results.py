@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 ENV = dict(os.environ, DYN_SDK=str(ROOT))
 REQUIRE = 'fn require(ok: bool) { if !ok { #panic("time result contract") } }\n'
-REAL = '''use "std/time" time
+REAL = '''use time "std/time"
 ''' + REQUIRE + '''fn main() {
   start := time.monotonic_now()
   wall := time.realtime_now()
@@ -34,7 +34,7 @@ REAL = '''use "std/time" time
 }
 '''
 # A clock the kernel refuses reads zero: nothing fails, deadlines expire.
-DENIED = '''use "std/time" time
+DENIED = '''use time "std/time"
 ''' + REQUIRE + '''struct Filter { code: u16, jt: u8, jf: u8, k: u32 }
 struct Program { length: u16, filter: *Filter }
 fn main() {
@@ -69,17 +69,11 @@ fn main() {
   require(sleep_calls == 1)
   max: i64 = 9223372036854775807
   min: i64 = -9223372036854775807 - 1
-  add: fail.Status
-  _ = checked_add(&add, max, 1)
-  require(add.failure.kind == fail.Kind.Overflow && add.failure.native == 0)
-  sub: fail.Status
-  _ = checked_sub(&sub, min, 1)
-  require(sub.failure.kind == fail.Kind.Overflow)
-  status: fail.Status
-  require(checked_sub(&status, -1, min) == max && !status.failed)
-  edge: fail.Status
-  _ = checked_sub(&edge, 0, min)
-  require(edge.failed)
+  // An overflowing result fails; the fallback 7 is never a real result here.
+  require((checked_add(max, 1) catch 7) == 7)
+  require((checked_sub(min, 1) catch 7) == 7)
+  require((checked_sub(-1, min) catch 7) == max)
+  require((checked_sub(0, min) catch 7) == 7)
   // Spans past the i64 range give its nearest end.
   require(elapsed(Instant{seconds: min}, Instant{seconds: max}) == max)
   require(elapsed(Instant{seconds: max}, Instant{seconds: min}) == min)

@@ -25,3 +25,21 @@ fn mapping_release(bytes: []u8) isize {
 fn mapping_sparse(bytes: []u8) {
   _ = bytes
 }
+
+extern fn rt_lifetime_checks "dyn_lifetime_checks_enabled"() bool
+
+fn mapping_protect(bytes: []u8, from: usize, to: usize, accessible: bool) bool {
+  _ = bytes
+  _ = from
+  _ = to
+  _ = accessible
+  return true
+}
+
+fn mapping_thread_id() u64 {
+  return 0
+}
+
+fn mapping_check_lifetimes() bool {
+  return rt_lifetime_checks()
+}

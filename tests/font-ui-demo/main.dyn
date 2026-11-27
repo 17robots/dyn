@@ -1,17 +1,16 @@
 // Usage: font-ui-demo FONT.ttf OUTPUT.png. No platform font service is used.
-use "std/io" io
-use "std/ui" ui
-use "std/ui/software" software
-use "std/mem" mem
-use "std/image/png" png
-use "std/fail"
-use "std/fs" fs
-use "std/fmt" fmt
-use "std/font" font
-use "std/font/ui" font_ui
-use "std/process" process
-use "std/text/layout" layout
-use "std/ui/text" ui_text
+use io "std/io"
+use ui "std/ui"
+use software "std/ui/software"
+use mem "std/mem"
+use png "std/image/png"
+use fs "std/fs"
+use fmt "std/fmt"
+use font "std/font"
+use font_ui "std/font/ui"
+use process "std/process"
+use layout "std/text/layout"
+use ui_text "std/ui/text"
 fn main() {
   frame := mem.arena_alloc(0)
   output := mem.arena_alloc(0)
@@ -19,18 +18,12 @@ fn main() {
     mem.arena_release(output)
     mem.arena_release(frame)
   }
-  arguments_status: fail.Status
-  arguments := process.arguments(output, &arguments_status)
-  if arguments_status.failed || #len(arguments) != 3 {
+  arguments := process.arguments(output) catch { #panic("cannot read arguments") }
+  if arguments.len != 3 {
     #panic("usage: font-ui-demo FONT.ttf OUTPUT.png")
   }
-  bytes_file: fail.Status
-  bytes := fs.read_all(output, &bytes_file, arguments[1], 64000000)
-  if bytes_file.failed {
-    #panic("cannot read font")
-  }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  face := font.open(&status, bytes)
+  bytes := fs.read_all(output, arguments[1], 64000000) catch { #panic("cannot read font") }
+  face := font.open(bytes) catch { #panic("unexpected failure") }
   codepoints: [100]u32
   for i in 0..95 {
     codepoints[i] = 32 + #cast(u32, i)
@@ -40,7 +33,7 @@ fn main() {
   codepoints[97] = 233
   codepoints[98] = 241
   codepoints[99] = 252
-  cached := font.atlas(output, &status, &face, codepoints[..], 24, 512, 256)
+  cached := font.atlas(output, &face, codepoints[..], 24, 512, 256) catch { #panic("unexpected failure") }
   context := ui.Context{ style: ui.default_style }
   viewport := ui.Rect{ width: 480, height: 240 }
   count: i32 = 2
@@ -61,23 +54,21 @@ fn main() {
   _ = ui.checkbox(&context, 3, ui.Rect{ x: 32, y: 152, width: 180, height: 24 }, "GRID", &grid, true)
   _ = ui.slider(&context, 4, ui.Rect{ x: 240, y: 160, width: 192, height: 16 }, &count, 0, 10, true)
   label_bytes: [32]u8
-  label_status: fail.Status
-  label := fmt.buffer(&label_status, label_bytes[..])
+  label := fmt.buffer(label_bytes[..])
   fmt.write(&label, "COUNT ")
   fmt.write_i64(&label, #cast(i64, count))
   ui.label(&context, ui.Rect{ x: 32, y: 64, width: 416, height: 24 }, fmt.bytes(&label), context.style.accent)
   metrics := font_ui.LayoutAdapter{ atlas: &cached, face: &face, pixels_per_em: 24 }
-  positioned := layout.build(frame, &status, "AV Café Å ñ ü Ç", font_ui.layout_font(&metrics), layout.Options{ width: 416 })
+  positioned := layout.build(frame, "AV Café Å ñ ü Ç", font_ui.layout_font(&metrics), layout.Options{ width: 416 }) catch { #panic("unexpected failure") }
   ui_text.label(&context, ui.Rect{ x: 32, y: 188, width: 416, height: 28 }, &positioned, context.style.foreground)
   ui.end(&context)
-  pixels := mem.push_array(u8, output, #cast(usize, 480 * 240 * 4))
+  pixels := mem.push_array<u8>(output, #cast(usize, 480 * 240 * 4))
   surface := software.Surface{ pixels: pixels, width: 480, height: 240, stride: 480 * 4 }
-  rendering: fail.Status
-  software.render(&rendering, &surface, ui.first(&context), font_ui.atlas_renderer(&cached))
-  if rendering.failed || count != 3 {
+  software.render(&surface, ui.first(&context), font_ui.atlas_renderer(&cached)) catch { #panic("UI demo render") }
+  if count != 3 {
     #panic("UI demo render")
   }
-  encoded := png.encode(output, &status, pixels, 480, 240, 4)
+  encoded := png.encode(output, pixels, 480, 240, 4) catch { #panic("unexpected failure") }
   if !fs_write_file(arguments[2], encoded) {
     #panic("UI demo output")
   }
@@ -85,7 +76,6 @@ fn main() {
 
 // Writes data to path; whether it worked.
 fn fs_write_file(path: []const u8, data: []const u8) bool {
-  status: fail.Status
-  fs.write_all(&status, path, data)
-  return !status.failed
+  fs.write_all(path, data) catch { return false }
+  return true
 }

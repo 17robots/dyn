@@ -16,7 +16,7 @@ if sys.platform != 'linux':
     raise SystemExit(0)
 
 CASES = {
-    'unopened-connection': '''use "std/io" io
+    'unopened-connection': '''use io "std/io"
 use "std/net"
 fn main() {
   connection := net.Connection{}
@@ -24,7 +24,7 @@ fn main() {
   if #syscall(72, 0, 1, 0) < 0 { #panic("closed stdin") }
 }
 ''',
-    'unopened-listener': '''use "std/io" io
+    'unopened-listener': '''use io "std/io"
 use "std/net"
 fn main() {
   listener := net.Listener{}
@@ -32,91 +32,101 @@ fn main() {
   if #syscall(72, 0, 1, 0) < 0 { #panic("closed stdin") }
 }
 ''',
-    'failed-connection': '''use "std/fail"
-use "std/net"
-fn check_failed(status: *const fail.Status, connection: *net.Connection) {
-  if !status.failed { #panic("connection unexpectedly succeeded") }
-  net.connection_close(connection)
+    'failed-connection': '''use "std/net"
+fn check_failed() {
   if #syscall(72, 0, 1, 0) < 0 { #panic("failed connection closed stdin") }
-  if connection.active { #panic("failed connection active") }
+}
+fn connect_fails(address: *const net.Ipv4Address) bool {
+  connection := net.tcp_connect_ipv4(address) catch { return true }
+  net.connection_close(&connection)
+  return false
+}
+fn accept_fails(listener: *net.Listener) bool {
+  connection := net.listener_accept(listener) catch { return true }
+  net.connection_close(&connection)
+  return false
 }
 fn main() {
   address := net.ipv4(127, 0, 0, 1, 1)
   address.bytes[0] = 255
-  refused: fail.Status
-  connected := net.tcp_connect_ipv4(&refused, &address)
-  check_failed(&refused, &connected)
+  if !connect_fails(&address) { #panic("connection unexpectedly succeeded") }
+  check_failed()
   listener := net.Listener{}
-  closed: fail.Status
-  accepted := net.listener_accept(&closed, &listener)
-  check_failed(&closed, &accepted)
-  // Positive descriptor validation must also return an inactive connection.
+  if !accept_fails(&listener) { #panic("accept on a closed listener succeeded") }
+  check_failed()
+  // Positive descriptor validation must fail without closing anything else.
   listener.descriptor = 2147483647
   listener.active = true
-  invalid: fail.Status
-  accepted = net.listener_accept(&invalid, &listener)
-  check_failed(&invalid, &accepted)
+  if !accept_fails(&listener) { #panic("accept on an invalid descriptor succeeded") }
+  check_failed()
 }
 ''',
-    'failed-listener': '''use "std/fail"
-use "std/net"
+    'failed-listener': '''use "std/net"
+fn listen_fails(address: *const net.Ipv4Address) bool {
+  listener := net.tcp_listen_ipv4(address, 1) catch { return true }
+  net.listener_close(&listener)
+  return false
+}
 fn main() {
   address := net.ipv4(127, 0, 0, 1, 1)
   address.bytes[0] = 255
-  status: fail.Status
-  listener := net.tcp_listen_ipv4(&status, &address, 1)
-  if !status.failed { #panic("listener unexpectedly succeeded") }
-  net.listener_close(&listener)
+  if !listen_fails(&address) { #panic("listener unexpectedly succeeded") }
   if #syscall(72, 0, 1, 0) < 0 { #panic("failed listener closed stdin") }
-  if listener.active { #panic("failed listener active") }
 }
 ''',
-    'empty-datagram': '''use "std/fail"
-use "std/net"
+    'empty-datagram': '''use "std/net"
+fn send_fails(descriptor: isize, address: []const u8) bool {
+  _ = net.send_to(descriptor, "", 0, address) catch { return true }
+  return false
+}
 fn main() {
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  descriptor := net.socket(&status, net.AddressFamilyIpv4, net.SocketDatagram, 0)
+  descriptor := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0) catch { #panic("net.socket") }
   defer { net.close(descriptor) }
   address := net.ipv4(127, 0, 0, 1, 0)
-  net.bind_ipv4(&status, descriptor, &address)
+  net.bind_ipv4(descriptor, &address) catch { #panic("net.bind_ipv4") }
   bound := net.Address{}
-  net.local_address(&status, descriptor, &bound)
-  net.nonblocking(&status, descriptor, true)
-  if net.send_to(&status, descriptor, "", 0, bound.bytes[..bound.length]) != 0 { #panic("send empty") }
-  if net.wait(&status, descriptor, net.PollReadable, 1000) == 0 { #panic("empty datagram dropped") }
+  net.local_address(descriptor, &bound) catch { #panic("net.local_address") }
+  net.nonblocking(descriptor, true) catch { #panic("net.nonblocking") }
+  sent := net.send_to(descriptor, "", 0, bound.bytes[..bound.length]) catch { #panic("net.send_to") }
+  if sent != 0 { #panic("send empty") }
+  ready := net.wait(descriptor, net.PollReadable, 1000) catch { #panic("net.wait") }
+  if ready == 0 { #panic("empty datagram dropped") }
   // An empty datagram still validates the destination and socket.
-  bad_socket: fail.Status
-  _ = net.send_to(&bad_socket, -1, "", 0, bound.bytes[..bound.length])
-  if !bad_socket.failed { #panic("invalid socket accepted") }
-  bad_address: fail.Status
-  _ = net.send_to(&bad_address, descriptor, "", 0, "")
-  if !bad_address.failed { #panic("invalid address accepted") }
+  if !send_fails(-1, bound.bytes[..bound.length]) { #panic("invalid socket accepted") }
+  if !send_fails(descriptor, "") { #panic("invalid address accepted") }
   buffer: [1]u8
   peer: [128]u8
   length: u32 = 0
-  received := net.receive_from(&status, descriptor, buffer[..], 0, peer[..], &length)
+  received := net.receive_from(descriptor, buffer[..], 0, peer[..], &length) catch { #panic("net.receive_from") }
   if received != 0 || length != 16 { #panic("receive empty") }
-  if net.send_to(&status, descriptor, "x", 0, bound.bytes[..bound.length]) != 1 { #panic("send byte") }
-  if net.wait(&status, descriptor, net.PollReadable, 1000) == 0 { #panic("byte datagram dropped") }
-  received = net.receive_from(&status, descriptor, buffer[..], 0, peer[..], &length)
+  sent = net.send_to(descriptor, "x", 0, bound.bytes[..bound.length]) catch { #panic("net.send_to") }
+  if sent != 1 { #panic("send byte") }
+  ready = net.wait(descriptor, net.PollReadable, 1000) catch { #panic("net.wait") }
+  if ready == 0 { #panic("byte datagram dropped") }
+  received = net.receive_from(descriptor, buffer[..], 0, peer[..], &length) catch { #panic("net.receive_from") }
   if received != 1 || buffer[0] != 'x' { #panic("receive byte") }
 }
 ''',
 }
 
 for operation, expression in {
-    'send': 'net.send(&status, SOCKET_FD, "x", 0)',
-    'connection-write': 'net.connection_write(&status, &connection, "x")',
-    'send-to': 'net.send_to(&status, SOCKET_FD, "x", 0, address.bytes[..])',
+    'send': '_ = net.send(SOCKET_FD, "x", 0) catch err { return err }',
+    'connection-write': 'net.connection_write(connection, "x") catch err { return err }',
+    'send-to': '_ = net.send_to(SOCKET_FD, "x", 0, address.bytes[..]) catch err { return err }',
 }.items():
-    CASES['disconnected-' + operation] = '''use "std/fail"
+    CASES['disconnected-' + operation] = '''use "std/io"
 use "std/net"
+fn attempt(connection: *net.Connection, address: *const net.Ipv4Address) io.IoErr {
+  EXPRESSION
+  #panic("write to a disconnected peer succeeded")
+}
 fn main() {
   connection := net.connection_from_descriptor(SOCKET_FD)
   address := net.ipv4(127, 0, 0, 1, 1)
-  status: fail.Status
-  _ = EXPRESSION
-  if !status.failed || status.failure.native != -32 { #panic("expected EPIPE") }
+  case attempt(&connection, &address) {
+    .System(code) => { if code != -32 { #panic("expected EPIPE") } }
+    _ => { #panic("expected EPIPE") }
+  }
 }
 '''.replace('EXPRESSION', expression)
 
@@ -152,18 +162,16 @@ int net_audit_stop(void) {
     return signals;
 }
 """
-WAIT_SOURCE = r'''use "std/fail"
-use "std/net"
+WAIT_SOURCE = r'''use "std/net"
 use "std/time"
 extern fn start "net_audit_start"(readiness: i32) i32
 extern fn stop "net_audit_stop"() i32
 fn main() {
   descriptor := start(READY)
   if descriptor < 0 { #panic("signal helper") }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  queue := net.event_queue(&status)
+  queue := net.event_queue() catch { #panic("net.event_queue") }
   defer { net.close(queue) }
-  net.event_add(&status, queue, #cast(isize, descriptor), net.EventReadable, 42)
+  net.event_add(queue, #cast(isize, descriptor), net.EventReadable, 42) catch { #panic("net.event_add") }
   items: [1]net.PollDescriptor = [net.PollDescriptor{ descriptor: descriptor, events: net.PollReadable }]
   events: [1]net.Event
   before := time.monotonic_now()
@@ -226,9 +234,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-net-contracts-') as temporary, Exit
     subprocess.run([*shlex.split(os.environ.get('CC', 'cc')), '-std=c11', '-O2', '-shared', '-fPIC',
                     str(helper), '-o', str(library)], check=True, timeout=30)
     for kind, operation, verify in (
-        ('poll', 'net.poll(&status, items[..], TIMEOUT)',
+        ('poll', 'net.poll(items[..], TIMEOUT) catch { #panic("net.poll") }',
          'if !net.poll_has(&items[0], net.PollReadable) { #panic("poll readiness") }'),
-        ('epoll', 'net.event_wait(&status, queue, events[..], TIMEOUT)',
+        ('epoll', 'net.event_wait(queue, events[..], TIMEOUT) catch { #panic("net.event_wait") }',
          'if net.event_data(&events[0]) != 42 { #panic("epoll readiness") }'),
     ):
         for timeout in (100, 1000, -1, 0):

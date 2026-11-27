@@ -8,19 +8,40 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/ui" ui
-use "std/ui/software" software
-use "std/mem" mem
-use "std/io" errors
-use "std/fail"
-fn software_render(p0: *software.Surface, p1: *const ui.Command, p2: software.Font) fail.Failure {
-  status: fail.Status
-  software.render(&status, p0, p1, p2)
-  return status.failure
+SOURCE = r'''use io "std/io"
+use ui "std/ui"
+use software "std/ui/software"
+use mem "std/mem"
+use errors "std/io"
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+fn software_render(p0: *software.Surface, p1: *const ui.Command, p2: software.Font) Failure {
+  software.render(p0, p1, p2) catch { return Failure{ kind: Kind.InvalidInput } }
+  return Failure{}
 }
 
-fn failed(failure: fail.Failure) bool {
-  return failure.kind != fail.Kind.Ok
+fn failed(failure: Failure) bool {
+  return failure.kind != Kind.Ok
 }
 
 fn check(ok: bool) { if !ok { #panic("UI contract") } }
@@ -182,11 +203,11 @@ fn raster(arena: *mem.Arena) {
   check(!failed(software_render(&surface, ui.first(&context), font)))
   check(trace.calls == 2 && trace.first == 65533 && trace.last == 233)
   trace.invalid = true
-  check(software_render(&surface, ui.first(&context), font).kind == fail.Kind.InvalidInput)
+  check(software_render(&surface, ui.first(&context), font).kind == Kind.InvalidInput)
   surface.stride = 15
-  check(software_render(&surface, ui.first(&context), font).kind == fail.Kind.InvalidInput)
+  check(software_render(&surface, ui.first(&context), font).kind == Kind.InvalidInput)
   surface.stride = 20
-  check(software_render(&surface, ui.first(&context), software.Font{}).kind == fail.Kind.InvalidInput)
+  check(software_render(&surface, ui.first(&context), software.Font{}).kind == Kind.InvalidInput)
 }
 fn main() {
   arena := mem.arena_alloc(0)
@@ -233,7 +254,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-ui-results-') as directory:
         'UI widget ID must be nonzero': 'ui.begin(&context, arena, ui.Input{}, bounds)\n _ = ui.button(&context, 0, bounds, "", true)',
     }
     for message, body in failures.items():
-        (work / 'main.dyn').write_text('use "std/ui" ui\nuse "std/mem" mem\nfn main() {\n arena := mem.arena_alloc(0)\n context := ui.Context{ style: ui.default_style }\n bounds := ui.Rect{ width: 10, height: 10 }\n '+body+'\n}')
+        (work / 'main.dyn').write_text('use ui "std/ui"\nuse mem "std/mem"\nfn main() {\n arena := mem.arena_alloc(0)\n context := ui.Context{ style: ui.default_style }\n bounds := ui.Rect{ width: 10, height: 10 }\n '+body+'\n}')
         for mode in ('--debug', '--release'):
             output = work / 'invalid'
             subprocess.run([DYN, 'build', str(work), mode, '--quiet', '--output', str(output)], check=True, timeout=300)

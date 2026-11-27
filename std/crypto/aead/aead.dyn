@@ -1,26 +1,25 @@
-use "std/fail"
-use "std/crypto/aesgcm" aes
-use "std/mem" mem
-use "std/crypto/chacha20poly1305" native
+use aes "std/crypto/aesgcm"
+use mem "std/mem"
+use native "std/crypto/chacha20poly1305"
 pub enum Cipher { Aes256Gcm, Chacha20Poly1305 }
 pub struct Sealed { ciphertext: []u8, tag: []u8 }
 
 fn valid(kind: Cipher, count: usize, additional: []const u8, key: []const u8, nonce: []const u8) bool {
   if kind != Cipher.Aes256Gcm && kind != Cipher.Chacha20Poly1305 { return false }
-  if #len(key) != 32 || #len(nonce) == 0 || #len(nonce) > 2147483647 || count > 2147483647 || #len(additional) > 2147483647 {
+  if key.len != 32 || nonce.len == 0 || nonce.len > 2147483647 || count > 2147483647 || additional.len > 2147483647 {
     return false
   }
   // Preserve the established GCM nonce and payload limits; ChaCha fixes IV12.
-  if kind == Cipher.Aes256Gcm && #len(nonce) > 128 { return false }
-  if kind == Cipher.Chacha20Poly1305 && #len(nonce) != 12 { return false }
+  if kind == Cipher.Aes256Gcm && nonce.len > 128 { return false }
+  if kind == Cipher.Chacha20Poly1305 && nonce.len != 12 { return false }
   return true
 }
 fn overlaps(left: []const u8, right: []const u8) bool {
-  if #len(left) == 0 || #len(right) == 0 { return false }
+  if left.len == 0 || right.len == 0 { return false }
   a := #cast(usize, &left[0])
   b := #cast(usize, &right[0])
-  if a <= b { return b - a < #len(left) }
-  return a - b < #len(right)
+  if a <= b { return b - a < left.len }
+  return a - b < right.len
 }
 // Reject unused backing before allocations can overwrite borrowed inputs.
 // Allocated inputs remain stable when this arena adds blocks.
@@ -32,35 +31,28 @@ fn conflicts(arena: *mem.Arena, _count: usize, first: []const u8, second: []cons
 // Views expire on the applicable arena rewind/reset/release. Inputs are borrowed
 // only for this call and must not overlap pending output. Key is 32 bytes; GCM
 // accepts 1..128 nonce bytes, ChaCha requires 12 bytes. Nonce uniqueness for a key
-// is the caller's responsibility. Exhaustion panics; failure returns empty
-// values, preserves the arena prefix, and consumes no arena bytes. A bad key,
-// nonce or size, or an input in the arena's free space, fails with InvalidInput.
-pub fn seal(arena: *mem.Arena, status: *fail.Status, kind: Cipher, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Sealed {
-  if status == nil { return seal(arena, &fail.Status{}, kind, plaintext, additional, key, nonce) }
-  if status.failed { return Sealed{} }
-  count := #len(plaintext)
-  if !valid(kind, count, additional, key, nonce) || count > #max(usize) - 16 {
-    fail.invalid(status, "seal", "", "bad cipher, key, nonce or size")
-    return Sealed{}
-  }
+// is the caller's responsibility. Exhaustion panics; failure preserves the
+// arena prefix and consumes no arena bytes. A bad key, nonce or size, or an
+// input in the arena's free space, fails.
+pub fn seal(arena: *mem.Arena, kind: Cipher, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Sealed! {
+  count := plaintext.len
+  if !valid(kind, count, additional, key, nonce) || count > #max(usize) - 16 { fail }
   empty: []const u8
-  if conflicts(arena, count + 16, plaintext, empty, additional, key, nonce) {
-    fail.invalid(status, "seal", "", "an input lies in the arena's free space")
-    return Sealed{}
-  }
+  if conflicts(arena, count + 16, plaintext, empty, additional, key, nonce) { fail }
   mark := mem.arena_mark(arena)
   output := mem.push_bytes(arena, count + 16)
   ciphertext := output[..count]
   tag := output[count..]
+  sealed := true
   if kind == Cipher.Chacha20Poly1305 {
-    native.seal(status, ciphertext, tag, plaintext, additional, key, nonce)
+    native.seal(ciphertext, tag, plaintext, additional, key, nonce) catch { sealed = false }
   } else {
-    aes.seal(status, ciphertext, tag, plaintext, additional, key, nonce)
+    aes.seal(ciphertext, tag, plaintext, additional, key, nonce) catch { sealed = false }
   }
-  if status.failed {
+  if !sealed {
     mem.zero(output)
     mem.arena_rewind(arena, mark)
-    return Sealed{}
+    fail
   }
   return Sealed{ciphertext: ciphertext, tag: tag}
 }
@@ -68,31 +60,23 @@ pub fn seal(arena: *mem.Arena, status: *fail.Status, kind: Cipher, plaintext: []
 // Produces arena-owned authenticated plaintext of ciphertext length. Same
 // borrowing, nonce, exhaustion and lifetime rules as seal; tag must be 16 bytes.
 // On failure clears all allocated plaintext before rewinding. Authentication
-// rejection is InvalidInput. Failure never publishes partial plaintext.
-pub fn open(arena: *mem.Arena, status: *fail.Status, kind: Cipher, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) []u8 {
-  if status == nil { return open(arena, &fail.Status{}, kind, ciphertext, tag, additional, key, nonce) }
-  empty: []u8
-  if status.failed { return empty }
-  count := #len(ciphertext)
-  if !valid(kind, count, additional, key, nonce) || #len(tag) != 16 {
-    fail.invalid(status, "open", "", "bad cipher, key, nonce, tag or size")
-    return empty
-  }
-  if conflicts(arena, count, ciphertext, tag, additional, key, nonce) {
-    fail.invalid(status, "open", "", "an input lies in the arena's free space")
-    return empty
-  }
+// rejection fails too. Failure never publishes partial plaintext.
+pub fn open(arena: *mem.Arena, kind: Cipher, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) []u8! {
+  count := ciphertext.len
+  if !valid(kind, count, additional, key, nonce) || tag.len != 16 { fail }
+  if conflicts(arena, count, ciphertext, tag, additional, key, nonce) { fail }
   mark := mem.arena_mark(arena)
   plaintext := mem.push_bytes(arena, count)
+  opened := true
   if kind == Cipher.Chacha20Poly1305 {
-    native.open(status, plaintext, ciphertext, tag, additional, key, nonce)
+    native.open(plaintext, ciphertext, tag, additional, key, nonce) catch { opened = false }
   } else {
-    aes.open(status, plaintext, ciphertext, tag, additional, key, nonce)
+    aes.open(plaintext, ciphertext, tag, additional, key, nonce) catch { opened = false }
   }
-  if status.failed {
+  if !opened {
     mem.zero(plaintext)
     mem.arena_rewind(arena, mark)
-    return empty
+    fail
   }
   return plaintext
 }

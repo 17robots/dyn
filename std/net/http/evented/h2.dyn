@@ -19,18 +19,17 @@
 //   WINDOW_UPDATE inside the handler (up to write_timeout_milliseconds), as an
 //   HTTP/1.1 response waits for the socket. Browsers grant megabytes.
 // - Frames are processed in order; a header block must fit receive_size.
-use "std/bytes" bytes
-use "std/event" event
-use "std/fail"
-use "std/io" io
-use "std/mem" mem
-use "std/net" network
-use "std/net/http" http
-use "std/net/http/hpack" hpack
-use "std/net/http/qpack" qpack
-use "std/net/websocket" websocket
-use "std/sync" sync
-use "std/thread/pool" tasks
+use bytes "std/bytes"
+use event "std/event"
+use io "std/io"
+use mem "std/mem"
+use network "std/net"
+use http "std/net/http"
+use hpack "std/net/http/hpack"
+use qpack "std/net/http/qpack"
+use websocket "std/net/websocket"
+use sync "std/sync"
+use tasks "std/thread/pool"
 
 const Preface: []const u8 = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 const FrameHead: usize = 9
@@ -181,13 +180,13 @@ struct Slot {
   index: usize,
   job_data: rawptr,
   job_work: fn(rawptr),
-  job_finish: fn(*fail.Status, *http.Response, *const http.Request, rawptr),
+  job_finish: fn(*http.Response, *const http.Request, rawptr) !io.IoErr,
   job_request: http.Request,
   job_running: bool,
   // Large bodies read with receive_body.
   body_data: rawptr,
   body_chunk: fn(rawptr, []const u8) bool,
-  body_finish: fn(*fail.Status, *http.Response, *const http.Request, rawptr, BodyEnd),
+  body_finish: fn(*http.Response, *const http.Request, rawptr, BodyEnd) !io.IoErr,
 }
 
 struct H2Pool {
@@ -223,11 +222,11 @@ pub struct Http2 {
   job_done: fn(*Worker, usize),
   deliver: fn(*Worker, *Connection, Post, []const u8),
   job: fn(*Connection) *mem.Arena,
-  run: fn(*fail.Status, *Connection, rawptr, fn(rawptr), fn(*fail.Status, *http.Response, *const http.Request, rawptr)),
-  receive_body: fn(*fail.Status, *Connection, *http.Response, rawptr, fn(rawptr, []const u8) bool,
-    fn(*fail.Status, *http.Response, *const http.Request, rawptr, BodyEnd)),
-  open_stream: fn(*fail.Status, *Connection, *http.Response, http.ResponseOptions, u64) Peer,
-  upgrade: fn(*fail.Status, *Connection, *http.Response, u64) Peer,
+  run: fn(*Connection, rawptr, fn(rawptr), fn(*http.Response, *const http.Request, rawptr) !io.IoErr) !io.IoErr,
+  receive_body: fn(*Connection, *http.Response, rawptr, fn(rawptr, []const u8) bool,
+    fn(*http.Response, *const http.Request, rawptr, BodyEnd) !io.IoErr) !io.IoErr,
+  open_stream: fn(*Connection, *http.Response, http.ResponseOptions, u64) Peer!io.IoErr,
+  upgrade: fn(*Connection, *http.Response, u64) Peer!io.IoErr,
 }
 
 // HTTP/2 for Config.http2: prior-knowledge cleartext clients and TLS clients
@@ -263,14 +262,14 @@ fn h2_valid(config: Config) bool {
 fn h2_start(arena: *mem.Arena, worker: *Worker) {
   config := worker.config
   pool := &worker.h2
-  pool.states = mem.push_array(H2, arena, config.http2_connections)
-  pool.free = mem.push_array(usize, arena, config.http2_connections)
+  pool.states = mem.push_array<H2>(arena, config.http2_connections)
+  pool.free = mem.push_array<usize>(arena, config.http2_connections)
   for i in 0..config.http2_connections {
     pool.free[i] = config.http2_connections - 1 - i
   }
   pool.free_count = config.http2_connections
-  pool.slots = mem.push_array(Slot, arena, config.http2_slots)
-  pool.slot_free = mem.push_array(usize, arena, config.http2_slots)
+  pool.slots = mem.push_array<Slot>(arena, config.http2_slots)
+  pool.slot_free = mem.push_array<usize>(arena, config.http2_slots)
   slot_bytes := mem.push_bytes(arena, config.http2_slots * config.receive_size)
   for i in 0..config.http2_slots {
     pool.slots[i].bytes = slot_bytes[i * config.receive_size..(i + 1) * config.receive_size]
@@ -312,17 +311,16 @@ fn frame_header(destination: []u8, length: usize, kind: u8, flags: u8, stream: u
 // full (inside a handler); otherwise a full buffer fails.
 fn send_frame(connection: *Connection, kind: u8, flags: u8, stream: u32, payload: []const u8, blocking: bool) bool {
   head: [FrameHead]u8
-  frame_header(head[..], #len(payload), kind, flags, stream)
+  frame_header(head[..], payload.len, kind, flags, stream)
   if !blocking {
-    if FrameHead + #len(payload) > #len(connection.output) - connection.queued {
+    if FrameHead + payload.len > connection.output.len - connection.queued {
       _ = grow_output(connection)
     }
     return push_bytes(connection, head[..]) && push_bytes(connection, payload)
   }
-  status: fail.Status
-  _ = output_write(connection, &status, head[..])
-  _ = output_write(connection, &status, payload)
-  return !status.failed
+  _ = output_write(connection, head[..]) catch { return false }
+  _ = output_write(connection, payload) catch { return false }
+  return true
 }
 
 fn send_reset(connection: *Connection, stream: u32, code: u32) {
@@ -432,9 +430,9 @@ fn h2_release(worker: *Worker, connection: *Connection) {
 
 // Whether input could still become the connection preface.
 fn preface_prefix(input: []const u8) bool {
-  count := #len(input)
-  if count > #len(Preface) {
-    count = #len(Preface)
+  count := input.len
+  if count > Preface.len {
+    count = Preface.len
   }
   return bytes.equal(input[..count], Preface[..count])
 }
@@ -546,18 +544,18 @@ fn h2_serve(worker: *Worker, index: usize) bool {
   }
   at: usize = 0
   if !h2.preface {
-    if connection.used < #len(Preface) {
+    if connection.used < Preface.len {
       if !preface_prefix(connection.input[..connection.used]) {
         h2_fail(connection, ErrorProtocol)
       }
       return settle_h2(worker, index)
     }
-    if !bytes.equal(connection.input[..#len(Preface)], Preface) {
+    if !bytes.equal(connection.input[..Preface.len], Preface) {
       h2_fail(connection, ErrorProtocol)
       return settle_h2(worker, index)
     }
     h2.preface = true
-    at = #len(Preface)
+    at = Preface.len
   }
   for !connection.close_after && !connection.failed && connection.active {
     if connection.used - at < FrameHead { break }
@@ -570,7 +568,7 @@ fn h2_serve(worker: *Worker, index: usize) bool {
       h2_fail(connection, ErrorFrameSize)
       break
     }
-    if #len(frame) < FrameHead + length { break }
+    if frame.len < FrameHead + length { break }
     if !h2.settings_seen && kind != FrameSettings {
       h2_fail(connection, ErrorProtocol)
       break
@@ -622,12 +620,12 @@ fn on_control(worker: *Worker, index: usize, kind: u8, flags: u8, id: u32, paylo
   connection := &worker.connections[index]
   h2 := connection.h2
   if kind == FrameSettings {
-    if id != 0 || (#len(payload) % 6) != 0 || ((flags & FlagAck) != 0 && #len(payload) != 0) {
+    if id != 0 || (payload.len % 6) != 0 || ((flags & FlagAck) != 0 && payload.len != 0) {
       h2_fail(connection, ErrorFrameSize)
       return false
     }
     if (flags & FlagAck) != 0 { return true }
-    for at in 0..#len(payload) / 6 {
+    for at in 0..payload.len / 6 {
       item := payload[at * 6..at * 6 + 6]
       setting := (#cast(u16, item[0]) << 8) | #cast(u16, item[1])
       value := get_u32(item[2..6])
@@ -666,7 +664,7 @@ fn on_control(worker: *Worker, index: usize, kind: u8, flags: u8, id: u32, paylo
     return true
   }
   if kind == FramePing {
-    if id != 0 || #len(payload) != 8 {
+    if id != 0 || payload.len != 8 {
       h2_fail(connection, ErrorFrameSize)
       return false
     }
@@ -676,7 +674,7 @@ fn on_control(worker: *Worker, index: usize, kind: u8, flags: u8, id: u32, paylo
     return true
   }
   if kind == FrameWindowUpdate {
-    if #len(payload) != 4 {
+    if payload.len != 4 {
       h2_fail(connection, ErrorFrameSize)
       return false
     }
@@ -701,7 +699,7 @@ fn on_control(worker: *Worker, index: usize, kind: u8, flags: u8, id: u32, paylo
     return true
   }
   if kind == FrameReset {
-    if id == 0 || #len(payload) != 4 {
+    if id == 0 || payload.len != 4 {
       h2_fail(connection, ErrorProtocol)
       return false
     }
@@ -720,7 +718,7 @@ fn on_control(worker: *Worker, index: usize, kind: u8, flags: u8, id: u32, paylo
     return true
   }
   if kind == FrameGoaway {
-    if id != 0 || #len(payload) < 8 {
+    if id != 0 || payload.len < 8 {
       h2_fail(connection, ErrorProtocol)
       return false
     }
@@ -729,7 +727,7 @@ fn on_control(worker: *Worker, index: usize, kind: u8, flags: u8, id: u32, paylo
     return true
   }
   if kind == FramePriority {
-    if id == 0 || #len(payload) != 5 {
+    if id == 0 || payload.len != 5 {
       h2_fail(connection, ErrorProtocol)
       return false
     }
@@ -747,8 +745,8 @@ fn header_sequence(connection: *Connection, at: usize) usize {
   flags := frame[4]
   offset := FrameHead + ((#cast(usize, frame[0]) << 16) | (#cast(usize, frame[1]) << 8) | #cast(usize, frame[2]))
   for (flags & FlagEndHeaders) == 0 {
-    if #len(frame) - offset < FrameHead {
-      if offset + FrameHead + MaxFrame > #len(connection.input) - at {
+    if frame.len - offset < FrameHead {
+      if offset + FrameHead + MaxFrame > connection.input.len - at {
         h2_fail(connection, ErrorCalm)
       }
       return 0
@@ -759,8 +757,8 @@ fn header_sequence(connection: *Connection, at: usize) usize {
       h2_fail(connection, ErrorProtocol)
       return 0
     }
-    if #len(next) < FrameHead + length {
-      if offset + FrameHead + length > #len(connection.input) - at {
+    if next.len < FrameHead + length {
+      if offset + FrameHead + length > connection.input.len - at {
         h2_fail(connection, ErrorCalm)
       }
       return 0
@@ -787,17 +785,17 @@ fn gather_block(worker: *Worker, connection: *Connection, at: usize, sequence: u
       start: usize = 0
       pad: usize = 0
       if (flags & FlagPadded) != 0 {
-        if #len(payload) == 0 { return pool.block[..0] }
+        if payload.len == 0 { return pool.block[..0] }
         pad = payload[0]
         start = 1
       }
       if (flags & FlagPriority) != 0 {
         start += 5
       }
-      if start + pad > #len(payload) { return pool.block[..0] }
-      payload = payload[start..#len(payload) - pad]
+      if start + pad > payload.len { return pool.block[..0] }
+      payload = payload[start..payload.len - pad]
     }
-    if #len(payload) > #len(pool.block) - used { return pool.block[..0] }
+    if payload.len > pool.block.len - used { return pool.block[..0] }
     used += mem.copy(pool.block[used..], payload)
     offset += FrameHead + length
   }
@@ -814,21 +812,19 @@ fn decode_block(worker: *Worker, connection: *Connection, block: []const u8) usi
   at: usize = 0
   // No response is being written while a request is read.
   scratch := pool.head
-  decoding: fail.Status
-  for at < #len(block) {
-    field := hpack.decode_field(&decoding, &h2.decoder, block[at..], scratch)
-    if decoding.failed { return 0xffffffffffffffff }
+  for at < block.len {
+    field := hpack.decode_field(&h2.decoder, block[at..], scratch) catch { return 0xffffffffffffffff }
     at += field.consumed
     if field.update { continue }
-    need := 4 + #len(field.name) + #len(field.value)
-    if need > #len(pool.fields) - used {
+    need := 4 + field.name.len + field.value.len
+    if need > pool.fields.len - used {
       // Larger than SETTINGS_MAX_HEADER_LIST_SIZE.
       return 0xfffffffffffffffe
     }
-    pool.fields[used] = #cast(u8, #len(field.name) >> 8)
-    pool.fields[used + 1] = #cast(u8, #len(field.name))
-    pool.fields[used + 2] = #cast(u8, #len(field.value) >> 8)
-    pool.fields[used + 3] = #cast(u8, #len(field.value))
+    pool.fields[used] = #cast(u8, field.name.len >> 8)
+    pool.fields[used + 1] = #cast(u8, field.name.len)
+    pool.fields[used + 2] = #cast(u8, field.value.len >> 8)
+    pool.fields[used + 3] = #cast(u8, field.value.len)
     used += 4
     used += mem.copy(pool.fields[used..], field.name)
     used += mem.copy(pool.fields[used..], field.value)
@@ -847,7 +843,7 @@ fn field_at(fields: []const u8, at: usize) FieldAt {
 }
 
 fn lowercase_token(name: []const u8) bool {
-  if #len(name) == 0 { return false }
+  if name.len == 0 { return false }
   for byte in name {
     if byte >= 'A' && byte <= 'Z' { return false }
     if byte <= 32 || byte >= 127 || byte == ':' || byte == '(' || byte == ')' || byte == ',' || byte == ';' ||
@@ -863,9 +859,9 @@ fn value_valid(value: []const u8) bool {
   for byte in value {
     if byte == 0 || byte == '\r' || byte == '\n' { return false }
   }
-  if #len(value) > 0 {
+  if value.len > 0 {
     first := value[0]
-    last := value[#len(value) - 1]
+    last := value[value.len - 1]
     if first == ' ' || first == '\t' || last == ' ' || last == '\t' { return false }
   }
   return true
@@ -879,7 +875,7 @@ fn connection_specific(name: []const u8) bool {
 struct Head { length: usize, declared: i64, ok: bool, websocket: bool }
 
 fn append(destination: []u8, at: usize, piece: []const u8) usize {
-  if at + #len(piece) > #len(destination) { return #len(destination) + 1 }
+  if at + piece.len > destination.len { return destination.len + 1 }
   return at + mem.copy(destination[at..], piece)
 }
 
@@ -901,11 +897,11 @@ fn synthesize(fields: []const u8, destination: []u8) Head {
   declared: i64 = -1
   at: usize = 0
   regular := false
-  for at < #len(fields) {
+  for at < fields.len {
     field := field_at(fields, at)
     at = field.next
     if !value_valid(field.value) { return Head{} }
-    if #len(field.name) > 0 && field.name[0] == ':' {
+    if field.name.len > 0 && field.name[0] == ':' {
       if regular { return Head{} }
       if bytes.equal(field.name, ":method") && !has_method {
         method = field.value
@@ -935,7 +931,7 @@ fn synthesize(fields: []const u8, destination: []u8) Head {
     }
     if bytes.equal(field.name, "content-length") {
       value: i64 = 0
-      if #len(field.value) == 0 || #len(field.value) > 18 { return Head{} }
+      if field.value.len == 0 || field.value.len > 18 { return Head{} }
       for byte in field.value {
         if byte < '0' || byte > '9' { return Head{} }
         value = value * 10 + byte - '0'
@@ -947,7 +943,7 @@ fn synthesize(fields: []const u8, destination: []u8) Head {
   // Only the extended CONNECT of RFC 8441 for WebSockets; :protocol needs it.
   websocket_connect := bytes.equal(method, "CONNECT") && has_protocol && bytes.equal(protocol, "websocket")
   if has_protocol && !websocket_connect { return Head{} }
-  if !has_method || !has_path || !has_scheme || #len(path) == 0 || (bytes.equal(method, "CONNECT") && !websocket_connect) ||
+  if !has_method || !has_path || !has_scheme || path.len == 0 || (bytes.equal(method, "CONNECT") && !websocket_connect) ||
     !method_valid(method) {
     return Head{}
   }
@@ -973,7 +969,7 @@ fn synthesize(fields: []const u8, destination: []u8) Head {
     used = append(destination, used, "upgrade: websocket\r\nconnection: upgrade\r\n")
   }
   at = 0
-  for at < #len(fields) {
+  for at < fields.len {
     field := field_at(fields, at)
     at = field.next
     if field.name[0] == ':' { continue }
@@ -983,13 +979,13 @@ fn synthesize(fields: []const u8, destination: []u8) Head {
     used = append(destination, used, "\r\n")
   }
   used = append(destination, used, "\r\n")
-  if used > #len(destination) { return Head{} }
+  if used > destination.len { return Head{} }
   return Head{ length: used, declared: declared, ok: true, websocket: websocket_connect }
 }
 
 // A method is a token; HTTP/2 keeps its case.
 fn method_valid(method: []const u8) bool {
-  if #len(method) == 0 { return false }
+  if method.len == 0 { return false }
   for byte in method {
     if byte <= 32 || byte >= 127 || byte == ':' || byte == '/' { return false }
   }
@@ -1076,7 +1072,7 @@ fn on_headers(worker: *Worker, index: usize, at: usize, sequence: usize) bool {
   h2.stream_count += 1
   if ended {
     stream_ended(worker, index, free)
-  } else if head.declared > #cast(i64, #len(storage) - head.length) {
+  } else if head.declared > #cast(i64, storage.len - head.length) {
     grow_stream(worker, index, free, #cast(usize, head.declared))
   }
   return true
@@ -1124,16 +1120,11 @@ fn send_answer(worker: *Worker, index: usize, stream_index: usize, status: u16, 
   if handler != nil {
     request := stream_request(worker, stream)
     request.body = request.body[..0]
-    answering: fail.Status
-    handler(&answering, &response, &request)
-    if answering.failed {
-      log_failure(worker, &request, &answering.failure)
-    }
+    handler(&response, &request) catch err { log_failure(worker, &request, err) }
   }
   if !response.started {
     // Best effort: finish_stream resets a stream left unanswered.
-    answered: fail.Status
-    http.respond(&answered, &response, body, http.ResponseOptions{ status: status, content_type: "text/plain; charset=utf-8" })
+    http.respond(&response, body, http.ResponseOptions{ status: status, content_type: "text/plain; charset=utf-8" }) catch {}
   }
   finish_stream(worker, index, stream_index)
 }
@@ -1146,17 +1137,17 @@ fn on_data(worker: *Worker, index: usize, flags: u8, id: u32, payload: []const u
     return
   }
   // Flow control counts the whole payload, padding included.
-  h2.credit += #cast(i64, #len(payload))
+  h2.credit += #cast(i64, payload.len)
   if h2.credit >= ConnectionWindow / 2 && send_window_update(connection, 0, h2.credit) {
     h2.credit = 0
   }
   data := payload
   if (flags & FlagPadded) != 0 {
-    if #len(payload) == 0 || #cast(usize, payload[0]) >= #len(payload) {
+    if payload.len == 0 || #cast(usize, payload[0]) >= payload.len {
       h2_fail(connection, ErrorProtocol)
       return
     }
-    data = payload[1..#len(payload) - #cast(usize, payload[0])]
+    data = payload[1..payload.len - #cast(usize, payload[0])]
   }
   found := find_stream(h2, id)
   if found == Http2Streams {
@@ -1168,7 +1159,7 @@ fn on_data(worker: *Worker, index: usize, flags: u8, id: u32, payload: []const u
   }
   stream := &h2.streams[found]
   if stream.phase == Phase.WebSocket && !stream.ended {
-    stream.credit += #cast(i64, #len(payload))
+    stream.credit += #cast(i64, payload.len)
     websocket_data(worker, connection, found, data, (flags & FlagEndStream) != 0)
     stream = &h2.streams[found]
     if stream.phase == Phase.WebSocket && stream.credit >= StreamWindow / 2 &&
@@ -1181,22 +1172,22 @@ fn on_data(worker: *Worker, index: usize, flags: u8, id: u32, payload: []const u
     reset_stream(worker, connection, found, ErrorStreamClosed)
     return
   }
-  stream.credit += #cast(i64, #len(payload))
-  if stream.phase == Phase.Receiving && stream.head_length + stream.body_length + #len(data) > #len(stream.storage) {
+  stream.credit += #cast(i64, payload.len)
+  if stream.phase == Phase.Receiving && stream.head_length + stream.body_length + data.len > stream.storage.len {
     // Into an upload block, to large_body, or answered and closed.
-    grow_stream(worker, index, found, stream.body_length + #len(data))
+    grow_stream(worker, index, found, stream.body_length + data.len)
     stream = &h2.streams[found]
     if stream.phase != Phase.Receiving && stream.phase != Phase.Large { return }
   }
   if stream.phase == Phase.Large {
     slot := &worker.h2.slots[stream.slot - 1]
-    if #len(data) > 0 && !slot.body_chunk(slot.body_data, data) {
+    if data.len > 0 && !slot.body_chunk(slot.body_data, data) {
       large_end(worker, connection, found, BodyEnd.Stopped)
       return
     }
   } else {
     at := stream.head_length + stream.body_length
-    stream.body_length += mem.copy(stream.storage[at..at + #len(data)], data)
+    stream.body_length += mem.copy(stream.storage[at..at + data.len], data)
     if stream.declared >= 0 && stream.body_length > #cast(usize, stream.declared) {
       reset_stream(worker, connection, found, ErrorProtocol)
       return
@@ -1238,7 +1229,7 @@ fn stream_request(worker: *Worker, stream: *Stream) http.Request {
   target = target[..second]
   question := bytes.find_byte(target, '?')
   query := target[..0]
-  if question < #len(target) {
+  if question < target.len {
     query = target[question + 1..]
   }
   _ = line_end
@@ -1274,7 +1265,7 @@ fn dispatch(worker: *Worker, index: usize, stream_index: usize) {
   response := h2_response(worker, connection, stream_index)
   worker.requests += 1
   started := log_start(worker)
-  worker.handler(&worker.request, &response, &request)
+  invoke(worker, worker.handler, &response, &request)
   _ = handled(worker, &request, &response, h2.streams[stream_index].phase == Phase.Answering)
   log_request(worker, &connection.remote, &request, &response, started)
   stream = &h2.streams[stream_index]
@@ -1305,41 +1296,33 @@ fn finish_stream(worker: *Worker, index: usize, stream_index: usize) {
 }
 
 // The response writer: HTTP/1.1 bytes in, frames out.
-fn h2_write_stream(data: rawptr, status: *fail.Status, source: []const u8) usize {
+// A failed connection fails with InvalidInput; a stream that cannot take
+// more output with WouldBlock.
+fn h2_write_stream(data: rawptr, source: []const u8) usize!io.IoErr {
   connection := #cast(*Connection, data)
   worker := connection.worker
   h2 := connection.h2
-  if connection.failed || h2 == nil {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "write", "", "the connection failed"))
-    return 0
-  }
+  if connection.failed || h2 == nil { fail .InvalidInput }
   stream := &h2.streams[h2.current]
-  if stream.reset { return #len(source) }
-  if !h2_output(worker, connection, h2.current, source, true) {
-    fail.set(status, fail.make(fail.Kind.WouldBlock, "write", "", "the stream cannot take more output"))
-    return 0
-  }
-  return #len(source)
+  if stream.reset { return source.len }
+  if !h2_output(worker, connection, h2.current, source, true) { fail .WouldBlock }
+  return source.len
 }
 
 fn h2_reserve(data: rawptr, capacity: usize) []u8 {
   connection := #cast(*Connection, data)
   body := connection.worker.h2.body
-  if capacity > #len(body) { return body[..0] }
+  if capacity > body.len { return body[..0] }
   return body[..capacity]
 }
 
-fn h2_commit(data: rawptr, status: *fail.Status, head: []const u8, length: usize) usize {
+// A body past the reserved storage fails with InvalidInput.
+fn h2_commit(data: rawptr, head: []const u8, length: usize) usize!io.IoErr {
   connection := #cast(*Connection, data)
   body := connection.worker.h2.body
-  if status.failed { return 0 }
-  if length > #len(body) {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "respond", "", "the body is past the reserved storage"))
-    return 0
-  }
-  first := h2_write_stream(data, status, head)
-  if status.failed { return 0 }
-  return first + h2_write_stream(data, status, body[..length])
+  if length > body.len { fail .InvalidInput }
+  first := try h2_write_stream(data, head)
+  return first + try h2_write_stream(data, body[..length])
 }
 
 // Turns response bytes into frames for a stream. blocking may wait for flow
@@ -1348,13 +1331,13 @@ fn h2_commit(data: rawptr, status: *fail.Status, head: []const u8, length: usize
 fn h2_output(worker: *Worker, connection: *Connection, stream_index: usize, source: []const u8, blocking: bool) bool {
   h2 := connection.h2
   rest := source
-  for #len(rest) > 0 {
+  for rest.len > 0 {
     stream := &h2.streams[stream_index]
     if stream.reset || stream.phase == Phase.Free { return true }
     if stream.output == Output.Head {
       pool := &worker.h2
-      room := #len(pool.head) - pool.head_used
-      count := #len(rest)
+      room := pool.head.len - pool.head_used
+      count := rest.len
       if count > room {
         count = room
       }
@@ -1368,8 +1351,8 @@ fn h2_output(worker: *Worker, connection: *Connection, stream_index: usize, sour
       }
       pool.head_used += count
       end := find_text(pool.head[search..pool.head_used], "\r\n\r\n")
-      if end == #len(pool.head) + 1 {
-        if pool.head_used == #len(pool.head) { return false }
+      if end == pool.head.len + 1 {
+        if pool.head_used == pool.head.len { return false }
         rest = rest[count..]
         continue
       }
@@ -1385,7 +1368,7 @@ fn h2_output(worker: *Worker, connection: *Connection, stream_index: usize, sour
     }
     if stream.output == Output.Done { return true }
     if stream.output == Output.Length {
-      count := #len(rest)
+      count := rest.len
       if count > stream.output_left {
         count = stream.output_left
       }
@@ -1399,12 +1382,11 @@ fn h2_output(worker: *Worker, connection: *Connection, stream_index: usize, sour
       if end { return true }
       continue
     }
-    step := http.chunk_step(&worker.io, &stream.output_chunks, rest)
-    if io_failed(worker) { return false }
+    step := http.chunk_step(&stream.output_chunks, rest) catch { return false }
     if step.done {
       stream.output = Output.Done
     }
-    if (#len(step.data) > 0 || step.done) && !send_data(worker, connection, stream_index, step.data, step.done, blocking) {
+    if (step.data.len > 0 || step.done) && !send_data(worker, connection, stream_index, step.data, step.done, blocking) {
       return false
     }
     rest = rest[step.consumed..]
@@ -1414,16 +1396,16 @@ fn h2_output(worker: *Worker, connection: *Connection, stream_index: usize, sour
 }
 
 fn find_text(haystack: []const u8, needle: []const u8) usize {
-  if #len(haystack) < #len(needle) { return 0xffffffffffffffff }
-  for i in 0..#len(haystack) - #len(needle) + 1 {
-    if bytes.equal(haystack[i..i + #len(needle)], needle) { return i }
+  if haystack.len < needle.len { return 0xffffffffffffffff }
+  for i in 0..haystack.len - needle.len + 1 {
+    if bytes.equal(haystack[i..i + needle.len], needle) { return i }
   }
   return 0xffffffffffffffff
 }
 
 fn header_is(name: []const u8, known: []const u8) bool {
-  if #len(name) != #len(known) { return false }
-  for i in 0..#len(name) {
+  if name.len != known.len { return false }
+  for i in 0..name.len {
     byte := name[i]
     if byte >= 'A' && byte <= 'Z' {
       byte += 32
@@ -1439,7 +1421,7 @@ fn send_headers(worker: *Worker, connection: *Connection, stream_index: usize, h
   h2 := connection.h2
   stream := &h2.streams[stream_index]
   pool := &worker.h2
-  if #len(head) < 16 || !bytes.starts_with(head, "HTTP/1.1 ") { return false }
+  if head.len < 16 || !bytes.starts_with(head, "HTTP/1.1 ") { return false }
   status := head[9..12]
   if status[0] == '1' {
     // Interim responses have no place here; HTTP/2 clients do not wait.
@@ -1456,15 +1438,15 @@ fn send_headers(worker: *Worker, connection: *Connection, stream_index: usize, h
   length: i64 = -1
   chunked := false
   at := bytes.find_byte(head, '\n') + 1
-  for at + 2 <= #len(head) && !(head[at] == '\r' && head[at + 1] == '\n') {
+  for at + 2 <= head.len && !(head[at] == '\r' && head[at + 1] == '\n') {
     line_end := at + find_text(head[at..], "\r\n")
     line := head[at..line_end]
     at = line_end + 2
     colon := bytes.find_byte(line, ':')
-    if colon >= #len(line) { return false }
+    if colon >= line.len { return false }
     name := line[..colon]
     value := line[colon + 1..]
-    for #len(value) > 0 && (value[0] == ' ' || value[0] == '\t') {
+    for value.len > 0 && (value[0] == ' ' || value[0] == '\t') {
       value = value[1..]
     }
     if header_is(name, "connection") || header_is(name, "keep-alive") || header_is(name, "proxy-connection") ||
@@ -1508,12 +1490,12 @@ fn send_headers(worker: *Worker, connection: *Connection, stream_index: usize, h
     return h3_send_headers(worker, connection, stream_index, block, stream.output == Output.Done, blocking)
   }
   first := true
-  for first || #len(block) > 0 {
-    count := #len(block)
+  for first || block.len > 0 {
+    count := block.len
     if count > h2.peer_frame {
       count = h2.peer_frame
     }
-    last := count == #len(block)
+    last := count == block.len
     kind := FrameContinuation
     flags: u8 = 0
     if first {
@@ -1539,8 +1521,8 @@ fn send_data(worker: *Worker, connection: *Connection, stream_index: usize, data
   for {
     stream := &h2.streams[stream_index]
     if stream.reset || stream.phase == Phase.Free { return true }
-    if #len(rest) == 0 && !end { return true }
-    allowed := #cast(i64, #len(rest))
+    if rest.len == 0 && !end { return true }
+    allowed := #cast(i64, rest.len)
     if allowed > #cast(i64, h2.peer_frame) {
       allowed = #cast(i64, h2.peer_frame)
     }
@@ -1550,13 +1532,13 @@ fn send_data(worker: *Worker, connection: *Connection, stream_index: usize, data
     if allowed > h2.send_window {
       allowed = h2.send_window
     }
-    if allowed <= 0 && #len(rest) > 0 {
+    if allowed <= 0 && rest.len > 0 {
       if !blocking || !wait_window(worker, connection, stream_index) { return false }
       continue
     }
     count := #cast(usize, allowed)
     flags: u8 = 0
-    if end && count == #len(rest) {
+    if end && count == rest.len {
       flags = FlagEndStream
     }
     if !send_frame(connection, FrameData, flags, stream.id, rest[..count], blocking) {
@@ -1565,7 +1547,7 @@ fn send_data(worker: *Worker, connection: *Connection, stream_index: usize, data
     stream.send_window -= allowed
     h2.send_window -= allowed
     rest = rest[count..]
-    if #len(rest) == 0 { return true }
+    if rest.len == 0 { return true }
   }
   return true
 }
@@ -1583,7 +1565,7 @@ fn wait_window(worker: *Worker, connection: *Connection, stream_index: usize) bo
     stream := &h2.streams[stream_index]
     if stream.reset || stream.phase == Phase.Free { return true }
     if stream.send_window > 0 && h2.send_window > 0 { return true }
-    if now_milliseconds() - started > connection.write_timeout || connection.used == #len(connection.input) {
+    if now_milliseconds() - started > connection.write_timeout || connection.used == connection.input.len {
       return false
     }
     received := connection_read(connection, connection.input[connection.used..])
@@ -1592,8 +1574,8 @@ fn wait_window(worker: *Worker, connection: *Connection, stream_index: usize) bo
       if received.status == TransportStatus.WouldWrite {
         wanted = network.PollWritable
       }
-      ready := network.wait(&worker.io, connection.descriptor, wanted, connection.write_timeout)
-      if io_failed(worker) || ready == 0 { return false }
+      ready := network.wait(connection.descriptor, wanted, connection.write_timeout) catch { return false }
+      if ready == 0 { return false }
       continue
     }
     if received.status != TransportStatus.Ok || received.count == 0 { return false }
@@ -1618,7 +1600,7 @@ fn control_scan(worker: *Worker, connection: *Connection) bool {
       h2_fail(connection, ErrorFrameSize)
       return false
     }
-    if #len(frame) < FrameHead + length { return true }
+    if frame.len < FrameHead + length { return true }
     kind := frame[3]
     stream_id := get_u32(frame[5..9]) & 0x7fffffff
     if kind == FrameHeaders || kind == FrameData || kind == FrameContinuation || stream_id > h2.last_stream {
@@ -1670,23 +1652,21 @@ fn h2_job(connection: *Connection) *mem.Arena {
   return slot.jobs
 }
 
-fn h2_run(status: *fail.Status, connection: *Connection, data: rawptr, work: fn(rawptr), finish_job: fn(*fail.Status, *http.Response, *const http.Request, rawptr)) {
+// Not an unanswered stream fails with InvalidInput; a full pool queue with
+// Capacity.
+fn h2_run(connection: *Connection, data: rawptr, work: fn(rawptr), finish_job: fn(*http.Response, *const http.Request, rawptr) !io.IoErr) !io.IoErr {
   worker := connection.worker
   stream := current_stream(connection)
   slot := current_slot(connection)
-  if slot == nil || slot.job_running || stream.phase != Phase.Answering {
-    job_failure(status, fail.Kind.InvalidState, "not an unanswered stream")
-    return
-  }
+  if slot == nil || slot.job_running || stream.phase != Phase.Answering { fail .InvalidInput }
   slot.job_data = data
   slot.job_work = work
   slot.job_finish = finish_job
   slot.job_request = stream_request(worker, stream)
   slot.job_running = true
-  if !tasks.submit(worker.config.pool, tasks.Task{ run: h2_job_main, data: slot }) {
+  if !tasks.submit(worker.config.pool, h2_job_main, slot) {
     slot.job_running = false
-    job_failure(status, fail.Kind.Capacity, "the pool's queue is full")
-    return
+    fail .Capacity
   }
   stream.phase = Phase.Deferred
   connection.h2.jobs += 1
@@ -1694,8 +1674,7 @@ fn h2_run(status: *fail.Status, connection: *Connection, data: rawptr, work: fn(
 }
 
 // On a pool thread.
-fn h2_job_main(data: rawptr) {
-  slot := #cast(*Slot, data)
+fn h2_job_main(slot: *Slot) {
   slot.job_work(slot.job_data)
   worker := slot.connection.worker
   inbox := &worker.inbox
@@ -1731,7 +1710,10 @@ fn h2_job_done(worker: *Worker, slot_index: usize) {
   request := slot.job_request
   response := h2_response(worker, connection, stream_index)
   started := log_start(worker)
-  slot.job_finish(&worker.request, &response, &request, slot.job_data)
+  slot.job_finish(&response, &request, slot.job_data) catch err {
+    worker.request_failed = true
+    worker.request_error = err
+  }
   _ = handled(worker, &request, &response, connection.h2.streams[stream_index].phase == Phase.Answering)
   log_request(worker, &connection.remote, &request, &response, started)
   stream = &connection.h2.streams[stream_index]
@@ -1743,13 +1725,11 @@ fn h2_job_done(worker: *Worker, slot_index: usize) {
   }
 }
 
-fn h2_open_stream(status: *fail.Status, connection: *Connection, response: *http.Response, options: http.ResponseOptions, topic: u64) Peer {
+// Not a fresh evented response fails with InvalidInput.
+fn h2_open_stream(connection: *Connection, response: *http.Response, options: http.ResponseOptions, topic: u64) Peer!io.IoErr {
   stream := current_stream(connection)
-  if stream.phase != Phase.Answering || response.started || response.finished || response.head_only {
-    return peer_failure(status, fail.Kind.InvalidState, "not a fresh evented response")
-  }
-  _ = http.respond_stream(status, response, options)
-  if status.failed { return Peer{} }
+  if stream.phase != Phase.Answering || response.started || response.finished || response.head_only { fail .InvalidInput }
+  _ = try http.respond_stream(response, options)
   stream = current_stream(connection)
   stream.phase = Phase.Streaming
   stream.topic = topic
@@ -1832,12 +1812,12 @@ fn large_begin(worker: *Worker, index: usize, stream_index: usize) {
   stream.head_only = bytes.equal(request.method, "HEAD")
   response := h2_response(worker, connection, stream_index)
   worker.requests += 1
-  worker.config.large_body.handler(&worker.request, &response, &request)
+  invoke(worker, worker.config.large_body.handler, &response, &request)
   _ = handled(worker, &request, &response, connection.h2.streams[stream_index].phase == Phase.LargeHead)
   stream = &connection.h2.streams[stream_index]
   if stream.phase == Phase.Large {
     // Bytes that came before the decision go first.
-    keep := #len(pending) == 0 || slot.body_chunk(slot.body_data, pending)
+    keep := pending.len == 0 || slot.body_chunk(slot.body_data, pending)
     stream = &connection.h2.streams[stream_index]
     if stream.upload != 0 {
       _ = mem.copy(slot.bytes, stream.storage[..stream.head_length])
@@ -1855,14 +1835,12 @@ fn large_begin(worker: *Worker, index: usize, stream_index: usize) {
   finish_stream(worker, index, stream_index)
 }
 
-fn h2_receive_body(status: *fail.Status, connection: *Connection, response: *http.Response, data: rawptr, chunk: fn(rawptr, []const u8) bool,
-  finish_body: fn(*fail.Status, *http.Response, *const http.Request, rawptr, BodyEnd)) {
+// Outside the Config.large_body handler fails with InvalidInput.
+fn h2_receive_body(connection: *Connection, response: *http.Response, data: rawptr, chunk: fn(rawptr, []const u8) bool,
+  finish_body: fn(*http.Response, *const http.Request, rawptr, BodyEnd) !io.IoErr) !io.IoErr {
   stream := current_stream(connection)
   slot := current_slot(connection)
-  if slot == nil || stream.phase != Phase.LargeHead || response.started || response.finished {
-    job_failure(status, fail.Kind.InvalidState, "receive_body runs only in the Config.large_body handler")
-    return
-  }
+  if slot == nil || stream.phase != Phase.LargeHead || response.started || response.finished { fail .InvalidInput }
   slot.body_data = data
   slot.body_chunk = chunk
   slot.body_finish = finish_body
@@ -1886,7 +1864,10 @@ fn large_end(worker: *Worker, connection: *Connection, stream_index: usize, outc
     stream.reset = true
   }
   response := h2_response(worker, connection, stream_index)
-  done(&worker.request, &response, &request, slot.body_data, outcome)
+  done(&response, &request, slot.body_data, outcome) catch err {
+    worker.request_failed = true
+    worker.request_error = err
+  }
   _ = handled(worker, &request, &response, outcome != BodyEnd.Closed && connection.h2.streams[stream_index].phase == Phase.Answering)
   stream = &connection.h2.streams[stream_index]
   if stream.phase == Phase.Deferred { return }
@@ -1903,18 +1884,16 @@ fn large_end(worker: *Worker, connection: *Connection, stream_index: usize, outc
 // ---------------------------------------------------------------- WebSockets (RFC 8441)
 
 // upgrade on an HTTP/2 stream: 200, then WebSocket frames in DATA.
-fn h2_upgrade(status: *fail.Status, connection: *Connection, response: *http.Response, topic: u64) Peer {
+// Not an extended CONNECT WebSocket stream fails with InvalidInput; no room
+// for the response head with Capacity.
+fn h2_upgrade(connection: *Connection, response: *http.Response, topic: u64) Peer!io.IoErr {
   worker := connection.worker
   h2 := connection.h2
   stream := current_stream(connection)
-  if stream.phase != Phase.Answering || !stream.websocket_request || response.started || response.finished || stream.slot == 0 {
-    return peer_failure(status, fail.Kind.InvalidInput, "not an extended CONNECT WebSocket stream")
-  }
+  if stream.phase != Phase.Answering || !stream.websocket_request || response.started || response.finished || stream.slot == 0 { fail .InvalidInput }
   block: [8]u8
   length := hpack.encode_field(block[..], ":status", "200")
-  if length == 0 || !send_frame(connection, FrameHeaders, FlagEndHeaders, stream.id, block[..length], true) {
-    return peer_failure(status, fail.Kind.Capacity, "no room for the response head")
-  }
+  if length == 0 || !send_frame(connection, FrameHeaders, FlagEndHeaders, stream.id, block[..length], true) { fail .Capacity }
   response.started = true
   response.finished = true
   stream = current_stream(connection)
@@ -1935,9 +1914,9 @@ fn h2_upgrade(status: *fail.Status, connection: *Connection, response: *http.Res
 // One WebSocket frame as DATA, never waiting: a full window fails.
 fn websocket_send(worker: *Worker, connection: *Connection, index: usize, opcode: u8, payload: []const u8) bool {
   head_storage: [10]u8
-  head := frame_head(head_storage[..], opcode, #len(payload))
+  head := frame_head(head_storage[..], opcode, payload.len)
   stream := &connection.h2.streams[index]
-  total := #cast(i64, #len(head) + #len(payload))
+  total := #cast(i64, head.len + payload.len)
   if total > stream.send_window || total > connection.h2.send_window { return false }
   return send_data(worker, connection, index, head, false, false) && send_data(worker, connection, index, payload, false, false)
 }
@@ -1963,7 +1942,7 @@ fn websocket_close(worker: *Worker, connection: *Connection, index: usize, code:
 fn websocket_data(worker: *Worker, connection: *Connection, index: usize, data: []const u8, end: bool) {
   stream := &connection.h2.streams[index]
   buffer := stream.storage
-  if #len(data) > #len(buffer) - stream.websocket_used {
+  if data.len > buffer.len - stream.websocket_used {
     // The message cannot fit a slot.
     websocket_close(worker, connection, index, 1009)
     return
@@ -1973,11 +1952,13 @@ fn websocket_data(worker: *Worker, connection: *Connection, index: usize, data: 
     stream = &connection.h2.streams[index]
     if stream.phase != Phase.WebSocket || stream.close_sent { break }
     start := stream.frames.used
-    frame := websocket.parse_frame(&worker.io, buffer[start..stream.websocket_used])
-    if !worker.io.failed && !frame.complete { break }
+    frame := websocket.parse_frame(buffer[start..stream.websocket_used]) catch {
+      websocket_close(worker, connection, index, 1002)
+      return
+    }
+    if !frame.complete { break }
     control: [125]u8
-    received := websocket.receive(&worker.io, &stream.frames, buffer[..start + frame.consumed], control[..], frame)
-    if io_failed(worker) {
+    received := websocket.receive(&stream.frames, buffer[..start + frame.consumed], control[..], frame) catch {
       websocket_close(worker, connection, index, 1002)
       return
     }

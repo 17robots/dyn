@@ -2,25 +2,27 @@
 // arena and the tasks borrow it: nothing is copied or freed one by one.
 
 use "std/container/array"
-use "std/fail"
 use "std/fs"
+use "std/io"
 use "std/mem"
 use "std/strings"
 
 const MaxFileBytes: usize = 1 << 20
 
+// What load fails with besides a failed read: a line that is not a task,
+// with its line number.
+enum StoreErr { BadLine(usize) }
+
 // Loads the list at path into tasks. A missing file is not a failure: it is
 // an empty list. A line that is not a task fails with its line number.
-fn load(tasks: *array.Array(Task), arena: *mem.Arena, status: *fail.Status, path: []const u8) {
-  // Reading gets its own status, so that "not found" can mean an empty list
-  // while any other failure goes on to the caller.
-  reading: fail.Status
-  read := fs.read_all(arena, &reading, path, MaxFileBytes)
-  if reading.failed {
-    if reading.failure.kind != fail.Kind.NotFound {
-      fail.set(status, reading.failure)
+fn load(tasks: *array.Array<Task>, arena: *mem.Arena, path: []const u8) !(io.IoErr | StoreErr) {
+  // "Not found" means an empty list; any other failure goes on to the
+  // caller.
+  read := fs.read_all(arena, path, MaxFileBytes) catch err {
+    case err {
+      .NotFound => { return }
+      _ => { fail err }
     }
-    return
   }
   line_number: usize = 0
   scan := strings.scanner(read)
@@ -28,14 +30,11 @@ fn load(tasks: *array.Array(Task), arena: *mem.Arena, status: *fail.Status, path
     line := strings.scan_line(&scan)
     if scan.ended { break }
     line_number += 1
-    if #len(line) == 0 { continue }
-    // Each line gets a status of its own, so the message can name the line.
-    parsing: fail.Status
-    task := parse_task(&parsing, line)
-    if parsing.failed {
-      message := strings.format(arena, "line {}: {}", line_number, fail.message_text(&parsing.failure))
-      fail.invalid(status, "read", path, message)
-      return
+    if line.len == 0 { continue }
+    // The parser's offset matters less than the line, so load fails with
+    // the line number instead.
+    task := parse_task(line) catch {
+      fail StoreErr.BadLine(line_number)
     }
     array.push(tasks, task)
   }
@@ -43,10 +42,10 @@ fn load(tasks: *array.Array(Task), arena: *mem.Arena, status: *fail.Status, path
 
 // Writes the whole list to a temporary file, then renames it over the old
 // one, so a crash halfway never leaves a half-written list behind. If the
-// write fails, the rename does nothing: it takes the same status. (On Linux,
-// fs.write_atomic does both steps and can also make them durable.)
-fn save(tasks: []const Task, arena: *mem.Arena, status: *fail.Status, path: []const u8) {
-  text: array.Array(u8)
+// write fails, try returns before the rename. (On Linux, fs.write_atomic
+// does both steps and can also make them durable.)
+fn save(tasks: []const Task, arena: *mem.Arena, path: []const u8) !io.IoErr {
+  text: array.Array<u8>
   array.init(&text, arena)
   for task in tasks {
     array.push_all(&text, marker(task.state))
@@ -54,6 +53,6 @@ fn save(tasks: []const Task, arena: *mem.Arena, status: *fail.Status, path: []co
     array.push(&text, '\n')
   }
   temporary := strings.format(arena, "{}.tmp", path)
-  fs.write_all(status, temporary, text.items)
-  fs.rename(status, temporary, path)
+  try fs.write_all(temporary, text.items)
+  try fs.rename(temporary, path)
 }

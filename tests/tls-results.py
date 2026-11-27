@@ -48,52 +48,90 @@ int main(int argc, char **argv) {
 '''
 
 COMMON = r'''
-use "std/net/tls" tls
-use "std/mem" mem
-use "std/fail"
+use tls "std/net/tls"
+use mem "std/mem"
+use io "std/io"
 fn check(ok: bool) { if !ok { #panic("TLS result contract") } }
+fn invalid(err: io.IoErr) bool {
+  case err {
+    .InvalidInput => { return true }
+    _ => { return false }
+  }
+}
+fn denied(err: io.IoErr) bool {
+  case err {
+    .PermissionDenied => { return true }
+    _ => { return false }
+  }
+}
+fn system(err: io.IoErr, code: isize) bool {
+  case err {
+    .System(native) => { return native == code }
+    _ => { return false }
+  }
+}
+fn provider_code(err: io.IoErr) bool {
+  case err {
+    .System(native) => { return native != 0 }
+    _ => { return false }
+  }
+}
 '''
 REAL = COMMON + r'''
 #link("crypto")
 extern fn bio_new "BIO_new_mem_buf"(data: *const u8, length: i32) rawptr
 extern fn bio_free "BIO_free"(bio: rawptr) i32
 extern fn read_cert "PEM_read_bio_X509"(bio: rawptr, output: rawptr, password: rawptr, data: rawptr) rawptr
+fn connection_err(arena: *mem.Arena) io.IoErr {
+  _ = tls.client_connection_create(arena, nil, -1, "host") catch err { return err }
+  #panic("connection unexpectedly created")
+}
+fn config_err(arena: *mem.Arena) io.IoErr {
+  _ = tls.server_config_create(arena, "/dyn/no-certificate.pem", "/dyn/no-key.pem") catch err { return err }
+  #panic("config unexpectedly created")
+}
+fn handshake_err() io.IoErr {
+  _ = tls.handshake(nil) catch err { return err }
+  #panic("handshake unexpectedly succeeded")
+}
+fn server_handshake_fails() bool {
+  _ = tls.server_handshake(nil) catch { return true }
+  return false
+}
+fn shutdown_fails() bool {
+  _ = tls.shutdown(nil) catch { return true }
+  return false
+}
+fn alpn_fails() bool {
+  tls.set_alpn_protocols(nil, "\x02h2") catch { return true }
+  return false
+}
+fn subject_err(arena: *mem.Arena) io.IoErr {
+  _ = tls.certificate_subject(arena, nil) catch err { return err }
+  #panic("subject unexpectedly read")
+}
 fn main() {
   backing: [16384]u8
   mem.fill(backing[..], 165)
   arena := mem.arena_from_buffer(backing[..])
   prefix := mem.push_bytes(arena, 7)
   mark := mem.arena_mark(arena)
-  invalid: fail.Status
-  connection := tls.client_connection_create(arena, &invalid, nil, -1, "host")
-  check(connection == nil && invalid.failure.kind == fail.Kind.InvalidInput && invalid.failure.native == 0)
-  provider: fail.Status
-  config := tls.server_config_create(arena, &provider, "/dyn/no-certificate.pem", "/dyn/no-key.pem")
-  check(config == nil && provider.failure.kind == fail.Kind.System && provider.failure.native != 0 && #len(fail.message_text(&provider.failure)) > 0)
-  bad: fail.Status
-  wanted := tls.handshake(&bad, nil)
-  check(wanted == tls.Want.Nothing && bad.failure.kind == fail.Kind.InvalidInput && bad.failure.native == 0)
-  server: fail.Status
-  _ = tls.server_handshake(&server, nil)
-  closing: fail.Status
-  _ = tls.shutdown(&closing, nil)
-  alpn: fail.Status
-  tls.set_alpn_protocols(&alpn, nil, "\x02h2")
-  check(server.failed && closing.failed && alpn.failed)
-  missing: fail.Status
-  absent := tls.certificate_subject(arena, &missing, nil)
-  check(missing.failure.kind == fail.Kind.InvalidInput && missing.failure.native == 0 && #len(absent) == 0 && mem.arena_mark(arena) == mark)
+  check(invalid(connection_err(arena)))
+  provider := config_err(arena)
+  check(provider_code(provider) && io.text(provider).len > 0)
+  check(invalid(handshake_err()))
+  check(server_handshake_fails() && shutdown_fails() && alpn_fails())
+  check(invalid(subject_err(arena)) && mem.arena_mark(arena) == mark)
   for byte in prefix { check(byte == 165) }
   pem: []const u8 = PEM
-  bio := bio_new(&pem[0], #cast(i32, #len(pem)))
+  bio := bio_new(&pem[0], #cast(i32, pem.len))
   check(bio != nil)
   cert := read_cert(bio, nil, nil, nil)
   _ = bio_free(bio)
   check(cert != nil)
-  status: fail.Status
-  subject := tls.certificate_subject(arena, &status, cert)
-  check(!status.failed && #len(subject) > 1023 && mem.equal(subject, ORACLE))
-  check(mem.arena_mark(arena) == mark + #len(subject))
+  subject := tls.certificate_subject(arena, cert) catch { #panic("certificate subject") }
+  check(subject.len > 1023 && mem.equal(subject, ORACLE))
+  check(mem.arena_mark(arena) == mark + subject.len)
   tls.certificate_release(&cert)
   tls.certificate_release(&cert)
   check(cert == nil && mem.equal(subject, ORACLE))
@@ -105,6 +143,32 @@ fn main() {
 # Copy the actual provider, replacing only its operation bodies with injected
 # results. This keeps all type declarations and unused API signatures exact.
 MOCK = COMMON.replace('"std/net/tls"', '"tls"') + r'''
+// A want is no failure; the others are: PermissionDenied, or System with the
+// provider's code.
+struct Outcome { want: tls.Want, count: usize, err: io.IoErr, failed: bool }
+fn do_handshake(conn: tls.Connection) Outcome {
+  wanted := tls.handshake(conn) catch err { return Outcome{ err: err, failed: true } }
+  return Outcome{ want: wanted }
+}
+fn do_read(conn: tls.Connection, data: []u8) Outcome {
+  attempt := tls.read(conn, data) catch err { return Outcome{ err: err, failed: true } }
+  return Outcome{ want: attempt.want, count: attempt.count }
+}
+fn do_write(conn: tls.Connection, data: []const u8) Outcome {
+  attempt := tls.write(conn, data) catch err { return Outcome{ err: err, failed: true } }
+  return Outcome{ want: attempt.want, count: attempt.count }
+}
+fn expect(mode: usize, outcome: Outcome) {
+  if mode == 1 { check(!outcome.failed && outcome.want == tls.Want.Read) }
+  if mode == 2 { check(!outcome.failed && outcome.want == tls.Want.Write) }
+  if mode == 3 { check(outcome.failed && denied(outcome.err)) }
+  if mode == 4 { check(outcome.failed && system(outcome.err, -1)) }
+  check(outcome.count == 0)
+}
+fn subject_err(arena: *mem.Arena, conn: tls.Certificate) io.IoErr {
+  _ = tls.certificate_subject(arena, conn) catch err { return err }
+  #panic("subject unexpectedly read")
+}
 fn main() {
   backing: [mem.ArenaBufferOverhead+32]u8
   mem.fill(backing[..], 165)
@@ -113,24 +177,15 @@ fn main() {
   _ = mem.push_bytes(arena, 7)
   for mode in 1..5 {
     conn := #cast(rawptr, mode)
-    status: fail.Status
-    wanted := tls.handshake(&status, conn)
     data: [4]u8
-    read := tls.read(&status, conn, data[..])
-    written := tls.write(&status, conn, "test")
-    // A want is no failure; the others are, with the provider's code.
-    if mode == 1 { check(!status.failed && wanted == tls.Want.Read && read.want == tls.Want.Read && written.want == tls.Want.Read) }
-    if mode == 2 { check(!status.failed && wanted == tls.Want.Write && read.want == tls.Want.Write && written.want == tls.Want.Write) }
-    if mode == 3 { check(status.failure.kind == fail.Kind.PermissionDenied && status.failure.native == -1) }
-    if mode == 4 { check(status.failure.kind == fail.Kind.System && status.failure.native == -1) }
-    check(read.count == 0 && written.count == 0)
+    expect(#cast(usize, mode), do_handshake(conn))
+    expect(#cast(usize, mode), do_read(conn, data[..]))
+    expect(#cast(usize, mode), do_write(conn, "test"))
   }
-  status: fail.Status
-  tls.set_alpn_protocols(&status, #cast(rawptr, 1), "\x02h2")
-  pending := tls.shutdown(&status, #cast(rawptr, 1))
-  check(!status.failed && pending == tls.Want.Read)
-  failed := tls.certificate_subject(arena, &status, #cast(rawptr, 1))
-  check(status.failure.kind == fail.Kind.System && status.failure.native == -1 && #len(failed) == 0 && mem.arena_used(arena) == 7)
+  tls.set_alpn_protocols(#cast(rawptr, 1), "\x02h2") catch { #panic("alpn") }
+  pending := tls.shutdown(#cast(rawptr, 1)) catch { #panic("shutdown") }
+  check(pending == tls.Want.Read)
+  check(system(subject_err(arena, #cast(rawptr, 1)), -1) && mem.arena_used(arena) == 7)
   for byte in storage { check(byte == 165) }
 }
 '''
@@ -183,21 +238,14 @@ with tempfile.TemporaryDirectory(prefix='dyn-tls-results-') as temporary:
     provider = replace_body(provider, 'handshake', '''  mode := #cast(usize, connection)
   if mode == 1 { return Want.Read }
   if mode == 2 { return Want.Write }
-  kind := fail.Kind.System
-  if mode == 3 { kind = fail.Kind.PermissionDenied }
-  failure := fail.make(kind, "handshake", "", "mock")
-  failure.native = -1
-  fail.set(status, failure)
-  return Want.Nothing''')
-    provider = replace_body(provider, 'read', '  _ = destination\nreturn Attempt{ want: handshake(status, connection) }')
-    provider = replace_body(provider, 'write', '  _ = source\nreturn Attempt{ want: handshake(status, connection) }')
-    provider = replace_body(provider, 'set_alpn_protocols', '  _ = status\n_ = connection\n_ = protocols')
-    provider = replace_body(provider, 'shutdown', '  _ = status\n_ = connection\nreturn Want.Read')
+  if mode == 3 { fail .PermissionDenied }
+  fail io.IoErr.System(-1)''')
+    provider = replace_body(provider, 'read', '  _ = destination\nreturn Attempt{ want: try handshake(connection) }')
+    provider = replace_body(provider, 'write', '  _ = source\nreturn Attempt{ want: try handshake(connection) }')
+    provider = replace_body(provider, 'set_alpn_protocols', '  _ = connection\n_ = protocols')
+    provider = replace_body(provider, 'shutdown', '  _ = connection\nreturn Want.Read')
     provider = replace_body(provider, 'subject_text_owned', '''  _ = certificate
-  failure := fail.make(fail.Kind.System, "certificate subject", "", "mock")
-  failure.native = -1
-  fail.set(status, failure)
-  return nil''')
+  fail io.IoErr.System(-1)''')
     (mock / 'stub').mkdir()
     (mock / 'stub/stub.dyn').write_text(provider)
     for sibling in (ROOT / 'vendor/openssl/tls').glob('*.dyn'):
@@ -210,13 +258,12 @@ with tempfile.TemporaryDirectory(prefix='dyn-tls-results-') as temporary:
   skip := (16-(#cast(usize,&backing[0]) & 15)) & 15
   arena := mem.arena_from_buffer(backing[skip..skip+mem.ArenaHeader])
   pem: []const u8 = ''' + json.dumps(pem.read_text()) + '''
-  bio := bio_new(&pem[0], #cast(i32, #len(pem)))
+  bio := bio_new(&pem[0], #cast(i32, pem.len))
   check(bio != nil)
   cert := read_cert(bio, nil, nil, nil)
   _ = bio_free(bio)
   check(cert != nil)
-  status: fail.Status
-  _ = tls.certificate_subject(arena, &status, cert)
+  _ = tls.certificate_subject(arena, cert) catch { return }
 }
 ''')
     for release in (False, True):

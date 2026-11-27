@@ -12,17 +12,17 @@ NODE = os.environ.get('NODE', 'node')
 if not shutil.which(NODE):
     print('SKIP Wasm dead inline: Node unavailable')
     raise SystemExit(0)
-SOURCE = '''use "std/mem" mem
+SOURCE = '''use mem "std/mem"
 fn main() {
   arena := mem.arena_alloc(0)
-  value := mem.push(i32, arena)
+  value := mem.push<i32>(arena)
   value.* = 42
   if value.* != 42 { #panic("live allocation") }
   mem.arena_release(arena)
 }
 '''
 WASI = "const {WASI}=require('node:wasi'),fs=require('node:fs');(async()=>{const wasi=new WASI({version:'preview1',returnOnExit:true});const {instance}=await WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{wasi_snapshot_preview1:wasi.wasiImport});process.exitCode=wasi.start(instance);})().catch(e=>{console.error(e);process.exit(1)});"
-LIBRARY = '''use "std/mem" mem
+LIBRARY = '''use mem "std/mem"
 extern fn missing "unused_missing"() i32
 fn dead() i32 { return missing() }
 fn initial() i32 { return 3 }
@@ -31,7 +31,7 @@ fn plus(value: i32) i32 { return value + state }
 callback: fn(i32) i32 = plus
 pub fn api(value: i32) i32 {
   arena := mem.arena_alloc(0)
-  slot := mem.push(i32, arena)
+  slot := mem.push<i32>(arena)
   slot.* = callback(value)
   result := slot.*
   mem.arena_release(arena)

@@ -4,12 +4,12 @@ fn expect(condition: bool, message: []const u8) { if !condition { #panic(message
 fn main() {
   // This limit includes the header and exactly 128 payload bytes.
   arena := mem.arena_from_source(mem.pages(mem.ArenaHeader + 128))
-  allocated_bytes := mem.push_array(u8, arena, 128)
+  allocated_bytes := mem.push_array<u8>(arena, 128)
   expect(allocated_bytes[0] == 0 && allocated_bytes[127] == 0, "owned zeroed storage")
   allocated_bytes[0] = 42
   expect(mem.arena_used(arena) == 128, "bounded arena holds its payload")
   mem.arena_reset(arena)
-  repeated := mem.push_array(u8, arena, 128)
+  repeated := mem.push_array<u8>(arena, 128)
   expect(repeated[0] == 0 && repeated[127] == 0 && mem.arena_used(arena) == 128, "owned reset reuse and zero")
   mem.arena_release(arena)
   arena = nil
@@ -17,24 +17,24 @@ fn main() {
 
   // Small blocks force chaining; earlier pushes never move.
   chain := mem.arena_alloc(256)
-  a := mem.push(u64, chain)
+  a := mem.push<u64>(chain)
   start := mem.arena_mark(chain)
   for i in 0..40 {
-    _ = mem.push_array(u64, chain, 3)
+    _ = mem.push_array<u64>(chain, 3)
   }
-  b := mem.push(u64, chain)
+  b := mem.push<u64>(chain)
   a.* = 20
   b.* = 22
   expect(a != b && a.* + b.* == 42 && mem.arena_used(chain) > 256, "chained pointer stability")
   mem.arena_rewind(chain, start)
   expect(mem.arena_mark(chain) == start && a.* == 20, "rewind frees later blocks")
   mem.arena_reset(chain)
-  reused := mem.push(u64, chain)
+  reused := mem.push<u64>(chain)
   expect(reused.* == 0 && mem.arena_used(chain) == 8, "reset starts fresh in first block")
   mem.arena_release(chain)
   chain = nil
   bounded := mem.arena_from_source(mem.pages(1024))
-  _ = mem.push_array(u64, bounded, 16)
+  _ = mem.push_array<u64>(bounded, 16)
   mem.arena_release(bounded)
   bounded = nil
 }

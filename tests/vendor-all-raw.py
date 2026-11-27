@@ -60,7 +60,7 @@ cases = {
     'cgltf': '''options := raw.cgltf_options{}
   data: *raw.cgltf_data = nil
   document: []const u8 = "{\\"asset\\":{\\"version\\":\\"2.0\\"}}"
-  if raw.cgltf_parse(&options, #cast(rawptr, &document[0]), #len(document), &data) != raw.cgltf_result_success { #panic("parse") }
+  if raw.cgltf_parse(&options, #cast(rawptr, &document[0]), document.len, &data) != raw.cgltf_result_success { #panic("parse") }
   if raw.cgltf_write(&options, nil, 0, data) == 0 { #panic("writer") }
   raw.cgltf_free(data)''',
     'stb_rect_pack': '''context := raw.stbrp_context{}
@@ -75,26 +75,19 @@ cases = {
   storage: [131072]u8
   arena := mem.arena_from_buffer(storage[..])
   scaled: [16]u8
-  status: fail.Status
-  image.resize(arena, &status, input[..], 2, 2, scaled[..], 4, 4, 1, false)
-  if status.failed || mem.arena_used(arena) != 0 { #panic("arena wrapper coexistence") }
+  image.resize(arena, input[..], 2, 2, scaled[..], 4, 4, 1, false) catch { #panic("arena wrapper coexistence") }
+  if mem.arena_used(arena) != 0 { #panic("arena wrapper coexistence") }
   if scaled[0] != 33 || scaled[15] != 33 { #panic("arena pixels") }''',
-    'vulkan': '''status: fail.Status
-  library := dynlib.open(&status, "libvulkan.so.1", dynlib.Now)
-  if status.failed { #panic("loader") }
-  symbol := dynlib.symbol(&status, library, "vkEnumerateInstanceVersion")
-  if status.failed { #panic("procedure") }
+    'vulkan': '''library := dynlib.open("libvulkan.so.1", dynlib.Now) catch { #panic("loader") }
+  symbol := dynlib.symbol(library, "vkEnumerateInstanceVersion") catch { #panic("procedure") }
   version: u32 = 0
   if raw.vkEnumerateInstanceVersion(#cast(raw.Procedure_vkEnumerateInstanceVersion, symbol), &version) != raw.VK_SUCCESS || version == 0 { #panic("dispatch") }
-  dynlib.close(&status, &library)''',
-    'opengl': '''status: fail.Status
-  library := dynlib.open(&status, "libGL.so.1", dynlib.Now)
-  if status.failed { #panic("loader") }
-  symbol := dynlib.symbol(&status, library, "glGetError")
-  if status.failed { #panic("procedure") }
+  dynlib.close(&library) catch { #panic("close") }''',
+    'opengl': '''library := dynlib.open("libGL.so.1", dynlib.Now) catch { #panic("loader") }
+  symbol := dynlib.symbol(library, "glGetError") catch { #panic("procedure") }
   raw.glClear(record_clear, #cast(u32, raw.GL_COLOR_BUFFER_BIT))
   if recorded_mask != #cast(u32, raw.GL_COLOR_BUFFER_BIT) { #panic("dispatch") }
-  dynlib.close(&status, &library)''',
+  dynlib.close(&library) catch { #panic("close") }''',
 }
 cases['lua'] = r'''state := raw.luaL_newstate()
   if state == nil { #panic("state") }
@@ -105,14 +98,14 @@ cases['lua'] = r'''state := raw.luaL_newstate()
   raw.lua_pushinteger(state, 37)
   name: [2]u8 = ['t', 0]
   good: []const u8 = "return 6 * 7"
-  if raw.luaL_loadbuffer(state, #cast(*const c.char, &good[0]), #len(good), #cast(*const c.char, &name[0])) != 0 || raw.lua_pcall(state, 0, 1, 0) != 0 || raw.lua_tointeger(state, -1) != 42 { #panic("protected script") }
+  if raw.luaL_loadbuffer(state, #cast(*const c.char, &good[0]), good.len, #cast(*const c.char, &name[0])) != 0 || raw.lua_pcall(state, 0, 1, 0) != 0 || raw.lua_tointeger(state, -1) != 42 { #panic("protected script") }
   raw.lua_pop(state, 1)
   bad: []const u8 = "return 1 + nil"
-  if raw.luaL_loadbuffer(state, #cast(*const c.char, &bad[0]), #len(bad), #cast(*const c.char, &name[0])) != 0 { #panic("load runtime error") }
+  if raw.luaL_loadbuffer(state, #cast(*const c.char, &bad[0]), bad.len, #cast(*const c.char, &name[0])) != 0 { #panic("load runtime error") }
   if raw.lua_pcall(state, 0, 1, 0) == 0 || raw.lua_tostring(state, -1) == nil { #panic("protected runtime error") }
   raw.lua_pop(state, 1)
   malformed: []const u8 = "return ("
-  if raw.luaL_loadbuffer(state, #cast(*const c.char, &malformed[0]), #len(malformed), #cast(*const c.char, &name[0])) == 0 { #panic("malformed script") }
+  if raw.luaL_loadbuffer(state, #cast(*const c.char, &malformed[0]), malformed.len, #cast(*const c.char, &name[0])) == 0 { #panic("malformed script") }
   raw.lua_pop(state, 1)
   if raw.lua_gettop(state) != 1 || raw.lua_tointeger(state, -1) != 37 { #panic("preserved stack prefix") }
   raw.lua_pop(state, 1)
@@ -142,7 +135,7 @@ cases['sqlite'] = r'''path: [9]u8 = [':','m','e','m','o','r','y',':',0]
   defer { _ = raw.sqlite3_close(database) }
   query: []const u8 = "SELECT ?1"
   statement: rawptr = nil
-  if raw.sqlite3_prepare_v2(database, #cast(*const c.char, &query[0]), #cast(i32, #len(query)), &statement, nil) != raw.SQLITE_OK { #panic("prepare") }
+  if raw.sqlite3_prepare_v2(database, #cast(*const c.char, &query[0]), #cast(i32, query.len), &statement, nil) != raw.SQLITE_OK { #panic("prepare") }
   defer { _ = raw.sqlite3_finalize(statement) }
   payload: [3]u8 = [4,5,6]
   if raw.sqlite3_bind_blob(statement, 1, #cast(rawptr, &payload[0]), 3, #cast(raw.sqlite3_destructor_type, raw.SQLITE_TRANSIENT())) != raw.SQLITE_OK { #panic("bind") }
@@ -154,19 +147,19 @@ cases['sqlite'] = r'''path: [9]u8 = [':','m','e','m','o','r','y',':',0]
   if raw.sqlite3_reset(statement) != raw.SQLITE_OK { #panic("reset") }
   invalid: []const u8 = "SELECT ("
   rejected: rawptr = nil
-  if raw.sqlite3_prepare_v2(database, #cast(*const c.char, &invalid[0]), #cast(i32, #len(invalid)), &rejected, nil) == raw.SQLITE_OK || rejected != nil { #panic("syntax failure") }'''
+  if raw.sqlite3_prepare_v2(database, #cast(*const c.char, &invalid[0]), #cast(i32, invalid.len), &rejected, nil) == raw.SQLITE_OK || rejected != nil { #panic("syntax failure") }'''
 cases['lz4'] = r'''input: [64]u8
   encoded: [256]u8
   decoded: [64]u8
   i: usize = 0
-  for i < #len(input) {
+  for i < input.len {
     input[i] = #cast(u8, i)
     i += 1
   }
   n := raw.LZ4_compress_default(#cast(*const c.char, &input[0]), #cast(*c.char, &encoded[0]), 64, 256)
   if n <= 0 || raw.LZ4_decompress_safe(#cast(*const c.char, &encoded[0]), #cast(*c.char, &decoded[0]), n, 64) != 64 { #panic("LZ4 roundtrip") }
   i = 0
-  for i < #len(input) {
+  for i < input.len {
     if input[i] != decoded[i] { #panic("LZ4 bytes") }
     i += 1
   }
@@ -177,14 +170,14 @@ cases['zstd'] = r'''input: [64]u8
   encoded: [256]u8
   decoded: [64]u8
   i: usize = 0
-  for i < #len(input) {
+  for i < input.len {
     input[i] = #cast(u8, i)
     i += 1
   }
   n := raw.ZSTD_compress(#cast(rawptr, &encoded[0]), 256, #cast(rawptr, &input[0]), 64, 3)
   if raw.ZSTD_isError(n) != 0 || raw.ZSTD_decompress(#cast(rawptr, &decoded[0]), 64, #cast(rawptr, &encoded[0]), n) != 64 { #panic("zstd roundtrip") }
   i = 0
-  for i < #len(input) {
+  for i < input.len {
     if input[i] != decoded[i] { #panic("zstd bytes") }
     i += 1
   }
@@ -232,15 +225,15 @@ try:
             wav.writeframes(bytes([1,0,2,0,3,0,4,0]))
         for name, body in cases.items():
             module = manifest[name]['module']
-            imports = 'use "vendor/' + module + '" raw\nuse "std/c"\n'
+            imports = 'use raw "vendor/' + module + '"\nuse "std/c"\n'
             if name in ('vulkan', 'opengl'):
-                imports += 'use "std/dynlib"\nuse "std/fail"\n#link("c")\n'
+                imports += 'use "std/dynlib"\n#link("c")\n'
             if name == 'sdl3':
                 imports += 'fn event_filter(data: rawptr, event: *raw.SDL_Event) bool {\n_ = event\nreturn data != nil\n}\n'
             if name == 'opengl':
                 imports += 'recorded_mask: u32 = 0\nfn record_clear(mask: u32) {\nrecorded_mask = mask\n}\n'
             if name == 'stb_image_resize':
-                imports += 'use "std/mem"\nuse "std/fail"\nuse "vendor/stb/image_resize" image\n'
+                imports += 'use "std/mem"\nuse image "vendor/stb/image_resize"\n'
             (work / 'main.dyn').write_text(imports + 'fn main() {\nif !raw.verify_layout() { #panic("layout") }\n' + body + '\n}\n')
             for mode in ([], ['--release']):
                 result = subprocess.run([dyn, 'build', str(work), '--no-cache', '--max-work', '100000000', '--output', str(work / 'test'), *mode], env=env, text=True, capture_output=True, timeout=180)

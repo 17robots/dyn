@@ -1,0 +1,171 @@
+// An opt-in allocator for the rare data whose objects come and go one at a
+// time, such as a cache with evictions or a graph that is edited in place.
+// Arenas stay the default: use a heap only when objects do not share a
+// lifetime.
+//
+//   h := heap.heap(arena)
+//   node := heap.alloc<Node>(&h)
+//   heap.free(&h, node)
+//
+// All memory comes from arena and goes back to it only when the arena is
+// reset or released; freed blocks are reused by later allocations. Blocks
+// have no header: free takes the type (and free_array the slice) to know the
+// size. Sizes up to 64 KiB use power-of-two classes; larger blocks are
+// rounded to 4 KiB pages and reused first-fit.
+//
+// Not thread-safe: one thread uses a heap at a time, as with its arena.
+// Freeing a block twice, or with another type, corrupts the heap.
+
+use mem "std/mem"
+
+const min_shift: usize = 4
+const page: usize = 4096
+const largest_class: usize = 65536
+
+struct Free { next: *Free }
+struct Large { next: *Large, size: usize }
+
+pub nocopy struct Heap {
+  arena: *mem.Arena,
+  free: [13]*Free,
+  large: *Large,
+}
+
+pub fn heap(arena: *mem.Arena) Heap {
+  return Heap{ arena: arena }
+}
+
+// One fresh T: zeroed, then T's field defaults.
+pub fn alloc<T>(h: *Heap) *T {
+  value := #cast(*T, take(h, #sizeof(T), #alignof(T)))
+  #init(value)
+  return value
+}
+
+// Gives value's block back for reuse. nil does nothing.
+pub fn free<T>(h: *Heap, value: *T) {
+  if value == nil { return }
+  give(h, #cast(*u8, value), #sizeof(T), #alignof(T))
+}
+
+// count fresh elements. Zero count returns an empty slice.
+pub fn alloc_array<T>(h: *Heap, count: usize) []T {
+  if count == 0 {
+    empty: []T
+    return empty
+  }
+  if #sizeof(T) != 0 && count > #max(usize) / #sizeof(T) {
+    #panic("heap size overflow")
+  }
+  items := #slice(#cast(*T, take(h, count * #sizeof(T), #alignof(T))), count)
+  for i in 0..count {
+    #init(&items[i])
+  }
+  return items
+}
+
+// Gives a slice from alloc_array or resize_array back, whole.
+pub fn free_array<T>(h: *Heap, items: []T) {
+  if items.len == 0 { return }
+  give(h, #cast(*u8, &items[0]), items.len * #sizeof(T), #alignof(T))
+}
+
+// A slice of count elements that starts with items' elements; new elements
+// are fresh. items is freed and must not be used afterwards.
+pub fn resize_array<T>(h: *Heap, items: []T, count: usize) []T {
+  fresh := alloc_array<T>(h, count)
+  kept := items.len
+  if count < kept { kept = count }
+  for i in 0..kept {
+    fresh[i] = items[i]
+  }
+  free_array(h, items)
+  return fresh
+}
+
+fn block_size(size: usize, alignment: usize) usize {
+  if alignment > page { #panic("heap blocks align to at most 4096 bytes") }
+  // A block is aligned to its own size up to a page, so a class of at least
+  // the alignment is aligned enough.
+  need := size
+  if need < alignment { need = alignment }
+  if need > largest_class {
+    if need > #max(usize) - page { #panic("heap size overflow") }
+    return (need + page - 1) / page * page
+  }
+  one: usize = 1
+  shift := min_shift
+  for (one << shift) < need {
+    shift += 1
+  }
+  return one << shift
+}
+
+fn class_of(size: usize) usize {
+  one: usize = 1
+  class: usize = 0
+  for (one << (class + min_shift)) < size {
+    class += 1
+  }
+  return class
+}
+
+fn push_pages(arena: *mem.Arena, size: usize) []u8 {
+  bytes := mem.push_bytes(arena, size + page - 1)
+  address := #cast(usize, &bytes[0])
+  start := (page - address % page) % page
+  return bytes[start..start + size]
+}
+
+fn take(h: *Heap, size: usize, alignment: usize) *u8 {
+  if h.arena == nil { #panic("create a heap with heap.heap before allocating") }
+  bytes := block_size(size, alignment)
+  if bytes > largest_class { return take_large(h, bytes) }
+  class := class_of(bytes)
+  if h.free[class] == nil { refill(h, class, bytes) }
+  node := h.free[class]
+  h.free[class] = node.next
+  return #cast(*u8, node)
+}
+
+// Carves a page-aligned slab of at least eight blocks into the class list.
+fn refill(h: *Heap, class: usize, bytes: usize) {
+  slab_size := bytes * 8
+  if slab_size < page { slab_size = page }
+  slab := push_pages(h.arena, slab_size)
+  count := slab_size / bytes
+  for i in 0..count {
+    node := #cast(*Free, &slab[(count - 1 - i) * bytes])
+    node.next = h.free[class]
+    h.free[class] = node
+  }
+}
+
+// First fit that wastes at most half the block.
+fn take_large(h: *Heap, bytes: usize) *u8 {
+  link := &h.large
+  for link.* != nil {
+    node := link.*
+    if node.size >= bytes && node.size / 2 <= bytes {
+      link.* = node.next
+      return #cast(*u8, node)
+    }
+    link = &node.next
+  }
+  return &push_pages(h.arena, bytes)[0]
+}
+
+fn give(h: *Heap, memory: *u8, size: usize, alignment: usize) {
+  bytes := block_size(size, alignment)
+  if bytes > largest_class {
+    node := #cast(*Large, memory)
+    node.size = bytes
+    node.next = h.large
+    h.large = node
+    return
+  }
+  class := class_of(bytes)
+  node := #cast(*Free, memory)
+  node.next = h.free[class]
+  h.free[class] = node
+}

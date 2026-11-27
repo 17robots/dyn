@@ -1,6 +1,5 @@
 // PBKDF2-HMAC-SHA256, 50 derivations of 20000 iterations.
 use "std/crypto/password"
-use "std/fail"
 use "std/io"
 
 fn main() {
@@ -8,10 +7,9 @@ fn main() {
   scratch: [20]u8
   salt: [16]u8
   check: u64 = 0
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   for i in 0..50 {
     salt[0] = #cast(u8, i)
-    password.pbkdf2_sha256(&status, derived[..], "correct-horse-battery", salt[..], 20000, scratch[..])
+    password.pbkdf2_sha256(derived[..], "correct-horse-battery", salt[..], 20000, scratch[..]) catch { #panic("unexpected failure") }
     check += #cast(u64, derived[0])
   }
   io.println("{}", check)

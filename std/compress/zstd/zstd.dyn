@@ -1,7 +1,6 @@
-use "vendor/zstd" provider
-use "std/fail"
-use "std/io" stream
-use "std/mem" memory
+use provider "vendor/zstd"
+use stream "std/io"
+use memory "std/mem"
 // A frame's decompressed size, when the frame header records it.
 pub struct FrameSize { size: u64, known: bool }
 // A failed decoder stays failed: later reads report the same failure.
@@ -16,7 +15,7 @@ pub struct Decoder {
   saw_frame: bool,
   finished: bool,
   failed: bool,
-  failure: fail.Failure,
+  failure: stream.IoErr,
 }
 pub fn version() u32 {
   return provider.version()
@@ -25,49 +24,34 @@ pub fn compress_bound(source_size: usize) usize {
   return provider.compress_bound(source_size)
 }
 // Compresses source into arena at level.
-pub fn compress(arena: *memory.Arena, status: *fail.Status, source: []const u8, level: i32) []u8 {
-  if status == nil { return compress(arena, &fail.Status{}, source, level) }
-  empty: []u8
-  if status.failed { return empty }
+pub fn compress(arena: *memory.Arena, source: []const u8, level: i32) []u8!stream.IoErr {
   mark := memory.arena_mark(arena)
-  capacity := compress_bound(#len(source))
+  capacity := compress_bound(source.len)
   allocation := memory.push_bytes(arena, capacity)
-  written := provider.compress(status, allocation, source, level)
-  if status.failed {
+  written := provider.compress(allocation, source, level) catch err {
     memory.arena_rewind(arena, mark)
-    return empty
+    fail err
   }
   return allocation[..written]
 }
 // One frame whose header records its size, into arena. A frame without a
-// recorded size fails with Unsupported: use the streaming decoder.
-pub fn decompress(arena: *memory.Arena, status: *fail.Status, source: []const u8) []u8 {
-  if status == nil { return decompress(arena, &fail.Status{}, source) }
-  empty: []u8
-  if status.failed { return empty }
+// recorded size fails with Unsupported: use the streaming decoder. A frame
+// larger than memory fails with Capacity, malformed data with InvalidInput.
+pub fn decompress(arena: *memory.Arena, source: []const u8) []u8!stream.IoErr {
   mark := memory.arena_mark(arena)
-  size := frame_size(status, source)
-  if status.failed { return empty }
-  if !size.known {
-    fail.set(status, fail.make(fail.Kind.Unsupported, "decompress", "", "the frame does not record its size"))
-    return empty
-  }
-  if size.size > #max(usize) {
-    fail.set(status, fail.make(fail.Kind.Overflow, "decompress", "", "the frame is too large"))
-    return empty
-  }
+  size := try frame_size(source)
+  if !size.known { fail .Unsupported }
+  if size.size > #max(usize) { fail .Capacity }
   capacity := #cast(usize, size.size)
   allocation := memory.push_bytes(arena, capacity)
-  written := provider.decompress(status, allocation, source)
-  if status.failed {
+  written := provider.decompress(allocation, source) catch err {
     memory.arena_rewind(arena, mark)
-    return empty
+    fail err
   }
   return allocation[..written]
 }
-pub fn frame_size(status: *fail.Status, source: []const u8) FrameSize {
-  if status == nil { return frame_size(&fail.Status{}, source) }
-  size := provider.frame_size(status, source)
+pub fn frame_size(source: []const u8) FrameSize!stream.IoErr {
+  size := try provider.frame_size(source)
   return FrameSize{ size: size.size, known: size.known }
 }
 pub fn error_name(code: usize, maximum: usize) []const u8 {
@@ -82,43 +66,37 @@ pub fn decoder_workspace_size(window_log: u32) usize {
   return provider.stream_workspace_size(window_log)
 }
 pub fn decoder(input: stream.Reader, compressed_bytes: []u8, workspace: []u8, window_log: u32) Decoder {
-  starting: fail.Status
-  context := provider.stream_context(&starting, workspace, window_log)
-  state := Decoder{ source_reader: input, compressed_storage: compressed_bytes, context: context }
-  if starting.failed {
+  state := Decoder{ source_reader: input, compressed_storage: compressed_bytes }
+  context := provider.stream_context(workspace, window_log) catch err {
     state.failed = true
-    state.failure = starting.failure
-  } else if #len(compressed_bytes) == 0 {
+    state.failure = err
+    return state
+  }
+  state.context = context
+  if compressed_bytes.len == 0 {
     state.failed = true
-    state.failure = fail.make(fail.Kind.Capacity, "decompress", "", "no input storage")
+    state.failure = stream.IoErr.Capacity
   }
   return state
 }
-fn decoder_failed(status: *fail.Status, state: *Decoder) usize {
+// Stops the decoder for good and returns err for the caller to fail with.
+fn decoder_failed(state: *Decoder, err: stream.IoErr) stream.IoErr {
   state.failed = true
-  state.failure = status.failure
-  return 0
+  state.failure = err
+  return err
 }
-fn decoder_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn decoder_read(data: rawptr, destination: []u8) usize!stream.IoErr {
   state := #cast(*Decoder, data)
-  if status.failed { return 0 }
-  if state.failed {
-    fail.set(status, state.failure)
-    return 0
+  if state.failed { fail state.failure }
+  if state.offset > state.used || state.used > state.compressed_storage.len {
+    #panic("zstd: decoder positions are out of range")
   }
-  if state.offset > state.used || state.used > #len(state.compressed_storage) {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "decompress", "", "the decoder positions are out of range"))
-    return decoder_failed(status, state)
-  }
-  if #len(destination) == 0 || state.finished { return 0 }
+  if destination.len == 0 || state.finished { return 0 }
   for {
     // First flush provider output, even with no new input. Reading the next chunk
     // before doing so would stall a caller while output is already available.
-    decoded := provider.stream_decode(status, &state.context, destination, state.compressed_storage[state.offset..state.used])
-    if status.failed {
-      status.failure.offset = state.offset
-      status.failure.has_offset = true
-      return decoder_failed(status, state)
+    decoded := provider.stream_decode(&state.context, destination, state.compressed_storage[state.offset..state.used]) catch err {
+      fail decoder_failed(state, err)
     }
     state.offset += decoded.consumed
     if decoded.ended {
@@ -129,10 +107,8 @@ fn decoder_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
     }
     if decoded.written != 0 { return decoded.written }
     if state.offset < state.used {
-      if decoded.consumed == 0 {
-        fail.set(status, fail.make(fail.Kind.System, "decompress", "", "the decoder made no progress"))
-        return decoder_failed(status, state)
-      }
+      // The decoder made no progress.
+      if decoded.consumed == 0 { fail decoder_failed(state, stream.IoErr.System(0)) }
       continue
     }
     if state.source_ended {
@@ -140,13 +116,14 @@ fn decoder_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
         state.finished = true
         return 0
       }
-      fail.at(status, fail.Kind.InvalidInput, "decompress", "the input ends inside a frame", state.offset)
-      return decoder_failed(status, state)
+      // The input ends inside a frame.
+      fail decoder_failed(state, stream.IoErr.InvalidInput)
     }
-    count := stream.read(status, state.source_reader, state.compressed_storage)
+    count := stream.read(state.source_reader, state.compressed_storage) catch err {
+      fail decoder_failed(state, err)
+    }
     state.offset = 0
     state.used = count
-    if status.failed { return decoder_failed(status, state) }
     if count == 0 {
       state.source_ended = true
     }

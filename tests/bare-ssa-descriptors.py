@@ -52,7 +52,7 @@ pub fn slice(x:[]u8) []u8 { return x }
 pub fn indirect(p:fn([]const u8) []const u8,x:[]const u8) []const u8 { return p(x) }
 pub fn anyround(x:any) u32 { return ccheck(x) }
 pub fn first(x:[]const u8) u8 { return cdesc(x)[0] }
-pub fn partial(x:[]const u8) usize { return #len(cdesc(x)) }
+pub fn partial(x:[]const u8) usize { return cdesc(x).len }
 pub fn unused(x:[]const u8,y:any) { _=cdesc(x) }
 pub fn many(a:u32,b:u32,c:u32,d:u32,e:u32,f:u32,g:u32,x:any,y:[]const u8,z:any) u32 { return cmany(a,b,c,d,e,f,g,x,y,z) }
 pub fn cycle(x:[]const u8,y:[]const u8,n:u32) []const u8 { a:=x
@@ -137,7 +137,7 @@ FALLBACK = []
 types = ','.join(['[]const u8'] * 256)
 params = ','.join(f'a{i}:[]const u8' for i in range(256))
 args = ','.join(['x'] * 256)
-SOURCE += f'\npub fn capacitycallee({params}) usize {{ return #len(a0)+#len(a255) }}\npub fn capacitycall(p:fn({types}) usize,x:[]const u8) usize {{ return p({args}) }}\n'
+SOURCE += f'\npub fn capacitycallee({params}) usize {{ return a0.len+a255.len }}\npub fn capacitycall(p:fn({types}) usize,x:[]const u8) usize {{ return p({args}) }}\n'
 
 RV_SHIM = '.text\n.globl cdesc\ncdesc: ret\n'
 ARM_SHIM = '.syntax unified\n.thumb\n.eabi_attribute 28,1\n.text\n.global cdesc\n.thumb_func\ncdesc: bx lr\n'

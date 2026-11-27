@@ -16,10 +16,10 @@ A page is plain text. The first line is the title, `# ` starts a heading,
 - **Directories.** `fs.list` copies a directory's entries into an arena.
   The order is up to the file system, so the program sorts before it writes
   the index.
-- **One status for the whole build.** Listing, reading and writing all take
-  the same `*fail.Status`. After the first failure every later step does
-  nothing, so `main` checks once, before reporting success, and prints the
-  failure (`list missing: no such file or directory`).
+- **`try` for the steps, `catch` in `main`.** Listing, reading and writing
+  return `T!io.IoErr`. `build_page` passes any failure up with `try`; `main`
+  catches each step's failure and names the path it was working on
+  (`site: missing: not found`).
 - **Paths.** `path.join` and `path.extension` work on text and never touch
   the disk.
 - **Safe HTML.** `html.Writer` escapes everything written with `html.text`.
@@ -29,8 +29,7 @@ A page is plain text. The first line is the title, `# ` starts a heading,
   defers a rewind. The file's text and the HTML go to scratch and vanish
   when the page is done, so a site of a thousand pages needs no more memory
   than its largest page. What must outlive the page goes to the `keep` arena
-  instead: its name and title, and the paths, because a failure borrows its
-  path and `main` prints it after the scratch is gone.
+  instead: its name and title.
 - **Sizing for the worst case.** Escaping turns one byte into at most six
   (`&quot;`), so a buffer of six times the input, plus room for tags, always
   fits, and a failed write would be a bug, a `#panic`.

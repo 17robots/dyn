@@ -27,10 +27,9 @@ signed = sorted(signed)
 def array(values):
     return ',\n'.join('  ' + ', '.join(map(str, values[i:i+8])) for i in range(0, len(values), 8))
 
-SOURCE = f'''use "std/fail"
-use "std/fmt" fmt
-use "std/io" io
-use "std/mem" mem
+SOURCE = f'''use fmt "std/fmt"
+use io "std/io"
+use mem "std/mem"
 const unsigned: [{len(unsigned)}]u64 = [
 {array(unsigned)}
 ]
@@ -39,24 +38,22 @@ const signed_bits: [{len(signed)}]u64 = [
 ]
 fn check_unsigned(value: u64) {{
   full: [20]u8
-  reference_status: fail.Status
-  reference := fmt.buffer(&reference_status, full[..])
+  reference := fmt.buffer(full[..])
   fmt.write_u64(&reference, value)
-  if reference_status.failed {{ #panic("full unsigned") }}
+  if fmt.overflowed(&reference) {{ #panic("full unsigned") }}
   io.println("{{}}", fmt.bytes(&reference))
   bounded: [24]u8
   for capacity in 0..22 {{
-    for i in 0..#len(bounded) {{ bounded[i] = '!' }}
-    state_status: fail.Status
-    state := fmt.buffer(&state_status, bounded[..capacity])
+    for i in 0..bounded.len {{ bounded[i] = '!' }}
+    state := fmt.buffer(bounded[..capacity])
     enough := capacity >= reference.length
     fmt.write_u64(&state, value)
-    if state_status.failed == enough {{ #panic("unsigned capacity") }}
+    if fmt.overflowed(&state) == enough {{ #panic("unsigned capacity") }}
     if enough {{
       if !mem.equal(fmt.bytes(&state), fmt.bytes(&reference)) {{ #panic("unsigned bytes") }}
     }} else {{
       fmt.write_u64(&state, 0)
-      if state.length != 0 || bounded[0] != '!' || !state_status.failed {{ #panic("unsigned rollback/sticky") }}
+      if state.length != 0 || bounded[0] != '!' || !fmt.overflowed(&state) {{ #panic("unsigned rollback/sticky") }}
     }}
     if bounded[capacity] != '!' {{ #panic("unsigned overwrite") }}
   }}
@@ -64,24 +61,22 @@ fn check_unsigned(value: u64) {{
 fn check_signed(bits: u64) {{
   value := #bitcast(i64, bits)
   full: [20]u8
-  reference_status: fail.Status
-  reference := fmt.buffer(&reference_status, full[..])
+  reference := fmt.buffer(full[..])
   fmt.write_i64(&reference, value)
-  if reference_status.failed {{ #panic("full signed") }}
+  if fmt.overflowed(&reference) {{ #panic("full signed") }}
   io.println("{{}}", fmt.bytes(&reference))
   bounded: [24]u8
   for capacity in 0..22 {{
-    for i in 0..#len(bounded) {{ bounded[i] = '!' }}
-    state_status: fail.Status
-    state := fmt.buffer(&state_status, bounded[..capacity])
+    for i in 0..bounded.len {{ bounded[i] = '!' }}
+    state := fmt.buffer(bounded[..capacity])
     enough := capacity >= reference.length
     fmt.write_i64(&state, value)
-    if state_status.failed == enough {{ #panic("signed capacity") }}
+    if fmt.overflowed(&state) == enough {{ #panic("signed capacity") }}
     if enough {{
       if !mem.equal(fmt.bytes(&state), fmt.bytes(&reference)) {{ #panic("signed bytes") }}
     }} else {{
       fmt.write_i64(&state, 0)
-      if state.length != 0 || bounded[0] != '!' || !state_status.failed {{ #panic("signed rollback/sticky") }}
+      if state.length != 0 || bounded[0] != '!' || !fmt.overflowed(&state) {{ #panic("signed rollback/sticky") }}
     }}
     if bounded[capacity] != '!' {{ #panic("signed overwrite") }}
   }}
@@ -90,22 +85,20 @@ fn main() {{
   for value in unsigned {{ check_unsigned(value) }}
   for bits in signed_bits {{ check_signed(bits) }}
   storage: [32]u8
-  state_status: fail.Status
-  state := fmt.buffer(&state_status, storage[..])
+  state := fmt.buffer(storage[..])
   fmt.write(&state, "id=")
   fmt.write_i64(&state, -42)
-  if state_status.failed || !mem.equal(fmt.bytes(&state), "id=-42") {{ #panic("append prefix") }}
+  if fmt.overflowed(&state) || !mem.equal(fmt.bytes(&state), "id=-42") {{ #panic("append prefix") }}
   fmt.clear(&state)
   fmt.write_u64_width(&state, 42, 5, '0')
-  if state_status.failed || !mem.equal(fmt.bytes(&state), "00042") {{ #panic("padding") }}
+  if fmt.overflowed(&state) || !mem.equal(fmt.bytes(&state), "00042") {{ #panic("padding") }}
   fmt.clear(&state)
   fmt.print(&state, "{{}}-{{}} {{{{ok}}}}", 7, "x")
-  if state_status.failed || !mem.equal(fmt.bytes(&state), "7-x {{ok}}") {{ #panic("print") }}
+  if fmt.overflowed(&state) || !mem.equal(fmt.bytes(&state), "7-x {{ok}}") {{ #panic("print") }}
   small: [4]u8
-  tight_status: fail.Status
-  tight := fmt.buffer(&tight_status, small[..])
+  tight := fmt.buffer(small[..])
   fmt.print(&tight, "ab{{}}", 123)
-  if !tight_status.failed || tight.length != 0 {{ #panic("print rollback") }}
+  if !fmt.overflowed(&tight) || tight.length != 0 {{ #panic("print rollback") }}
 }}
 '''
 expected = list(map(str, unsigned + signed))

@@ -5,15 +5,15 @@ flags: [8000000]u8
 fn main() {
   total: u64 = 0
   for round in 0..10 {
-    for i in 0..#len(flags) {
+    for i in 0..flags.len {
       flags[i] = 1
     }
     count: u64 = 0
-    for i in 2..#len(flags) {
+    for i in 2..flags.len {
       if flags[i] == 1 {
         count += 1
         j := i * 2
-        for j < #len(flags) {
+        for j < flags.len {
           flags[j] = 0
           j += i
         }

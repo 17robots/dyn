@@ -10,9 +10,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = '''use "std/process/signal" signal
-use "std/io" io
-use "std/fail"
+SOURCE = '''use signal "std/process/signal"
+use io "std/io"
 
 fn check(ok: bool) {
   if !ok {
@@ -20,24 +19,40 @@ fn check(ok: bool) {
   }
 }
 
+// Whether a closed watch fails with InvalidInput.
+fn invalid_poll(state: *signal.Watch) bool {
+  _ = signal.poll(state) catch err {
+    case err {
+      .InvalidInput => { return true }
+      _ => { return false }
+    }
+  }
+  return false
+}
+
+fn invalid_watch(set: signal.Set) bool {
+  watching := signal.watch(set) catch err {
+    case err {
+      .InvalidInput => { return true }
+      _ => { return false }
+    }
+  }
+  signal.close(&watching)
+  return false
+}
+
 fn main() {
   zero: signal.Watch
-  closed: fail.Status
-  _ = signal.poll(&closed, &zero)
-  check(closed.failure.kind == fail.Kind.InvalidState)
+  check(invalid_poll(&zero))
   signal.close(&zero)
-  empty: fail.Status
-  _ = signal.watch(&empty, signal.Set{})
-  check(empty.failure.kind == fail.Kind.InvalidInput)
-  status: fail.Status
-  state := signal.watch(&status, signal.Set{ interrupt: true, terminate: true, hangup: HANGUP })
-  first := signal.poll(&status, &state)
-  check(!status.failed && first == signal.Kind.None)
+  check(invalid_watch(signal.Set{}))
+  state := signal.watch(signal.Set{ interrupt: true, terminate: true, hangup: HANGUP }) catch { #panic("watch") }
+  first := signal.poll(&state) catch { #panic("poll") }
+  check(first == signal.Kind.None)
   if WAIT {
     io.println("ready")
     for i in 0..3 {
-      next := signal.wait(&status, &state)
-      check(!status.failed)
+      next := signal.wait(&state) catch { #panic("wait") }
       io.println("{}", #cast(u32, next))
     }
   }

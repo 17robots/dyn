@@ -1,6 +1,6 @@
 // BLAKE2b (RFC 7693): digests of 1-64 bytes, optionally keyed (up to 64 key
 // bytes). + is addition mod 2^64, written inside #wrapping.
-use "std/encoding/binary" binary
+use binary "std/encoding/binary"
 
 const Iv: [8]u64 = [
   0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
@@ -83,16 +83,16 @@ fn compress(state: *State, last: bool) {
 // (at most 64 bytes). An invalid length or key makes finish fail.
 pub fn init(length: usize, key: []const u8) State {
   state := State{ length: length }
-  if length == 0 || length > 64 || #len(key) > 64 {
+  if length == 0 || length > 64 || key.len > 64 {
     state.failed = true
     return state
   }
   for i in 0..8 {
     state.hash[i] = Iv[i]
   }
-  state.hash[0] ^= 0x01010000 ^ (#cast(u64, #len(key)) << 8) ^ #cast(u64, length)
-  if #len(key) > 0 {
-    for i in 0..#len(key) {
+  state.hash[0] ^= 0x01010000 ^ (#cast(u64, key.len) << 8) ^ #cast(u64, length)
+  if key.len > 0 {
+    for i in 0..key.len {
       state.block[i] = key[i]
     }
     state.used = 128
@@ -110,7 +110,7 @@ fn advance(state: *State, count: u64) {
 pub fn update(state: *State, input: []const u8) {
   if state.failed { return }
   at: usize = 0
-  for at < #len(input) {
+  for at < input.len {
     // A full block is compressed only once more input follows: the last
     // block must be compressed by finish with the final flag.
     if state.used == 128 {
@@ -118,7 +118,7 @@ pub fn update(state: *State, input: []const u8) {
       compress(state, false)
       state.used = 0
     }
-    take := #len(input) - at
+    take := input.len - at
     if take > 128 - state.used {
       take = 128 - state.used
     }
@@ -133,7 +133,7 @@ pub fn update(state: *State, input: []const u8) {
 // Writes the digest into the first length bytes of destination; empty when
 // destination is shorter or the state was invalid.
 pub fn finish(state: *State, destination: []u8) []u8 {
-  if state.failed || #len(destination) < state.length { return destination[..0] }
+  if state.failed || destination.len < state.length { return destination[..0] }
   advance(state, state.used)
   for i in state.used..128 {
     state.block[i] = 0
@@ -149,9 +149,9 @@ pub fn finish(state: *State, destination: []u8) []u8 {
   return destination[..state.length]
 }
 
-// One-shot digest of input, #len(destination) bytes long (1-64), unkeyed.
+// One-shot digest of input, destination.len bytes long (1-64), unkeyed.
 pub fn sum(destination: []u8, input: []const u8) []u8 {
-  state := init(#len(destination), "")
+  state := init(destination.len, "")
   update(&state, input)
   return finish(&state, destination)
 }

@@ -1,11 +1,10 @@
-use "std/fail"
-use "std/mem" mem
-use "std/io" io
-use "std/math" math
-use "std/unicode/utf8" utf8
-use "std/unicode/text" unicode
-use "vendor/harfbuzz" hb
-use "vendor/fribidi" bidi
+use mem "std/mem"
+use io "std/io"
+use math "std/math"
+use utf8 "std/unicode/utf8"
+use unicode "std/unicode/text"
+use hb "vendor/harfbuzz"
+use bidi "vendor/fribidi"
 
 // HarfBuzz fonts use 26.6 pixel positions. data identifies the caller's raster
 // owner; select receives a complete extended grapheme, never a partial mark.
@@ -20,7 +19,7 @@ pub struct Hit { start: usize, end: usize, line: usize, x: f64, y: f64, width: f
 struct Cluster { start: usize, end: usize, scalar: usize, level: i8, script: u32, face: Face, tab: bool }
 struct Unit { start: usize, end: usize, advance: f64, tab: bool, break_after: bool }
 struct Run { start: usize, end: usize, first: usize, last: usize, level: i8, script: u32, face: Face, glyphs: []hb.Glyph, advance: f64, tab: bool }
-struct Span { runs: []Run, units: []Unit, kind: fail.Kind }
+struct Span { runs: []Run, units: []Unit, kind: Problem }
 struct GlyphNode { value: Glyph, next: *GlyphNode }
 struct LineNode { value: Line, next: *LineNode }
 struct Output { arena: *mem.Arena, first: *GlyphNode, last: *GlyphNode, lines: *LineNode, tail: *LineNode, glyph_count: usize, line_count: usize, width: f64 }
@@ -33,14 +32,14 @@ fn finite(value: f64) bool {
   return value==value && value>=-2147483647.0 && value<=2147483647.0
 }
 fn append(output: *Output, glyph: Glyph) {
-  node:=mem.push(GlyphNode, output.arena)
+  node:=mem.push<GlyphNode>(output.arena)
   node.value=glyph
   if output.last==nil { output.first=node } else { output.last.next=node }
   output.last=node
   output.glyph_count+=1
 }
 fn line_append(output: *Output, line: Line) {
-  node:=mem.push(LineNode, output.arena)
+  node:=mem.push<LineNode>(output.arena)
   node.value=line
   if output.tail==nil { output.lines=node } else { output.tail.next=node }
   output.tail=node
@@ -50,16 +49,16 @@ fn line_append(output: *Output, line: Line) {
   }
 }
 fn level(cluster: Cluster, adjusted: []i8, first_scalar: usize) i8 {
-  if #len(adjusted)!=0 { return adjusted[cluster.scalar-first_scalar] }
+  if adjusted.len!=0 { return adjusted[cluster.scalar-first_scalar] }
   return cluster.level
 }
 fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluster, first, last:usize, adjusted:[]i8, first_scalar:usize, show_soft:bool) Span {
-  runs:=mem.push_array(Run, arena, last-first)
+  runs:=mem.push_array<Run>(arena, last-first)
   capacity:usize=0
   if last>first {
     capacity=clusters[last-1].end-clusters[first].start
   }
-  units:=mem.push_array(Unit, arena, capacity)
+  units:=mem.push_array<Unit>(arena, capacity)
   context_start:usize=0
   context_end:usize=0
   if last>first {
@@ -67,11 +66,11 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
     context_end=clusters[last-1].end
   }
   context_text:=text[context_start..context_end]
-  soft:=show_soft && #len(context_text)>=2 && context_text[#len(context_text)-2]==194 && context_text[#len(context_text)-1]==173
+  soft:=show_soft && context_text.len>=2 && context_text[context_text.len-2]==194 && context_text[context_text.len-1]==173
   if soft {
-    visible:=mem.push_bytes(arena, #len(context_text)-1)
-    _=mem.copy(visible[..#len(visible)-1], context_text[..#len(context_text)-2])
-    visible[#len(visible)-1]=45
+    visible:=mem.push_bytes(arena, context_text.len-1)
+    _=mem.copy(visible[..visible.len-1], context_text[..context_text.len-2])
+    visible[visible.len-1]=45
     context_text=visible
   }
   used:usize=0
@@ -107,27 +106,25 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
       if soft && run.last==last {
         item_length-=1
       }
-      shaping: fail.Status
-      shaped:=hb.shape_run(arena, &shaping, api, run.face.font, context_text, hb.Options{direction:direction, script:run.script, cluster_level:hb.MonotoneGraphemes, flags:flags, item_offset:#cast(u32, item_offset), has_item_length:true, item_length:#cast(i32, item_length)}, features[..])
-      if shaping.failed { return Span{ kind:shaping.failure.kind } }
+      shaped:=hb.shape_run(arena, api, run.face.font, context_text, hb.Options{direction:direction, script:run.script, cluster_level:hb.MonotoneGraphemes, flags:flags, item_offset:#cast(u32, item_offset), has_item_length:true, item_length:#cast(i32, item_length)}, features[..]) catch err { return Span{ kind:problem_of(err) } }
       run.glyphs=shaped
       for g in shaped {
-        if g.cluster<item_offset { return Span{ kind:fail.Kind.InvalidInput } }
+        if g.cluster<item_offset { return Span{ kind:Problem.InvalidInput } }
       }
-      for g in 0..#len(shaped) {
+      for g in 0..shaped.len {
         shaped[g].cluster-=#cast(u32, item_offset)
       }
       begin_units:=unit_count
       i:usize=0
       previous:=run.end
-      for i<#len(run.glyphs) {
+      for i<run.glyphs.len {
         source:=run.start+run.glyphs[i].cluster
         if source<run.start || source>=run.end || !utf8.decode(text, source).valid {
-          return Span{ kind:fail.Kind.InvalidInput }
+          return Span{ kind:Problem.InvalidInput }
         }
         next:=i+1
         advance:f64=0.0
-        for next<#len(run.glyphs) && run.glyphs[next].cluster==run.glyphs[i].cluster {
+        for next<run.glyphs.len && run.glyphs[next].cluster==run.glyphs[i].cluster {
           next+=1
         }
         for j in i..next {
@@ -136,20 +133,20 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
         end:=run.end
         if (run.level&1)!=0 {
           end=previous
-        } else if next<#len(run.glyphs) {
+        } else if next<run.glyphs.len {
           end=run.start+run.glyphs[next].cluster
         }
-        if end<=source || end>run.end || advance<0.0 || !finite(advance) || unit_count>=#len(units) {
-          return Span{ kind:fail.Kind.InvalidInput }
+        if end<=source || end>run.end || advance<0.0 || !finite(advance) || unit_count>=units.len {
+          return Span{ kind:Problem.InvalidInput }
         }
         c:=cluster_index(clusters, source)
-        if c==#len(clusters) || clusters[c].start>source {
+        if c==clusters.len || clusters[c].start>source {
           c-=1
         }
         snapped_start:=clusters[c].start
         e:=cluster_index(clusters, end)
         snapped_end:=end
-        if e==#len(clusters) || clusters[e].start!=end {
+        if e==clusters.len || clusters[e].start!=end {
           snapped_end=clusters[e-1].end
         }
         units[unit_count]=Unit{start:snapped_start, end:snapped_end, advance:advance}
@@ -198,7 +195,7 @@ fn advance(unit: Unit, x, tab:f64) f64 {
 }
 fn cluster_index(clusters:[]Cluster, offset:usize) usize {
   low:usize=0
-  high:=#len(clusters)
+  high:=clusters.len
   for low<high {
     mid:=low+(high-low)/2
     if clusters[mid].start<offset { low=mid+1 } else { high=mid }
@@ -207,37 +204,35 @@ fn cluster_index(clusters:[]Cluster, offset:usize) usize {
 }
 fn scalar_index(paragraph:*const bidi.Paragraph, offset:usize) usize {
   low:usize=0
-  high:=#len(paragraph.starts)
+  high:=paragraph.starts.len
   for low<high {
     mid:=low+(high-low)/2
     if paragraph.starts[mid]<offset { low=mid+1 } else { high=mid }
   }
   return low
 }
-fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, paragraph:*const bidi.Paragraph, clusters:[]Cluster, start, end, base:usize, font:Font, tab:f64) fail.Kind {
+fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, paragraph:*const bidi.Paragraph, clusters:[]Cluster, start, end, base:usize, font:Font, tab:f64) Problem {
   work:=mem.arena_alloc(0)
   defer mem.arena_release(work)
   first:=cluster_index(clusters, start)
   last:=cluster_index(clusters, end)
   first_scalar:=scalar_index(paragraph, start)
   last_scalar:=scalar_index(paragraph, end)
-  reordering: fail.Status
-  reordered:=bidi.reorder(work, &reordering, bidi_api, paragraph, first_scalar, last_scalar)
-  if reordering.failed { return reordering.failure.kind }
-  span:=shape(work, api, text, clusters, first, last, reordered.levels, first_scalar, end<#len(text))
-  if span.kind!=fail.Kind.Ok { return span.kind }
-  order:=mem.push_array(usize, work, #len(span.runs))
-  seen:=mem.push_array(u8, work, #len(span.runs))
+  reordered:=bidi.reorder(work, bidi_api, paragraph, first_scalar, last_scalar) catch err { return problem_of(err) }
+  span:=shape(work, api, text, clusters, first, last, reordered.levels, first_scalar, end<text.len)
+  if span.kind!=Problem.None { return span.kind }
+  order:=mem.push_array<usize>(work, span.runs.len)
+  seen:=mem.push_array<u8>(work, span.runs.len)
   count:usize=0
   for scalar in reordered.visual_to_logical {
     byte:=paragraph.starts[scalar]
     low:usize=0
-    high:=#len(span.runs)
+    high:=span.runs.len
     for low<high {
       mid:=low+(high-low)/2
       if span.runs[mid].end<=byte { low=mid+1 } else { high=mid }
     }
-    if low<#len(span.runs) && seen[low]==0 && byte>=span.runs[low].start {
+    if low<span.runs.len && seen[low]==0 && byte>=span.runs[low].start {
       order[count]=low
       count+=1
       seen[low]=1
@@ -254,25 +249,25 @@ fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]cons
       x+=width
       continue
     }
-    if #len(run.glyphs)==0 {
+    if run.glyphs.len==0 {
       append(output, Glyph{font:run.face.data, start:base+run.start, end:base+run.end, x:x, y:y, rtl:(run.level&1)!=0, hidden:true})
     }
     previous:=run.end
     i:usize=0
-    for i<#len(run.glyphs) {
+    for i<run.glyphs.len {
       source:=run.start+run.glyphs[i].cluster
       next:=i+1
-      for next<#len(run.glyphs) && run.glyphs[next].cluster==run.glyphs[i].cluster {
+      for next<run.glyphs.len && run.glyphs[next].cluster==run.glyphs[i].cluster {
         next+=1
       }
       cluster_end:=run.end
       if (run.level&1)!=0 {
         cluster_end=previous
-      } else if next<#len(run.glyphs) {
+      } else if next<run.glyphs.len {
         cluster_end=run.start+run.glyphs[next].cluster
       }
       low:usize=0
-      high:=#len(span.units)
+      high:=span.units.len
       for low<high {
         mid:=low+(high-low)/2
         if span.units[mid].start<=source { low=mid+1 } else { high=mid }
@@ -294,27 +289,24 @@ fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]cons
     }
   }
   line_append(output, Line{start:base+start, end:base+end, glyph_start:glyph_start, glyph_count:output.glyph_count-glyph_start, width:x, y:y, rtl:paragraph.base==bidi.RightToLeft})
-  return fail.Kind.Ok
+  return Problem.None
 }
-fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, base:usize, font:Font, options:Options) fail.Kind {
+fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, base:usize, font:Font, options:Options) Problem {
   work:=mem.arena_alloc(0)
   defer mem.arena_release(work)
-  resolving: fail.Status
-  resolved:=bidi.resolve(work, &resolving, bidi_api, text, options.base)
-  if resolving.failed { return resolving.failure.kind }
+  resolved:=bidi.resolve(work, bidi_api, text, options.base) catch err { return problem_of(err) }
   count:=utf8.codepoint_count(text)
-  clusters:=mem.push_array(Cluster, work, count)
+  clusters:=mem.push_array<Cluster>(work, count)
   used:usize=0
   scalar:usize=0
   iterator:=unicode.graphemes(text)
   unicode_api:=api.unicode_get_default()
-  for iterator.offset<#len(text) {
+  for iterator.offset<text.len {
     start:=iterator.offset
-    splitting: fail.Status
-    grapheme:=unicode.next_grapheme(&splitting, &iterator)
-    if iterator.ended { return fail.Kind.InvalidInput }
+    grapheme:=unicode.next_grapheme(&iterator) catch { return Problem.InvalidInput }
+    if iterator.ended { return Problem.InvalidInput }
     face:=font.select(font.data, grapheme)
-    if face.font==nil { return fail.Kind.NotFound }
+    if face.font==nil { return Problem.NotFound }
     script:u32=0
     at:=start
     for at<iterator.offset {
@@ -351,35 +343,33 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
     }
   }
   tab:=font.space_advance*#cast(f64, options.tab_columns)
-  if options.no_wrap || options.width==0 || #len(text)==0 {
-    return emit(output, api, bidi_api, text, &resolved, clusters, 0, #len(text), base, font, tab)
+  if options.no_wrap || options.width==0 || text.len==0 {
+    return emit(output, api, bidi_api, text, &resolved, clusters, 0, text.len, base, font, tab)
   }
-  breaking: fail.Status
-  breaks:=unicode.line_breaks(work, &breaking, text)
-  if breaking.failed { return fail.Kind.InvalidInput }
+  breaks:=unicode.line_breaks(work, text) catch { return Problem.InvalidInput }
   spans:=mem.arena_alloc(0)
   defer mem.arena_release(spans)
   adjusted:[0]i8
   measured:=shape(spans, api, text, clusters, 0, used, adjusted[..], 0, false)
-  if measured.kind!=fail.Kind.Ok { return measured.kind }
+  if measured.kind!=Problem.None { return measured.kind }
   breaks_index:usize=0
-  for u in 0..#len(measured.units) {
-    for breaks_index<#len(breaks) && breaks[breaks_index].offset<measured.units[u].end {
+  for u in 0..measured.units.len {
+    for breaks_index<breaks.len && breaks[breaks_index].offset<measured.units[u].end {
       breaks_index+=1
     }
-    measured.units[u].break_after=breaks_index<#len(breaks) && breaks[breaks_index].offset==measured.units[u].end
+    measured.units[u].break_after=breaks_index<breaks.len && breaks[breaks_index].offset==measured.units[u].end
   }
-  if #len(measured.units)==0 {
+  if measured.units.len==0 {
     return emit(output, api, bidi_api, text, &resolved, clusters, 0, 0, base, font, tab)
   }
   u:usize=0
-  for u<#len(measured.units) {
-    end:=#len(measured.units)
+  for u<measured.units.len {
+    end:=measured.units.len
     if !options.no_wrap && options.width>0 {
       x:f64=0.0
       last_break:=u
       at:=u
-      for at<#len(measured.units) {
+      for at<measured.units.len {
         width:=advance(measured.units[at], x, tab)
         if at>u && x+width>options.width { break }
         x+=width
@@ -389,7 +379,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
         }
       }
       end=at
-      if end<#len(measured.units) && last_break>u {
+      if end<measured.units.len && last_break>u {
         end=last_break
       }
       if end==u {
@@ -402,7 +392,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
       mem.arena_reset(candidate)
       temporary:=Output{arena:candidate, line_count:output.line_count}
       kind:=emit(&temporary, api, bidi_api, text, &resolved, clusters, measured.units[u].start, measured.units[end-1].end, base, font, tab)
-      if kind!=fail.Kind.Ok {
+      if kind!=Problem.None {
         mem.arena_release(candidate)
         return kind
       }
@@ -424,7 +414,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
     mem.arena_release(candidate)
     u=end
   }
-  return fail.Kind.Ok
+  return Problem.None
 }
 fn separator(cp:u32) bool {
   return cp==10 || cp==13 || cp==11 || cp==12 || cp==28 || cp==29 || cp==30 || cp==133 || cp==8232 || cp==8233
@@ -435,8 +425,7 @@ fn separator(cp:u32) bool {
 // Bad options fail with InvalidInput, an incomplete API with InvalidState; a
 // paragraph that cannot be shaped fails with the provider's kind, at the
 // paragraph's offset.
-pub fn build(arena:*mem.Arena, status:*fail.Status, source:[]const u8, font:Font, api:*const hb.Api, bidi_api:*const bidi.Api, requested:Options) Layout {
-  if status.failed { return Layout{} }
+pub fn build(arena:*mem.Arena, source:[]const u8, font:Font, api:*const hb.Api, bidi_api:*const bidi.Api, requested:Options) Layout!io.IoErr {
   options:=requested
   if options.tab_columns==0 {
     options.tab_columns=4
@@ -444,14 +433,11 @@ pub fn build(arena:*mem.Arena, status:*fail.Status, source:[]const u8, font:Font
   if options.base==0 {
     options.base=bidi.Auto
   }
-  if arena==nil || api==nil || bidi_api==nil || font.select==nil || font.line_height<=0 || !finite(font.space_advance) || font.space_advance<=0.0 || options.width<0 || options.tab_columns==0 || options.tab_columns>256 || !utf8.valid(source) || #len(source)>2147483647 || (options.base!=bidi.Auto && options.base!=bidi.LeftToRight && options.base!=bidi.RightToLeft) {
-    fail.invalid(status, "lay out text", "", "invalid font, API or options")
-    return Layout{}
+  if arena==nil || api==nil || bidi_api==nil || font.select==nil || font.line_height<=0 || !finite(font.space_advance) || font.space_advance<=0.0 || options.width<0 || options.tab_columns==0 || options.tab_columns>256 || !utf8.valid(source) || source.len>2147483647 || (options.base!=bidi.Auto && options.base!=bidi.LeftToRight && options.base!=bidi.RightToLeft) {
+    fail .InvalidInput
   }
-  if api.unicode_get_default==nil || api.unicode_script==nil || api.shape==nil {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "lay out text", "", "the HarfBuzz API is incomplete"))
-    return Layout{}
-  }
+  // The HarfBuzz API is incomplete.
+  if api.unicode_get_default==nil || api.unicode_script==nil || api.shape==nil { fail .InvalidInput }
   mark:=mem.arena_mark(arena)
   success:=false
   defer {
@@ -464,13 +450,13 @@ pub fn build(arena:*mem.Arena, status:*fail.Status, source:[]const u8, font:Font
   output:=Output{arena:work}
   begin:usize=0
   at:usize=0
-  for at<#len(source) {
+  for at<source.len {
     decoded:=utf8.decode(source, at)
     if separator(decoded.codepoint) {
       kind:=paragraph(&output, api, bidi_api, source[begin..at], begin, font, options)
-      if kind!=fail.Kind.Ok { return paragraph_failed(status, kind, begin) }
+      if kind!=Problem.None { fail problem_err(kind) }
       at+=decoded.width
-      if decoded.codepoint==13 && at<#len(source) && source[at]==10 {
+      if decoded.codepoint==13 && at<source.len && source[at]==10 {
         at+=1
       }
       begin=at
@@ -479,11 +465,11 @@ pub fn build(arena:*mem.Arena, status:*fail.Status, source:[]const u8, font:Font
     }
   }
   kind:=paragraph(&output, api, bidi_api, source[begin..], begin, font, options)
-  if kind!=fail.Kind.Ok { return paragraph_failed(status, kind, begin) }
-  text:=mem.push_bytes(arena, #len(source))
+  if kind!=Problem.None { fail problem_err(kind) }
+  text:=mem.push_bytes(arena, source.len)
   _=mem.copy(text, source)
-  glyphs:=mem.push_array(Glyph, arena, output.glyph_count)
-  lines:=mem.push_array(Line, arena, output.line_count)
+  glyphs:=mem.push_array<Glyph>(arena, output.glyph_count)
+  lines:=mem.push_array<Line>(arena, output.line_count)
   node:=output.first
   index:usize=0
   for node!=nil {
@@ -501,13 +487,7 @@ pub fn build(arena:*mem.Arena, status:*fail.Status, source:[]const u8, font:Font
   success=true
   return Layout{text:text, glyphs:glyphs, lines:lines, width:output.width, height:#cast(f64, output.line_count)*#cast(f64, font.line_height), line_height:font.line_height}
 }
-fn paragraph_failed(status:*fail.Status, kind:fail.Kind, offset:usize) Layout {
-  failure:=fail.make(kind, "lay out text", "", "a paragraph could not be shaped")
-  failure.offset=offset
-  failure.has_offset=true
-  fail.set(status, failure)
-  return Layout{}
-}
+
 fn hit(layout:*const Layout, line_index, offset:usize) Hit {
   line:=layout.lines[line_index]
   x:=line.width
@@ -546,17 +526,13 @@ fn hit(layout:*const Layout, line_index, offset:usize) Hit {
 
 // The logical source cluster at byte offset. InvalidInput without a layout or
 // for an offset past the text.
-pub fn cluster_at(status:*fail.Status, layout:*const Layout, offset:usize) Hit {
-  if status.failed { return Hit{} }
-  if layout==nil || offset>#len(layout.text) || #len(layout.lines)==0 {
-    fail.invalid(status, "find cluster", "", "no layout, or the offset is past the text")
-    return Hit{}
-  }
+pub fn cluster_at(layout:*const Layout, offset:usize) Hit!io.IoErr {
+  if layout==nil || offset>layout.text.len || layout.lines.len==0 { fail .InvalidInput }
   return cluster_in(layout, offset)
 }
 fn cluster_in(layout:*const Layout, offset:usize) Hit {
   line_index:usize=0
-  for i in 1..#len(layout.lines) {
+  for i in 1..layout.lines.len {
     if offset>=layout.lines[i].start {
       line_index=i
     }
@@ -582,17 +558,13 @@ fn cluster_in(layout:*const Layout, offset:usize) Hit {
 // The visual cluster at a point, or a boundary caret outside the first or
 // last cluster. InvalidInput without a layout or for a point that is not
 // finite.
-pub fn at_point(status:*fail.Status, layout:*const Layout, x, y:f64) Hit {
-  if status.failed { return Hit{} }
-  if layout==nil || #len(layout.lines)==0 || !finite(x) || !finite(y) {
-    fail.invalid(status, "find point", "", "no layout, or the point is not finite")
-    return Hit{}
-  }
+pub fn at_point(layout:*const Layout, x, y:f64) Hit!io.IoErr {
+  if layout==nil || layout.lines.len==0 || !finite(x) || !finite(y) { fail .InvalidInput }
   line_index:usize=0
   if y>0.0 {
     line_index=#cast(usize, math.floor64(y/layout.line_height))
   }
-  if line_index>=#len(layout.lines) { return cluster_in(layout, #len(layout.text)) }
+  if line_index>=layout.lines.len { return cluster_in(layout, layout.text.len) }
   line:=layout.lines[line_index]
   if line.glyph_count==0 { return hit(layout, line_index, line.start) }
   first:=layout.glyphs[line.glyph_start]
@@ -633,10 +605,10 @@ pub fn at_point(status:*fail.Status, layout:*const Layout, x, y:f64) Hit {
 // a contiguous visual or logical run. Geometry is authoritative for drawing.
 pub struct SelectionRect { line: usize, start: usize, end: usize, x: f64, y: f64, width: f64, height: f64 }
 fn selection_boundary(text: []const u8, offset: usize) bool {
-  return offset<=#len(text) && (offset==#len(text) || (text[offset]&0xc0)!=0x80)
+  return offset<=text.len && (offset==text.len || (text[offset]&0xc0)!=0x80)
 }
 fn selection_store(destination: []SelectionRect, count: usize, rect: SelectionRect) {
-  if count<#len(destination) {
+  if count<destination.len {
     destination[count]=rect
   }
 }
@@ -644,7 +616,7 @@ fn selection_store(destination: []SelectionRect, count: usize, rect: SelectionRe
 // An unselected positive-width cell is a merge barrier, including at bidi runs.
 fn selection_walk(layout: *const Layout, start, end: usize, destination: []SelectionRect) usize {
   count: usize=0
-  for line_index in 0..#len(layout.lines) {
+  for line_index in 0..layout.lines.len {
     line:=layout.lines[line_index]
     pending:=SelectionRect{}
     active:=false
@@ -704,45 +676,58 @@ fn selection_walk(layout: *const Layout, start, end: usize, destination: []Selec
 // Layouts built by build have contiguous line glyph slices; forged malformed
 // layouts are rejected before allocation. Empty ranges allocate nothing.
 // A range or layout that breaks these rules fails with InvalidInput.
-pub fn selection(arena: *mem.Arena, status: *fail.Status, layout: *const Layout, start, end: usize) []SelectionRect {
-  if status == nil { return selection(arena, &fail.Status{}, layout, start, end) }
+pub fn selection(arena: *mem.Arena, layout: *const Layout, start, end: usize) []SelectionRect!io.IoErr {
   empty: []SelectionRect
-  if status.failed { return empty }
-  if arena==nil || layout==nil || start>end || end>#len(layout.text) || !utf8.valid(layout.text) || !selection_boundary(layout.text, start) || !selection_boundary(layout.text, end) {
-    fail.invalid(status, "select text", "", "the range is not on character boundaries")
-    return empty
+  if arena==nil || layout==nil || start>end || end>layout.text.len || !utf8.valid(layout.text) || !selection_boundary(layout.text, start) || !selection_boundary(layout.text, end) {
+    fail .InvalidInput
   }
   if start==end { return empty }
-  if layout.line_height<=0 {
-    fail.invalid(status, "select text", "", "malformed layout")
-    return empty
-  }
+  if layout.line_height<=0 { fail .InvalidInput }
   used: usize=0
   for line in layout.lines {
-    if line.start>line.end || line.end>#len(layout.text) || line.glyph_start!=used || line.glyph_count>#len(layout.glyphs)-used || !selection_boundary(layout.text, line.start) || !selection_boundary(layout.text, line.end) || !finite(line.y) || !finite(line.y+layout.line_height) {
-      fail.invalid(status, "select text", "", "malformed layout")
-      return empty
+    if line.start>line.end || line.end>layout.text.len || line.glyph_start!=used || line.glyph_count>layout.glyphs.len-used || !selection_boundary(layout.text, line.start) || !selection_boundary(layout.text, line.end) || !finite(line.y) || !finite(line.y+layout.line_height) {
+      fail .InvalidInput
     }
     used+=line.glyph_count
   }
-  if used!=#len(layout.glyphs) {
-    fail.invalid(status, "select text", "", "malformed layout")
-    return empty
-  }
+  if used!=layout.glyphs.len { fail .InvalidInput }
   for glyph in layout.glyphs {
-    if glyph.start>=glyph.end || glyph.end>#len(layout.text) || !selection_boundary(layout.text, glyph.start) || !selection_boundary(layout.text, glyph.end) || !finite(glyph.x) || !finite(glyph.advance) || !finite(glyph.x+glyph.advance) {
-      fail.invalid(status, "select text", "", "malformed layout")
-      return empty
+    if glyph.start>=glyph.end || glyph.end>layout.text.len || !selection_boundary(layout.text, glyph.start) || !selection_boundary(layout.text, glyph.end) || !finite(glyph.x) || !finite(glyph.advance) || !finite(glyph.x+glyph.advance) {
+      fail .InvalidInput
     }
   }
   none: [0]SelectionRect
   count:=selection_walk(layout, start, end, none[..])
-  if count>#max(usize)/#sizeof(SelectionRect) {
-    fail.set(status, fail.make(fail.Kind.Overflow, "select text", "", "too many rectangles"))
-    return empty
-  }
+  if count>#max(usize)/#sizeof(SelectionRect) { fail .Capacity }
   if count==0 { return empty }
-  rects:=mem.push_array(SelectionRect, arena, count)
+  rects:=mem.push_array<SelectionRect>(arena, count)
   _=selection_walk(layout, start, end, rects)
   return rects
+}
+
+// What stopped a step, inside this module; None when nothing did.
+enum Problem { None, InvalidInput, NotFound, Capacity, Unsupported, System, PermissionDenied, Interrupted, AlreadyExists, WouldBlock }
+fn problem_err(problem: Problem) io.IoErr {
+  if problem == Problem.NotFound { return io.IoErr.NotFound }
+  if problem == Problem.Capacity { return io.IoErr.Capacity }
+  if problem == Problem.Unsupported { return io.IoErr.Unsupported }
+  if problem == Problem.System { return io.IoErr.System(0) }
+  if problem == Problem.PermissionDenied { return io.IoErr.PermissionDenied }
+  if problem == Problem.Interrupted { return io.IoErr.Interrupted }
+  if problem == Problem.AlreadyExists { return io.IoErr.AlreadyExists }
+  if problem == Problem.WouldBlock { return io.IoErr.WouldBlock }
+  return io.IoErr.InvalidInput
+}
+fn problem_of(err: io.IoErr) Problem {
+  case err {
+    .NotFound => { return Problem.NotFound }
+    .Capacity => { return Problem.Capacity }
+    .Unsupported => { return Problem.Unsupported }
+    .PermissionDenied => { return Problem.PermissionDenied }
+    .Interrupted => { return Problem.Interrupted }
+    .AlreadyExists => { return Problem.AlreadyExists }
+    .WouldBlock => { return Problem.WouldBlock }
+    .System(_) => { return Problem.System }
+    _ => { return Problem.InvalidInput }
+  }
 }

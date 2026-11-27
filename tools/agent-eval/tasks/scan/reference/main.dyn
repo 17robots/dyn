@@ -1,42 +1,44 @@
 use "std/bytes"
 use "std/encoding/json"
-use "std/fail"
 use "std/fs"
 use "std/io"
 use "std/mem"
+use "std/parse"
 use "std/path"
 use "std/process"
 
-fn report(name: []const u8, failure: fail.Failure) {
-  storage: [512]u8
-  text := fail.describe(storage[..], failure)
-  if #len(fail.path_text(&failure)) == 0 {
-    io.eprintln("scan: {}: {}", name, text)
-  } else {
-    io.eprintln("scan: {}", text)
+// Reads the whole-number "port" of the JSON file at path into value. On
+// failure prints one line that says why and returns false.
+fn port(arena: *mem.Arena, name: []const u8, file: []const u8, value: *i64) bool {
+  text := fs.read_all(arena, file, mem.MiB) catch err {
+    io.eprintln("scan: {}: {}", name, err)
+    return false
   }
-}
-
-// The whole-number "port" of the JSON file at path.
-fn port(arena: *mem.Arena, status: *fail.Status, file: []const u8) i64 {
-  text := fs.read_all(arena, status, file, mem.MiB)
-  root := json.parse(arena, status, text)
-  return json.get(i64, status, root, "port")
+  root := json.parse(arena, text) catch err {
+    io.eprintln("scan: {}: invalid JSON at byte {}", name, parse.offset(err))
+    return false
+  }
+  value.* = json.get<i64>(root, "port") catch err {
+    case err {
+      .NotFound => { io.eprintln("scan: {}: \"port\" is missing", name) }
+      _ => { io.eprintln("scan: {}: \"port\" is not a whole number", name) }
+    }
+    return false
+  }
+  return true
 }
 
 fn main() i32 {
   program := process.start()
-  if #len(program.args) != 2 {
+  if program.args.len != 2 {
     io.eprintln("scan: usage: scan DIR")
     return 1
   }
   directory := program.args[1]
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  listing: fail.Status
-  entries := fs.list(arena, &listing, directory)
-  if listing.failed {
-    report(directory, listing.failure)
+  entries := fs.list(arena, directory) catch err {
+    io.eprintln("scan: {}: {}", directory, err)
     return 1
   }
   good: usize = 0
@@ -44,10 +46,8 @@ fn main() i32 {
   for entry in entries {
     if !bytes.ends_with(entry.name, ".json") { continue }
     mark := mem.arena_mark(arena)
-    status: fail.Status
-    value := port(arena, &status, path.join(arena, directory, entry.name))
-    if status.failed {
-      report(entry.name, status.failure)
+    value: i64 = 0
+    if !port(arena, entry.name, path.join(arena, directory, entry.name), &value) {
       bad += 1
     } else {
       io.println("{} port={}", entry.name, value)

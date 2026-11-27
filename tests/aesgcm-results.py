@@ -8,25 +8,22 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 import random
-SOURCE=r'''use "std/crypto/aesgcm" aead
-use "std/fail"
+SOURCE=r'''use aead "std/crypto/aesgcm"
 fn seal_ok(output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool {
- status: fail.Status
- aead.seal(&status, output, tag, input, aad, key, nonce)
- return !status.failed
+ aead.seal(output, tag, input, aad, key, nonce) catch { return false }
+ return true
 }
 fn open_ok(output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool {
- status: fail.Status
- aead.open(&status, output, input, tag, aad, key, nonce)
- return !status.failed
+ aead.open(output, input, tag, aad, key, nonce) catch { return false }
+ return true
 }
-use "std/bytes" bytes
-use "std/mem" mem
+use bytes "std/bytes"
+use mem "std/mem"
 fn check(ok: bool) { if !ok { #panic("native AES-GCM contract") } }
 fn vector(key: []const u8, nonce: []const u8, aad: []const u8, message: []const u8, cipher: []const u8, expected: []const u8) {
  arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
- output := mem.push_array(u8,arena,#len(message))
+ output := mem.push_array<u8>(arena, message.len)
  tag: [16]u8
  check(seal_ok(output,tag[..],message,aad,key,nonce))
  check(bytes.equal(output,cipher) && bytes.equal(tag[..],expected))
@@ -39,20 +36,20 @@ fn vector(key: []const u8, nonce: []const u8, aad: []const u8, message: []const 
  check(!open_ok(output,cipher,tag[..],aad,wrong_key[..],nonce))
  for byte in output { check(byte == 165) }
  wrong_nonce: [128]u8
- for i in 0..#len(nonce) { wrong_nonce[i] = nonce[i] }
+ for i in 0..nonce.len { wrong_nonce[i] = nonce[i] }
  wrong_nonce[0] ^= 1
- check(!open_ok(output,cipher,tag[..],aad,key,wrong_nonce[..#len(nonce)]))
+ check(!open_ok(output,cipher,tag[..],aad,key,wrong_nonce[..nonce.len]))
  for byte in output { check(byte == 165) }
- if #len(cipher) != 0 {
-  changed := mem.push_array(u8,arena,#len(cipher))
-  for i in 0..#len(cipher) { changed[i] = cipher[i] }
+ if cipher.len != 0 {
+  changed := mem.push_array<u8>(arena, cipher.len)
+  for i in 0..cipher.len { changed[i] = cipher[i] }
   changed[0] ^= 1
   check(!open_ok(output,changed,tag[..],aad,key,nonce))
   for byte in output { check(byte == 165) }
  }
- if #len(aad) != 0 {
-  changed_aad := mem.push_array(u8,arena,#len(aad))
-  for i in 0..#len(aad) { changed_aad[i] = aad[i] }
+ if aad.len != 0 {
+  changed_aad := mem.push_array<u8>(arena, aad.len)
+  for i in 0..aad.len { changed_aad[i] = aad[i] }
   changed_aad[0] ^= 1
   check(!open_ok(output,cipher,tag[..],changed_aad,key,nonce))
   for byte in output { check(byte == 165) }

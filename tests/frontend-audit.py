@@ -82,17 +82,17 @@ fn main() {}
     check(project(root, 'struct-capacity-boundary', declarations + 'fn main() {}\n'))
     check(project(root, 'struct-capacity-overflow', declarations +
                   'struct Overflow {}\nfn main() {}\n'), 'struct type capacity exceeded')
-    embedded = project(root, 'load', '''use "./lib" lib
+    embedded = project(root, 'load', '''use lib "./lib"
 const LOCAL: []const u8 = #load("assets/data.bin")
 fn main() {
-  if #len(LOCAL) != 4 || LOCAL[1] != 0 || lib.size() != 3 { #panic("load") }
+  if LOCAL.len != 4 || LOCAL[1] != 0 || lib.size() != 3 { #panic("load") }
 }
 ''')
     (embedded / 'assets').mkdir()
     (embedded / 'assets/data.bin').write_bytes(b'a\x00b\n')
     (embedded / 'lib').mkdir()
     (embedded / 'lib/lib.dyn').write_text('pub const DATA: []const u8 = #load("d.txt")\n'
-                                          'pub fn size() usize { return #len(DATA) }\n')
+                                          'pub fn size() usize { return DATA.len }\n')
     (embedded / 'lib/d.txt').write_text('xyz')
     run(embedded)
     # Cached builds must notice edits to loaded files, including in imports.
@@ -109,13 +109,13 @@ fn main() {}
     check(project(root, 'load-missing', '''const A: []const u8 = #load("missing.bin")
 fn main() {}
 '''), '#load cannot read file')
-    run(project(root, 'use-list', '''use "std/mem" memory, "std/bytes",
-  "std/math" m
+    run(project(root, 'use-list', '''use memory "std/mem", "std/bytes",
+  m "std/math"
 fn main() {
   if memory.KiB != 1024 || !bytes.equal("a", "a") || m.min(2, 3) != 2 { #panic("imports") }
 }
 '''))
-    check(project(root, 'use-list-duplicate', '''use "std/mem" a, "std/strings" a
+    check(project(root, 'use-list-duplicate', '''use a "std/mem", a "std/strings"
 fn main() {}
 '''), "duplicate import alias 'a'")
     run(project(root, 'assert-pass', '''#assert(#sizeof(Header) == 12 && #alignof(Header) == 1, "packed header")

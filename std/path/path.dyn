@@ -1,6 +1,5 @@
-use "std/mem" mem
+use mem "std/mem"
 use "std/bytes"
-use "std/fail"
 
 // Slash-separated lexical paths. Operations do not access filesystem.
 // A bounded producer's output; valid is false when it did not fit or the
@@ -8,7 +7,7 @@ use "std/fail"
 struct Built { value: []u8, valid: bool }
 
 pub fn basename(path: []const u8) []const u8 {
-  end := #len(path)
+  end := path.len
   for end > 1 && path[end - 1] == '/' {
     end -= 1
   }
@@ -20,7 +19,7 @@ pub fn basename(path: []const u8) []const u8 {
   return path[start..end]
 }
 pub fn dirname(path: []const u8) []const u8 {
-  end := #len(path)
+  end := path.len
   for end > 1 && path[end - 1] == '/' {
     end -= 1
   }
@@ -35,7 +34,7 @@ pub fn dirname(path: []const u8) []const u8 {
 }
 pub fn extension(path: []const u8) []const u8 {
   name := basename(path)
-  i := #len(name)
+  i := name.len
   for i > 0 {
     i -= 1
     if name[i] == '.' {
@@ -46,19 +45,19 @@ pub fn extension(path: []const u8) []const u8 {
   return ""
 }
 pub fn is_absolute(path: []const u8) bool {
-  return #len(path) > 0 && path[0] == '/'
+  return path.len > 0 && path[0] == '/'
 }
 
 fn join_into(destination: []u8, left: []const u8, right: []const u8) Built {
-  separator := #len(left) > 0 && left[#len(left) - 1] != '/' && #len(right) > 0 && right[0] != '/'
+  separator := left.len > 0 && left[left.len - 1] != '/' && right.len > 0 && right[0] != '/'
   maximum := #max(usize)
-  if #len(left) > maximum - #len(right) { return Built{ value: destination[..0], valid: false } }
-  needed := #len(left) + #len(right)
+  if left.len > maximum - right.len { return Built{ value: destination[..0], valid: false } }
+  needed := left.len + right.len
   if separator {
     if needed == maximum { return Built{ value: destination[..0], valid: false } }
     needed += 1
   }
-  if needed > #len(destination) { return Built{ value: destination[..0], valid: false } }
+  if needed > destination.len { return Built{ value: destination[..0], valid: false } }
   at: usize = 0
   for left_byte in left {
     destination[at] = left_byte
@@ -76,7 +75,7 @@ fn join_into(destination: []u8, left: []const u8, right: []const u8) Built {
 }
 
 fn clean_into(destination: []u8, path: []const u8) Built {
-  if #len(destination) == 0 { return Built{ value: destination[..0], valid: false } }
+  if destination.len == 0 { return Built{ value: destination[..0], valid: false } }
   absolute := is_absolute(path)
   at: usize = 0
   if absolute {
@@ -84,12 +83,12 @@ fn clean_into(destination: []u8, path: []const u8) Built {
     at += 1
   }
   i: usize = 0
-  for i < #len(path) {
-    for i < #len(path) && path[i] == '/' {
+  for i < path.len {
+    for i < path.len && path[i] == '/' {
       i += 1
     }
     start := i
-    for i < #len(path) && path[i] != '/' {
+    for i < path.len && path[i] != '/' {
       i += 1
     }
     length := i - start
@@ -110,22 +109,22 @@ fn clean_into(destination: []u8, path: []const u8) Built {
         }
       } else if !absolute {
         if at > 0 {
-          if at == #len(destination) { return Built{ value: destination[..0], valid: false } }
+          if at == destination.len { return Built{ value: destination[..0], valid: false } }
           destination[at] = '/'
           at += 1
         }
-        if at + 2 > #len(destination) { return Built{ value: destination[..0], valid: false } }
+        if at + 2 > destination.len { return Built{ value: destination[..0], valid: false } }
         destination[at] = '.'
         destination[at + 1] = '.'
         at += 2
       }
     } else {
       if at > 0 && destination[at - 1] != '/' {
-        if at == #len(destination) { return Built{ value: destination[..0], valid: false } }
+        if at == destination.len { return Built{ value: destination[..0], valid: false } }
         destination[at] = '/'
         at += 1
       }
-      if length > #len(destination) - at { return Built{ value: destination[..0], valid: false } }
+      if length > destination.len - at { return Built{ value: destination[..0], valid: false } }
       for j in 0..length {
         destination[at] = path[start + j]
         at += 1
@@ -147,25 +146,25 @@ fn safe_join_into(destination: []u8, root: []const u8, child: []const u8) Built 
   if !combined.valid { return Built{ value: destination[..0], valid: false } }
   normalized := clean_into(destination, combined.value)
   normalized_root := clean_into(root_storage[..], root)
-  if !normalized.valid || !normalized_root.valid || #len(normalized.value) < #len(normalized_root.value) {
+  if !normalized.valid || !normalized_root.valid || normalized.value.len < normalized_root.value.len {
     return Built{ value: destination[..0], valid: false }
   }
   if bytes.equal(normalized_root.value, ".") {
-    if bytes.equal(normalized.value, "..") || (#len(normalized.value) >= 3 && bytes.equal(normalized.value[..3], "../")) {
+    if bytes.equal(normalized.value, "..") || (normalized.value.len >= 3 && bytes.equal(normalized.value[..3], "../")) {
       return Built{ value: destination[..0] }
     }
     return normalized
   }
   i: usize = 0
-  for i < #len(normalized_root.value) {
+  for i < normalized_root.value.len {
     if normalized.value[i] != normalized_root.value[i] {
       return Built{ value: destination[..0], valid: false }
     }
     i += 1
   }
-  if #len(normalized.value) > #len(normalized_root.value) &&
-    normalized_root.value[#len(normalized_root.value) - 1] != '/' &&
-    normalized.value[#len(normalized_root.value)] != '/' {
+  if normalized.value.len > normalized_root.value.len &&
+    normalized_root.value[normalized_root.value.len - 1] != '/' &&
+    normalized.value[normalized_root.value.len] != '/' {
     return Built{ value: destination[..0], valid: false }
   }
   return normalized
@@ -178,11 +177,11 @@ pub fn components(text: []const u8) Components {
   return Components{ text: text }
 }
 pub fn component_next(state: *Components) []const u8 {
-  for state.offset < #len(state.text) && state.text[state.offset] == '/' {
+  for state.offset < state.text.len && state.text[state.offset] == '/' {
     state.offset += 1
   }
   start := state.offset
-  for state.offset < #len(state.text) && state.text[state.offset] != '/' {
+  for state.offset < state.text.len && state.text[state.offset] != '/' {
     state.offset += 1
   }
   if start == state.offset {
@@ -233,20 +232,20 @@ fn relative_into(destination: []u8, base: []const u8, target: []const u8) Built 
     }
     break
   }
-  needed := parents * 3 + #len(remainder)
-  if parents > 0 && #len(remainder) == 0 {
+  needed := parents * 3 + remainder.len
+  if parents > 0 && remainder.len == 0 {
     needed -= 1
   }
   if needed == 0 {
     needed = 1
   }
-  if needed > #len(destination) { return Built{ value: destination[..0] } }
+  if needed > destination.len { return Built{ value: destination[..0] } }
   at: usize = 0
   for i in 0..parents {
     destination[at] = '.'
     destination[at + 1] = '.'
     at += 2
-    if i + 1 < parents || #len(remainder) > 0 {
+    if i + 1 < parents || remainder.len > 0 {
       destination[at] = '/'
       at += 1
     }
@@ -268,14 +267,14 @@ fn finish(arena: *mem.Arena, mark: usize, result: Built) Built {
     mem.arena_rewind(arena, mark)
     return Built{}
   }
-  mem.arena_rewind(arena, mark + #len(result.value))
+  mem.arena_rewind(arena, mark + result.value.len)
   return result
 }
 
 // left and right joined by one slash, in arena.
 pub fn join(arena: *mem.Arena, left: []const u8, right: []const u8) []u8 {
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes(arena, #len(left) + #len(right) + 1)
+  space := mem.push_bytes(arena, left.len + right.len + 1)
   // The space fits any join, so join_into cannot fail here.
   return finish(arena, mark, join_into(space, left, right)).value
 }
@@ -283,37 +282,27 @@ pub fn join(arena: *mem.Arena, left: []const u8, right: []const u8) []u8 {
 // path with . and .. resolved and repeated slashes removed, in arena.
 pub fn clean(arena: *mem.Arena, path: []const u8) []u8 {
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes(arena, #len(path) + 1)
+  space := mem.push_bytes(arena, path.len + 1)
   // The space fits any cleaned path, so clean_into cannot fail here.
   return finish(arena, mark, clean_into(space, path)).value
 }
 
 // root joined with a relative child that cannot climb out of root, in arena.
-// A child that is absolute or escapes root fails with InvalidInput.
-pub fn safe_join(arena: *mem.Arena, status: *fail.Status, root: []const u8, child: []const u8) []u8 {
-  if status == nil { return safe_join(arena, &fail.Status{}, root, child) }
-  empty: []u8
-  if status.failed { return empty }
+// A child that is absolute or escapes root fails, pushing nothing.
+pub fn safe_join(arena: *mem.Arena, root: []const u8, child: []const u8) []u8! {
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes(arena, #len(root) + #len(child) + 2)
+  space := mem.push_bytes(arena, root.len + child.len + 2)
   joined := finish(arena, mark, safe_join_into(space, root, child))
-  if !joined.valid {
-    fail.invalid(status, "join path", child, "the path is absolute or climbs out of its root")
-  }
+  if !joined.valid { fail }
   return joined.value
 }
 
 // The path from base to target, in arena. Both must be absolute or both
-// relative, and at most 4096 bytes; anything else fails with InvalidInput.
-pub fn relative(arena: *mem.Arena, status: *fail.Status, base: []const u8, target: []const u8) []u8 {
-  if status == nil { return relative(arena, &fail.Status{}, base, target) }
-  empty: []u8
-  if status.failed { return empty }
+// relative, and at most 4096 bytes; anything else fails, pushing nothing.
+pub fn relative(arena: *mem.Arena, base: []const u8, target: []const u8) []u8! {
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes(arena, 3 * #len(base) + #len(target) + 2)
+  space := mem.push_bytes(arena, 3 * base.len + target.len + 2)
   result := finish(arena, mark, relative_into(space, base, target))
-  if !result.valid {
-    fail.invalid(status, "relative path", target, "one path is absolute and the other relative, or one is over 4096 bytes")
-  }
+  if !result.valid { fail }
   return result.value
 }

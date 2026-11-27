@@ -1,57 +1,39 @@
-use "std/fail"
-use "std/mem" mem
-use "std/compress/deflate" deflate
+use parse "std/parse"
+use io "std/io"
+use mem "std/mem"
+use deflate "std/compress/deflate"
 
 pub struct Info { width: usize, height: usize, channels: u8 }
-// Malformed data fails with
-// InvalidInput (at its offset when known), an impossible size with Overflow,
-// data past the codec's working limits with Capacity.
+// Decoding fails with Invalid for malformed data, at its offset when known, and
+// TooLarge for an impossible size or data past the codec's working limits.
+// Encoding fails with InvalidInput or Capacity.
 pub struct Image { info: Info, pixels: []u8 }
 struct DecodeWork { info: Info, pixels: []u8, error: isize, ok: bool, offset: usize }
 struct EncodeWork { data: []u8, error: isize, ok: bool }
 
-fn codec_failure(status: *fail.Status, operation: []const u8, detail: isize, offset: usize, located: bool) {
-  kind := fail.Kind.InvalidInput
-  message: []const u8 = "malformed PNG"
-  if detail == -75 {
-    kind = fail.Kind.Overflow
-    message = "the image is too large"
-  } else if detail == -28 {
-    kind = fail.Kind.Capacity
-    message = "the image exceeds the codec's limits"
-  } else if !located {
-    message = "invalid pixels or size"
-  }
-  failure := fail.make(kind, operation, "", message)
-  failure.offset = offset
-  failure.has_offset = located
-  fail.set(status, failure)
+// A failed codec step: -75 is an impossible size, -28 data past the codec's
+// working limits, anything else malformed data at offset.
+fn decode_failure(detail: isize, offset: usize) parse.ParseErr {
+  if detail == -75 || detail == -28 { return parse.ParseErr.TooLarge(offset) }
+  return parse.ParseErr.Invalid(offset)
 }
 
 // The header's description of the image, without decoding it.
-pub fn inspect(status: *fail.Status, source: []const u8) Info {
-  if status == nil { return inspect(&fail.Status{}, source) }
-  if status.failed { return Info{} }
+pub fn inspect(source: []const u8) Info!parse.ParseErr {
   info := inspect_info(source)
-  if info.width == 0 {
-    fail.at(status, fail.Kind.InvalidInput, "inspect PNG", "malformed PNG header", 0)
-    return Info{}
-  }
+  if info.width == 0 { fail parse.ParseErr.Invalid(0) }
   return info
 }
 
-fn decode_result(status: *fail.Status, work: DecodeWork) Image {
-  if !work.ok {
-    codec_failure(status, "decode PNG", work.error, work.offset, true)
-    return Image{}
-  }
+fn decode_result(work: DecodeWork) Image!parse.ParseErr {
+  if !work.ok { fail decode_failure(work.error, work.offset) }
   return Image{ info: work.info, pixels: work.pixels }
 }
 
-fn encode_result(status: *fail.Status, work: EncodeWork) []u8 {
+fn encode_result(work: EncodeWork) []u8!io.IoErr {
   if !work.ok {
-    codec_failure(status, "encode PNG", work.error, 0, false)
-    return work.data[..0]
+    if work.error == -75 || work.error == -28 { fail .Capacity }
+    fail .InvalidInput
   }
   return work.data
 }
@@ -96,7 +78,7 @@ fn chunk_crc(source: []const u8, type_at: usize, data_at: usize, length: usize) 
 }
 
 fn inspect_info(source: []const u8) Info {
-  if #len(source) < 33 || source[0] != 137 || source[1] != 80 || source[2] != 78 || source[3] != 71 ||
+  if source.len < 33 || source[0] != 137 || source[1] != 80 || source[2] != 78 || source[3] != 71 ||
     source[4] != 13 || source[5] != 10 || source[6] != 26 || source[7] != 10 || u32be(source, 8) != 13 ||
     !chunk_type(source, 12, 'I', 'H', 'D', 'R') {
     return Info{}
@@ -157,25 +139,23 @@ fn decode_into(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const 
   if #cast(usize, info.height) != 0 && pixel_size / info.height != row_size {
     return DecodeWork{ info: info, error: -75 }
   }
-  if #len(pixels) < pixel_size || #len(scanlines) < scanline_size {
+  if pixels.len < pixel_size || scanlines.len < scanline_size {
     return DecodeWork{ info: info, error: -28 }
   }
   at: usize = 8
   compressed_used: usize = 0
   ended := false
-  for at + 12 <= #len(source) {
+  for at + 12 <= source.len {
     length := #cast(usize, u32be(source, at))
     type_at := at + 4
     data_at := at + 8
-    if length > #len(source) - data_at - 4 {
-      return DecodeWork{ info: info, error: -74, offset: at }
-    }
+    if length > source.len - data_at - 4 { return DecodeWork{ info: info, error: -74, offset: at } }
     expected_crc := u32be(source, data_at + length)
     if chunk_crc(source, type_at, data_at, length) != expected_crc {
       return DecodeWork{ info: info, error: -74, offset: data_at + length }
     }
     if chunk_type(source, type_at, 'I', 'D', 'A', 'T') {
-      if length > #len(compressed) - compressed_used { return DecodeWork{ info: info, error: -28 } }
+      if length > compressed.len - compressed_used { return DecodeWork{ info: info, error: -28 } }
       for i in 0..length {
         compressed[compressed_used + i] = source[data_at + i]
       }
@@ -244,24 +224,24 @@ fn adler32(source: []const u8) u32 {
 }
 
 fn append_chunk(destination: []u8, at: usize, kind: []const u8, payload: []const u8) usize {
-  if #len(kind) != 4 || at > #len(destination) || #len(payload) > #len(destination) - at ||
-    #len(destination) - at - #len(payload) < 12 {
-    return #len(destination) + 1
+  if kind.len != 4 || at > destination.len || payload.len > destination.len - at ||
+    destination.len - at - payload.len < 12 {
+    return destination.len + 1
   }
-  put_u32be(destination, at, #cast(u32, #len(payload)))
+  put_u32be(destination, at, #cast(u32, payload.len))
   i: usize = 0
   for i < 4 {
     destination[at + 4 + i] = kind[i]
     i += 1
   }
   i = 0
-  for i < #len(payload) {
+  for i < payload.len {
     destination[at + 8 + i] = payload[i]
     i += 1
   }
-  checksum := chunk_crc(destination, at + 4, at + 8, #len(payload))
-  put_u32be(destination, at + 8 + #len(payload), checksum)
-  return at + 12 + #len(payload)
+  checksum := chunk_crc(destination, at + 4, at + 8, payload.len)
+  put_u32be(destination, at + 8 + payload.len, checksum)
+  return at + 12 + payload.len
 }
 
 // Encodes tightly packed 8-bit grayscale, grayscale-alpha, RGB, or RGBA pixels.
@@ -271,7 +251,7 @@ fn encode_into(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []c
   row_size := #cast(usize, width) * #cast(usize, channels)
   pixel_size := row_size * height
   scanline_size := (row_size + 1) * height
-  if pixel_size != #len(pixels) || #len(scanlines) < scanline_size || #len(compressed) < 6 || #len(destination) < 57 {
+  if pixel_size != pixels.len || scanlines.len < scanline_size || compressed.len < 6 || destination.len < 57 {
     return EncodeWork{ error: -28 }
   }
   y: usize = 0
@@ -285,7 +265,7 @@ fn encode_into(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []c
   }
   compressed[0] = 120
   compressed[1] = 1
-  encoded := deflate.deflate_stored_chunk(compressed[2..#len(compressed) - 4], scanlines[..scanline_size], true)
+  encoded := deflate.deflate_stored_chunk(compressed[2..compressed.len - 4], scanlines[..scanline_size], true)
   if !encoded.done { return EncodeWork{ error: -28 } }
   zlib_size: usize = encoded.written + 6
   put_u32be(compressed, 2 + encoded.written, adler32(scanlines[..scanline_size]))
@@ -311,7 +291,7 @@ fn encode_into(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []c
   at := append_chunk(destination, 8, "IHDR", ihdr[..])
   at = append_chunk(destination, at, "IDAT", compressed[..zlib_size])
   at = append_chunk(destination, at, "IEND", compressed[..0])
-  if at > #len(destination) { return EncodeWork{ error: -28 } }
+  if at > destination.len { return EncodeWork{ error: -28 } }
   return EncodeWork{ data: destination[..at], ok: true }
 }
 
@@ -324,7 +304,7 @@ fn decode_work(arena: *mem.Arena, source: []const u8) DecodeWork {
   mark := mem.arena_mark(arena)
   pixels := mem.push_bytes(arena, row_size * info.height)
   workspace := mem.arena_mark(arena)
-  compressed := mem.push_bytes(arena, #len(source))
+  compressed := mem.push_bytes(arena, source.len)
   scanlines := mem.push_bytes(arena, (row_size + 1) * info.height)
   result := decode_into(pixels, compressed, scanlines, source)
   if !result.ok {
@@ -351,7 +331,7 @@ fn encode_work(arena: *mem.Arena, pixels: []const u8, width: usize, height: usiz
     mem.arena_rewind(arena, mark)
     return result
   }
-  mem.arena_rewind(arena, mark + #len(result.data))
+  mem.arena_rewind(arena, mark + result.data.len)
   return result
 }
 
@@ -366,61 +346,29 @@ fn pixel_count(width: usize, height: usize, channels: u8) usize {
   return count * channels
 }
 
-pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image {
-  if status == nil { return decode(arena, &fail.Status{}, source) }
-  if status.failed { return Image{} }
+pub fn decode(arena: *mem.Arena, source: []const u8) Image!parse.ParseErr {
   info := inspect_info(source)
-  if info.width == 0 {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "decode PNG", "", "malformed PNG"))
-    return Image{}
-  }
+  if info.width == 0 { fail parse.ParseErr.Invalid(0) }
   size := pixel_count(info.width, info.height, info.channels)
   limit := #max(usize)
-  if size == 0 || size > limit - info.height {
-    fail.set(status, fail.make(fail.Kind.Overflow, "decode PNG", "", "the PNG is too large"))
-    return Image{}
-  }
+  if size == 0 || size > limit - info.height { fail parse.ParseErr.TooLarge(0) }
   scan := size + info.height
-  if size > limit - scan || #len(source) > limit - size - scan {
-    fail.set(status, fail.make(fail.Kind.Overflow, "decode PNG", "", "the PNG is too large"))
-    return Image{}
-  }
-  return decode_result(status, decode_work(arena, source))
+  if size > limit - scan || source.len > limit - size - scan { fail parse.ParseErr.TooLarge(0) }
+  return try decode_result(decode_work(arena, source))
 }
 
-pub fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8) []u8 {
-  if status == nil { return encode(arena, &fail.Status{}, pixels, width, height, channels) }
-  empty: []u8
-  if status.failed { return empty }
-  if width == 0 || height == 0 || channels < 1 || channels > 4 {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "encode PNG", "", "invalid pixels or size"))
-    return empty
-  }
+pub fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8) []u8!io.IoErr {
+  if width == 0 || height == 0 || channels < 1 || channels > 4 { fail .InvalidInput }
   size := pixel_count(width, height, channels)
   limit := #max(usize)
-  if size == 0 || size > limit - height {
-    fail.set(status, fail.make(fail.Kind.Overflow, "encode PNG", "", "the PNG is too large"))
-    return empty
-  }
-  if size != #len(pixels) {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "encode PNG", "", "invalid pixels or size"))
-    return empty
-  }
+  if size == 0 || size > limit - height { fail .Capacity }
+  if size != pixels.len { fail .InvalidInput }
   scan := size + height
   overhead := (scan / 65535 + 1) * 5 + 6
-  if scan > limit - overhead {
-    fail.set(status, fail.make(fail.Kind.Overflow, "encode PNG", "", "the PNG is too large"))
-    return empty
-  }
+  if scan > limit - overhead { fail .Capacity }
   compressed := scan + overhead
-  if scan > limit - 64 || compressed > (limit - 64 - scan) / 2 {
-    fail.set(status, fail.make(fail.Kind.Overflow, "encode PNG", "", "the PNG is too large"))
-    return empty
-  }
+  if scan > limit - 64 || compressed > (limit - 64 - scan) / 2 { fail .Capacity }
   // PNG stores its IDAT length in a u32.
-  if compressed > 4294967295 {
-    fail.set(status, fail.make(fail.Kind.Overflow, "encode PNG", "", "the PNG is too large"))
-    return empty
-  }
-  return encode_result(status, encode_work(arena, pixels, width, height, channels))
+  if compressed > 4294967295 { fail .Capacity }
+  return try encode_result(encode_work(arena, pixels, width, height, channels))
 }

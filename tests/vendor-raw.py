@@ -25,7 +25,7 @@ CASES = {
   if raw.sqlite3_open(#cast(*const c.char, &path[0]), &database) != raw.SQLITE_OK { #panic("open") }
   query: []const u8 = "SELECT ?1"
   statement: rawptr = nil
-  if raw.sqlite3_prepare_v2(database, #cast(*const c.char, &query[0]), #cast(i32, #len(query)), &statement, nil) != raw.SQLITE_OK { #panic("prepare") }
+  if raw.sqlite3_prepare_v2(database, #cast(*const c.char, &query[0]), #cast(i32, query.len), &statement, nil) != raw.SQLITE_OK { #panic("prepare") }
   payload: [3]u8 = [4,5,6]
   if raw.sqlite3_bind_blob(statement, 1, #cast(rawptr, &payload[0]), 3, #cast(raw.sqlite3_destructor_type, raw.SQLITE_TRANSIENT())) != raw.SQLITE_OK { #panic("bind") }
   payload[0] = 99
@@ -36,18 +36,18 @@ CASES = {
   if raw.sqlite3_reset(statement) != raw.SQLITE_OK { #panic("reset") }
   invalid: []const u8 = "SELECT ("
   rejected: rawptr = nil
-  if raw.sqlite3_prepare_v2(database, #cast(*const c.char, &invalid[0]), #cast(i32, #len(invalid)), &rejected, nil) == raw.SQLITE_OK || rejected != nil { #panic("syntax failure") }
+  if raw.sqlite3_prepare_v2(database, #cast(*const c.char, &invalid[0]), #cast(i32, invalid.len), &rejected, nil) == raw.SQLITE_OK || rejected != nil { #panic("syntax failure") }
   if raw.sqlite3_finalize(statement) != raw.SQLITE_OK || raw.sqlite3_close(database) != raw.SQLITE_OK { #panic("cleanup") }''',
     'zstd': r'''input: [64]u8
   encoded: [256]u8
   decoded: [64]u8
   i: usize = 0
-  for i < #len(input) { input[i] = #cast(u8, i)
+  for i < input.len { input[i] = #cast(u8, i)
     i += 1 }
   n := raw.ZSTD_compress(#cast(rawptr, &encoded[0]), 256, #cast(rawptr, &input[0]), 64, 3)
   if raw.ZSTD_isError(n) != 0 || raw.ZSTD_decompress(#cast(rawptr, &decoded[0]), 64, #cast(rawptr, &encoded[0]), n) != 64 { #panic("zstd roundtrip") }
   i = 0
-  for i < #len(input) { if input[i] != decoded[i] { #panic("zstd bytes") }
+  for i < input.len { if input[i] != decoded[i] { #panic("zstd bytes") }
     i += 1 }
   if raw.ZSTD_isError(raw.ZSTD_decompress(#cast(rawptr, &decoded[0]), 1, #cast(rawptr, &encoded[0]), n)) == 0 { #panic("short output") }
   if raw.ZSTD_isError(raw.ZSTD_decompress(#cast(rawptr, &decoded[0]), 64, #cast(rawptr, &encoded[0]), n - 1)) == 0 { #panic("truncated frame") }''',
@@ -69,7 +69,7 @@ try:
         for name, body in CASES.items():
             project = work/name
             project.mkdir()
-            (project/'main.dyn').write_text('use "vendor/'+name+'/raw" raw\nuse "std/c"\nfn main() { if !raw.verify_layout() { #panic("layout") }\n'+body+'\n}\n')
+            (project/'main.dyn').write_text('use raw "vendor/'+name+'/raw"\nuse "std/c"\nfn main() { if !raw.verify_layout() { #panic("layout") }\n'+body+'\n}\n')
             for release in (False, True):
                 binary = project/'probe'
                 subprocess.run([DYN, 'build', str(project), '--quiet', '--no-cache', '--output', str(binary)] +

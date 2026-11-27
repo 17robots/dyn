@@ -1,7 +1,7 @@
 use "std/enums"
-use "std/mem" mem
-use "std/fail"
-use "std/encoding/binary" binary
+use mem "std/mem"
+use parse "std/parse"
+use binary "std/encoding/binary"
 pub enum Wire { Varint, Fixed64, Bytes, StartGroup, EndGroup, Fixed32 }
 pub struct Field { number: u32, wire: Wire, value: u64, bytes: []const u8 }
 // Input and field bytes are borrowed. Groups are emitted as explicit start/end
@@ -9,7 +9,10 @@ pub struct Field { number: u32, wire: Wire, value: u64, bytes: []const u8 }
 // reader stays failed: next fails the same way again.
 // start is where the last value next returned begins. ended turns true when
 // next returns no value, at the end of the input or after a failure.
-pub struct Reader { source: []const u8, offset: usize, failed: bool, kind: fail.Kind, error_offset: usize, groups: [64]u32, depth: usize, start: usize, ended: bool }
+pub struct Reader { source: []const u8, offset: usize, failed: bool, error_kind: Problem, error_offset: usize, groups: [64]u32, depth: usize, start: usize, ended: bool }
+// What is wrong with a field: TooLarge is groups nested past 64 levels or a
+// size past what the platform holds.
+enum Problem { None, Invalid, TooLarge }
 pub fn reader(source: []const u8) Reader {
   return Reader{ source: source }
 }
@@ -18,63 +21,62 @@ fn ended(state: *Reader, offset: usize) Field {
   state.ended = true
   return Field{}
 }
-fn failed(status: *fail.Status, state: *Reader, offset: usize, kind: fail.Kind) Field {
+// Ends the reader for good and returns its failure.
+fn failed(state: *Reader, offset: usize, kind: Problem) parse.ParseErr {
   state.failed = true
-  state.kind = kind
+  state.error_kind = kind
   state.error_offset = offset
-  fail.at(status, kind, "read protobuf", message_of(kind), offset)
-  return ended(state, offset)
+  _ = ended(state, offset)
+  return problem_err(kind, offset)
 }
-fn message_of(kind: fail.Kind) []const u8 {
-  if kind == fail.Kind.Capacity { return "groups nested deeper than 64" }
-  if kind == fail.Kind.Overflow { return "too large" }
-  return "malformed protobuf"
+fn problem_err(kind: Problem, offset: usize) parse.ParseErr {
+  if kind == Problem.TooLarge { return parse.ParseErr.TooLarge(offset) }
+  return parse.ParseErr.Invalid(offset)
 }
-// The next field. Malformed input fails with InvalidInput at its offset.
-pub fn next(status: *fail.Status, state: *Reader) Field {
-  if status == nil { return next(&fail.Status{}, state) }
-  if status.failed { return ended(state, state.offset) }
-  if state.failed { return failed(status, state, state.error_offset, state.kind) }
-  if state.offset == #len(state.source) {
-    if state.depth != 0 { return failed(status, state, state.offset, fail.Kind.InvalidInput) }
+// The next field. Malformed input fails with Invalid at its offset, groups
+// nested past 64 levels with TooLarge.
+pub fn next(state: *Reader) Field!parse.ParseErr {
+  if state.failed { fail failed(state, state.error_offset, state.error_kind) }
+  if state.offset == state.source.len {
+    if state.depth != 0 { fail failed(state, state.offset, Problem.Invalid) }
     return ended(state, state.offset)
   }
   start := state.offset
   key := binary.uleb128_decode(state.source[start..])
   if !key.valid || (key.value >> 3) == 0 || (key.value >> 3) > 536870911 || (key.value & 7) > 5 {
-    return failed(status, state, start, fail.Kind.InvalidInput)
+    fail failed(state, start, Problem.Invalid)
   }
   at := start + key.consumed
   wire := #cast(u8, key.value & 7)
-  field := Field{ number: #cast(u32, key.value >> 3), wire: enums.from_int(Wire, #cast(u64, wire)) }
+  field := Field{ number: #cast(u32, key.value >> 3), wire: enums.from_int<Wire>(#cast(u64, wire)) }
   if field.wire == Wire.Varint {
     value := binary.uleb128_decode(state.source[at..])
-    if !value.valid { return failed(status, state, at, fail.Kind.InvalidInput) }
+    if !value.valid { fail failed(state, at, Problem.Invalid) }
     field.value = value.value
     at += value.consumed
   } else if field.wire == Wire.Fixed64 {
-    if #len(state.source) - at < 8 { return failed(status, state, at, fail.Kind.InvalidInput) }
+    if state.source.len - at < 8 { fail failed(state, at, Problem.Invalid) }
     field.value = binary.load_u64_le(state.source[at..at+8])
     at += 8
   } else if field.wire == Wire.Fixed32 {
-    if #len(state.source) - at < 4 { return failed(status, state, at, fail.Kind.InvalidInput) }
+    if state.source.len - at < 4 { fail failed(state, at, Problem.Invalid) }
     field.value = binary.load_u32_le(state.source[at..at+4])
     at += 4
   } else if field.wire == Wire.Bytes {
     length := binary.uleb128_decode(state.source[at..])
-    if !length.valid { return failed(status, state, at, fail.Kind.InvalidInput) }
+    if !length.valid { fail failed(state, at, Problem.Invalid) }
     at += length.consumed
-    if length.value > (#len(state.source) - at) { return failed(status, state, at, fail.Kind.InvalidInput) }
+    if length.value > (state.source.len - at) { fail failed(state, at, Problem.Invalid) }
     count := #cast(usize, length.value)
     field.bytes = state.source[at..at+count]
     at += count
   } else if field.wire == Wire.StartGroup {
-    if state.depth == #len(state.groups) { return failed(status, state, start, fail.Kind.Capacity) }
+    if state.depth == state.groups.len { fail failed(state, start, Problem.TooLarge) }
     state.groups[state.depth] = field.number
     state.depth += 1
   } else {
     if state.depth == 0 || state.groups[state.depth - 1] != field.number {
-      return failed(status, state, start, fail.Kind.InvalidInput)
+      fail failed(state, start, Problem.Invalid)
     }
     state.depth -= 1
   }
@@ -95,54 +97,49 @@ fn key(field: Field) u64 {
 // types use bitcast. bytes represent strings, packed fields or nested messages.
 // Encode error offsets are field indexes. Inputs must remain alive and must not
 // borrow unused output-arena storage. No schema, reflection or generated code.
-pub fn encode(arena: *mem.Arena, status: *fail.Status, fields: []const Field) []u8 {
-  if status == nil { return encode(arena, &fail.Status{}, fields) }
-  empty: []u8
-  if status.failed { return empty }
+// Fails, writing nothing, with Invalid (TooLarge past 64 levels or past
+// usize) at the index of the offending field.
+pub fn encode(arena: *mem.Arena, fields: []const Field) []u8!parse.ParseErr {
   size: usize = 0
   groups: [64]u32
   depth: usize = 0
-  for i in 0..#len(fields) {
+  for i in 0..fields.len {
     field := fields[i]
-    if field.number == 0 || field.number > 536870911 {
-      return unencodable(status, fail.Kind.InvalidInput, i)
-    }
+    if field.number == 0 || field.number > 536870911 { fail problem_err(Problem.Invalid, i) }
     extra := binary.uleb128_size(key(field))
     if field.wire == Wire.Varint {
       extra += binary.uleb128_size(field.value)
     } else if field.wire == Wire.Fixed32 {
-      if field.value > 0xffffffff { return unencodable(status, fail.Kind.InvalidInput, i) }
+      if field.value > 0xffffffff { fail problem_err(Problem.Invalid, i) }
       extra += 4
     } else if field.wire == Wire.Fixed64 {
       extra += 8
     } else if field.wire == Wire.Bytes {
-      length_size := binary.uleb128_size(#len(field.bytes))
-      if #len(field.bytes) > #max(usize) - extra - length_size {
-        return unencodable(status, fail.Kind.Overflow, i)
+      length_size := binary.uleb128_size(field.bytes.len)
+      if field.bytes.len > #max(usize) - extra - length_size {
+        fail problem_err(Problem.TooLarge, i)
       }
-      extra += length_size + #len(field.bytes)
+      extra += length_size + field.bytes.len
     } else if field.wire == Wire.StartGroup {
-      if depth == #len(groups) { return unencodable(status, fail.Kind.Capacity, i) }
+      if depth == groups.len { fail problem_err(Problem.TooLarge, i) }
       groups[depth] = field.number
       depth += 1
     } else if field.wire == Wire.EndGroup {
-      if depth == 0 || groups[depth-1] != field.number {
-        return unencodable(status, fail.Kind.InvalidInput, i)
-      }
+      if depth == 0 || groups[depth-1] != field.number { fail problem_err(Problem.Invalid, i) }
       depth -= 1
     } else {
-      return unencodable(status, fail.Kind.InvalidInput, i)
+      fail problem_err(Problem.Invalid, i)
     }
-    if extra > #max(usize) - size { return unencodable(status, fail.Kind.Overflow, i) }
+    if extra > #max(usize) - size { fail problem_err(Problem.TooLarge, i) }
     size += extra
   }
-  if depth != 0 { return unencodable(status, fail.Kind.InvalidInput, #len(fields)) }
-  output := mem.push_array(u8, arena, size)
+  if depth != 0 { fail problem_err(Problem.Invalid, fields.len) }
+  output := mem.push_array<u8>(arena, size)
   at: usize = 0
   for field in fields {
-    at += #len(binary.uleb128_encode(output[at..], key(field)))
+    at += binary.uleb128_encode(output[at..], key(field)).len
     if field.wire == Wire.Varint {
-      at += #len(binary.uleb128_encode(output[at..], field.value))
+      at += binary.uleb128_encode(output[at..], field.value).len
     } else if field.wire == Wire.Fixed32 {
       binary.store_u32_le(output[at..at+4], #cast(u32, field.value))
       at += 4
@@ -150,16 +147,10 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, fields: []const Field) []
       binary.store_u64_le(output[at..at+8], field.value)
       at += 8
     } else if field.wire == Wire.Bytes {
-      at += #len(binary.uleb128_encode(output[at..], #len(field.bytes)))
-      _ = mem.copy(output[at..at+#len(field.bytes)], field.bytes)
-      at += #len(field.bytes)
+      at += binary.uleb128_encode(output[at..], field.bytes.len).len
+      _ = mem.copy(output[at..at+field.bytes.len], field.bytes)
+      at += field.bytes.len
     }
   }
   return output
-}
-
-fn unencodable(status: *fail.Status, kind: fail.Kind, index: usize) []u8 {
-  fail.at(status, kind, "encode protobuf", message_of(kind), index)
-  empty: []u8
-  return empty
 }

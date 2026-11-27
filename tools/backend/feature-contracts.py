@@ -55,15 +55,15 @@ pub fn box_cross(f:fn(Box) Box,value:i64) i64 {
 fn inspect(value: any) i64 {
   copy := value
   case copy {
-    i64 number => { return number }
-    bool yes => { if yes { return 1 } else { return 0 } }
-    Pair pair => { return pair.a + pair.b }
-    [2]i64 values => { return values[0]+values[1] }
-    f64 number => { return #cast(i64, number) }
-    Message message => {
+    i64(number) => { return number }
+    bool(yes) => { if yes { return 1 } else { return 0 } }
+    Pair(pair) => { return pair.a + pair.b }
+    [2]i64(values) => { return values[0]+values[1] }
+    f64(number) => { return #cast(i64, number) }
+    Message(message) => {
       return message.number
     }
-    []const u8 text => { return #cast(i64, #len(text)) }
+    []const u8(text) => { return #cast(i64, text.len) }
     _ => { return -1 }
   }
 }

@@ -6,7 +6,7 @@ const EventDataOffset: usize = 8
 struct PollTimeout { seconds: isize, nanoseconds: isize }
 fn poll_native(descriptors: []PollDescriptor, timeout_milliseconds: i32) isize {
   descriptor_pointer: *PollDescriptor = nil
-  if #len(descriptors) > 0 {
+  if descriptors.len > 0 {
     descriptor_pointer = &descriptors[0]
   }
   timeout := PollTimeout{}
@@ -16,5 +16,5 @@ fn poll_native(descriptors: []PollDescriptor, timeout_milliseconds: i32) isize {
     timeout.nanoseconds = #cast(isize, (timeout_milliseconds % 1000)) * 1000000
     timeout_pointer = &timeout
   }
-  return #syscall(sys.Ppoll, descriptor_pointer, #len(descriptors), timeout_pointer, 0, 8)
+  return #syscall(sys.Ppoll, descriptor_pointer, descriptors.len, timeout_pointer, 0, 8)
 }

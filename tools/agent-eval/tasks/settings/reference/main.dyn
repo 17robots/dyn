@@ -1,8 +1,8 @@
 use "std/encoding/json"
-use "std/fail"
 use "std/fs"
 use "std/io"
 use "std/mem"
+use "std/parse"
 use "std/process"
 
 struct Settings {
@@ -10,31 +10,53 @@ struct Settings {
   port: i64,
 }
 
-fn report(path: []const u8, failure: fail.Failure) {
-  storage: [512]u8
-  text := fail.describe(storage[..], failure)
-  if #len(fail.path_text(&failure)) == 0 {
-    io.eprintln("settings: {}: {}", path, text)
-  } else {
-    io.eprintln("settings: {}", text)
+// Why a JSON member could not be read.
+fn member_problem(err: io.IoErr) []const u8 {
+  case err {
+    .NotFound => { return "is missing" }
+    _ => { return "has the wrong type" }
   }
 }
 
-fn load(arena: *mem.Arena, status: *fail.Status, path: []const u8) Settings {
-  text := fs.read_all(arena, status, path, mem.MiB)
-  root := json.parse(arena, status, text)
-  name := json.get([]const u8, status, root, "name")
-  port := json.get(i64, status, root, "port")
-  if !status.failed && (port < 1 || port > 65535) {
-    fail.invalid(status, "read", path, "\"port\" is not a whole number from 1 to 65535")
+// Reads the settings at path into settings. On failure prints one line and
+// returns false.
+fn load(arena: *mem.Arena, path: []const u8, settings: *Settings) bool {
+  text := fs.read_all(arena, path, mem.MiB) catch err {
+    io.eprintln("settings: {}: {}", path, err)
+    return false
   }
-  if status.failed { return Settings{} }
-  return Settings{ name: name, port: port }
+  root := json.parse(arena, text) catch err {
+    io.eprintln("settings: {}: invalid JSON at byte {}", path, parse.offset(err))
+    return false
+  }
+  settings.name = json.get<[]const u8>(root, "name") catch err {
+    io.eprintln("settings: {}: \"name\" {}", path, member_problem(err))
+    return false
+  }
+  settings.port = json.get<i64>(root, "port") catch err {
+    io.eprintln("settings: {}: \"port\" {}", path, member_problem(err))
+    return false
+  }
+  if settings.port < 1 || settings.port > 65535 {
+    io.eprintln("settings: {}: \"port\" is not a whole number from 1 to 65535", path)
+    return false
+  }
+  return true
+}
+
+fn missing(path: []const u8) bool {
+  _ = fs.metadata(path) catch err {
+    case err {
+      .NotFound => { return true }
+      _ => { return false }
+    }
+  }
+  return false
 }
 
 fn main() i32 {
   program := process.start()
-  if #len(program.args) != 3 {
+  if program.args.len != 3 {
     io.eprintln("settings: usage: settings FIRST SECOND")
     return 1
   }
@@ -42,17 +64,11 @@ fn main() i32 {
   defer mem.arena_release(arena)
   used := program.args[1]
   // Only a missing FIRST falls back; any other failure of FIRST stands.
-  probe: fail.Status
-  _ = fs.metadata(&probe, used)
-  if probe.failed && probe.failure.kind == fail.Kind.NotFound {
+  if missing(used) {
     used = program.args[2]
   }
-  status: fail.Status
-  settings := load(arena, &status, used)
-  if status.failed {
-    report(used, status.failure)
-    return 1
-  }
+  settings: Settings
+  if !load(arena, used, &settings) { return 1 }
   io.println("name={} port={} from={}", settings.name, settings.port, used)
   return 0
 }

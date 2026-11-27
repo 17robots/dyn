@@ -7,30 +7,36 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "std/fail"
-use "std/encoding/msgpack" mp
-use "std/mem" mem
-use "std/bytes" bytes
-struct Got { value: mp.Token, offset: usize, found: bool, failure: fail.Failure }
-fn next(state: *mp.Reader) Got {
- status: fail.Status
- item := mp.next(&status, state)
- return Got{ value: item, offset: state.start, found: !state.ended, failure: status.failure }
+SOURCE=r'''use parse "std/parse"
+use mp "std/encoding/msgpack"
+use mem "std/mem"
+use bytes "std/bytes"
+// code: 0 none, 1 Invalid, 2 TooLarge.
+fn code_of(err: parse.ParseErr) u8 {
+ case err {
+  .Invalid(_) => { return 1 }
+  .TooLarge(_) => { return 2 }
+  .Unsupported(_) => { return 2 }
+ }
 }
-struct Encoded { value: []u8, failure: fail.Failure }
+struct Got { value: mp.Token, offset: usize, found: bool, code: u8 }
+fn next(state: *mp.Reader) Got {
+ item := mp.next(state) catch err { return Got{ offset: state.start, code: code_of(err) } }
+ return Got{ value: item, offset: state.start, found: !state.ended }
+}
+struct Encoded { value: []u8, code: u8 }
 fn encode(arena: *mem.Arena, items: []const mp.Token) Encoded {
- status: fail.Status
- value := mp.encode(arena, &status, items)
- return Encoded{ value: value, failure: status.failure }
+ value := mp.encode(arena, items) catch err { return Encoded{ code: code_of(err) } }
+ return Encoded{ value: value }
 }
 fn check(ok: bool) { if !ok { #panic("msgpack contract") } }
 fn bad(source: []const u8) {
  state := mp.reader(source)
  item := next(&state)
  for item.found { item = next(&state) }
- check(item.failure.kind == fail.Kind.InvalidInput)
+ check(item.code == 1)
  again := next(&state)
- check(again.failure.kind == item.failure.kind && again.offset == item.offset)
+ check(again.code == item.code && again.offset == item.offset)
 }
 fn main() {
  arena := mem.arena_alloc(0)
@@ -43,18 +49,18 @@ fn main() {
  for item.found { tokens[count] = item.value
  count += 1
  item = next(&state) }
- check(item.failure.kind == fail.Kind.Ok && count == 8)
+ check(item.code == 0 && count == 8)
  check(tokens[0].kind == mp.Kind.Map && tokens[0].value == 2)
  check(tokens[2].kind == mp.Kind.Array && tokens[2].value == 3)
  check(tokens[5].integer == -1 && bytes.equal(tokens[7].bytes,"hi"))
  encoded := encode(arena,tokens[..count])
- check(encoded.failure.kind == fail.Kind.Ok)
+ check(encoded.code == 0)
  state = mp.reader(encoded.value)
  for token in tokens[..count] {
   value := next(&state)
   check(value.found && value.value.kind == token.kind && value.value.value == token.value && value.value.integer == token.integer && bytes.equal(value.value.bytes,token.bytes))
  }
- check(next(&state).failure.kind == fail.Kind.Ok && !next(&state).found)
+ check(next(&state).code == 0 && !next(&state).found)
  // Every header is either complete or a structured failure, never a trap.
  raw: [20]u8
  for tag in 0..256 {
@@ -62,7 +68,7 @@ fn main() {
   state = mp.reader(raw[..])
   result := next(&state)
   for result.found { result = next(&state) }
-  check(result.failure.kind == fail.Kind.Ok || result.failure.kind == fail.Kind.InvalidInput)
+  check(result.code == 0 || result.code == 1)
  }
  bad("\xc1")
  bad("\x91")
@@ -72,7 +78,7 @@ fn main() {
  bad("\xcf\x00")
  extrema: [7]mp.Token = [mp.Token{kind:mp.Kind.Unsigned,value:0xffffffffffffffff},mp.Token{kind:mp.Kind.Signed,integer:-9223372036854775808},mp.Token{kind:mp.Kind.Signed,integer:9223372036854775807},mp.Token{kind:mp.Kind.Float,real:-1.5},mp.Token{kind:mp.Kind.Extension,extension:-1,bytes:"123456789012"},mp.Token{kind:mp.Kind.Text,bytes:"\xff\x00"},mp.Token{kind:mp.Kind.Bool,boolean:true}]
  encoded = encode(arena,extrema[..])
- check(encoded.failure.kind == fail.Kind.Ok)
+ check(encoded.code == 0)
  state = mp.reader(encoded.value)
  for expected in extrema {
   result := next(&state)
@@ -82,12 +88,12 @@ fn main() {
  check(next(&state).value.real == 1.5)
  mark := mem.arena_mark(arena)
  invalid: [1]mp.Token = [mp.Token{kind:mp.Kind.Array,value:1}]
- check(encode(arena,invalid[..]).failure.kind == fail.Kind.InvalidInput && mem.arena_mark(arena) == mark)
+ check(encode(arena,invalid[..]).code == 1 && mem.arena_mark(arena) == mark)
  deep: [130]u8
  for i in 0..129 { deep[i] = 0x91 }
  state = mp.reader(deep[..])
  for i in 0..64 { check(next(&state).found) }
- check(next(&state).failure.kind == fail.Kind.Capacity)
+ check(next(&state).code == 2)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-msgpack-') as directory:

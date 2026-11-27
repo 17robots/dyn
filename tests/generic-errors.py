@@ -20,9 +20,9 @@ struct Point {
 
 fn main() {
   arena := mem.arena_alloc(0)
-  points: map.Map(Point, u32)
+  points: map.Map<Point, u32>
   map.init(&points, arena)
-  names: array.Array(u32)
+  names: array.Array<u32>
   array.init(&names, arena)
   array.push(&names, "hello")
 }
@@ -40,51 +40,50 @@ with tempfile.TemporaryDirectory(prefix='dyn-generic-errors-') as directory:
     assert any('map.dyn' in line and 'note: reported inside the library here' in line for line in lines), result.stderr
     assert not any('map.dyn' in line and ': error:' in line for line in lines), result.stderr
 
-# One spelling per generic: `$T: type` is an error when an argument's type
-# already carries T, and inferred generics name instances as function values.
-REDUNDANT = '''fn first(T: type, items: []T) T {
+# Explicit and inferred generic calls, and generic function values.
+EXPLICIT = '''fn first<T>(items: []T) T {
   return items[0]
 }
 
-fn sizes(T: type, count: usize) usize {
+fn sizes<T>(count: usize) usize {
   return count * #sizeof(T)
 }
 
 fn main() {
   values: [2]u8 = [1, 2]
-  _ = first(u8, values[..])
-  _ = sizes(u32, 2)
+  if first<u8>(values[..]) != 1 || first(values[..]) != 1 || sizes<u32>(2) != 8 {
+    #panic("explicit")
+  }
 }
 '''
-INSTANCE = '''fn mix(seed: u64, key: $K) u64 {
+INSTANCE = '''fn mix<K>(seed: u64, key: K) u64 {
   return seed + #cast(u64, key)
 }
 
 fn main() {
   hash: fn(u64, u32) u64 = mix
-  if hash(1, 2) != 3 {
+  explicit := mix<u32>
+  if hash(1, 2) != 3 || explicit(1, 2) != 3 {
     #panic("instance value")
   }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-generic-spelling-') as directory:
-    work = Path(directory) / 'redundant'
+    work = Path(directory) / 'explicit'
     work.mkdir()
-    (work / 'main.dyn').write_text(REDUNDANT)
-    result = subprocess.run([DYN, 'check', str(work)], capture_output=True, text=True, timeout=60)
-    errors = [line for line in result.stderr.splitlines() if ': error:' in line]
-    assert result.returncode != 0 and len(errors) == 1, result.stderr
-    assert ':1:10: error: T is in the type of `items`, so it is inferred' in errors[0], result.stderr
+    (work / 'main.dyn').write_text(EXPLICIT)
+    result = subprocess.run([DYN, 'run', str(work), '--quiet'], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
     work = Path(directory) / 'instance'
     work.mkdir()
     (work / 'main.dyn').write_text(INSTANCE)
     result = subprocess.run([DYN, 'run', str(work), '--quiet'], capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
-print('PASS generic errors: conflicts name the binding argument; std instance failures land on the program call; one generic spelling; inferred instance values')
+print('PASS generic errors: conflicts name the binding argument; std instance failures land on the program call; <T> explicit/inferred; instance values')
 
 # A bad generic signature is reported once and does not stop later functions
 # from being declared, so their bodies raise no false errors.
-CASCADE = '''fn make(items: []$T, state: *T) i32 {
+CASCADE = '''fn make<T>(items: []Missing, state: *T) i32 {
   return 0
 }
 
@@ -102,5 +101,5 @@ with tempfile.TemporaryDirectory(prefix='dyn-generic-cascade-') as directory:
     result = subprocess.run([DYN, 'check', str(work)], capture_output=True, text=True, timeout=60)
     errors = [line for line in result.stderr.splitlines() if ': error:' in line]
     assert result.returncode != 0 and len(errors) == 1, result.stderr
-    assert 'in every parameter that supplies it' in errors[0], result.stderr
+    assert 'unknown type in parameter' in errors[0], result.stderr
 print('PASS generic signature errors do not cascade')

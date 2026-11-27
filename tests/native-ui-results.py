@@ -9,53 +9,68 @@ import shlex
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/('build/dyn-release.exe' if sys.platform=='win32' else 'build/dyn-release'))).resolve())
-SOURCE = r'''use "vendor/window" window
-use "vendor/opengl" gl
-use "vendor/ui/opengl" gpu
-use "std/ui" ui
+SOURCE = r'''use window "vendor/window"
+use gl "vendor/opengl"
+use gpu "vendor/ui/opengl"
+use ui "std/ui"
 use "std/io"
-use "std/ui/software" software
-use "std/io" errors
-use "std/mem" mem
-use "std/fail"
-fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
-  status: fail.Status
-  window.open(&status, p0, p1, p2, p3)
-  return status.failure
+use software "std/ui/software"
+use errors "std/io"
+use mem "std/mem"
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) Failure {
+  window.open(p0, p1, p2, p3) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_poll(p0: *window.Window) fail.Failure {
-  status: fail.Status
-  window.poll(&status, p0)
-  return status.failure
+fn window_poll(p0: *window.Window) Failure {
+  window.poll(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_swap(p0: *window.Window) fail.Failure {
-  status: fail.Status
-  window.swap(&status, p0)
-  return status.failure
+fn window_swap(p0: *window.Window) Failure {
+  window.swap(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn gpu_open(p0: *gpu.Renderer, p1: gl.Api) fail.Failure {
-  status: fail.Status
-  gpu.open(&status, p0, p1)
-  return status.failure
+fn gpu_open(p0: *gpu.Renderer, p1: gl.Api) Failure {
+  gpu.open(p0, p1) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn gpu_render(p0: *gpu.Renderer, p1: *const ui.Command, p2, p3: i32, p4: software.Font) fail.Failure {
-  status: fail.Status
-  gpu.render(&status, p0, p1, p2, p3, p4)
-  return status.failure
+fn gpu_render(p0: *gpu.Renderer, p1: *const ui.Command, p2, p3: i32, p4: software.Font) Failure {
+  gpu.render(p0, p1, p2, p3, p4) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn software_render(p0: *software.Surface, p1: *const ui.Command, p2: software.Font) fail.Failure {
-  status: fail.Status
-  software.render(&status, p0, p1, p2)
-  return status.failure
+fn software_render(p0: *software.Surface, p1: *const ui.Command, p2: software.Font) Failure {
+  software.render(p0, p1, p2) catch { return Failure{ kind: Kind.InvalidInput } }
+  return Failure{}
 }
 
-fn failed(failure: fail.Failure) bool {
-  return failure.kind != fail.Kind.Ok
+fn failed(failure: Failure) bool {
+  return failure.kind != Kind.Ok
 }
 
 fn check(ok: bool) { if !ok { #panic("native GPU UI contract") } }
@@ -69,23 +84,21 @@ struct Wide { pixels: []u8 }
 fn wide_bitmap(data: rawptr, codepoint: u32) software.Glyph {
  _ = codepoint
  wide := #cast(*Wide,data)
- return software.Glyph{pixels:wide.pixels,width:#cast(i32,#len(wide.pixels)),height:1,stride:#len(wide.pixels)}
+ return software.Glyph{pixels:wide.pixels,width:#cast(i32,wide.pixels.len),height:1,stride:wide.pixels.len}
 }
 fn no_textures(count: i32, output: *u32) { _ = count
  output.* = 0 }
 fn main() {
  host := window.Window{}
- check(window_open(&host,"bad",0,32).kind != fail.Kind.Ok)
- check(window_open(&host,"Dyn native renderer test",32,32).kind == fail.Kind.Ok)
+ check(window_open(&host,"bad",0,32).kind != Kind.Ok)
+ check(window_open(&host,"Dyn native renderer test",32,32).kind == Kind.Ok)
  defer { window.close(&host) }
- check(window_open(&host,"duplicate",32,32).kind == fail.Kind.InvalidState)
- loading: fail.Status
- api := gl.load(&loading, window.gl_proc)
- check(!loading.failed)
+ check(window_open(&host,"duplicate",32,32).kind == Kind.InvalidInput)
+ api := gl.load(window.gl_proc) catch { #panic("gl") }
  renderer := gpu.Renderer{}
  check(!failed(gpu_open(&renderer,api)))
  defer { gpu.close(&renderer) }
- check(gpu_open(&renderer,api).kind == fail.Kind.InvalidState)
+ check(gpu_open(&renderer,api).kind == Kind.InvalidInput)
  commands: [5]ui.Command = [
  ui.Command{kind:ui.Kind.Rectangle,bounds:ui.Rect{width:32,height:32},clip:ui.Rect{width:32,height:32},color:ui.Color{r:10,g:20,b:30,a:255}},
  ui.Command{kind:ui.Kind.Rectangle,bounds:ui.Rect{x:2,y:3,width:12,height:9},clip:ui.Rect{x:5,y:4,width:6,height:5},color:ui.Color{r:230,g:60,b:90,a:128}},
@@ -123,7 +136,7 @@ fn main() {
  arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  check(renderer.max_texture > 0 && renderer.max_texture < 1048576)
- wide := Wide{pixels:mem.push_array(u8,arena,#cast(usize,renderer.max_texture)+1)}
+ wide := Wide{pixels:mem.push_array<u8>(arena, #cast(usize,renderer.max_texture)+1)}
  wide.pixels[0] = 255
  single := ui.Command{kind:ui.Kind.Glyph,bounds:ui.Rect{width:32,height:32},clip:ui.Rect{x:2,y:2,width:1,height:1},glyph_x:2,glyph_y:2,color:ui.Color{r:255,a:255}}
  check(!failed(gpu_render(&renderer,&single,32,32,software.Font{data:&wide,glyph:wide_bitmap,line_height:1})))
@@ -131,21 +144,21 @@ fn main() {
  api.read_pixels(2,29,1,1,gl.Rgba,gl.UnsignedByte,&pixel[0])
  check(pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 255 && api.get_error() == 0)
  api.enable(0xffffffff)
- check(gpu_render(&renderer,&commands[0],32,32,font).kind == fail.Kind.System && api.get_error() == 0)
+ check(gpu_render(&renderer,&commands[0],32,32,font).kind == Kind.System && api.get_error() == 0)
  broken := api
  broken.gen_textures = no_textures
  rejected := gpu.Renderer{}
- check(gpu_open(&rejected,broken).kind == fail.Kind.System && rejected.program == 0)
- check(window_poll(&host).kind == fail.Kind.Ok && window_swap(&host).kind == fail.Kind.Ok)
+ check(gpu_open(&rejected,broken).kind == Kind.System && rejected.program == 0)
+ check(window_poll(&host).kind == Kind.Ok && window_swap(&host).kind == Kind.Ok)
  bad := commands[3]
  bad.codepoint = 0
- check(gpu_render(&renderer,&bad,32,32,font).kind == fail.Kind.InvalidInput)
+ check(gpu_render(&renderer,&bad,32,32,font).kind == Kind.InvalidInput)
  gpu.close(&renderer)
  gpu.close(&renderer)
- check(gpu_render(&renderer,&commands[0],32,32,font).kind == fail.Kind.InvalidState)
+ check(gpu_render(&renderer,&commands[0],32,32,font).kind == Kind.InvalidInput)
  window.close(&host)
  window.close(&host)
- check(window_poll(&host).kind != fail.Kind.Ok && window_swap(&host).kind != fail.Kind.Ok)
+ check(window_poll(&host).kind != Kind.Ok && window_swap(&host).kind != Kind.Ok)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-native-ui-') as directory:
@@ -164,7 +177,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-ui-') as directory:
         if os.environ.get('WAYLAND_DISPLAY') and shutil.which('wayland-scanner'):
             bridge=work/'libdyn_window.so'
             subprocess.run(['python3',str(ROOT/'vendor/window/native/build.py'),'--output',str(bridge)],check=True,timeout=60)
-            backends.append(('Wayland',SOURCE.replace('use "vendor/window" window','use "vendor/window/wayland" window'),['--link',str(bridge)]))
+            backends.append(('Wayland',SOURCE.replace('use window "vendor/window"','use window "vendor/window/wayland"'),['--link',str(bridge)]))
         else:
             print('SKIP native Wayland: display or scanner unavailable')
     elif sys.platform in ('darwin','win32'):
@@ -182,7 +195,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-ui-') as directory:
     if sys.platform.startswith('linux') and os.environ.get('DISPLAY'):
         shim=work/'glx-failure.so'
         subprocess.run([*shlex.split(os.environ.get('CC','cc')),'-shared','-fPIC','-Wall','-Wextra','-Werror',str(ROOT/'tests/x11-context-failure.c'),'-ldl','-o',str(shim)],check=True,timeout=60)
-        (work/'main.dyn').write_text('use "vendor/window" window\nuse "std/fail"\nfn main(){ host := window.Window{}\n result: fail.Status\n window.open(&result,&host,"Expected failure",32,32)\n if !result.failed || result.failure.kind != fail.Kind.System || host.display != nil { #panic("GLX error was not recovered") }\n window.close(&host)\n}\n', encoding='utf-8')
+        (work/'main.dyn').write_text('use window "vendor/window"\nfn main(){ host := window.Window{}\n failed := false\n window.open(&host,"Expected failure",32,32) catch { failed = true }\n if !failed || host.display != nil { #panic("GLX error was not recovered") }\n window.close(&host)\n}\n', encoding='utf-8')
         output=work/'context-failure'
         subprocess.run([DYN,'build',str(work),'--debug','--quiet','--output',str(output)],check=True,timeout=300)
         subprocess.run([str(output)],env={**os.environ,'LD_PRELOAD':str(shim)},check=True,timeout=60)

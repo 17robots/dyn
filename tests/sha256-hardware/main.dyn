@@ -2,7 +2,6 @@
 // and without the CPU's SHA instructions.
 use "std/crypto/core"
 use "std/crypto/password"
-use "std/fail"
 use "std/encoding/hex"
 use "std/io"
 use "std/mem"
@@ -21,7 +20,6 @@ fn main() {
   io.println("{}", hex.encode(arena, core.hmac_sha256(mac[..], "key", "The quick brown fox jumps over the lazy dog"), false))
   derived: [32]u8
   scratch: [20]u8
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  password.pbkdf2_sha256(&status, derived[..], "password", "salt", 4096, scratch[..])
+  password.pbkdf2_sha256(derived[..], "password", "salt", 4096, scratch[..]) catch { #panic("unexpected failure") }
   io.println("{}", hex.encode(arena, derived[..], false))
 }

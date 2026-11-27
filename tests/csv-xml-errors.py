@@ -12,20 +12,33 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get("DYN", ROOT / "build/dyn-release")).resolve()
 
-SOURCE = r'''use "std/encoding/csv" csv
-use "std/encoding/xml" xml
-use "std/fail"
-use "std/io" io
-use "std/bytes" bytes
+SOURCE = r'''use csv "std/encoding/csv"
+use xml "std/encoding/xml"
+use parse "std/parse"
+use io "std/io"
+use bytes "std/bytes"
 struct Probe { calls: usize, code: isize, mode: usize }
 fn check(ok: bool) { if !ok { #panic("CSV/XML diagnostic contract") } }
-fn refused(status: *fail.Status, code: isize) usize {
-  failure := fail.make(fail.Kind.PermissionDenied, "probe", "", "denied")
-  failure.native = code
-  fail.set(status, failure)
-  return 0
+// A failure as a comparable kind: 0 none, 1 malformed (Invalid or
+// InvalidInput), 2 too large (TooLarge or Capacity), 3 PermissionDenied,
+// 4 anything else; offset for a parse failure.
+struct Failure { kind: u8, offset: usize }
+fn of_parse(err: parse.ParseErr) Failure {
+  case err {
+    .Invalid(at) => { return Failure{ kind: 1, offset: at } }
+    .TooLarge(at) => { return Failure{ kind: 2, offset: at } }
+    .Unsupported(at) => { return Failure{ kind: 2, offset: at } }
+  }
 }
-fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn of_io(err: io.IoErr) Failure {
+  case err {
+    .InvalidInput => { return Failure{ kind: 1 } }
+    .Capacity => { return Failure{ kind: 2 } }
+    .PermissionDenied => { return Failure{ kind: 3 } }
+    _ => { return Failure{ kind: 4 } }
+  }
+}
+fn read(data: rawptr, destination: []u8) usize!io.IoErr {
   p := #cast(*Probe, data)
   p.calls += 1
   // A stream ends with a read that returns 0, so mode 1 (one byte, then the
@@ -36,39 +49,64 @@ fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
     destination[0] = 'x'
     return 1
   }
-  return refused(status, p.code)
+  fail .PermissionDenied
 }
-fn write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+fn write(data: rawptr, source: []const u8) usize!io.IoErr {
   p := #cast(*Probe, data)
   p.calls += 1
   check(p.calls == 1)
-  return refused(status, p.code)
+  fail .PermissionDenied
+}
+// The failure of a write; kind 0 when it worked.
+fn csv_write(state: *csv.Writer, value: []const u8, end_record: bool) Failure {
+  csv.write_field(state, value, end_record) catch err { return of_io(err) }
+  return Failure{}
+}
+fn xml_text(state: *xml.Writer, value: []const u8) Failure {
+  xml.write_text(state, value) catch err { return of_io(err) }
+  return Failure{}
+}
+fn xml_start(state: *xml.Writer, name: []const u8) Failure {
+  xml.write_start(state, name) catch err { return of_io(err) }
+  return Failure{}
+}
+fn xml_attribute(state: *xml.Writer, name: []const u8, value: []const u8) Failure {
+  xml.write_attribute(state, name, value) catch err { return of_io(err) }
+  return Failure{}
+}
+fn xml_end(state: *xml.Writer, name: []const u8) Failure {
+  xml.write_end(state, name) catch err { return of_io(err) }
+  return Failure{}
+}
+fn xml_start_end(state: *xml.Writer, self_closing: bool) Failure {
+  xml.write_start_end(state, self_closing) catch err { return of_io(err) }
+  return Failure{}
+}
+fn attribute_failure(state: *xml.AttributeScanner) Failure {
+  _ = xml.next_attribute(state) catch err { return of_parse(err) }
+  return Failure{}
 }
 // A field or event with whether the call returned one (the scanner's ended,
 // inverted) and the call's failure.
 struct Got { text: []u8, end_record: bool, end_input: bool, found: bool }
-struct CsvField { value: Got, failure: fail.Failure }
+struct CsvField { value: Got, failure: Failure }
 fn csv_next(state: *csv.Scanner, destination: []u8) CsvField {
-  status: fail.Status
-  value := csv.next(&status, state, destination)
-  return CsvField{ value: Got{ text: value.text, end_record: value.end_record, end_input: value.end_input, found: !state.ended }, failure: status.failure }
+  value := csv.next(state, destination) catch err { return CsvField{ failure: of_parse(err) } }
+  return CsvField{ value: Got{ text: value.text, end_record: value.end_record, end_input: value.end_input, found: !state.ended } }
 }
 fn csv_stream(state: *csv.StreamScanner, destination: []u8) CsvField {
-  status: fail.Status
-  value := csv.next_stream(&status, state, destination)
-  return CsvField{ value: Got{ text: value.text, end_record: value.end_record, end_input: value.end_input, found: !state.ended }, failure: status.failure }
+  value := csv.next_stream(state, destination) catch err { return CsvField{ failure: of_io(err) } }
+  return CsvField{ value: Got{ text: value.text, end_record: value.end_record, end_input: value.end_input, found: !state.ended } }
 }
 struct EventGot { value: xml.Event, found: bool }
-struct XmlEvent { value: EventGot, failure: fail.Failure }
+struct XmlEvent { value: EventGot, failure: Failure }
 fn xml_next(state: *xml.Scanner) XmlEvent {
-  status: fail.Status
-  value := xml.next(&status, state)
-  return XmlEvent{ value: EventGot{ value: value, found: !state.ended }, failure: status.failure }
+  value := xml.next(state) catch err { return XmlEvent{ failure: of_parse(err) } }
+  return XmlEvent{ value: EventGot{ value: value, found: !state.ended } }
 }
 fn xml_stream(state: *xml.StreamScanner) XmlEvent {
-  status: fail.Status
-  value := xml.next_stream(&status, state)
-  return XmlEvent{ value: EventGot{ value: value, found: !state.ended }, failure: status.failure }
+  value := xml.next_stream(state) catch err { return XmlEvent{ failure: of_io(err) } }
+  return XmlEvent{ value: EventGot{ value: value, found: !state.ended } }
 }
 fn callback_contracts() {
   scratch: [32]u8
@@ -78,7 +116,7 @@ fn callback_contracts() {
     sink := io.Writer{ data: #cast(rawptr, &p), write: write }
     c := csv.stream_scanner(reader)
     f := csv_stream(&c, scratch[..])
-    check(!f.value.found && f.failure.kind == fail.Kind.PermissionDenied && f.failure.native == p.code)
+    check(!f.value.found && f.failure.kind == 3)
     p.code = -99
     again := csv_stream(&c, scratch[..])
     check(!again.value.found && p.calls == 1)
@@ -86,68 +124,45 @@ fn callback_contracts() {
     p.calls = 0
     x := xml.stream_scanner(reader, scratch[..])
     r := xml_stream(&x)
-    check(!r.value.found && r.failure.kind == fail.Kind.PermissionDenied && r.failure.native == p.code)
+    check(!r.value.found && r.failure.kind == 3)
     p.code = -99
     r2 := xml_stream(&x)
     check(!r2.value.found && p.calls == 1)
     p.code = 0 - #cast(isize, code * 13)
     p.calls = 0
-    // A failed write leaves the status failed; later writes do nothing.
-    writing: fail.Status
+    // A failed write reports the sink's failure.
     cw := csv.writer(sink)
-    csv.write_field(&writing, &cw, "x", false)
-    check(writing.failed)
-    saved := p.code
-    p.code = -99
-    csv.write_field(&writing, &cw, "", true)
-    csv.write_field(&writing, &cw, "later", false)
-    check(p.calls == 1 && writing.failure.kind == fail.Kind.PermissionDenied && writing.failure.native == saved)
-    p.code = saved
+    check(csv_write(&cw, "x", false).kind == 3 && p.calls == 1)
     p.calls = 0
-    xml_writing: fail.Status
     xw := xml.writer(sink)
-    xml.write_text(&xml_writing, &xw, "x")
-    check(xml_writing.failed)
-    p.code = -99
-    xml.write_text(&xml_writing, &xw, "")
-    xml.write_start(&xml_writing, &xw, "")
-    xml.write_attribute(&xml_writing, &xw, "", "")
-    xml.write_end(&xml_writing, &xw, "")
-    xml.write_start_end(&xml_writing, &xw, true)
-    xml.write_start_end(&xml_writing, &xw, false)
-    check(p.calls == 1 && xml_writing.failure.kind == fail.Kind.PermissionDenied && xml_writing.failure.native == saved)
+    check(xml_text(&xw, "x").kind == 3 && p.calls == 1)
   }
   eof := Probe{ mode: 1 }
   c := csv.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: read })
   f := csv_stream(&c, scratch[..])
-  check(f.value.found && #len(f.value.text) == 1 && f.value.end_input && f.failure.kind == fail.Kind.Ok)
+  check(f.value.found && f.value.text.len == 1 && f.value.end_input && f.failure.kind == 0)
   check(!csv_stream(&c, scratch[..]).value.found && eof.calls == 2)
   eof.calls = 0
   x := xml.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: read }, scratch[..])
   xe := xml_stream(&x)
-  check(xe.value.found && xe.failure.kind == fail.Kind.Ok && bytes.equal(xe.value.value.text, "x"))
+  check(xe.value.found && xe.failure.kind == 0 && bytes.equal(xe.value.value.text, "x"))
   check(!xml_stream(&x).value.found && eof.calls == 2)
   bad := csv.scanner("a,b\"c")
   check(csv_next(&bad, scratch[..]).value.found)
   cf := csv_next(&bad, scratch[..])
-  check(!cf.value.found && cf.failure.kind == fail.Kind.InvalidInput && cf.failure.offset == 2)
+  check(!cf.value.found && cf.failure.kind == 1 && cf.failure.offset == 2)
   short := csv.scanner("abc")
   cap := csv_next(&short, scratch[..0])
-  check(!cap.value.found && cap.failure.kind == fail.Kind.Capacity)
+  check(!cap.value.found && cap.failure.kind == 2)
   xb := xml.scanner("<a")
   xr := xml_next(&xb)
-  check(!xr.value.found && xr.failure.kind == fail.Kind.InvalidInput && xr.failure.offset == 2)
+  check(!xr.value.found && xr.failure.kind == 1 && xr.failure.offset == 2)
   check(!xml_next(&xb).value.found)
   attr := xml.attributes(xml.Event{ attributes: " a=bad" })
-  attributing: fail.Status
-  _ = xml.next_attribute(&attributing, &attr)
-  check(attr.ended && attributing.failure.kind == fail.Kind.InvalidInput)
+  check(attribute_failure(&attr).kind == 1 && attr.ended)
   p := Probe{}
   w := xml.writer(io.Writer{ data: #cast(rawptr, &p), write: write })
-  invalid_name: fail.Status
-  xml.write_start(&invalid_name, &w, "")
-  xml.write_text(&invalid_name, &w, "later")
-  check(invalid_name.failure.kind == fail.Kind.InvalidInput && p.calls == 0)
+  check(xml_start(&w, "").kind == 1 && p.calls == 0)
 }
 
 fn additional_contracts() {
@@ -157,87 +172,72 @@ fn additional_contracts() {
   reader := io.Reader{data: #cast(rawptr, &p), read: read}
   c := csv.stream_scanner(reader)
   f := csv_stream(&c, scratch[..0])
-  check(f.value.found && #len(f.value.text) == 0 && f.value.end_input && f.value.end_record && f.failure.kind == fail.Kind.Ok)
+  check(f.value.found && f.value.text.len == 0 && f.value.end_input && f.value.end_record && f.failure.kind == 0)
   check(!csv_stream(&c, scratch[..0]).value.found && p.calls == 1)
   p.calls = 0
   x := xml.stream_scanner(reader, scratch[..])
   r := xml_stream(&x)
-  check(!r.value.found && r.failure.kind == fail.Kind.Ok)
+  check(!r.value.found && r.failure.kind == 0)
   check(!xml_stream(&x).value.found && p.calls == 1)
   // A zero-sized XML buffer reports capacity before any callback.
   p.calls = 0
   xs := xml.stream_scanner(reader, scratch[..0])
   cap := xml_stream(&xs)
-  check(!cap.value.found && cap.failure.kind == fail.Kind.Capacity)
+  check(!cap.value.found && cap.failure.kind == 2)
   check(!xml_stream(&xs).value.found && p.calls == 0)
   empty := xml.scanner("")
   end := xml_next(&empty)
-  check(!end.value.found && end.failure.kind == fail.Kind.Ok)
+  check(!end.value.found && end.failure.kind == 0)
   attrs := xml.attributes(xml.Event{})
-  none: fail.Status
-  _ = xml.next_attribute(&none, &attrs)
-  check(attrs.ended && !none.failed)
+  check(attribute_failure(&attrs).kind == 0 && attrs.ended)
   zero_field: csv.Field
   zero_event: xml.Event
   zero_attribute: xml.Attribute
-  check(#len(zero_field.text) == 0 && #len(zero_event.name) == 0 && #len(zero_attribute.name) == 0)
+  check(zero_field.text.len == 0 && zero_event.name.len == 0 && zero_attribute.name.len == 0)
   // CSV diagnostics retain the field's starting byte offset.
   bad := csv.scanner("a,\"unfinished")
   check(csv_next(&bad, scratch[..]).value.found)
   failure := csv_next(&bad, scratch[..])
-  check(!failure.value.found && failure.failure.kind == fail.Kind.InvalidInput && failure.failure.offset == 2)
+  check(!failure.value.found && failure.failure.kind == 1 && failure.failure.offset == 2)
   check(!csv_next(&bad, scratch[..0]).value.found)
   // XML diagnostics use byte offsets, including an incomplete UTF-8 name.
   partial: [3]u8 = ['<', 226, 130]
   xb := xml.scanner(partial[..])
   xr := xml_next(&xb)
-  check(!xr.value.found && xr.failure.kind == fail.Kind.InvalidInput && xr.failure.offset == 1)
+  check(!xr.value.found && xr.failure.kind == 1 && xr.failure.offset == 1)
   eof := xml.scanner("<a x='")
   er := xml_next(&eof)
-  check(!er.value.found && er.failure.kind == fail.Kind.InvalidInput && er.failure.offset == 6)
+  check(!er.value.found && er.failure.kind == 1 && er.failure.offset == 6)
   invalid: [1]u8 = [255]
-  writing: fail.Status
   w := xml.writer(io.Writer{data: #cast(rawptr, &p), write: write})
-  xml.write_text(&writing, &w, invalid[..])
-  check(writing.failure.kind == fail.Kind.InvalidInput)
-  xml.write_text(&writing, &w, "")
-  xml.write_attribute(&writing, &w, "a", "")
-  xml.write_end(&writing, &w, "a")
-  xml.write_start_end(&writing, &w, false)
-  check(p.calls == 0)
+  // Text XML cannot carry fails before anything is written.
+  check(xml_text(&w, invalid[..]).kind == 1 && p.calls == 0)
   // Empty writes succeed without touching the sink.
-  clean: fail.Status
   clean_csv := csv.writer(io.Writer{data: #cast(rawptr, &p), write: write})
   clean_xml := xml.writer(io.Writer{data: #cast(rawptr, &p), write: write})
-  csv.write_field(&clean, &clean_csv, "", false)
-  xml.write_text(&clean, &clean_xml, "")
-  check(!clean.failed && p.calls == 0)
+  check(csv_write(&clean_csv, "", false).kind == 0 && xml_text(&clean_xml, "").kind == 0 && p.calls == 0)
   // Zero writers reject real output.
   zwc: csv.Writer
   zwx: xml.Writer
-  zero_csv: fail.Status
-  csv.write_field(&zero_csv, &zwc, "x", false)
-  check(zero_csv.failure.kind == fail.Kind.InvalidState && zero_csv.failure.native == 0)
-  zero_xml: fail.Status
-  xml.write_text(&zero_xml, &zwx, "x")
-  check(zero_xml.failure.kind == fail.Kind.InvalidState && zero_xml.failure.native == 0)
+  check(csv_write(&zwc, "x", false).kind == 1)
+  check(xml_text(&zwx, "x").kind == 1)
   stack: [4][]const u8
   check(xml.valid("<a/>", stack[..]) && !xml.valid("<a x=bad/>", stack[..]) && !xml.valid("<a>&unknown;</a>", stack[..]))
 }
 
 struct Chunk { calls: usize, source: []const u8, at: usize, split: usize, limit: usize }
-fn read_chunk(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read_chunk(data: rawptr, destination: []u8) usize!io.IoErr {
   state := #cast(*Chunk, data)
   state.calls += 1
-  take := #len(state.source) - state.at
+  take := state.source.len - state.at
   if state.at < state.split && take > state.split - state.at {
     take = state.split - state.at
   }
   if state.limit > 0 && take > state.limit {
     take = state.limit
   }
-  if take > #len(destination) {
-    take = #len(destination)
+  if take > destination.len {
+    take = destination.len
   }
   for i in 0..take {
     destination[i] = state.source[state.at + i]
@@ -279,21 +279,21 @@ fn xml_check(source: []const u8, expected: bool) {
     #panic("XML fixture invalid")
   }
   if expected {
-    for capacity in 0..#len(source) {
+    for capacity in 0..source.len {
       chunk := Chunk{source: source, limit: 1}
       storage: [128]u8
       streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
       event := xml_stream(&streamed)
-      if event.value.found || event.failure.kind != fail.Kind.Capacity {
+      if event.value.found || event.failure.kind != 2 {
         #panic("XML short storage")
       }
     }
   }
   for limit in 0..4 {
-    for split in 1..#len(source) + 1 {
+    for split in 1..source.len + 1 {
       chunk := Chunk{source: source, split: split, limit: limit}
       storage: [128]u8
-      capacity := #len(source)
+      capacity := source.len
       if !expected {
         capacity += 1
       }

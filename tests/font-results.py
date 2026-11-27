@@ -48,48 +48,71 @@ def fixture(long_loca=False, cmap12=False):
         body += data; offset += len(data)
     return u32(0x10000)+u16(len(tables))+b'\0'*6+directory+body,positions
 
-SOURCE = r'''use "std/font" font
-use "std/font/ui" font_ui
-use "std/ui" ui
-use "std/ui/software" software
-use "std/fail"
-use "std/mem" mem
+SOURCE = r'''use font "std/font"
+use font_ui "std/font/ui"
+use ui "std/ui"
+use software "std/ui/software"
+use mem "std/mem"
+use parse "std/parse"
 fn check(ok: bool) { if !ok { #panic("font contract") } }
 fn opens(bytes: []const u8) bool {
-  status: fail.Status
-  _ = font.open(&status, bytes)
-  return !status.failed
+  _ = font.open(bytes) catch { return false }
+  return true
 }
-fn raster_kind(arena: *mem.Arena, face: *const font.Face, glyph: u16, size: u16) fail.Kind {
-  status: fail.Status
-  _ = font.raster(arena, &status, face, glyph, size)
-  return status.failure.kind
+// Whether rastering fails with an Invalid parse error.
+fn raster_invalid(arena: *mem.Arena, face: *const font.Face, glyph: u16, size: u16) bool {
+  _ = font.raster(arena, face, glyph, size) catch err {
+    case err {
+      .Invalid => { return true }
+      _ => { return false }
+    }
+  }
+  return false
+}
+// Rasters glyph; a failure must leave the arena where it was.
+fn raster_rewinds(arena: *mem.Arena, face: *const font.Face, glyph: u16) bool {
+  before := mem.arena_mark(arena)
+  _ = font.raster(arena, face, glyph, 16) catch { return mem.arena_mark(arena) == before }
+  return true
+}
+fn atlas_too_small(arena: *mem.Arena, face: *const font.Face, codepoints: []const u32) bool {
+  _ = font.atlas(arena, face, codepoints, 16, 1, 1) catch err {
+    case err {
+      .TooLarge => { return true }
+      _ => { return false }
+    }
+  }
+  return false
+}
+fn adapter_invalid(err: parse.ParseErr) bool {
+  case err {
+    .Invalid => { return true }
+    _ => { return false }
+  }
 }
 fn renders(surface: *software.Surface, commands: *const ui.Command, glyphs: software.Font) bool {
-  status: fail.Status
-  software.render(&status, surface, commands, glyphs)
-  return !status.failed
+  software.render(surface, commands, glyphs) catch { return false }
+  return true
 }
 fn main() {
   arena := mem.arena_alloc(0)
   frame := mem.arena_alloc(0)
   defer { mem.arena_release(frame)
     mem.arena_release(arena) }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  face := font.open(&status, data[..])
+  face := font.open(data[..]) catch { #panic("unexpected failure") }
   check(font.glyph_index(&face, 65) == 1 && font.glyph_index(&face, 68) == 4 && font.glyph_index(&face, 69) == 0)
   check(font.glyph_index(&face, 0xd800) == 0 && font.glyph_index(&face, 0x110000) == 0)
-  for length in 0..#len(data) { check(!opens(data[..length])) }
-  solid := font.raster(arena, &status, &face, 1, 16)
+  for length in 0..data.len { check(!opens(data[..length])) }
+  solid := font.raster(arena, &face, 1, 16) catch { #panic("unexpected failure") }
   check(solid.width == 16 && solid.height == 16 && solid.y_offset == -16 && solid.advance == 11)
   for pixel in solid.pixels { check(pixel == 255) }
-  hole := font.raster(arena, &status, &face, 2, 16)
+  hole := font.raster(arena, &face, 2, 16) catch { #panic("unexpected failure") }
   for y in 0..16 { for x in 0..16 {
     expected: u8 = 255
     if x >= 4 && x < 12 && y >= 4 && y < 12 { expected = 0 }
     check(hole.pixels[y * 16 + x] == expected)
   } }
-  curve := font.raster(arena, &status, &face, 3, 16)
+  curve := font.raster(arena, &face, 3, 16) catch { #panic("unexpected failure") }
   // Analytic quadratic parabola, independent of the edge flattener.
   partial := false
   for y in 0..16 { for x in 0..16 {
@@ -105,40 +128,34 @@ fn main() {
     if actual > 0 && actual < 255 { partial = true }
   } }
   check(partial)
-  _ = font.raster(arena, &status, &face, 0, 16)
+  _ = font.raster(arena, &face, 0, 16) catch { #panic("unexpected failure") }
   mark := mem.arena_mark(arena)
-  check(raster_kind(arena, &face, 4, 16) == fail.Kind.InvalidInput)
-  check(raster_kind(arena, &face, 5, 16) == fail.Kind.InvalidInput)
-  check(raster_kind(arena, &face, 1, 0) == fail.Kind.InvalidInput)
+  check(raster_invalid(arena, &face, 4, 16))
+  check(raster_invalid(arena, &face, 5, 16))
+  check(raster_invalid(arena, &face, 1, 0))
   check(mem.arena_mark(arena) == mark)
   // Corrupt every byte through deterministic mutations; valid parses must also
   // survive bounded rasterization without a language bounds/overflow trap.
   work := data
   for iteration in 0..2000 {
-    index := (iteration * 37) % #len(work)
+    index := (iteration * 37) % work.len
     work[index] ^= #cast(u8, (1 << (iteration % 8)))
-    opening: fail.Status
-    parsed := font.open(&opening, work[..])
-    if !opening.failed {
+    if opens(work[..]) {
+      parsed := font.open(work[..]) catch { #panic("open") }
       for glyph in 0..5 {
-        before := mem.arena_mark(arena)
-        rastering: fail.Status
-        _ = font.raster(arena, &rastering, &parsed, #cast(u16, glyph), 16)
-        if rastering.failed { check(mem.arena_mark(arena) == before) }
+        check(raster_rewinds(arena, &parsed, #cast(u16, glyph)))
         mem.arena_rewind(arena, mark)
       }
     }
     work[index] = data[index]
   }
   codepoints: [3]u32 = [65, 66, 67]
-  cached := font.atlas(arena, &status, &face, codepoints[..], 16, 64, 16)
+  cached := font.atlas(arena, &face, codepoints[..], 16, 64, 16) catch { #panic("unexpected failure") }
   check(cached.line_height == 20)
   check(font.atlas_glyph(&cached, 65).advance == 11)
   check(font.atlas_glyph(&cached, 999).advance == 16)
   before := mem.arena_mark(arena)
-  small: fail.Status
-  _ = font.atlas(arena, &small, &face, codepoints[..], 16, 1, 1)
-  check(small.failure.kind == fail.Kind.Capacity)
+  check(atlas_too_small(arena, &face, codepoints[..]))
   check(mem.arena_mark(arena) == before)
   context := ui.Context{ style: ui.default_style }
   ui.begin(&context, frame, ui.Input{}, ui.Rect{ width: 64, height: 32 })
@@ -149,15 +166,15 @@ fn main() {
   adapter := font_ui.Adapter{ face: &face, arena: arena, pixels_per_em: 16 }
   check(renders(&surface, ui.first(&context), font_ui.renderer(&adapter)) && !adapter.failed && pixels[3] == 255)
   expected := pixels
-  for i in 0..#len(pixels) { pixels[i] = 0 }
+  for i in 0..pixels.len { pixels[i] = 0 }
   before = mem.arena_mark(arena)
   check(renders(&surface, ui.first(&context), font_ui.atlas_renderer(&cached)))
   check(mem.arena_mark(arena) == before)
-  for i in 0..#len(pixels) { check(pixels[i] == expected[i]) }
+  for i in 0..pixels.len { check(pixels[i] == expected[i]) }
   ui.begin(&context, frame, ui.Input{}, ui.Rect{ width: 64, height: 32 })
   ui.label(&context, ui.Rect{ width: 64, height: 32 }, "D", ui.Color{ a: 255 })
   ui.end(&context)
-  check(!renders(&surface, ui.first(&context), font_ui.renderer(&adapter)) && adapter.failed && adapter.failure.kind == fail.Kind.InvalidInput)
+  check(!renders(&surface, ui.first(&context), font_ui.renderer(&adapter)) && adapter.failed && adapter_invalid(adapter.failure))
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-font-results-') as directory:

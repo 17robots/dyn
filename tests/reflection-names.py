@@ -29,6 +29,6 @@ for owner, declaration in (('main.dyn', 'struct TypeInfo { label: []const u8 }')
     assert run.returncode != 0 and f'{name} is a builtin type, used by #typeof' in run.stderr, (declaration, run.stderr)
 
 run = check({'main.dyn': 'use "std/io"\n\nstruct P { x: i64, y: i32 }\n\nfn main() {\n  info := #typeof(P)\n'
-             '  io.println("{} {} {}", info.size, #len(info.fields), info.kind == TypeKind.Struct)\n}\n'})
+             '  io.println("{} {} {}", info.size, info.fields.len, info.kind == TypeKind.Struct)\n}\n'})
 assert run.returncode == 0 and run.stdout.endswith('16 2 true\n'), run
 print('PASS reflection names: TypeInfo/TypeMember/TypeKind reserved in every module; #typeof uses the builtin types')

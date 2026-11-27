@@ -1,5 +1,5 @@
-use "std/mem" mem
-use "std/image/color" color
+use mem "std/mem"
+use color "std/image/color"
 
 pub type Color = color.Rgba
 pub struct Rect { x: i32, y: i32, width: i32, height: i32 }
@@ -171,16 +171,16 @@ pub fn pop_clip(context: *Context, previous: Rect) {
 fn emit(context: *Context, kind: Kind, bounds: Rect, tint: Color, text: []const u8) *Command {
   frame(context)
   visible := intersect(bounds, context.clip)
-  if visible.width == 0 || visible.height == 0 || tint.a == 0 || (kind == Kind.Text && #len(text) == 0) {
+  if visible.width == 0 || visible.height == 0 || tint.a == 0 || (kind == Kind.Text && text.len == 0) {
     return nil
   }
-  command := mem.push(Command, context.arena)
+  command := mem.push<Command>(context.arena)
   command.kind = kind
   command.bounds = bounds
   command.clip = context.clip
   command.color = tint
   if kind == Kind.Text {
-    copied := mem.push_array(u8, context.arena, #len(text))
+    copied := mem.push_array<u8>(context.arena, text.len)
     _ = mem.copy(copied, text)
     command.text = copied
   }

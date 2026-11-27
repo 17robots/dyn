@@ -1,19 +1,18 @@
-use "std/fail"
-use "std/io" io
-use "std/mem" memory
-use "std/text/template" core
+use parse "std/parse"
+use io "std/io"
+use memory "std/mem"
+use core "std/text/template"
 
 pub type Template = core.Template
 pub type Field = core.Field
 
-pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) Template {
-  if status == nil { return parse(arena, &fail.Status{}, source) }
-  return core.parse(arena, status, source)
+pub fn parse(arena: *memory.Arena, source: []const u8) Template!parse.ParseErr {
+  return try core.parse(arena, source)
 }
 
-fn write_escaped(status: *fail.Status, destination: io.Writer, source: []const u8) {
+fn write_escaped(destination: io.Writer, source: []const u8) !io.IoErr {
   start: usize = 0
-  for i in 0..#len(source) {
+  for i in 0..source.len {
     replacement: []const u8 = ""
     if source[i] == '&' {
       replacement = "&amp;"
@@ -26,25 +25,20 @@ fn write_escaped(status: *fail.Status, destination: io.Writer, source: []const u
     } else if source[i] == 39 {
       replacement = "&#39;"
     }
-    if #len(replacement) > 0 {
+    if replacement.len > 0 {
       if i > start {
-        io.write(status, destination, source[start..i])
+        try io.write(destination, source[start..i])
       }
-      io.write(status, destination, replacement)
-      if status.failed { return }
+      try io.write(destination, replacement)
       start = i + 1
     }
   }
-  if start < #len(source) {
-    io.write(status, destination, source[start..])
+  if start < source.len {
+    try io.write(destination, source[start..])
   }
 }
 
 // Escapes text and quoted attribute values. Not a JS/CSS/URL-context sanitizer.
-pub fn render(status: *fail.Status, destination: io.Writer, template: *const Template, fields: []const Field) {
-  if status == nil {
-    render(&fail.Status{}, destination, template, fields)
-    return
-  }
-  core.render_with(status, destination, template, fields, write_escaped)
+pub fn render(destination: io.Writer, template: *const Template, fields: []const Field) !io.IoErr {
+  try core.render_with(destination, template, fields, write_escaped)
 }

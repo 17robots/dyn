@@ -8,7 +8,7 @@
 //     ... rebuild the worker's copy ...
 //     cache.rebuilt(&worker.posts, seen)
 //   }
-use "std/sync" sync
+use sync "std/sync"
 
 // The shared side: one per piece of shared data.
 pub struct Shared { version: sync.AtomicU64 }

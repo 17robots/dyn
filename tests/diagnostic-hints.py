@@ -15,27 +15,27 @@ CASES = (
     ('use "std/fmt"\n\nfn main() {\n  _ = fmt.f64_decimal_into\n}\n', "'fmt.f64_decimal_into' is not pub"),
     ('import io\n\nfn main() {\n}\n', 'Dyn imports a module with use, as in use "std/io"'),
     ('fn main() {\n  sizes := [3]usize{ 1, 2, 3 }\n  _ = sizes\n}\n', 'write an array literal as [a, b, c] and give the type to the name'),
-    ('use "std/fs"\nuse "std/mem"\nuse "std/fail"\n\nfn main() {\n  a := mem.arena_alloc(0)\n  status: fail.Status\n'
-     '  _ = fs.list_entries(a, &status, ".")\n}\n', "'fs' has no pub member 'list_entries'; related: fs.list"),
-    ('use "std/fs"\nuse "std/fail"\n\nfn main() {\n  status: fail.Status\n  fs.create_dir_all(&status, "x")\n}\n',
-     "'fs' has no pub member 'create_dir_all': Dyn calls it fs.make_directory(&status, path)"),
+    ('use "std/fs"\nuse "std/mem"\n\nfn main() {\n  a := mem.arena_alloc(0)\n'
+     '  _ = fs.list_entries(a, ".")\n}\n', "'fs' has no pub member 'list_entries'; related: fs.list"),
+    ('use "std/fs"\n\nfn main() {\n  fs.create_dir_all("x") catch {}\n}\n',
+     "'fs' has no pub member 'create_dir_all': Dyn calls it fs.make_directory(path)"),
     ('use "std/strings"\n\nfn main() {\n  _ = strings.equal("a", "b")\n}\n',
      "'strings.equal' was removed: use bytes.equal(a, b) from std/bytes"),
     # Neighboring arguments that each fit the other's place are reported as
     # swapped, with the swap as a suggestion; a plain mismatch is not.
-    ('use "std/fs"\nuse "std/mem"\nuse "std/fail"\n\nfn main() {\n  a := mem.arena_alloc(0)\n  status: fail.Status\n'
-     '  _ = fs.read_all(&status, a, "x", 10)\n}\n',
+    ('use "std/mem"\n\nstruct Status { failed: bool }\nfn load(arena: *mem.Arena, status: *Status, text: []const u8) {\n  _ = arena\n  _ = status\n  _ = text\n}\n\n'
+     'fn main() {\n  a := mem.arena_alloc(0)\n  status: Status\n  load(&status, a, "x")\n}\n',
      "function arguments 1 and 2 look swapped (expected *Arena, *Status; found *Status, *Arena)\n"
-     " 8 |   _ = fs.read_all(&status, a, \"x\", 10)\n   |                   ^~~~~~~~~~\n"
+     " 13 |   load(&status, a, \"x\")\n    |" + " " * 8 + "^~~~~~~~~~\n"
      " suggestion: replace '&status, a' with 'a, &status'"),
     ('fn pair(n: i32, name: []const u8) {\n  _ = n\n  _ = name\n}\n\nfn main() {\n  name: []const u8 = "x"\n  pair(name, name)\n}\n',
      "function argument type mismatch (expected i32, found []const u8)"),
     # A struct where exactly one of its fields fits names that field, with a
     # fix that adds it; a struct with two fitting fields gets the plain error.
-    ('use "std/fs"\nuse "std/fail"\n\nfn main() {\n  status: fail.Status\n  entry: fs.DirectoryEntry\n'
-     '  fs.remove(&status, entry)\n}\n',
+    ('use "std/fs"\n\nfn main() {\n  entry: fs.DirectoryEntry\n'
+     '  fs.remove(entry) catch {}\n}\n',
      "function argument type mismatch (expected []const u8, found DirectoryEntry): did you mean entry.name?\n"
-     " 7 |   fs.remove(&status, entry)\n   |                      ^~~~~\n fix: insert '.name' at 7:27"),
+     " 5 |   fs.remove(entry) catch {}\n   |             ^~~~~\n fix: insert '.name' at 5:18"),
     ('struct Pair { a: []const u8, b: []const u8 }\nfn take(text: []const u8) {\n  _ = text\n}\n\nfn main() {\n'
      '  pair: Pair\n  take(pair)\n}\n',
      "function argument type mismatch (expected []const u8, found Pair)\n"),

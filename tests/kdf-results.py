@@ -9,32 +9,27 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 import hashlib
 import hmac
-SOURCE=r'''use "std/crypto/hmac" hmac
-use "std/crypto/kdf" kdf
-use "std/crypto/password" password
-use "std/crypto/chacha20" chacha
-use "std/bytes" bytes
-use "std/fail"
+SOURCE=r'''use hmac "std/crypto/hmac"
+use kdf "std/crypto/kdf"
+use password "std/crypto/password"
+use chacha "std/crypto/chacha20"
+use bytes "std/bytes"
 fn check(ok: bool) { if !ok { #panic("KDF contract") } }
 fn hkdf_ok(destination: []u8, salt: []const u8, material: []const u8, info: []const u8, scratch: []u8) bool {
- status: fail.Status
- kdf.hkdf(&status, destination, salt, material, info, scratch)
- return !status.failed
+ kdf.hkdf(destination, salt, material, info, scratch) catch { return false }
+ return true
 }
 fn expand_ok(destination: []u8, key: []const u8, info: []const u8, scratch: []u8) bool {
- status: fail.Status
- kdf.hkdf_expand(&status, destination, key, info, scratch)
- return !status.failed
+ kdf.hkdf_expand(destination, key, info, scratch) catch { return false }
+ return true
 }
 fn pbkdf2_ok(destination: []u8, secret: []const u8, salt: []const u8, iterations: u32, scratch: []u8) bool {
- status: fail.Status
- password.pbkdf2_sha256(&status, destination, secret, salt, iterations, scratch)
- return !status.failed
+ password.pbkdf2_sha256(destination, secret, salt, iterations, scratch) catch { return false }
+ return true
 }
 fn xor_ok(destination: []u8, input: []const u8, key: []const u8, nonce: []const u8, counter: u32) bool {
- status: fail.Status
- chacha.xor(&status, destination, input, key, nonce, counter)
- return !status.failed
+ chacha.xor(destination, input, key, nonce, counter) catch { return false }
+ return true
 }
 fn filled(data: []const u8, value: u8) bool { for byte in data { if byte != value { return false } }
  return true }
@@ -75,7 +70,7 @@ SOURCE+=r''' for i in 0..100 { output[i] = 165 }
  if #sizeof(usize) == 8 {
   size: u64 = 2305843009213693952
   huge_key := #slice(&key[0], #cast(usize,size))
-  check(#len(hmac.sha256(output[..],huge_key,"message")) == 0 && filled(output[..],165))
+  check(hmac.sha256(output[..],huge_key,"message").len == 0 && filled(output[..],165))
  }
 }
 '''

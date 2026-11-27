@@ -1,0 +1,15 @@
+#target(kernel: linux, arch: x86_64)
+
+extern fn fiber_boot "dyn_fiber_boot"()
+
+// The frame dyn_fiber_switch pops first: r15, r14, r13, r12 = f, rbx =
+// fiber_main, rbp = 0, then the return address dyn_fiber_boot, which calls
+// fiber_main(f) with the stack 16-byte aligned.
+fn first_frame(f: *Fiber, top: usize) usize {
+  sp := (top & ~#cast(usize, 15)) - 56
+  words := #slice(#cast(*usize, sp), 7)
+  words[3] = #cast(usize, f)
+  words[4] = #cast(usize, fiber_main)
+  words[6] = #cast(usize, fiber_boot)
+  return sp
+}

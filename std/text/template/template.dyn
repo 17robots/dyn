@@ -1,14 +1,14 @@
-use "std/bytes" byte_ops
-use "std/io" stream
-use "std/mem" memory
-use "std/fail"
+use byte_ops "std/bytes"
+use stream "std/io"
+use memory "std/mem"
+use parse "std/parse"
 
 pub struct Template { source: []const u8 }
 pub struct Field { name: []const u8, value: []const u8 }
 
 fn trim(source: []const u8) []const u8 {
   start: usize = 0
-  end := #len(source)
+  end := source.len
   for start < end && (source[start] == ' ' || source[start] == '\t' || source[start] == '\n' || source[start] == '\r') {
     start += 1
   }
@@ -19,8 +19,8 @@ fn trim(source: []const u8) []const u8 {
 }
 
 fn valid_name(name: []const u8) bool {
-  if #len(name) == 0 { return false }
-  for i in 0..#len(name) {
+  if name.len == 0 { return false }
+  for i in 0..name.len {
     byte := name[i]
     if !((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
         (byte >= '0' && byte <= '9') || byte == '_' || byte == '.') {
@@ -32,27 +32,22 @@ fn valid_name(name: []const u8) bool {
 
 // Validates before allocating; the retained source borrows the arena's lifetime.
 // Required storage exhaustion panics, including for nonempty literal templates.
-// A malformed {{field}} fails with InvalidInput at its offset.
-pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) Template {
-  if status == nil { return parse(arena, &fail.Status{}, source) }
-  if status.failed { return Template{} }
+// A malformed {{field}} fails with Invalid at its offset.
+pub fn parse(arena: *memory.Arena, source: []const u8) Template!parse.ParseErr {
   cursor: usize = 0
-  for cursor < #len(source) {
-    if cursor + 1 < #len(source) && source[cursor] == '{' && source[cursor + 1] == '{' {
+  for cursor < source.len {
+    if cursor + 1 < source.len && source[cursor] == '{' && source[cursor + 1] == '{' {
       end := cursor + 2
-      for end + 1 < #len(source) && !(source[end] == '}' && source[end + 1] == '}') {
+      for end + 1 < source.len && !(source[end] == '}' && source[end + 1] == '}') {
         end += 1
       }
-      if end + 1 >= #len(source) || !valid_name(trim(source[cursor + 2..end])) {
-        fail.at(status, fail.Kind.InvalidInput, "parse template", "malformed field", cursor)
-        return Template{}
-      }
+      if end + 1 >= source.len || !valid_name(trim(source[cursor + 2..end])) { fail parse.ParseErr.Invalid(cursor) }
       cursor = end + 2
     } else {
       cursor += 1
     }
   }
-  retained := memory.push_bytes(arena, #len(source))
+  retained := memory.push_bytes(arena, source.len)
   _ = memory.copy(retained, source)
   return Template{ source: retained }
 }
@@ -64,56 +59,40 @@ fn value(fields: []const Field, name: []const u8) []const u8 {
   return ""
 }
 
-fn write(status: *fail.Status, destination: stream.Writer, source: []const u8) {
-  stream.write(status, destination, source)
+fn write(destination: stream.Writer, source: []const u8) !stream.IoErr {
+  try stream.write(destination, source)
 }
 
-pub fn render(status: *fail.Status, destination: stream.Writer, template: *const Template, fields: []const Field) {
-  if status == nil {
-    render(&fail.Status{}, destination, template, fields)
-    return
-  }
-  render_with(status, destination, template, fields, write)
+pub fn render(destination: stream.Writer, template: *const Template, fields: []const Field) !stream.IoErr {
+  try render_with(destination, template, fields, write)
 }
 
 // Field rendering seam shared by plain-text and HTML templates. Literal text
-// is unchanged. A malformed field fails with InvalidInput at its offset.
-pub fn render_with(status: *fail.Status, destination: stream.Writer, template: *const Template, fields: []const Field,
-  render_field: fn(*fail.Status, stream.Writer, []const u8)) {
-  if status == nil {
-    render_with(&fail.Status{}, destination, template, fields, render_field)
-    return
-  }
-  if status.failed { return }
-  if template == nil || render_field == nil {
-    fail.invalid(status, "render template", "", "no template or field renderer")
-    return
-  }
+// is unchanged. A malformed field fails with InvalidInput, as does a nil
+// template or renderer.
+pub fn render_with(destination: stream.Writer, template: *const Template, fields: []const Field,
+  render_field: fn(stream.Writer, []const u8) !stream.IoErr) !stream.IoErr {
+  if template == nil || render_field == nil { fail .InvalidInput }
   cursor: usize = 0
   literal: usize = 0
-  for cursor < #len(template.source) {
-    if cursor + 1 < #len(template.source) && template.source[cursor] == '{' && template.source[cursor + 1] == '{' {
+  for cursor < template.source.len {
+    if cursor + 1 < template.source.len && template.source[cursor] == '{' && template.source[cursor + 1] == '{' {
       if cursor > literal {
-        stream.write(status, destination, template.source[literal..cursor])
-        if status.failed { return }
+        try stream.write(destination, template.source[literal..cursor])
       }
       end := cursor + 2
-      for end + 1 < #len(template.source) && !(template.source[end] == '}' && template.source[end + 1] == '}') {
+      for end + 1 < template.source.len && !(template.source[end] == '}' && template.source[end + 1] == '}') {
         end += 1
       }
-      if end + 1 >= #len(template.source) || !valid_name(trim(template.source[cursor + 2..end])) {
-        fail.at(status, fail.Kind.InvalidInput, "render template", "malformed field", cursor)
-        return
-      }
-      render_field(status, destination, value(fields, trim(template.source[cursor + 2..end])))
-      if status.failed { return }
+      if end + 1 >= template.source.len || !valid_name(trim(template.source[cursor + 2..end])) { fail .InvalidInput }
+      try render_field(destination, value(fields, trim(template.source[cursor + 2..end])))
       cursor = end + 2
       literal = cursor
     } else {
       cursor += 1
     }
   }
-  if literal < #len(template.source) {
-    stream.write(status, destination, template.source[literal..])
+  if literal < template.source.len {
+    try stream.write(destination, template.source[literal..])
   }
 }

@@ -1,6 +1,6 @@
-use "std/mem" mem
-use "std/fail"
-use "std/bytes/builder" builder
+use mem "std/mem"
+use io "std/io"
+use builder "std/bytes/builder"
 
 // Handles are native descriptors/HANDLE values. -1 inherits that standard stream.
 // Arguments include argv[0]. Environment is explicit NAME=value entries; empty
@@ -28,124 +28,70 @@ pub struct Pipe { input: isize, output: isize }
 struct Read { count: usize, ended: bool }
 pub struct Captured { output: []u8, errors: []u8, exit: Exit, timed_out: bool, limit_reached: bool }
 
-fn invalid(status: *fail.Status, operation: []const u8, path: []const u8, message: []const u8) {
-  failure := fail.make(fail.Kind.InvalidInput, operation, path, message)
-  failure.native = -22
-  fail.set(status, failure)
+fn has_nul(text: []const u8) bool {
+  for byte in text {
+    if byte == 0 { return true }
+  }
+  return false
 }
 
-// Starts path with arguments (argv[0] first). The Child lives in arena; on
-// failure it is inactive, so wait and terminate on it do nothing.
-pub fn spawn(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, configuration: Options) *Child {
-  if status == nil { return spawn(arena, &fail.Status{}, path, arguments, configuration) }
-  child := mem.push(Child, arena)
-  if status.failed { return child }
-  if #len(path) == 0 || #len(arguments) == 0 {
-    invalid(status, "spawn", path, "a program needs a path and argv[0]")
-    return child
-  }
-  for byte in path {
-    if byte == 0 {
-      invalid(status, "spawn", path, "the path holds NUL")
-      return child
-    }
-  }
-  for directory_byte in configuration.directory {
-    if directory_byte == 0 {
-      invalid(status, "spawn", path, "the directory holds NUL")
-      return child
-    }
-  }
+// Starts path with arguments (argv[0] first). The Child lives in arena.
+// An empty path or argv, NUL in any text, or an environment entry without
+// '=' (or starting with it) fails with InvalidInput.
+pub fn spawn(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) *Child!io.IoErr {
+  if path.len == 0 || arguments.len == 0 { fail .InvalidInput }
+  if has_nul(path) || has_nul(configuration.directory) { fail .InvalidInput }
   for argument in arguments {
-    for argument_byte in argument {
-      if argument_byte == 0 {
-        invalid(status, "spawn", path, "an argument holds NUL")
-        return child
-      }
-    }
+    if has_nul(argument) { fail .InvalidInput }
   }
   for entry in configuration.environment {
     equal: bool = false
     at: usize = 0
     for environment_byte in entry {
-      if environment_byte == 0 || (environment_byte == '=' && at == 0) {
-        invalid(status, "spawn", path, "an environment entry holds NUL or starts with '='")
-        return child
-      }
+      if environment_byte == 0 || (environment_byte == '=' && at == 0) { fail .InvalidInput }
       if environment_byte == '=' {
         equal = true
       }
       at += 1
     }
-    if !equal {
-      invalid(status, "spawn", path, "an environment entry has no '='")
-      return child
-    }
+    if !equal { fail .InvalidInput }
   }
-  child.* = spawn_native(arena, status, path, arguments, configuration)
+  child := mem.push<Child>(arena)
+  child.* = try spawn_native(arena, path, arguments, configuration)
   return child
 }
 // Waits for child to end; nonblocking returns at once with finished false
-// while it runs. Waiting on a child that already ended is InvalidState.
-pub fn wait(status: *fail.Status, child: *Child, nonblocking: bool) Exit {
-  if status == nil { return wait(&fail.Status{}, child, nonblocking) }
-  if status.failed { return Exit{} }
-  if !child.active {
-    failure := fail.make(fail.Kind.InvalidState, "wait", "", "the child has already been waited for")
-    failure.native = -22
-    fail.set(status, failure)
-    return Exit{}
-  }
-  return wait_native(status, child, nonblocking)
+// while it runs. Waiting on a child that already ended fails with
+// InvalidInput.
+pub fn wait(child: *Child, nonblocking: bool) Exit!io.IoErr {
+  if !child.active { fail .InvalidInput }
+  return try wait_native(child, nonblocking)
 }
-// Kills child. It still needs a wait to be reaped.
-pub fn terminate(status: *fail.Status, child: *Child) {
-  if status == nil {
-    terminate(&fail.Status{}, child)
-    return
-  }
-  if status.failed { return }
-  if !child.active {
-    failure := fail.make(fail.Kind.InvalidState, "terminate", "", "the child has already been waited for")
-    failure.native = -22
-    fail.set(status, failure)
-    return
-  }
-  terminate_native(status, child)
+// Kills child. It still needs a wait to be reaped. A child that already
+// ended fails with InvalidInput.
+pub fn terminate(child: *Child) !io.IoErr {
+  if !child.active { fail .InvalidInput }
+  try terminate_native(child)
 }
 // A pipe: write to output, read from input. Close both with close_pipe.
-pub fn pipe(status: *fail.Status) Pipe {
-  if status == nil { return pipe(&fail.Status{}) }
-  if status.failed { return Pipe{ input: -1, output: -1 } }
-  return pipe_native(status)
+pub fn pipe() Pipe!io.IoErr {
+  return try pipe_native()
 }
 pub fn close_pipe(handle: isize) {
   close_native(handle)
 }
 // The variable's value in arena, or fallback when it is unset or unreadable.
 pub fn environment_or(arena: *mem.Arena, name: []const u8, fallback: []const u8) []const u8 {
-  status: fail.Status
-  value := environment(arena, &status, name)
-  if status.failed { return fallback }
+  value := environment(arena, name) catch { return fallback }
   return value
 }
 
-// The value of environment variable name, in arena; empty when it cannot be
-// read, and then the status says why: NotFound when it is unset. Read an
-// optional variable with a status of its own, or use environment_or.
-pub fn environment(arena: *mem.Arena, status: *fail.Status, name: []const u8) []u8 {
-  if status == nil { return environment(arena, &fail.Status{}, name) }
-  empty: []u8
-  if status.failed { return empty }
-  if #len(name) == 0 {
-    invalid(status, "read environment", name, "empty variable name")
-    return empty
-  }
+// The value of environment variable name, in arena. Fails with NotFound when
+// it is unset, and InvalidInput for an empty name or one holding '=' or NUL.
+pub fn environment(arena: *mem.Arena, name: []const u8) []u8!io.IoErr {
+  if name.len == 0 { fail .InvalidInput }
   for byte in name {
-    if byte == 0 || byte == '=' {
-      invalid(status, "read environment", name, "variable names cannot hold '=' or NUL")
-      return empty
-    }
+    if byte == 0 || byte == '=' { fail .InvalidInput }
   }
   room := mem.arena_room(arena)
   capacity := #cast(usize, 256)
@@ -154,25 +100,24 @@ pub fn environment(arena: *mem.Arena, status: *fail.Status, name: []const u8) []
   }
   for capacity <= #max(usize) / 4 {
     mark := mem.arena_mark(arena)
-    // Too small a buffer is retried bigger, so it gets a status of its own.
-    attempt: fail.Status
-    value := environment_native(&attempt, name, mem.push_bytes(arena, capacity))
-    if !attempt.failed {
-      mem.arena_rewind(arena, mark + #len(value))
-      return value
+    // Too small a buffer is retried bigger.
+    value := environment_native(name, mem.push_bytes(arena, capacity)) catch err {
+      mem.arena_rewind(arena, mark)
+      case err {
+        .Capacity => {}
+        _ => { fail err }
+      }
+      if capacity == room {
+        #panic("arena exhausted: the output does not fit")
+      }
+      capacity = capacity * 2
+      if capacity > room {
+        capacity = room
+      }
+      continue
     }
-    mem.arena_rewind(arena, mark)
-    if attempt.failure.kind != fail.Kind.Capacity {
-      fail.set(status, attempt.failure)
-      return empty
-    }
-    if capacity == room {
-      #panic("arena exhausted: the output does not fit")
-    }
-    capacity = capacity * 2
-    if capacity > room {
-      capacity = room
-    }
+    mem.arena_rewind(arena, mark + value.len)
+    return value
   }
   #panic("output size overflows")
 }
@@ -187,12 +132,12 @@ fn capture_input_overlap(arena: *mem.Arena, path: []const u8, arguments: [][]con
   if mem.arena_overlaps_unallocated(arena, path) || mem.arena_overlaps_unallocated(arena, configuration.directory) {
     return true
   }
-  if #len(arguments) > 0 {
-    slots := #slice(#cast(*const u8, &arguments[0]), #len(arguments) * #sizeof([]const u8))
+  if arguments.len > 0 {
+    slots := #slice(#cast(*const u8, &arguments[0]), arguments.len * #sizeof([]const u8))
     if mem.arena_overlaps_unallocated(arena, slots) { return true }
   }
-  if #len(configuration.environment) > 0 {
-    slots := #slice(#cast(*const u8, &configuration.environment[0]), #len(configuration.environment) * #sizeof([]const u8))
+  if configuration.environment.len > 0 {
+    slots := #slice(#cast(*const u8, &configuration.environment[0]), configuration.environment.len * #sizeof([]const u8))
     if mem.arena_overlaps_unallocated(arena, slots) { return true }
   }
   for argument in arguments {
@@ -206,30 +151,20 @@ fn capture_input_overlap(arena: *mem.Arena, path: []const u8, arguments: [][]con
 
 // Drains both streams fairly into growing arena slices, valid until caller
 // rewind/reset/release. Exhaustion panics and deferred cleanup reaps the child.
-// A timeout or limit fails the capture but keeps the output so far (timed_out
-// or limit_reached says which); other failures keep nothing and rewind the
-// capture's allocations. Limits terminate and reap the direct child;
-// descendants are not killed. A nonzero exit code is a successful capture.
-pub fn capture(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8,
-  configuration: Options, policy: CaptureOptions) Captured {
-  if status == nil { return capture(arena, &fail.Status{}, path, arguments, configuration, policy) }
-  if status.failed { return Captured{} }
-  if capture_input_overlap(arena, path, arguments, configuration) {
-    invalid(status, "capture", path, "an input lies in the arena's free space")
-    return Captured{}
-  }
+// A timeout or limit is not a failure: the capture stops, keeps the output so
+// far, and sets timed_out or limit_reached. Limits terminate and reap the
+// direct child; descendants are not killed. A nonzero exit code is a
+// successful capture. Other failures keep nothing and rewind the capture's
+// allocations. An input in the arena's free space fails with InvalidInput.
+pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
+  configuration: Options, policy: CaptureOptions) Captured!io.IoErr {
+  if capture_input_overlap(arena, path, arguments, configuration) { fail .InvalidInput }
   mark := mem.arena_mark(arena)
-  published: bool = false
-  defer {
-    if !published {
-      mem.arena_rewind(arena, mark)
-    }
-  }
+  errdefer mem.arena_rewind(arena, mark)
   config := configuration
   borrowed_input: isize = -1
   if config.input.set {
-    borrowed_input = duplicate_native(status, config.input.handle)
-    if status.failed { return Captured{} }
+    borrowed_input = try duplicate_native(config.input.handle)
     config.input = redirect(borrowed_input)
   }
   defer {
@@ -237,21 +172,22 @@ pub fn capture(arena: *mem.Arena, status: *fail.Status, path: []const u8, argume
       close_native(borrowed_input)
     }
   }
-  stdout := pipe(status)
-  if status.failed { return Captured{} }
+  stdout := try pipe()
   defer close_native(stdout.input)
-  stderr := pipe(status)
-  if status.failed {
+  stderr := pipe() catch err {
     close_native(stdout.output)
-    return Captured{}
+    fail err
   }
   defer close_native(stderr.input)
   config.output = redirect(stdout.output)
   config.error = redirect(stderr.output)
-  child := spawn(arena, status, path, arguments, config)
+  child := spawn(arena, path, arguments, config) catch err {
+    close_native(stdout.output)
+    close_native(stderr.output)
+    fail err
+  }
   close_native(stdout.output)
   close_native(stderr.output)
-  if status.failed { return Captured{} }
   defer reap(child)
   has_deadline := policy.no_wait || policy.timeout_milliseconds > 0
   wait_limit: u64 = 0
@@ -265,7 +201,7 @@ pub fn capture(arena: *mem.Arena, status: *fail.Status, path: []const u8, argume
   err_end: bool = false
   result := Captured{}
   buffer: [65536]u8
-  for !status.failed {
+  outer: for {
     progress: bool = false
     for stream_index in 0..2 {
       ended := out_end
@@ -278,22 +214,20 @@ pub fn capture(arena: *mem.Arena, status: *fail.Status, path: []const u8, argume
         state = &errors
         limit = policy.error_limit
       }
-      if !ended && !status.failed {
+      if !ended {
         destination := buffer[..]
         probing := limit > 0 && state.length == limit
         if probing {
           destination = destination[..1]
         } else {
-          if limit > 0 && limit - state.length < #len(destination) {
+          if limit > 0 && limit - state.length < destination.len {
             destination = destination[..limit - state.length]
           }
         }
-        read := read_native(status, handle, destination)
+        read := try read_native(handle, destination)
         if probing && read.count > 0 {
           result.limit_reached = true
-          failure := fail.make(fail.Kind.Capacity, "capture", path, "the output limit was reached")
-          failure.native = -28
-          fail.set(status, failure)
+          break outer
         } else if read.count > 0 {
           progress = true
           builder.append_grow(arena, state, destination[..read.count])
@@ -301,9 +235,8 @@ pub fn capture(arena: *mem.Arena, status: *fail.Status, path: []const u8, argume
         if stream_index == 0 { out_end = read.ended } else { err_end = read.ended }
       }
     }
-    if status.failed { break }
     if child.active {
-      exited := wait(status, child, true)
+      exited := try wait(child, true)
       if exited.finished {
         result.exit = exited
       }
@@ -311,28 +244,22 @@ pub fn capture(arena: *mem.Arena, status: *fail.Status, path: []const u8, argume
     if out_end && err_end && !child.active { break }
     if has_deadline && milliseconds_native() - started >= wait_limit {
       result.timed_out = true
-      failure := fail.make(fail.Kind.Interrupted, "capture", path, "timed out")
-      failure.native = -110
-      fail.set(status, failure)
+      break
     }
-    if !progress && !status.failed {
+    if !progress {
       sleep_native()
     }
   }
-  if !status.failed || result.timed_out || result.limit_reached {
-    result.output = output.storage[..output.length]
-    result.errors = errors.storage[..errors.length]
-    published = true
-  }
+  result.output = output.storage[..output.length]
+  result.errors = errors.storage[..errors.length]
   return result
 }
 
 // Cleanup for capture: kills and waits for a child still running.
 fn reap(child: *Child) {
   if !child.active { return }
-  cleanup: fail.Status
-  terminate(&cleanup, child)
-  _ = wait(&cleanup, child, false)
+  terminate(child) catch {}
+  _ = wait(child, false) catch { return }
 }
 
 // What process.start() returns: an arena that lives for the
@@ -343,28 +270,20 @@ pub struct Program { arena: *mem.Arena, args: [][]const u8 }
 // when the arguments cannot be read.
 pub fn start() Program {
   arena := mem.arena_alloc(0)
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  args := arguments(arena, &status)
+  args := arguments(arena) catch { #panic("process.start could not read the arguments") }
   return Program{ arena: arena, args: args }
 }
 
 // Includes argv[0]. Descriptors and argument bytes belong to arena.
 // Unix preserves native bytes; Windows converts UTF-16 to UTF-8.
 // Failure rewinds arena; success lives until its next reset/rewind/destroy.
-pub fn arguments(arena: *mem.Arena, status: *fail.Status) [][]const u8 {
-  if status == nil { return arguments(arena, &fail.Status{}) }
-  empty: [][]const u8
-  if status.failed { return empty }
+pub fn arguments(arena: *mem.Arena) [][]const u8!io.IoErr {
   mark := mem.arena_mark(arena)
-  result := arguments_native(arena, status)
-  if status.failed {
-    mem.arena_rewind(arena, mark)
-    return empty
-  }
-  return result
+  errdefer mem.arena_rewind(arena, mark)
+  return try arguments_native(arena)
 }
 fn argument_slots(arena: *mem.Arena, count: usize) [][]const u8 {
   empty: [][]const u8
   if count == 0 { return empty }
-  return mem.push_array([]const u8, arena, count)
+  return mem.push_array<[]const u8>(arena, count)
 }

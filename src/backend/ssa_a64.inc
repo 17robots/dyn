@@ -660,10 +660,11 @@ static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_DIV: case SO_REM: {
     d = a64s_target(v);
     unsigned ra = a64s_get(e, v->a, A_S1), rb = a64s_get(e, v->b, A_S2);
-    if (v->op == SO_DIV) a64_word(ctx, (v->aux2 ? 0x9ac00c00u : 0x9ac00800u) | rb << 16 | ra << 5 | d);
+    uint32_t wbit = (!v->aux2 && v->w32) ? 0u : 0x80000000u;
+    if (v->op == SO_DIV) a64_word(ctx, (wbit | (v->aux2 ? 0x1ac00c00u : 0x1ac00800u)) | rb << 16 | ra << 5 | d);
     else {
-      a64_word(ctx, (v->aux2 ? 0x9ac00c00u : 0x9ac00800u) | rb << 16 | ra << 5 | A_S3);
-      a64_word(ctx, 0x9b008000u | rb << 16 | ra << 10 | A_S3 << 5 | d); /* msub d, x15, b, a */
+      a64_word(ctx, (wbit | (v->aux2 ? 0x1ac00c00u : 0x1ac00800u)) | rb << 16 | ra << 5 | A_S3);
+      a64_word(ctx, (wbit | 0x1b008000u) | rb << 16 | ra << 10 | A_S3 << 5 | d); /* msub d, r15, b, a */
     }
     a64s_put(e, v, d);
     return;
@@ -687,8 +688,18 @@ static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
        loaded last into x15 itself and the false value before it into x14. */
     unsigned code = 1; /* ne */
     SsaValue *c = &s->values[v->a];
-    if (c->fused && c->op == SO_CMP) code = a64_cond[a64s_compare(e, c->a, c->b, (Cond)c->cond)];
-    else a64_word(ctx, 0xf100001fu | a64s_get(e, v->a, A_S1) << 5);     /* cmp rc, #0 */
+    if (c->fused && c->op == SO_CMP) {
+      if (e->flags_cmp == v->a) code = a64_cond[e->flags_cond];
+      else {
+        Cond cond = a64s_compare(e, c->a, c->b, (Cond)c->cond);
+        e->flags_cmp = v->a;
+        e->flags_cond = cond;
+        code = a64_cond[cond];
+      }
+    } else {
+      e->flags_cmp = -1;
+      a64_word(ctx, 0xf100001fu | a64s_get(e, v->a, A_S1) << 5);     /* cmp rc, #0 */
+    }
     unsigned rf = a64s_get(e, v->c, A_S4);
     unsigned rt = a64s_get(e, v->b, A_S3);
     d = a64s_target(v);

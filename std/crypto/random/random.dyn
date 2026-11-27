@@ -1,12 +1,7 @@
-use "std/crypto/core" crypto_core
-use "std/fail"
+use crypto_core "std/crypto/core"
 
 // Fills destination with cryptographically secure random bytes. A target with
 // no random source fails with Unsupported, a failing source with System.
-pub fn fill(status: *fail.Status, destination: []u8) {
-  if status == nil {
-    fill(&fail.Status{}, destination)
-    return
-  }
-  crypto_core.secure_random(status, destination)
+pub fn fill(destination: []u8) ! {
+  try crypto_core.secure_random(destination)
 }

@@ -1,4 +1,4 @@
-use "std/bytes" bytes
+use bytes "std/bytes"
 
 // multipart/form-data request bodies (RFC 7578). Parts borrow the request
 // body; nothing is copied or allocated. The whole body must fit the server's
@@ -26,25 +26,28 @@ pub struct Parts {
   ended: bool,
 }
 
-fn multipart_failure(status: *fail.Status, message: []const u8) {
-  fail.set(status, fail.make(fail.Kind.InvalidInput, "read multipart body", "", message))
+// A malformed part or body: the reader stays failed and ended.
+fn parts_failed(reader: *Parts) io.IoErr {
+  reader.failed = true
+  reader.ended = true
+  return io.IoErr.InvalidInput
 }
 
 // The boundary parameter of a multipart Content-Type, unquoted.
 fn boundary_of(content_type: []const u8) []const u8 {
   rest := content_type
-  for #len(rest) > 0 {
+  for rest.len > 0 {
     end := bytes.find_byte(rest, ';')
     item := trim_ows(rest[..end])
     equals := bytes.find_byte(item, '=')
-    if equals < #len(item) && ascii_equal(trim_ows(item[..equals]), "boundary") {
+    if equals < item.len && ascii_equal(trim_ows(item[..equals]), "boundary") {
       value := trim_ows(item[equals + 1..])
-      if #len(value) >= 2 && value[0] == '"' && value[#len(value) - 1] == '"' {
-        value = value[1..#len(value) - 1]
+      if value.len >= 2 && value[0] == '"' && value[value.len - 1] == '"' {
+        value = value[1..value.len - 1]
       }
       return value
     }
-    if end >= #len(rest) { break }
+    if end >= rest.len { break }
     rest = rest[end + 1..]
   }
   return content_type[..0]
@@ -53,69 +56,60 @@ fn boundary_of(content_type: []const u8) []const u8 {
 // Starts reading a multipart/form-data body. Fails with InvalidInput when the
 // Content-Type is not multipart/form-data or has no valid boundary (1-70
 // bytes), or the body does not start with the first delimiter.
-pub fn multipart(status: *fail.Status, request: *const Request) Parts {
-  if status == nil { return multipart(&fail.Status{}, request) }
-  if status.failed { return Parts{ failed: true } }
+pub fn multipart(request: *const Request) Parts!io.IoErr {
   header := find_header(request, "Content-Type")
-  if !header.found || #len(header.value) < 19 || !ascii_equal(header.value[..19], "multipart/form-data") {
-    multipart_failure(status, "not multipart/form-data")
-    return Parts{ failed: true }
+  if !header.found || header.value.len < 19 || !ascii_equal(header.value[..19], "multipart/form-data") {
+    fail .InvalidInput
   }
   boundary := boundary_of(header.value)
-  if #len(boundary) == 0 || #len(boundary) > 70 {
-    multipart_failure(status, "bad boundary")
-    return Parts{ failed: true }
-  }
+  if boundary.len == 0 || boundary.len > 70 { fail .InvalidInput }
   reader := Parts{}
   reader.delimiter[0] = '\r'
   reader.delimiter[1] = '\n'
   reader.delimiter[2] = '-'
   reader.delimiter[3] = '-'
-  for i in 0..#len(boundary) {
+  for i in 0..boundary.len {
     reader.delimiter[4 + i] = boundary[i]
   }
-  reader.delimiter_length = 4 + #len(boundary)
+  reader.delimiter_length = 4 + boundary.len
   body := request.body
   // The first delimiter may lack its leading CRLF; a preamble is skipped.
   first := reader.delimiter[2..reader.delimiter_length]
   at: usize = 0
   if !bytes.starts_with(body, first) {
     found := bytes.find(body, reader.delimiter[..reader.delimiter_length])
-    if found == #len(body) {
-      multipart_failure(status, "no first boundary")
-      return Parts{ failed: true }
-    }
+    if found == body.len { fail .InvalidInput }
     at = found + 2
   }
-  reader.rest = body[at + #len(first)..]
+  reader.rest = body[at + first.len..]
   return reader
 }
 
 // A Content-Disposition parameter such as name="field", unquoted.
 fn disposition_parameter(value: []const u8, wanted: []const u8) HttpHeader {
   rest := value
-  for #len(rest) > 0 {
+  for rest.len > 0 {
     // Split on ';' outside quotes.
     end: usize = 0
     quoted := false
-    for end < #len(rest) && (quoted || rest[end] != ';') {
+    for end < rest.len && (quoted || rest[end] != ';') {
       if rest[end] == '"' {
         quoted = !quoted
-      } else if rest[end] == '\\' && quoted && end + 1 < #len(rest) {
+      } else if rest[end] == '\\' && quoted && end + 1 < rest.len {
         end += 1
       }
       end += 1
     }
     item := trim_ows(rest[..end])
     equals := bytes.find_byte(item, '=')
-    if equals < #len(item) && ascii_equal(trim_ows(item[..equals]), wanted) {
+    if equals < item.len && ascii_equal(trim_ows(item[..equals]), wanted) {
       text := trim_ows(item[equals + 1..])
-      if #len(text) >= 2 && text[0] == '"' && text[#len(text) - 1] == '"' {
-        text = text[1..#len(text) - 1]
+      if text.len >= 2 && text[0] == '"' && text[text.len - 1] == '"' {
+        text = text[1..text.len - 1]
       }
       return HttpHeader{ name: wanted, value: text, found: true }
     }
-    if end >= #len(rest) { break }
+    if end >= rest.len { break }
     rest = rest[end + 1..]
   }
   return HttpHeader{}
@@ -128,13 +122,9 @@ fn parts_ended(reader: *Parts) Part {
   reader.ended = true
   return Part{}
 }
-pub fn next_part(status: *fail.Status, reader: *Parts) Part {
-  if status == nil { return next_part(&fail.Status{}, reader) }
-  if status.failed { return parts_ended(reader) }
-  if reader.failed {
-    multipart_failure(status, "an earlier part was malformed")
-    return parts_ended(reader)
-  }
+pub fn next_part(reader: *Parts) Part!io.IoErr {
+  // An earlier part was malformed.
+  if reader.failed { fail parts_failed(reader) }
   if reader.done { return parts_ended(reader) }
   rest := reader.rest
   // After a delimiter: "--" closes, otherwise optional padding and CRLF.
@@ -143,38 +133,22 @@ pub fn next_part(status: *fail.Status, reader: *Parts) Part {
     return parts_ended(reader)
   }
   line_end := bytes.find(rest, "\r\n")
-  if line_end == #len(rest) || #len(trim_ows(rest[..line_end])) != 0 {
-    reader.failed = true
-    multipart_failure(status, "bad delimiter line")
-    return parts_ended(reader)
-  }
+  if line_end == rest.len || trim_ows(rest[..line_end]).len != 0 { fail parts_failed(reader) }
   rest = rest[line_end + 2..]
   part := Part{}
   disposition := false
   for true {
     end := bytes.find(rest, "\r\n")
-    if end == #len(rest) {
-      reader.failed = true
-      multipart_failure(status, "part headers cut short")
-      return parts_ended(reader)
-    }
+    if end == rest.len { fail parts_failed(reader) }
     line := rest[..end]
     rest = rest[end + 2..]
-    if #len(line) == 0 { break }
+    if line.len == 0 { break }
     colon := bytes.find_byte(line, ':')
-    if colon == #len(line) {
-      reader.failed = true
-      multipart_failure(status, "bad part header")
-      return parts_ended(reader)
-    }
+    if colon == line.len { fail parts_failed(reader) }
     field := trim_ows(line[..colon])
     value := trim_ows(line[colon + 1..])
     if ascii_equal(field, "content-disposition") {
-      if #len(value) < 9 || !ascii_equal(value[..9], "form-data") {
-        reader.failed = true
-        multipart_failure(status, "not form-data")
-        return parts_ended(reader)
-      }
+      if value.len < 9 || !ascii_equal(value[..9], "form-data") { fail parts_failed(reader) }
       part.name = disposition_parameter(value, "name").value
       file := disposition_parameter(value, "filename")
       part.filename = file.value
@@ -184,19 +158,11 @@ pub fn next_part(status: *fail.Status, reader: *Parts) Part {
       part.content_type = value
     }
   }
-  if !disposition {
-    reader.failed = true
-    multipart_failure(status, "part without Content-Disposition")
-    return parts_ended(reader)
-  }
+  if !disposition { fail parts_failed(reader) }
   delimiter := reader.delimiter[..reader.delimiter_length]
   end := bytes.find(rest, delimiter)
-  if end == #len(rest) {
-    reader.failed = true
-    multipart_failure(status, "no closing boundary")
-    return parts_ended(reader)
-  }
+  if end == rest.len { fail parts_failed(reader) }
   part.body = rest[..end]
-  reader.rest = rest[end + #len(delimiter)..]
+  reader.rest = rest[end + delimiter.len..]
   return part
 }

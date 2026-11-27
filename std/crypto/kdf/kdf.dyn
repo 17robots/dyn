@@ -1,12 +1,11 @@
-use "std/fail"
-use "std/crypto/core" crypto_core
-use "std/bytes" bytes
+use crypto_core "std/crypto/core"
+use bytes "std/bytes"
 
 pub fn hkdf_extract(destination: []u8, salt: []const u8, input_key_material: []const u8) []u8 {
-  if #len(destination) < 32 { return destination[..0] }
+  if destination.len < 32 { return destination[..0] }
   zero_salt: [32]u8
   actual_salt := salt
-  if #len(actual_salt) == 0 {
+  if actual_salt.len == 0 {
     actual_salt = zero_salt[..]
   }
   return crypto_core.hmac_sha256(destination, actual_salt, input_key_material)
@@ -15,44 +14,36 @@ pub fn hkdf_extract(destination: []u8, salt: []const u8, input_key_material: []c
 // scratch needs 32 + len(info) + 1 bytes. Maximum output is 255 SHA-256 blocks.
 // Destination and scratch must not overlap each other or the borrowed key/info,
 // including unused slice tails. Validation failure leaves all storage unchanged.
-pub fn hkdf_expand(status: *fail.Status, destination: []u8, pseudorandom_key: []const u8, info: []const u8, scratch: []u8) {
-  if status == nil {
-    hkdf_expand(&fail.Status{}, destination, pseudorandom_key, info, scratch)
-    return
-  }
-  if status.failed { return }
+pub fn hkdf_expand(destination: []u8, pseudorandom_key: []const u8, info: []const u8, scratch: []u8) ! {
   limit: u64 = 2305843009213693951
-  if #len(pseudorandom_key) < 32 || #len(pseudorandom_key) > limit || #len(destination) > 8160 || #len(info) > #max(usize) - 33 || #len(info) > limit - 97 || #len(scratch) < 33 + #len(info) {
-    fail.invalid(status, "HKDF expand", "", "bad sizes, or overlapping key, info, output or scratch")
-    return
+  if pseudorandom_key.len < 32 || pseudorandom_key.len > limit || destination.len > 8160 || info.len > #max(usize) - 33 || info.len > limit - 97 || scratch.len < 33 + info.len {
+    fail
   }
   if bytes.overlaps(destination, scratch) || bytes.overlaps(destination, pseudorandom_key) || bytes.overlaps(destination, info) || bytes.overlaps(scratch, pseudorandom_key) || bytes.overlaps(scratch, info) {
-    fail.invalid(status, "HKDF expand", "", "bad sizes, or overlapping key, info, output or scratch")
-    return
+    fail
   }
   previous: [32]u8
   previous_length: usize = 0
   output_at: usize = 0
   counter: u8 = 1
-  for output_at < #len(destination) {
-    message_length := previous_length + #len(info) + 1
+  for output_at < destination.len {
+    message_length := previous_length + info.len + 1
     i: usize = 0
     for i < previous_length {
       scratch[i] = previous[i]
       i += 1
     }
     i = 0
-    for i < #len(info) {
+    for i < info.len {
       scratch[previous_length + i] = info[i]
       i += 1
     }
     scratch[message_length - 1] = counter
-    if #len(crypto_core.hmac_sha256(previous[..], pseudorandom_key, scratch[..message_length])) != 32 {
-      fail.invalid(status, "HKDF expand", "", "bad sizes, or overlapping key, info, output or scratch")
-      return
+    if crypto_core.hmac_sha256(previous[..], pseudorandom_key, scratch[..message_length]).len != 32 {
+      fail
     }
     previous_length = 32
-    take := #len(destination) - output_at
+    take := destination.len - output_at
     if take > 32 {
       take = 32
     }
@@ -62,22 +53,14 @@ pub fn hkdf_expand(status: *fail.Status, destination: []u8, pseudorandom_key: []
       i += 1
     }
     output_at += take
-    if output_at < #len(destination) {
+    if output_at < destination.len {
       counter += 1
     }
   }
 }
 
-pub fn hkdf(status: *fail.Status, destination: []u8, salt: []const u8, input_key_material: []const u8, info: []const u8, scratch: []u8) {
-  if status == nil {
-    hkdf(&fail.Status{}, destination, salt, input_key_material, info, scratch)
-    return
-  }
-  if status.failed { return }
+pub fn hkdf(destination: []u8, salt: []const u8, input_key_material: []const u8, info: []const u8, scratch: []u8) ! {
   extracted: [32]u8
-  if #len(hkdf_extract(extracted[..], salt, input_key_material)) != 32 {
-    fail.invalid(status, "HKDF extract", "", "the input key material is too long")
-    return
-  }
-  hkdf_expand(status, destination, extracted[..], info, scratch)
+  if hkdf_extract(extracted[..], salt, input_key_material).len != 32 { fail }
+  try hkdf_expand(destination, extracted[..], info, scratch)
 }

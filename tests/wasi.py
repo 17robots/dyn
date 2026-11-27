@@ -5,36 +5,32 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 DYN=os.environ.get('DYN',str(ROOT/'build/dyn'))
 source=r'''
-use "std/fail"
-use "std/io" io
-use "std/mem" mem
-use "std/os/wasi" wasi
-use "std/terminal" terminal
+use io "std/io"
+use mem "std/mem"
+use wasi "std/os/wasi"
+use terminal "std/terminal"
 fn main() {
   arena := mem.arena_alloc(65536)
   defer { mem.arena_release(arena) }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  arguments := wasi.arguments(arena, &status)
-  if #len(arguments) != 3 || #len(arguments[2]) != 5 { #panic("args") }
-  opening: fail.Status
-  fd := wasi.open_read(&opening, 3, "input.txt")
-  if #len(arguments[1]) == 4 {
-    if !opening.failed { #panic("unexpected preopen") }
-    io.println("denied")
-    return
+  arguments := wasi.arguments(arena) catch { #panic("unexpected failure") }
+  if arguments.len != 3 || arguments[2].len != 5 { #panic("args") }
+  if arguments[1].len == 4 {
+    _ = wasi.open_read(3, "input.txt") catch {
+      io.println("denied")
+      return
+    }
+    #panic("unexpected preopen")
   }
-  if opening.failed { #panic("open") }
+  fd := wasi.open_read(3, "input.txt") catch { #panic("open") }
   defer { _ = wasi.close(fd) }
   data: [16]u8
-  count := wasi.read(&status, fd, data[..])
+  count := wasi.read(fd, data[..]) catch { #panic("unexpected failure") }
   if count != 5 { #panic("read") }
-  io.write(&status, io.stdout(), data[..count])
-  if wasi.read(&status, fd, data[..]) != 0 { #panic("EOF") }
-  bad: fail.Status
-  _ = wasi.read(&bad, 999999, data[..])
-  if !bad.failed { #panic("bad fd") }
-  if io.read_exact(&status, io.stdin(), data[..3]) != 3 { #panic("stdin") }
-  io.write(&status, io.stdout(), data[..3])
+  io.write(io.stdout(), data[..count]) catch { #panic("stdout") }
+  if (wasi.read(fd, data[..]) catch 99) != 0 { #panic("EOF") }
+  if (wasi.read(999999, data[..]) catch 99) != 99 { #panic("bad fd") }
+  if (io.read_exact(io.stdin(), data[..3]) catch 0) != 3 { #panic("stdin") }
+  io.write(io.stdout(), data[..3]) catch { #panic("stdout") }
   if wasi.random(data[..]) != 0 { #panic("random") }
   now: u64 = 0
   if wasi.clock_time(1, 0, &now) != 0 || now == 0 { #panic("clock") }

@@ -30,7 +30,7 @@ static bool src_restore(Parser *p, Parser saved, uint32_t count) {
   p->tree->error_offset = 0; return true;
 }
 static Token src_peek(Parser *p) {
-  if (p->tree->error) return (Token){p->offset, p->offset, END};
+  if (p->tree->error) return (Token){p->offset, p->offset, END, false};
   Parser probe = *p;
   ExpTree scratch = {0}; probe.tree = &scratch;
   lex(&probe);
@@ -44,6 +44,9 @@ static bool src_next_is(Parser *p, const char *word) {
 static bool src_distinct(Parser *p) { return is(p, "distinct"); }
 /* union still starts a declaration so src_struct can report its removal. */
 static bool src_packed(Parser *p) { return is(p, "packed") || is(p, "union"); }
+static bool src_nocopy(Parser *p) {
+  return is(p, "nocopy") && (src_next_is(p, "struct") || src_next_is(p, "packed"));
+}
 /* A pattern that can only be a type: i32, []const u8, *Node, fn(..), $T.
    Named types (Point, geo.Point, Box(i32)) parse as value patterns and the
    AST resolves them, since only names know whether they are types. */
@@ -103,37 +106,13 @@ static uint32_t src_statement(Parser *p);
 static uint32_t src_if(Parser *p);
 static uint32_t src_for(Parser *p);
 static uint32_t src_case(Parser *p);
-/* A condition can end in a name directly before its block. The initial
-   expression attempt can consume that block as a named struct literal. Scan
-   only the bytes reached by that attempt, retaining the final top-level brace;
-   earlier braces belong to genuine struct operands. At most one retry runs,
-   and both scanning and parsing charge the shared work budget. */
+/* Unparenthesized struct literals are disallowed directly in if/for/case
+   headers, so the header's opening '{' is never mistaken for a struct literal. */
 static uint32_t src_condition(Parser *p) {
-  Parser saved = *p; uint32_t count = p->tree->count;
+  bool prev = p->no_struct_literal;
+  p->no_struct_literal = true;
   uint32_t value = expression(p, 0);
-  if (!p->tree->error && (is(p, "{") || is(p, "..") || is(p, "..="))) return value;
-  uint32_t stop = p->token.start;
-  if (!src_restore(p, saved, count)) return NONE;
-  Parser probe = *p; ExpTree scratch = {0}; probe.tree = &scratch;
-  unsigned parens = 0, brackets = 0, braces = 0;
-  uint32_t brace = 0;
-  while (probe.token.kind != END && probe.token.start <= stop && !scratch.error) {
-    if (is(&probe, "{")) {
-      if (!parens && !brackets && !braces) brace = probe.token.start;
-      ++braces;
-    } else if (is(&probe, "}")) {
-      if (!braces) break;
-      --braces;
-    } else if (is(&probe, "(")) ++parens;
-    else if (is(&probe, ")")) { if (!parens) break; --parens; }
-    else if (is(&probe, "[")) ++brackets;
-    else if (is(&probe, "]")) { if (!brackets) break; --brackets; }
-    lex(&probe);
-  }
-  if (scratch.error) { propagate_error(p, &scratch); return NONE; }
-  p->block_brace = brace;
-  value = expression(p, 0);
-  p->block_brace = saved.block_brace;
+  p->no_struct_literal = prev;
   return value;
 }
 static uint32_t src_range(Parser *p, bool condition) {
@@ -160,9 +139,14 @@ static uint32_t src_if(Parser *p) {
 /* #step(first..last, n) */
 static uint32_t src_step(Parser *p) {
   uint32_t start = p->token.start; lex(p); expect(p, "(");
+  bool prev_no_struct = p->no_struct_literal; p->no_struct_literal = false;
+  ++p->bracket_depth;
   uint32_t range = src_range(p, false);
   expect(p, ",");
-  uint32_t step = expression(p, 0), end = p->token.end;
+  uint32_t step = expression(p, 0);
+  --p->bracket_depth;
+  p->no_struct_literal = prev_no_struct;
+  uint32_t end = p->token.end;
   expect(p, ")");
   if (range == NONE || step == NONE || p->tree->error) return NONE;
   p->tree->nodes[range].next = step;
@@ -170,6 +154,10 @@ static uint32_t src_step(Parser *p) {
 }
 static uint32_t src_for(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
+  if (p->token.kind == NAME && !is(p, "for")) {
+    append(p, &first, &last, name(p));
+    expect(p, ":");
+  }
   expect(p, "for");
   if (!is(p, "{")) {
     uint32_t begin = p->token.start, cf = NONE, cl = NONE;
@@ -196,7 +184,12 @@ static uint32_t src_for(Parser *p) {
       if (bound_type != NONE) append(p, &cf, &cl, bound_type);
       if (is(p, "#reverse")) {
         uint32_t reverse_start = p->token.start; lex(p); expect(p, "(");
-        uint32_t value = is(p, "#step") ? src_step(p) : src_range(p, false), end = p->token.end; expect(p, ")");
+        bool prev_no_struct = p->no_struct_literal; p->no_struct_literal = false;
+        ++p->bracket_depth;
+        uint32_t value = is(p, "#step") ? src_step(p) : src_range(p, false);
+        --p->bracket_depth;
+        p->no_struct_literal = prev_no_struct;
+        uint32_t end = p->token.end; expect(p, ")");
         append(p, &cf, &cl, src_node(p, SRC_REVERSE, reverse_start, end, value));
       } else if (is(p, "#step")) append(p, &cf, &cl, src_step(p));
       else append(p, &cf, &cl, src_range(p, true));
@@ -209,47 +202,132 @@ static uint32_t src_for(Parser *p) {
   append(p, &first, &last, src_block(p));
   return src_node(p, SRC_FOR, start, src_end(p, last, start), first);
 }
+static bool src_extract_case_binding(Parser *p, uint32_t *pattern, uint32_t *binding, bool *pointer) {
+  ExpNode *nodes = p->tree->nodes;
+  uint32_t id = *pattern;
+  if (id == NONE || nodes[id].kind != EXP_CALL) return false;
+  uint32_t callee = nodes[id].first;
+  if (callee == NONE) return false;
+  uint32_t arg = nodes[callee].next;
+  if (arg == NONE || nodes[arg].next != NONE) return false;
+  unsigned ck = nodes[callee].kind;
+  if (ck != EXP_FIELD && ck != EXP_DOT_NAME && ck != EXP_NAME && ck != EXP_GENERIC_TYPE) return false;
+  if (nodes[arg].kind == EXP_NAME) {
+    bool ignored = nodes[arg].end - nodes[arg].start == 1 && p->text[nodes[arg].start] == '_';
+    if (!ignored) {
+      if (*binding != NONE) {
+        fail(p, nodes[arg].start, "a case arm can bind at most one payload");
+        return false;
+      }
+      nodes[arg].flags &= ~EXP_PRIMARY;
+      *binding = arg;
+    }
+    nodes[callee].next = NONE;
+    *pattern = callee;
+    return true;
+  }
+  if (nodes[arg].kind == EXP_PREFIX && nodes[arg].operator_length == 1 &&
+      p->text[nodes[arg].operator_start] == '*') {
+    uint32_t bound = nodes[arg].first;
+    if (bound != NONE && nodes[bound].kind == EXP_NAME && nodes[bound].next == NONE) {
+      if (*binding != NONE) {
+        fail(p, nodes[bound].start, "a case arm can bind at most one payload");
+        return false;
+      }
+      nodes[bound].flags &= ~EXP_PRIMARY;
+      *binding = bound;
+      *pointer = true;
+      nodes[callee].next = NONE;
+      *pattern = callee;
+      return true;
+    }
+  }
+  return false;
+}
 static uint32_t src_case(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
   expect(p, "case"); append(p, &first, &last, src_condition(p)); expect(p, "{");
   while (!is(p, "}") && !p->tree->error) {
     uint32_t begin = p->token.start, af = NONE, al = NONE;
-    bool wildcard = false;
-    if (is(p, "is")) { fail(p, p->token.start, "type patterns do not use `is`: write `i64 n =>`"); break; }
+    bool wildcard = false, pointer = false;
+    if (is(p, "is")) { fail(p, p->token.start, "type patterns do not use `is`: write `i64(n) =>`"); break; }
     if (src_type_pattern(p)) {
       uint32_t pf = NONE, pl = NONE;
       append(p, &pf, &pl, type(p));
-      if (p->token.kind == NAME) append(p, &pf, &pl, name(p));
-      append(p, &af, &al, src_node(p, SRC_TYPE_PATTERN, begin, src_end(p, pl, begin), pf));
+      if (take(p, "(")) {
+        if (take(p, "*")) {
+          fail(p, p->token.start, "type case binding cannot use '*': write `Type(name) =>`");
+          break;
+        }
+        if (!take(p, "_")) append(p, &pf, &pl, name(p));
+        expect(p, ")");
+        append(p, &af, &al, src_node(p, SRC_TYPE_PATTERN, begin, src_end(p, pl, begin), pf));
+      } else if (p->token.kind == NAME) {
+        fail(p, p->token.start, "case bindings use parentheses: write `Type(name) =>`, not `Type name =>`");
+        break;
+      } else {
+        append(p, &af, &al, src_node(p, SRC_TYPE_PATTERN, begin, src_end(p, pl, begin), pf));
+        while (take(p, ",") && !p->tree->error) {
+          uint32_t tbegin = p->token.start;
+          uint32_t extra = type(p);
+          append(p, &af, &al, src_node(p, SRC_TYPE_PATTERN, tbegin, src_end(p, extra, tbegin), extra));
+        }
+      }
     } else {
       wildcard = take(p, "_");
       if (!wildcard) {
+        uint32_t binding = NONE;
+        bool prev_cp = p->in_case_pattern;
+        p->in_case_pattern = true;
         do {
+          if (src_type_pattern(p)) {
+            uint32_t tbegin = p->token.start;
+            uint32_t extra = type(p);
+            append(p, &af, &al, src_node(p, SRC_TYPE_PATTERN, tbegin, src_end(p, extra, tbegin), extra));
+            continue;
+          }
           uint32_t pattern = src_range(p, false);
           if (pattern == NONE) break;
+          src_extract_case_binding(p, &pattern, &binding, &pointer);
+          if (p->tree->error) break;
           append(p, &af, &al, src_node(p, SRC_CASE_PATTERN, p->tree->nodes[pattern].start,
                   p->tree->nodes[pattern].end, pattern));
         } while (take(p, ",") && !p->tree->error);
+        p->in_case_pattern = prev_cp;
+        if (binding != NONE) append(p, &af, &al, binding);
       }
-      if (p->token.kind == NAME) append(p, &af, &al, name(p));
+      if (p->token.kind == NAME) {
+        fail(p, p->token.start, "case bindings use parentheses: write `Variant(name) =>`, not `Variant name =>`");
+        break;
+      }
     }
     expect(p, "=>"); append(p, &af, &al, src_block(p));
-    append(p, &first, &last, mark(p, src_node(p, SRC_CASE_ARM, begin, src_end(p, al, begin), af), wildcard ? EXP_WILDCARD : 0));
+    append(p, &first, &last, mark(p, src_node(p, SRC_CASE_ARM, begin, src_end(p, al, begin), af),
+        (wildcard ? EXP_WILDCARD : 0) | (pointer ? EXP_POINTER_BINDING : 0)));
     if (is(p, ",")) fail(p, p->token.start, "case arms are not separated by commas");
   }
   uint32_t end = p->token.end; expect(p, "}");
   return src_node(p, SRC_CASE, start, end, first);
 }
+static bool src_is_fail_stmt(Parser *p) {
+  if (!is(p, "fail")) return false;
+  if (p->token.end < p->length && (p->text[p->token.end] == '.' || p->text[p->token.end] == '('))
+    return false;
+  if (src_next_is(p, ":") || src_next_is(p, ":=") || src_next_is(p, "="))
+    return false;
+  return true;
+}
 static bool src_expression_start(Parser *p) {
   if (is(p, "return") || is(p, "break") || is(p, "continue") ||
       is(p, "const") || is(p, "if") || is(p, "case") || is(p, "for") ||
-      is(p, "defer") || is(p, "type") || src_distinct(p)) return false;
-  return p->token.kind == NAME || p->token.kind == NUMBER || p->token.kind == STRING ||
+      is(p, "defer") || is(p, "errdefer") || is(p, "type") || src_distinct(p) ||
+      src_is_fail_stmt(p)) return false;
+  return is(p, "try") || p->token.kind == NAME || p->token.kind == NUMBER || p->token.kind == STRING ||
       p->token.kind == CHARACTER || is(p, "(") || is(p, "[") || is(p, ".") ||
       is(p, "-") || is(p, "&") || is(p, "!") || is(p, "~") ||
       is(p, "#cast") || is(p, "#bitcast") || is(p, "#wrapping") || is(p, "#sizeof") ||
       is(p, "#alignof") || is(p, "#offsetof") || is(p, "#typeof") || is(p, "#max") || is(p, "#min") ||
-      is(p, "#len") || is(p, "#init") || is(p, "#instance") || is(p, "#slice") || is(p, "#offset") || is(p, "#load") || is(p, "#syscall") ||
+      is(p, "#len") || is(p, "#init") || is(p, "#take") || is(p, "#instance") || is(p, "#slice") || is(p, "#offset") || is(p, "#load") || is(p, "#syscall") ||
       is(p, "#sqrt") || is(p, "#floor") || is(p, "#ceil") || is(p, "#trunc") || is(p, "#round") || is(p, "#fma");
 }
 static uint32_t src_assert(Parser *p);
@@ -278,36 +356,47 @@ static uint32_t src_statement_body(Parser *p) {
   if (is(p, "type") || src_distinct(p)) return src_alias(p);
   if (is(p, "#panic")) return src_panic(p);
   if (is(p, "#assert")) return src_assert(p);
-  if (is(p, "defer")) {
+  if (is(p, "defer") || is(p, "errdefer")) {
+    bool is_errdefer = is(p, "errdefer");
     lex(p); uint32_t child = is(p, "{") ? src_block(p) : src_statement(p);
     if (child != NONE) {
       unsigned kind = p->tree->nodes[child].kind;
-      if (kind != SRC_BLOCK && kind != EXP_CALL && kind != SRC_ASSIGNMENT &&
+      if (kind != SRC_BLOCK && kind != EXP_CALL && kind != EXP_CATCH && kind != SRC_ASSIGNMENT &&
           kind != SRC_IF && kind != SRC_CASE && kind != SRC_FOR &&
           kind != SRC_PANIC && kind != EXP_SYSCALL)
         fail(p, start, "invalid deferred statement");
     }
-    return src_node(p, SRC_DEFER, start, src_end(p, child, start), child);
+    return src_node(p, is_errdefer ? SRC_ERRDEFER : SRC_DEFER, start, src_end(p, child, start), child);
+  }
+  if (src_is_fail_stmt(p)) {
+    uint32_t end = p->token.end; lex(p);
+    uint32_t child = NONE;
+    if (!p->token.newline && !is(p, "}") && p->token.kind != END && src_expression_start(p)) {
+      child = expression(p, 0);
+    }
+    return src_node(p, SRC_FAIL, start, src_end(p, child, end), child);
   }
   if (is(p, "break") || is(p, "continue")) {
     unsigned kind = is(p, "break") ? SRC_BREAK : SRC_CONTINUE;
     uint32_t end = p->token.end; lex(p);
-    if (is(p, ":")) {
-      fail(p, start, "loops have no labels: break and continue act on the innermost loop");
-      return NONE;
+    uint32_t child = NONE;
+    if (!p->token.newline) {
+      if (is(p, ":")) {
+        fail(p, p->token.start, "loop labels do not use a colon: write `break label` or `continue label`");
+        return NONE;
+      }
+      if (p->token.kind == NAME && !is(p, "true") && !is(p, "false") && !is(p, "nil")) {
+        child = name(p);
+        end = src_end(p, child, end);
+      }
     }
-    return src_node(p, kind, start, end, NONE);
+    return src_node(p, kind, start, end, child);
   }
   if (is(p, "return")) {
     uint32_t end = p->token.end; lex(p);
     uint32_t child = NONE;
-    if (src_expression_start(p)) {
-      Parser saved = *p; uint32_t count = p->tree->count;
+    if (!p->token.newline && !is(p, "}") && p->token.kind != END && src_expression_start(p)) {
       child = expression(p, 0);
-      if (p->tree->error) {
-        if (!src_restore(p, saved, count)) return NONE;
-        child = NONE;
-      }
     }
     return src_node(p, SRC_RETURN, start, src_end(p, child, end), child);
   }
@@ -316,10 +405,7 @@ static uint32_t src_statement_body(Parser *p) {
     Parser probe = *p; ExpTree scratch = {0}; probe.tree = &scratch;
     lex(&probe); bool colon = take(&probe, ":");
     if (scratch.error) { propagate_error(p, &scratch); return NONE; }
-    if (colon && is(&probe, "for")) {
-      fail(p, start, "loops have no labels: use a flag variable, or move the inner loop into a function and return");
-      return NONE;
-    }
+    if (colon && is(&probe, "for")) return src_for(p);
     return src_variable(p);
   }
   uint32_t value = expression(p, 0);
@@ -334,6 +420,7 @@ static uint32_t src_statement_body(Parser *p) {
     return node(p, (ExpKind)SRC_ASSIGNMENT, start, p->tree->nodes[right].end, value, operator);
   }
   if (p->tree->nodes[value].kind != EXP_CALL && p->tree->nodes[value].kind != EXP_SYSCALL &&
+      p->tree->nodes[value].kind != EXP_TRY && p->tree->nodes[value].kind != EXP_CATCH &&
       !(p->tree->nodes[value].kind == EXP_LEN && at(p, start, "#init"))) {
     fail(p, start, "expression is not a statement"); return NONE;
   }
@@ -411,24 +498,6 @@ static uint32_t src_recover(Parser *p, Parser saved, uint32_t count, bool top) {
   if (t->error) return NONE;
   return src_node(p, SRC_ERROR, start, end, NONE);
 }
-/* The offset of a `.Name` on the current statement's line that no value
-   precedes, as in `c == .Red`: Dyn always writes the enum type. */
-static uint32_t statement_start(const Parser *p, Parser saved) {
-  (void)p;
-  return saved.token.start;
-}
-static uint32_t src_bare_variant(const Parser *p, uint32_t from) {
-  for (uint32_t i = from; i + 1 < p->length && p->text[i] != '\n'; ++i) {
-    if (p->text[i] != '.' || !alpha((unsigned char)p->text[i + 1])) continue;
-    uint32_t before = i;
-    while (before > from && (p->text[before - 1] == ' ' || p->text[before - 1] == '\t')) --before;
-    char c = before > from ? p->text[before - 1] : ' ';
-    if (c == '=' || c == '(' || c == ',' || c == '!' || c == '<' || c == '>' || c == ':' || c == '{' ||
-        (before < i && (c == '|' || c == '&' || c == 'n')))
-      return i;
-  }
-  return NONE;
-}
 /* `[3]i32{1, 2, 3}` written as in other languages: an element type name
    right after `]`, then `{`. */
 static bool src_typed_array_literal(Parser *p) {
@@ -445,10 +514,7 @@ static uint32_t src_block(Parser *p) {
     Parser saved = *p; uint32_t count = p->tree->count;
     uint32_t statement = src_statement(p);
     if (!p->tree->error && !is(p, "}") && p->token.kind != END && !src_line_start(p, p->token.start)) {
-      uint32_t variant = src_bare_variant(p, statement_start(p, saved));
-      if (variant != NONE)
-        fail(p, variant, "an enum variant needs its type: write Enum.Variant, not .Variant");
-      else if (src_typed_array_literal(p))
+      if (src_typed_array_literal(p))
         fail(p, p->token.start, "write an array literal as [a, b, c] and give the type to the name: values: [3]i32 = [1, 2, 3]");
       else
         fail(p, p->token.start, "each statement must start on its own line");
@@ -459,10 +525,11 @@ static uint32_t src_block(Parser *p) {
   uint32_t end = p->token.end; expect(p, "}");
   return src_node(p, SRC_BLOCK, start, end, first);
 }
+static void src_type_parameters(Parser *p, uint32_t *first, uint32_t *last);
 static uint32_t src_param(Parser *p, bool variadic_allowed) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
   if (at(p, start, "$")) {
-    fail(p, start, "write `T: type` to take a type; `$T` marks a parameter that supplies T, as in `items: []$T`");
+    fail(p, start, "$T generics were removed: declare type parameters with <T>, as in fn f<T>(x: T)");
     return NONE;
   }
   append(p, &first, &last, name(p));
@@ -475,6 +542,10 @@ static uint32_t src_param(Parser *p, bool variadic_allowed) {
     append(p, &first, &last, type(p));
     return src_node(p, SRC_VARIADIC_PARAM, start, src_end(p, last, start), first);
   }
+  if (is(p, "type")) {
+    fail(p, p->token.start, "`T: type` was removed: declare type parameters with <T>, as in fn f<T>(...)");
+    return NONE;
+  }
   uint32_t target = type(p);
   append(p, &first, &last, src_node(p, SRC_QUALIFIER, colon, src_end(p, target, colon), target));
   return src_node(p, SRC_FN_PARAM, start, src_end(p, last, start), first);
@@ -483,9 +554,11 @@ static uint32_t src_function(Parser *p, bool external) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
   if (external) expect(p, "extern");
   expect(p, "fn"); append(p, &first, &last, name(p));
+  if (!external) src_type_parameters(p, &first, &last);
   if (external && p->token.kind == STRING)
     append(p, &first, &last, src_literal(p, STRING, EXP_STRING));
   expect(p, "(");
+  ++p->bracket_depth;
   while (!is(p, ")") && !p->tree->error) {
     if (external && (is(p, "..") || is(p, "..."))) {
       append(p, &first, &last, src_variadic(p)); break;
@@ -493,36 +566,38 @@ static uint32_t src_function(Parser *p, bool external) {
     append(p, &first, &last, src_param(p, !external));
     if (!take(p, ",")) break;
   }
+  --p->bracket_depth;
   uint32_t end = p->token.end; expect(p, ")");
   if (external) {
     if (optional_type_start(p)) {
       append(p, &first, &last, type(p)); end = src_end(p, last, end);
     }
   } else {
-    if (!is(p, "{")) append(p, &first, &last, type(p));
+    if (!is(p, "{")) append(p, &first, &last, return_type(p, true));
     append(p, &first, &last, src_block(p)); end = src_end(p, last, end);
   }
   return src_node(p, external ? SRC_EXTERN_FN : SRC_FN, start, end, first);
 }
 static void src_type_parameters(Parser *p, uint32_t *first, uint32_t *last) {
-  if (!take(p, "(")) return;
-  /* Bare names: every name in a declaration's parentheses is a type. */
-  while (!is(p, ")") && !p->tree->error) {
+  if (!take(p, "<")) return;
+  ++p->bracket_depth;
+  while (!is(p, ">") && !(p->token.kind == PUNCT && p->token.start < p->length && p->text[p->token.start] == '>') && !p->tree->error) {
     Token t = p->token;
     if (at(p, t.start, "$")) {
-      fail(p, t.start, "write `T`, not `$T`; a struct or enum's parameters are all types");
+      fail(p, t.start, "write `<T>`, not `<$T>`");
       break;
     }
-    if (t.kind != NAME) { fail(p, t.start, "expected a type parameter name, as in `List(T)`"); break; }
+    if (t.kind != NAME) { fail(p, t.start, "expected a type parameter name, as in `List<T>`"); break; }
     lex(p);
     append(p, first, last, node(p, EXP_TYPE_PARAMETER, t.start, t.end, NONE, (Token){0}));
     if (is(p, ":")) {
-      fail(p, p->token.start, "write `T`, not `T: type`; a struct or enum's parameters are all types");
+      fail(p, p->token.start, "write `<T>`, not `<T: type>`");
       break;
     }
     if (!take(p, ",")) break;
   }
-  expect(p, ")");
+  --p->bracket_depth;
+  expect_gt(p);
 }
 static uint32_t src_struct(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
@@ -530,7 +605,12 @@ static uint32_t src_struct(Parser *p) {
     fail(p, start, "union types were removed; use #bitcast or a payload enum");
     return NONE;
   }
-  bool packed = take(p, "packed");
+  bool packed = false, nocopy = false;
+  for (;;) {
+    if (!packed && take(p, "packed")) packed = true;
+    else if (!nocopy && take(p, "nocopy")) nocopy = true;
+    else break;
+  }
   expect(p, "struct");
   append(p, &first, &last, name(p));
   src_type_parameters(p, &first, &last);
@@ -545,7 +625,8 @@ static uint32_t src_struct(Parser *p) {
     if (!take(p, ",")) break;
   }
   uint32_t end = p->token.end; expect(p, "}");
-  return mark(p, src_node(p, SRC_STRUCT, start, end, first), packed ? EXP_PACKED : 0);
+  unsigned flags = (packed ? EXP_PACKED : 0) | (nocopy ? EXP_NOCOPY : 0);
+  return mark(p, src_node(p, SRC_STRUCT, start, end, first), flags);
 }
 static uint32_t src_enum(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
@@ -560,7 +641,18 @@ static uint32_t src_enum(Parser *p) {
   while (!is(p, "}") && !p->tree->error) {
     uint32_t begin = p->token.start, mf = NONE, ml = NONE;
     append(p, &mf, &ml, name(p));
-    if (is(p, ":")) append(p, &mf, &ml, src_qualifier(p));
+    if (take(p, "(")) {
+      uint32_t qstart = p->token.start;
+      ++p->bracket_depth;
+      uint32_t payload = type(p);
+      --p->bracket_depth;
+      uint32_t qend = p->token.end;
+      expect(p, ")");
+      append(p, &mf, &ml, src_node(p, SRC_QUALIFIER, qstart, qend, payload));
+    } else if (is(p, ":")) {
+      fail(p, p->token.start, "enum payload uses parentheses: write `Variant(Type)`, not `Variant: Type`");
+      return NONE;
+    }
     if (take(p, "=")) append(p, &mf, &ml, expression(p, 0));
     append(p, &first, &last, src_node(p, SRC_ENUM_MEMBER, begin, src_end(p, ml, begin), mf));
     if (!take(p, ",")) break;
@@ -570,21 +662,21 @@ static uint32_t src_enum(Parser *p) {
 }
 static bool src_declaration_keyword(Parser *p) {
   return is(p, "fn") || is(p, "pub") || is(p, "const") || is(p, "extern") ||
-      is(p, "struct") || src_packed(p) || is(p, "enum") || is(p, "type") ||
+      is(p, "struct") || src_packed(p) || src_nocopy(p) || is(p, "enum") || is(p, "type") ||
       src_distinct(p) || is(p, "use");
 }
 static uint32_t src_use(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
   expect(p, "use");
   do {
-    uint32_t begin = p->token.start, path = src_literal(p, STRING, EXP_STRING), end = src_end(p, path, begin);
-    if (p->token.kind == NAME && !src_declaration_keyword(p) &&
-        !src_next_is(p, ":") && !src_next_is(p, ":=")) {
-      uint32_t alias = name(p);
-      if (path != NONE) p->tree->nodes[path].next = alias;
-      end = src_end(p, alias, end);
+    uint32_t begin = p->token.start, item_first = NONE, item_last = NONE;
+    if (p->token.kind == NAME) append(p, &item_first, &item_last, name(p));
+    append(p, &item_first, &item_last, src_literal(p, STRING, EXP_STRING));
+    if (!p->tree->error && p->token.kind == NAME && !p->token.newline && !src_declaration_keyword(p)) {
+      fail(p, p->token.start, "import alias comes before the path: write `use alias \"path\"`");
+      return NONE;
     }
-    append(p, &first, &last, src_node(p, SRC_IMPORT, begin, end, path));
+    append(p, &first, &last, src_node(p, SRC_IMPORT, begin, src_end(p, item_last, begin), item_first));
   } while (take(p, ",") && !p->tree->error);
   return src_node(p, SRC_USE, start, src_end(p, last, start), first);
 }
@@ -624,7 +716,7 @@ static uint32_t src_declaration(Parser *p) {
       append(p, &first, &last, src_qualifier(p));
       child = src_node(p, SRC_EXTERN_VARIABLE, begin, src_end(p, last, begin), first);
     }
-  } else if (is(p, "struct") || src_packed(p)) child = src_struct(p);
+  } else if (is(p, "struct") || src_packed(p) || src_nocopy(p)) child = src_struct(p);
   else if (is(p, "enum")) child = src_enum(p);
   else if (is(p, "const")) child = src_const(p);
   else if (is(p, "type") || src_distinct(p)) child = src_alias(p);
@@ -707,7 +799,7 @@ static bool finish_tree(Parser *p, uint32_t root) {
         else if (c->kind == EXP_TYPE) c->field = EXP_ROLE_TYPE;
         break;
       case SRC_IMPORT:
-        c->field = child == n->first ? EXP_ROLE_PATH : EXP_ROLE_ALIAS;
+        c->field = c->kind == EXP_STRING ? EXP_ROLE_PATH : EXP_ROLE_ALIAS;
         break;
       case SRC_LINK: c->field = EXP_ROLE_LIBRARY; break;
       default: break;

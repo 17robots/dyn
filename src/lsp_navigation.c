@@ -87,8 +87,6 @@ const char *lsp_builtin_hover(const char *text, size_t line, size_t character) {
                 "numeric, integer, or pointer values."},
       {"#bitcast", "#bitcast(type, value) -> type\nReinterprets equal-sized "
                    "compatible scalar bits without numeric conversion."},
-      {"#len", "#len(array_or_slice) -> usize\nReturns an array or slice "
-               "element count."},
       {"#reverse", "for item in #reverse(range_or_collection)\nVisits a range, "
                    "array, or slice from its last value to its first."},
       {"#wrapping", "#wrapping(expression)\nInteger arithmetic inside wraps, even under "
@@ -587,7 +585,7 @@ static void lsp_semantic_token_nodes(const LspDocument *document, char *body,
     else if (kind == SRC_STRUCT_MEMBER ||
              (kind == EXP_FIELD && dyn_node_first(parent).id != node.id))
       type = 6;
-    else if (kind == SRC_ENUM_MEMBER)
+    else if (kind == SRC_ENUM_MEMBER || kind == EXP_DOT_NAME)
       type = 7;
     else if (kind == EXP_FIELD_TYPE || kind == EXP_TYPE)
       type = 1;
@@ -1497,7 +1495,7 @@ static void lsp_struct_hover(LspSemantic *semantic, uint32_t index, char *out,
                 s->packed ? "packed " : "",
                 /* A template's name runs on through its parameters. */
                 (int)(s->is_template
-                          ? (size_t)(strchr(semantic->source.text + s->name.end_byte, ')') + 1 -
+                          ? (size_t)(strchr(semantic->source.text + s->name.end_byte, '>') + 1 -
                                      (semantic->source.text + s->name.start_byte))
                           : s->name.end_byte - s->name.start_byte),
                 semantic->source.text + s->name.start_byte);

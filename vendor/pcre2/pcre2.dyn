@@ -1,4 +1,5 @@
-use "std/fail"
+use io "std/io"
+use parse "std/parse"
 #link("pcre2-8")
 // PCRE2 8-bit API. Compiled patterns and match data are provider-owned.
 pub type Pattern = rawptr
@@ -11,35 +12,17 @@ pub const NoMatch: i32 = -1
 pub struct Span { start: usize, end: usize }
 extern fn native_error_message "pcre2_get_error_message_8"(code: i32, buffer: *u8, size: usize) i32
 
-// Records PCRE2's message for code, keeping the code in native.
-fn provider_failed(status: *fail.Status, kind: fail.Kind, operation: []const u8, code: i32, offset: usize, located: bool) {
-  text: [120]u8
-  length := native_error_message(code, &text[0], #len(text))
-  message: []const u8 = "PCRE2 failed"
-  if length > 0 {
-    message = text[..#cast(usize, length)]
-  }
-  failure := fail.make(kind, operation, "", message)
-  failure.native = code
-  failure.offset = offset
-  failure.has_offset = located
-  fail.set(status, failure)
-}
-// A malformed pattern fails with InvalidInput at its offset.
-pub fn compile_owned(status: *fail.Status, pattern: []const u8, options: u32) Pattern {
-  if status == nil { return compile_owned(&fail.Status{}, pattern, options) }
-  if status.failed { return nil }
+// A malformed pattern fails with Invalid at its offset.
+pub fn compile_owned(pattern: []const u8, options: u32) Pattern!parse.ParseErr {
   empty: [1]u8
   pointer: *const u8 = &empty[0]
-  if #len(pattern) > 0 {
+  if pattern.len > 0 {
     pointer = &pattern[0]
   }
   code: i32 = 0
   offset: usize = 0
-  value := native_compile(pointer, #len(pattern), options, &code, &offset, nil)
-  if value == nil {
-    provider_failed(status, fail.Kind.InvalidInput, "compile pattern", code, offset, true)
-  }
+  value := native_compile(pointer, pattern.len, options, &code, &offset, nil)
+  if value == nil { fail parse.ParseErr.Invalid(offset) }
   return value
 }
 pub fn pattern_destroy_owned(pattern: Pattern) {
@@ -58,43 +41,32 @@ pub fn match_data_destroy_owned(data: MatchData) {
 }
 // Subject borrowed for call; offsets refer to caller subject. Match data is mutable
 // and thread-confined. Captures are meaningful only after a match. Whether it
-// matched; a match error (such as a resource limit) fails with System.
-pub fn match(status: *fail.Status, pattern: Pattern, data: MatchData, subject: []const u8, start: usize) bool {
-  if status == nil { return match(&fail.Status{}, pattern, data, subject, start) }
-  if status.failed { return false }
-  if pattern == nil || data == nil || start > #len(subject) {
-    provider_failed(status, fail.Kind.InvalidInput, "match", -33, 0, false)
-    return false
-  }
+// matched; a match error (such as a resource limit) fails with System and
+// PCRE2's code, and no pattern or data, or a start past the subject, with
+// InvalidInput.
+pub fn match(pattern: Pattern, data: MatchData, subject: []const u8, start: usize) bool!io.IoErr {
+  if pattern == nil || data == nil || start > subject.len { fail .InvalidInput }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
-  if #len(subject) > 0 {
+  if subject.len > 0 {
     pointer = &subject[0]
   }
-  code := native_match(pattern, pointer, #len(subject), start, 0, data, nil)
-  if code < 0 && code != NoMatch {
-    provider_failed(status, fail.Kind.System, "match", code, 0, false)
-    return false
-  }
+  code := native_match(pattern, pointer, subject.len, start, 0, data, nil)
+  if code < 0 && code != NoMatch { fail io.IoErr.System(code) }
   return code >= 0
 }
 // Where group index matched (0 is the whole match). NotFound for a group that
 // took no part in the match or an index past the pattern's groups.
-pub fn capture(status: *fail.Status, data: MatchData, index: usize) Span {
-  if status == nil { return capture(&fail.Status{}, data, index) }
-  if status.failed { return Span{} }
-  if data == nil || index >= #cast(usize, native_count(data)) { return no_capture(status) }
+pub fn capture(data: MatchData, index: usize) Span!io.IoErr {
+  if data == nil || index >= #cast(usize, native_count(data)) { fail .NotFound }
   offsets := native_offsets(data)
   pair := #slice(offsets, #cast(usize, native_count(data)) * 2)
   start := pair[index * 2]
   end := pair[index * 2 + 1]
-  if start == #cast(usize, -1) || end == #cast(usize, -1) { return no_capture(status) }
+  if start == #cast(usize, -1) || end == #cast(usize, -1) { fail .NotFound }
   return Span{ start: start, end: end }
 }
-fn no_capture(status: *fail.Status) Span {
-  fail.set(status, fail.make(fail.Kind.NotFound, "read capture", "", "the group took no part in the match"))
-  return Span{}
-}
+
 extern fn native_compile "pcre2_compile_8"(pattern: *const u8, length: usize, options: u32, code: *i32, offset: *usize, context: rawptr) Pattern
 extern fn native_code_free "pcre2_code_free_8"(pattern: Pattern)
 extern fn native_data_create "pcre2_match_data_create_from_pattern_8"(pattern: Pattern, context: rawptr) MatchData

@@ -1,5 +1,5 @@
-use "std/fail"
-use "std/io" io
+use parse "std/parse"
+use io "std/io"
 // Semantic Versioning 2.0 values. Prerelease/build slices borrow input.
 
 pub struct Version {
@@ -16,9 +16,9 @@ fn identifier_byte(byte: u8) bool {
     (byte >= 'A' && byte <= 'Z') || byte == '-'
 }
 
-fn parse_number(text: []const u8, offset: *usize, output: *u32, kind: *fail.Kind) bool {
+fn parse_number(text: []const u8, offset: *usize, output: *u32, overflow: *bool) bool {
   start := offset.*
-  for offset.* < #len(text) && text[offset.*] >= '0' && text[offset.*] <= '9' {
+  for offset.* < text.len && text[offset.*] >= '0' && text[offset.*] <= '9' {
     offset.* += 1
   }
   if offset.* == start { return false }
@@ -31,7 +31,7 @@ fn parse_number(text: []const u8, offset: *usize, output: *u32, kind: *fail.Kind
   for i < offset.* {
     value = value * 10 + (text[i] - '0')
     if value > 4294967295 {
-      kind.* = fail.Kind.Overflow
+      overflow.* = true
       offset.* = i
       return false
     }
@@ -43,11 +43,11 @@ fn parse_number(text: []const u8, offset: *usize, output: *u32, kind: *fail.Kind
 
 fn valid_identifiers(text: []const u8, prerelease: bool, failure: *usize) bool {
   failure.* = 0
-  if #len(text) == 0 { return false }
+  if text.len == 0 { return false }
   start: usize = 0
   i: usize = 0
-  for i <= #len(text) {
-    if i == #len(text) || text[i] == '.' {
+  for i <= text.len {
+    if i == text.len || text[i] == '.' {
       if i == start {
         failure.* = i
         return false
@@ -74,57 +74,55 @@ fn valid_identifiers(text: []const u8, prerelease: bool, failure: *usize) bool {
 }
 
 // A version such as "1.2.3-alpha.1+build". Malformed text fails with
-// InvalidInput, a number past u32 with Overflow, at the offending byte.
-pub fn parse(status: *fail.Status, text: []const u8) Version {
-  if status == nil { return parse(&fail.Status{}, text) }
-  if status.failed { return Version{} }
+// Invalid, a number past u32 with TooLarge, at the offending byte.
+pub fn parse(text: []const u8) Version!parse.ParseErr {
   at: usize = 0
   version: Version
-  kind := fail.Kind.InvalidInput
-  if !parse_number(text, &at, &version.major, &kind) { return failed(status, kind, at) }
-  if at == #len(text) || text[at] != '.' { return failed(status, kind, at) }
+  overflow := false
+  if !parse_number(text, &at, &version.major, &overflow) { fail failed(overflow, at) }
+  if at == text.len || text[at] != '.' { fail failed(overflow, at) }
   at += 1
-  if !parse_number(text, &at, &version.minor, &kind) { return failed(status, kind, at) }
-  if at == #len(text) || text[at] != '.' { return failed(status, kind, at) }
+  if !parse_number(text, &at, &version.minor, &overflow) { fail failed(overflow, at) }
+  if at == text.len || text[at] != '.' { fail failed(overflow, at) }
   at += 1
-  if !parse_number(text, &at, &version.patch, &kind) { return failed(status, kind, at) }
-  if at < #len(text) && text[at] == '-' {
+  if !parse_number(text, &at, &version.patch, &overflow) { fail failed(overflow, at) }
+  if at < text.len && text[at] == '-' {
     at += 1
     prerelease_start := at
-    for at < #len(text) && text[at] != '+' {
+    for at < text.len && text[at] != '+' {
       at += 1
     }
     version.prerelease = text[prerelease_start..at]
     failure: usize = 0
     if !valid_identifiers(version.prerelease, true, &failure) {
-      return failed(status, fail.Kind.InvalidInput, prerelease_start + failure)
+      fail parse.ParseErr.Invalid(prerelease_start + failure)
     }
   }
-  if at < #len(text) && text[at] == '+' {
+  if at < text.len && text[at] == '+' {
     at += 1
     build_start := at
-    at = #len(text)
+    at = text.len
     version.build = text[build_start..at]
     failure: usize = 0
     if !valid_identifiers(version.build, false, &failure) {
-      return failed(status, fail.Kind.InvalidInput, build_start + failure)
+      fail parse.ParseErr.Invalid(build_start + failure)
     }
   }
-  if at != #len(text) { return failed(status, kind, at) }
+  if at != text.len { fail failed(overflow, at) }
   return version
 }
 
 fn bytes_compare(a: []const u8, b: []const u8) i32 {
-  shared := #len(a)
-  if #len(b) < shared {
-    shared = #len(b)
+  shared := a.len
+  if b.len < shared {
+    shared = b.len
   }
   for i in 0..shared {
     if a[i] < b[i] { return -1 }
     if a[i] > b[i] { return 1 }
   }
-  if #len(a) < #len(b) { return -1 }
-  if #len(a) > #len(b) { return 1 }
+  if a.len < b.len { return -1 }
+  if a.len > b.len { return 1 }
   return 0
 }
 
@@ -137,23 +135,23 @@ fn numeric_identifier(value: []const u8) bool {
 
 fn next_identifier(text: []const u8, offset: *usize) []const u8 {
   start := offset.*
-  for offset.* < #len(text) && text[offset.*] != '.' {
+  for offset.* < text.len && text[offset.*] != '.' {
     offset.* += 1
   }
   result := text[start..offset.*]
-  if offset.* < #len(text) {
+  if offset.* < text.len {
     offset.* += 1
   }
   return result
 }
 
 fn compare_prerelease(a: []const u8, b: []const u8) i32 {
-  if #len(a) == 0 && #len(b) == 0 { return 0 }
-  if #len(a) == 0 { return 1 }
-  if #len(b) == 0 { return -1 }
+  if a.len == 0 && b.len == 0 { return 0 }
+  if a.len == 0 { return 1 }
+  if b.len == 0 { return -1 }
   a_at: usize = 0
   b_at: usize = 0
-  for a_at < #len(a) && b_at < #len(b) {
+  for a_at < a.len && b_at < b.len {
     left := next_identifier(a, &a_at)
     right := next_identifier(b, &b_at)
     left_numeric := numeric_identifier(left)
@@ -162,9 +160,9 @@ fn compare_prerelease(a: []const u8, b: []const u8) i32 {
     if !left_numeric && right_numeric { return 1 }
     comparison: i32 = 0
     if left_numeric {
-      if #len(left) < #len(right) {
+      if left.len < right.len {
         comparison = -1
-      } else if #len(left) > #len(right) {
+      } else if left.len > right.len {
         comparison = 1
       } else {
         comparison = bytes_compare(left, right)
@@ -174,16 +172,17 @@ fn compare_prerelease(a: []const u8, b: []const u8) i32 {
     }
     if comparison != 0 { return comparison }
   }
-  if a_at < #len(a) { return 1 }
-  if b_at < #len(b) { return -1 }
+  if a_at < a.len { return 1 }
+  if b_at < b.len { return -1 }
   return 0
 }
 
-// Build metadata does not affect precedence.
-fn failed(status: *fail.Status, kind: fail.Kind, offset: usize) Version {
-  fail.at(status, kind, "parse version", "malformed version", offset)
-  return Version{}
+fn failed(overflow: bool, offset: usize) parse.ParseErr {
+  if overflow { return parse.ParseErr.TooLarge(offset) }
+  return parse.ParseErr.Invalid(offset)
 }
+
+// Build metadata does not affect precedence.
 
 pub fn compare(a, b: Version) i32 {
   if a.major < b.major { return -1 }

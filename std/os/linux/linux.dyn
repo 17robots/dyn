@@ -1,15 +1,12 @@
 #target(kernel: linux)
 
-use "std/mem" memory
+use memory "std/mem"
 use "std/os/linux/sys"
 use "std/io"
-use "std/fail"
 
-// Records a negative system result as a failure of operation; returns value.
-fn check(status: *fail.Status, operation: []const u8, value: isize) isize {
-  if value < 0 {
-    fail.set(status, io.from_linux(operation, "", value))
-  }
+// value, or its failure when it is a negative system result.
+fn check(value: isize) isize!io.IoErr {
+  if value < 0 { fail io.linux_err(value) }
   return value
 }
 
@@ -25,15 +22,15 @@ pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
   path: [19]u8
   source: []const u8 = "/proc/self/cmdline"
   i: usize = 0
-  for i < #len(source) {
+  for i < source.len {
     path[i] = source[i]
     i += 1
   }
   descriptor := #syscall(sys.Openat, -100, &path[0], 0, 0)
   if descriptor < 0 { return no_arguments() }
-  value := #syscall(sys.Read, descriptor, &temporary[0], #len(temporary))
+  value := #syscall(sys.Read, descriptor, &temporary[0], temporary.len)
   _ = #syscall(sys.Close, descriptor)
-  if value < 0 || #cast(usize, value) == #len(temporary) { return no_arguments() }
+  if value < 0 || #cast(usize, value) == temporary.len { return no_arguments() }
   used := #cast(usize, value)
   count: usize = 0
   i = 0
@@ -49,7 +46,7 @@ pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
 
   bytes := memory.push_bytes(arena, used)
   _ = memory.copy(bytes, temporary[..used])
-  arguments := memory.push_array([]const u8, arena, count)
+  arguments := memory.push_array<[]const u8>(arena, count)
   start: usize = 0
   at: usize = 0
   i = 0
@@ -87,61 +84,45 @@ pub struct Waited { process: isize, wait_status: i32 }
 pub struct SpawnOptions { input: isize, output: isize, error: isize, directory: []const u8 }
 struct CStringPointer { value: *u8 }
 
-pub fn pipe(status: *fail.Status) Pipe {
-  if status == nil { return pipe(&fail.Status{}) }
-  if status.failed { return Pipe{ input: -1, output: -1 } }
+pub fn pipe() Pipe!io.IoErr {
   descriptors: [2]i32
-  value := #syscall(sys.Pipe2, &descriptors[0], 0)
-  if check(status, "pipe", value) < 0 { return Pipe{ input: -1, output: -1 } }
+  _ = try check(#syscall(sys.Pipe2, &descriptors[0], 0))
   return Pipe{ input: descriptors[0], output: descriptors[1] }
 }
 // Closes descriptor. Never retry a failed close: the descriptor may already
 // be reused.
-pub fn close_descriptor(status: *fail.Status, descriptor: isize) {
-  if status == nil {
-    close_descriptor(&fail.Status{}, descriptor)
-    return
-  }
-  _ = check(status, "close", #syscall(sys.Close, descriptor))
+pub fn close_descriptor(descriptor: isize) !io.IoErr {
+  _ = try check(#syscall(sys.Close, descriptor))
 }
-pub fn duplicate_to(status: *fail.Status, descriptor: isize, target: isize) isize {
-  if status == nil { return duplicate_to(&fail.Status{}, descriptor, target) }
-  if status.failed { return -1 }
-  if descriptor == target { return check(status, "duplicate", #syscall(sys.Fcntl, descriptor, 1, 0)) }
+pub fn duplicate_to(descriptor: isize, target: isize) isize!io.IoErr {
+  if descriptor == target { return try check(#syscall(sys.Fcntl, descriptor, 1, 0)) }
   value := #syscall(sys.Dup2, descriptor, target, 0)
   for value == -4 {
     value = #syscall(sys.Dup2, descriptor, target, 0)
   }
-  return check(status, "duplicate", value)
+  return try check(value)
 }
-pub fn send_signal(status: *fail.Status, process: isize, signal: usize) {
-  if status == nil {
-    send_signal(&fail.Status{}, process, signal)
-    return
-  }
-  if status.failed { return }
-  _ = check(status, "signal", #syscall(sys.Kill, process, signal))
+pub fn send_signal(process: isize, signal: usize) !io.IoErr {
+  _ = try check(#syscall(sys.Kill, process, signal))
 }
 // fork: 0 in the child, the child's id in the parent.
-pub fn fork_process(status: *fail.Status) isize {
-  if status == nil { return fork_process(&fail.Status{}) }
-  if status.failed { return -1 }
-  return check(status, "fork", fork_native())
+pub fn fork_process() isize!io.IoErr {
+  return try check(fork_native())
 }
 
 fn terminate(arena: *memory.Arena, text: []const u8) *u8 {
-  bytes := memory.push_bytes(arena, #len(text) + 1)
-  for i in 0..#len(text) {
+  bytes := memory.push_bytes(arena, text.len + 1)
+  for i in 0..text.len {
     bytes[i] = text[i]
   }
-  bytes[#len(text)] = 0
+  bytes[text.len] = 0
   return &bytes[0]
 }
 
 pub fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) isize {
   mark := memory.arena_mark(arena)
   defer memory.arena_rewind(arena, mark)
-  if #len(path) == 0 { return -22 }
+  if path.len == 0 { return -22 }
   for byte in path {
     if byte == 0 { return -22 }
   }
@@ -152,8 +133,8 @@ pub fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) 
   }
   path_raw := terminate(arena, path)
   if path_raw == nil { return -28 }
-  length := #len(arguments)
-  pointers := memory.push_array(CStringPointer, arena, length + 1)
+  length := arguments.len
+  pointers := memory.push_array<CStringPointer>(arena, length + 1)
   for i in 0..length {
     pointers[i] = CStringPointer{ value: terminate(arena, arguments[i]) }
     if pointers[i].value == nil { return -28 }
@@ -165,50 +146,47 @@ pub fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) 
 
 pub fn spawn_environment(
   arena: *memory.Arena,
-  status: *fail.Status,
   path: []const u8,
   arguments: [][]const u8,
   environment: [][]const u8,
   options: SpawnOptions,
-) isize {
-  if status == nil { return spawn_environment(arena, &fail.Status{}, path, arguments, environment, options) }
-  if status.failed { return -1 }
+) isize!io.IoErr {
   mark := memory.arena_mark(arena)
   defer memory.arena_rewind(arena, mark)
-  if #len(path) == 0 { return spawn_failed(status, -22) }
+  if path.len == 0 { fail io.linux_err(-22) }
   for byte in path {
-    if byte == 0 { return spawn_failed(status, -22) }
+    if byte == 0 { fail io.linux_err(-22) }
   }
   for argument in arguments {
     for argument_byte in argument {
-      if argument_byte == 0 { return spawn_failed(status, -22) }
+      if argument_byte == 0 { fail io.linux_err(-22) }
     }
   }
   path_raw := terminate(arena, path)
-  if path_raw == nil { return spawn_failed(status, -28) }
+  if path_raw == nil { fail io.linux_err(-28) }
   directory_raw: *const u8 = nil
-  if #len(options.directory) > 0 {
+  if options.directory.len > 0 {
     for directory_byte in options.directory {
-      if directory_byte == 0 { return spawn_failed(status, -22) }
+      if directory_byte == 0 { fail io.linux_err(-22) }
     }
     directory_raw = terminate(arena, options.directory)
-    if directory_raw == nil { return spawn_failed(status, -28) }
+    if directory_raw == nil { fail io.linux_err(-28) }
   }
-  count := #len(arguments)
-  pointers := memory.push_array(CStringPointer, arena, count + 1)
+  count := arguments.len
+  pointers := memory.push_array<CStringPointer>(arena, count + 1)
   for index in 0..count {
     pointers[index].value = terminate(arena, arguments[index])
-    if pointers[index].value == nil { return spawn_failed(status, -28) }
+    if pointers[index].value == nil { fail io.linux_err(-28) }
   }
   pointers[count].value = nil
-  environment_pointers := memory.push_array(CStringPointer, arena, #len(environment) + 1)
+  environment_pointers := memory.push_array<CStringPointer>(arena, environment.len + 1)
   env_index: usize = 0
-  for env_index < #len(environment) {
+  for env_index < environment.len {
     for env_byte in environment[env_index] {
-      if env_byte == 0 { return spawn_failed(status, -22) }
+      if env_byte == 0 { fail io.linux_err(-22) }
     }
     environment_pointers[env_index].value = terminate(arena, environment[env_index])
-    if environment_pointers[env_index].value == nil { return spawn_failed(status, -28) }
+    if environment_pointers[env_index].value == nil { fail io.linux_err(-28) }
     env_index += 1
   }
   environment_pointers[env_index].value = nil
@@ -224,13 +202,13 @@ pub fn spawn_environment(
   for source_index in 0..3 {
     if sources[source_index] >= 0 {
       copied := #syscall(sys.Fcntl, sources[source_index], 1030, 3)
-      if copied < 0 { return spawn_failed(status, copied) }
+      if copied < 0 { fail io.linux_err(copied) }
       redirected_sources[source_index] = copied
     }
   }
   descriptors: [2]i32
   channel := #syscall(sys.Pipe2, &descriptors[0], 524288)
-  if channel < 0 { return spawn_failed(status, channel) }
+  if channel < 0 { fail io.linux_err(channel) }
   // Keep the error pipe out of the standard-descriptor range even if stdin/out/err
   // were closed by the parent; redirection must not overwrite the reporting pipe.
   input := #syscall(sys.Fcntl, descriptors[0], 1030, 3)
@@ -244,13 +222,13 @@ pub fn spawn_environment(
     if output >= 0 {
       _ = #syscall(sys.Close, output)
     }
-    return spawn_failed(status, -24)
+    fail io.linux_err(-24)
   }
   child := fork_native()
   if child < 0 {
     _ = #syscall(sys.Close, input)
     _ = #syscall(sys.Close, output)
-    return spawn_failed(status, child)
+    fail io.linux_err(child)
   }
   if child == 0 {
     // In the child only raw system calls: the failure goes back to the parent.
@@ -278,22 +256,21 @@ pub fn spawn_environment(
   }
   _ = #syscall(sys.Close, input)
   if received != 0 {
-    cleanup: fail.Status
-    send_signal(&cleanup, child, 9)
-    _ = wait(&cleanup, child, false)
+    send_signal(child, 9) catch {}
+    reap(child)
     if received < 0 {
       reported = received
     } else if received != #cast(isize, #sizeof(isize)) {
       reported = -5
     }
-    return spawn_failed(status, reported)
+    fail io.linux_err(reported)
   }
   return child
 }
 
-fn spawn_failed(status: *fail.Status, code: isize) isize {
-  fail.set(status, io.from_linux("spawn", "", code))
-  return -1
+// Waits for child, which is ending anyway; its failure changes nothing.
+fn reap(child: isize) {
+  _ = wait(child, false) catch { return }
 }
 
 // dup2 for the forked child: 0 or a negative code.
@@ -313,9 +290,7 @@ fn raw_duplicate(descriptor: isize, target: isize) isize {
 
 // Waits for process to end. nonblocking returns process 0 when it is
 // still running.
-pub fn wait(status: *fail.Status, process: isize, nonblocking: bool) Waited {
-  if status == nil { return wait(&fail.Status{}, process, nonblocking) }
-  if status.failed { return Waited{} }
+pub fn wait(process: isize, nonblocking: bool) Waited!io.IoErr {
   wait_status: i32 = 0
   options: usize = 0
   if nonblocking {
@@ -325,7 +300,7 @@ pub fn wait(status: *fail.Status, process: isize, nonblocking: bool) Waited {
   for value == -4 {
     value = #syscall(sys.Wait4, process, &wait_status, options, 0)
   }
-  if check(status, "wait", value) < 0 { return Waited{} }
+  _ = try check(value)
   return Waited{ process: value, wait_status: wait_status }
 }
 pub fn exited(status: i32) bool {
@@ -350,25 +325,14 @@ pub fn exit_process(status: u8) {
 // Reads the process's initial environment. Values are copied into caller
 // storage. NotFound when the variable is unset; Capacity when the value does
 // not fit destination.
-pub fn environment_get(status: *fail.Status, name: []const u8, destination: []u8) []u8 {
-  if status == nil { return environment_get(&fail.Status{}, name, destination) }
-  if status.failed { return destination[..0] }
-  if #len(name) == 0 {
-    fail.invalid(status, "read environment", name, "empty variable name")
-    return destination[..0]
-  }
+pub fn environment_get(name: []const u8, destination: []u8) []u8!io.IoErr {
+  // An empty name, or one holding '=' or NUL, is InvalidInput.
+  if name.len == 0 { fail .InvalidInput }
   for name_byte in name {
-    if name_byte == 0 || name_byte == '=' {
-      fail.invalid(status, "read environment", name, "variable names cannot hold '=' or NUL")
-      return destination[..0]
-    }
+    if name_byte == 0 || name_byte == '=' { fail .InvalidInput }
   }
   path := "/proc/self/environ\0"
-  descriptor := #syscall(sys.Openat, -100, &path[0], 0, 0)
-  if descriptor < 0 {
-    fail.set(status, io.from_linux("read environment", "/proc/self/environ", descriptor))
-    return destination[..0]
-  }
+  descriptor := try check(#syscall(sys.Openat, -100, &path[0], 0, 0))
   defer _ = #syscall(sys.Close, descriptor)
   scratch: [4096]u8
   position: usize = 0
@@ -377,19 +341,13 @@ pub fn environment_get(status: *fail.Status, name: []const u8, destination: []u8
   in_value := false
   selected := false
   for {
-    count := #syscall(sys.Read, descriptor, &scratch[0], #len(scratch))
+    count := #syscall(sys.Read, descriptor, &scratch[0], scratch.len)
     if count == -4 { continue }
-    if count < 0 {
-      fail.set(status, io.from_linux("read environment", "/proc/self/environ", count))
-      return destination[..0]
-    }
+    _ = try check(count)
     if count == 0 {
-      if selected {
-        fail.set(status, fail.make(fail.Kind.System, "read environment", "/proc/self/environ", "the last entry has no end"))
-      } else {
-        fail.set(status, fail.make(fail.Kind.NotFound, "read environment", name, "not set"))
-      }
-      return destination[..0]
+      // The last entry has no end: EIO.
+      if selected { fail io.linux_err(-5) }
+      fail .NotFound
     }
     for byte in scratch[..#cast(usize, count)] {
       if byte == 0 {
@@ -402,20 +360,15 @@ pub fn environment_get(status: *fail.Status, name: []const u8, destination: []u8
       } else if !in_value {
         if byte == '=' {
           in_value = true
-          selected = matching && position == #len(name)
+          selected = matching && position == name.len
         } else {
-          if position >= #len(name) || byte != name[position] {
+          if position >= name.len || byte != name[position] {
             matching = false
           }
           position += 1
         }
       } else if selected {
-        if used == #len(destination) {
-          failure := fail.make(fail.Kind.Capacity, "read environment", name, "the value does not fit the storage")
-          failure.native = -28
-          fail.set(status, failure)
-          return destination[..0]
-        }
+        if used == destination.len { fail .Capacity }
         destination[used] = byte
         used += 1
       }
@@ -425,45 +378,26 @@ pub fn environment_get(status: *fail.Status, name: []const u8, destination: []u8
 }
 
 // The working directory, in destination.
-pub fn current_directory(status: *fail.Status, destination: []u8) []u8 {
-  if status == nil { return current_directory(&fail.Status{}, destination) }
-  if status.failed { return destination[..0] }
-  if #len(destination) == 0 {
-    fail.set(status, io.from_linux("current directory", "", -34))
-    return destination[..0]
-  }
-  count := #syscall(sys.Getcwd, &destination[0], #len(destination))
-  if check(status, "current directory", count) < 0 { return destination[..0] }
-  if count == 0 {
-    fail.set(status, io.from_linux("current directory", "", -5))
-    return destination[..0]
-  }
+pub fn current_directory(destination: []u8) []u8!io.IoErr {
+  if destination.len == 0 { fail io.linux_err(-34) }
+  count := try check(#syscall(sys.Getcwd, &destination[0], destination.len))
+  if count == 0 { fail io.linux_err(-5) }
   return destination[..#cast(usize, count) - 1]
 }
 
 struct SignalDisposition { handler: usize, flags: usize, restorer: usize, mask: u64 }
-fn signal_disposition(status: *fail.Status, signal: usize, handler: usize) {
-  if status.failed { return }
+fn signal_disposition(signal: usize, handler: usize) !io.IoErr {
   action := SignalDisposition{ handler: handler }
-  _ = check(status, "set signal action", #syscall(sys.RtSigaction, signal, &action, 0, 8))
+  _ = try check(#syscall(sys.RtSigaction, signal, &action, 0, 8))
 }
-pub fn signal_ignore(status: *fail.Status, signal: usize) {
-  if status == nil {
-    signal_ignore(&fail.Status{}, signal)
-    return
-  }
-  signal_disposition(status, signal, 1)
+pub fn signal_ignore(signal: usize) !io.IoErr {
+  try signal_disposition(signal, 1)
 }
-pub fn signal_default(status: *fail.Status, signal: usize) {
-  if status == nil {
-    signal_default(&fail.Status{}, signal)
-    return
-  }
-  signal_disposition(status, signal, 0)
+pub fn signal_default(signal: usize) !io.IoErr {
+  try signal_disposition(signal, 0)
 }
 
-pub fn spawn(arena: *memory.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, options: SpawnOptions) isize {
-  if status == nil { return spawn(arena, &fail.Status{}, path, arguments, options) }
+pub fn spawn(arena: *memory.Arena, path: []const u8, arguments: [][]const u8, options: SpawnOptions) isize!io.IoErr {
   empty: [0][]const u8
-  return spawn_environment(arena, status, path, arguments, empty[..], options)
+  return try spawn_environment(arena, path, arguments, empty[..], options)
 }

@@ -14,7 +14,7 @@ SIZES = (1, 3, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 72, 127, 128)
 
 
 def source(guard):
-    declarations = ['use "std/io" io', 'fn expect(ok:bool) { if !ok { #panic("zero copy") } }']
+    declarations = ['use io "std/io"', 'fn expect(ok:bool) { if !ok { #panic("zero copy") } }']
     checks = []
     for size in SIZES:
         declarations += [f'struct Z{size} {{ a:[{size}]u8 }}',

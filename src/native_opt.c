@@ -355,6 +355,10 @@ typedef struct {
      part, iterated by pointer, or a case subject (an arm may alias a
      payload). With addressed, a local neither marks keeps its first value. */
   bool *written;
+  /* Locals given a new value as a whole: `p = ...`, or the subject of a
+     pointer loop or case. A pointer parameter neither this nor addressed
+     marks points at its argument for the whole body. */
+  bool *rebound;
   /* Original expression ID -> 1 + the rebuilt expression holding its value,
      for pure leaf calls hoisted out of the statement being rebuilt. */
   uint32_t *substitute;
@@ -400,6 +404,10 @@ typedef struct {
      alias_from[i] (an input local ID) is output local alias_to[i]. */
   uint32_t alias_from[8], alias_to[8];
   uint32_t alias_count;
+  /* Pointer parameters given &local: parameter pointer_from[i] points at
+     output local pointer_to[i], so p.* is that local and p.field its field. */
+  uint32_t pointer_from[8], pointer_to[8];
+  uint32_t pointer_count;
 } InlineScope;
 typedef struct {
   uint32_t *ids;
@@ -621,6 +629,47 @@ static void inline_uniform_call(Inline *b, const DynIrExpr *call) {
     } else *fact = id + 2;
   }
 }
+static DynExprId inline_name(Inline *b, uint32_t local, DynSpan span);
+static DynExprId inline_expr(Inline *b, const InlineScope *scope, DynExprId id, unsigned depth);
+/* The output local a pointer parameter named by expression id points at,
+   or UINT32_MAX. */
+static uint32_t inline_pointer_target(const Inline *b, const InlineScope *scope, DynExprId id) {
+  if (id >= b->in->expression_count) return UINT32_MAX;
+  const DynIrExpr *x = &b->in->expressions[id];
+  if (x->kind != DYN_EXPR_NAME) return UINT32_MAX;
+  for (uint32_t i = 0; i < scope->pointer_count; ++i)
+    if (scope->pointer_from[i] == x->integer) return scope->pointer_to[i];
+  return UINT32_MAX;
+}
+/* p.* becomes the local, p.field its field, and a bare p &local. Returns
+   DYN_NO_EXPR when e is none of these. */
+static DynExprId inline_pointer_use(Inline *b, const InlineScope *scope, const DynIrExpr *e, unsigned depth) {
+  uint32_t target;
+  if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_DEREF &&
+      (target = inline_pointer_target(b, scope, e->left)) != UINT32_MAX)
+    return inline_name(b, target, e->span);
+  if (e->kind == DYN_EXPR_FIELD && (target = inline_pointer_target(b, scope, e->left)) != UINT32_MAX) {
+    DynIrExpr field = *e;
+    if (!field.check_origin) field.check_origin = scope->check_origin;
+    field.left = inline_name(b, target, e->span);
+    field.right = inline_expr(b, scope, e->right, depth + 1);
+    uint32_t result;
+    INLINE_APPEND(b, expression, expressions_cap, field, result);
+    return result;
+  }
+  if (e->kind == DYN_EXPR_NAME) {
+    for (uint32_t i = 0; i < scope->pointer_count; ++i) {
+      if (scope->pointer_from[i] != e->integer) continue;
+      DynIrExpr address = {.kind = DYN_EXPR_UNARY, .op = DYN_OP_ADDRESS, .type = e->type,
+                           .left = inline_name(b, scope->pointer_to[i], e->span), .right = DYN_NO_EXPR,
+                           .span = e->span, .check_origin = e->check_origin ? e->check_origin : scope->check_origin};
+      uint32_t result;
+      INLINE_APPEND(b, expression, expressions_cap, address, result);
+      return result;
+    }
+  }
+  return DYN_NO_EXPR;
+}
 static DynExprId inline_expr(Inline *b, const InlineScope *scope, DynExprId id,
                              unsigned depth) {
   if (id == DYN_NO_EXPR || b->failed)
@@ -636,6 +685,10 @@ static DynExprId inline_expr(Inline *b, const InlineScope *scope, DynExprId id,
                          scope->check_origin != 0))
     return id;
   DynIrExpr e = b->in->expressions[id];
+  if (scope->pointer_count) {
+    DynExprId rewritten = inline_pointer_use(b, scope, &e, depth);
+    if (rewritten != DYN_NO_EXPR || b->failed) return rewritten;
+  }
   if (b->uniform_params && e.kind == DYN_EXPR_NAME && e.integer < b->in->local_count &&
       b->param_literals[e.integer] > 1 && b->in->unstable_locals &&
       !b->in->unstable_locals[e.integer] && !b->addressed[e.integer] &&
@@ -823,7 +876,7 @@ static bool inline_small_type(const DynIrProgram *ir, DynType type) {
 /* A function that returns, takes or keeps a struct this large by value is
    not inlined: its body is mostly the struct's zeroing and copying, so each
    inlined copy adds that code to the caller and saves only the call. Such
-   functions are usually failure paths (fail.make, fail.set). */
+   functions are usually cold paths that build a large record. */
 static bool inline_large_value(const DynIrProgram *ir, DynType type) {
   if (!dyn_type_is_struct(type)) return false;
   size_t index = type - DYN_TYPE_STRUCT_BASE;
@@ -1052,6 +1105,27 @@ static bool inline_call_bound(Inline *b, const InlineScope *scope,
         if (target != UINT32_MAX) {
           nested.alias_from[nested.alias_count] = param;
           nested.alias_to[nested.alias_count++] = target;
+          continue;
+        }
+      }
+    }
+    /* A pointer parameter the body never rebinds, given &local of a caller
+       local, uses that local directly, so taking its address for the call
+       no longer keeps it in memory. */
+    DynType param_type = param < b->in->local_count ? b->in->locals[param].type : DYN_TYPE_VOID;
+    if (!bound && b->rebound && param < b->in->local_count && nested.pointer_count < 8 &&
+        !b->rebound[param] && !b->addressed[param] && dyn_type_is_pointer(param_type) &&
+        (size_t)(param_type - DYN_TYPE_POINTER_BASE) < b->in->pointer_count) {
+      DynExprId argument = b->in->items[call->item_start + i].expression;
+      const DynIrExpr *address = argument < b->in->expression_count ? &b->in->expressions[argument] : NULL;
+      const DynIrExpr *named = address && address->kind == DYN_EXPR_UNARY && address->op == DYN_OP_ADDRESS &&
+                               address->left < b->in->expression_count ? &b->in->expressions[address->left] : NULL;
+      if (named && named->kind == DYN_EXPR_NAME && named->integer < b->in->local_count &&
+          named->type == b->in->pointers[param_type - DYN_TYPE_POINTER_BASE].pointee) {
+        uint32_t target = inline_local(b, scope, (uint32_t)named->integer);
+        if (target != UINT32_MAX) {
+          nested.pointer_from[nested.pointer_count] = param;
+          nested.pointer_to[nested.pointer_count++] = target;
           continue;
         }
       }
@@ -1918,13 +1992,14 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
   }
   b.addressed = calloc(b.in->local_count ? b.in->local_count : 1, sizeof(bool));
   b.written = calloc(b.in->local_count ? b.in->local_count : 1, sizeof(bool));
-  if (!b.written) b.failed = true;
+  b.rebound = calloc(b.in->local_count ? b.in->local_count : 1, sizeof(bool));
+  if (!b.written || !b.rebound) b.failed = true;
   for (size_t i = 0; i < b.in->statement_count && !b.failed; ++i) {
     const DynIrStmt *s = &b.in->statements[i];
     DynExprId root = DYN_NO_EXPR;
     if (s->kind == DYN_STMT_ASSIGN) {
       if (s->target == DYN_NO_EXPR) {
-        if (s->local_id < b.in->local_count) b.written[s->local_id] = true;
+        if (s->local_id < b.in->local_count) b.written[s->local_id] = b.rebound[s->local_id] = true;
         continue;
       }
       root = s->target;
@@ -1933,6 +2008,9 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
     } else {
       continue;
     }
+    if (root < b.in->expression_count && b.in->expressions[root].kind == DYN_EXPR_NAME &&
+        (uint64_t)b.in->expressions[root].integer < b.in->local_count)
+      b.rebound[b.in->expressions[root].integer] = true;
     for (unsigned d = 0; d < 64 && root != DYN_NO_EXPR && root < b.in->expression_count; ++d) {
       const DynIrExpr *x = &b.in->expressions[root];
       if (x->kind == DYN_EXPR_NAME) {
@@ -2070,6 +2148,7 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
   free(b.loop_span);
   free(b.addressed);
   free(b.written);
+  free(b.rebound);
   free(b.substitute);
   free(b.param_literals);
   free(b.escaped);

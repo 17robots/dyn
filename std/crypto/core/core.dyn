@@ -1,4 +1,3 @@
-use "std/fail"
 // Private implementation shared by the public algorithm modules.
 // The algorithms' + and << are mod 2^32: they are written inside #wrapping.
 fn rotr(x: u32, n: u32) u32 {
@@ -19,16 +18,16 @@ const K: [64]u32 = [
 // Whole 64-byte blocks of data, through the CPU's SHA instructions where
 // there are some.
 fn blocks(state: *[8]u32, data: []const u8) {
-  if #len(data) < 64 || hardware_blocks(state, data) { return }
+  if data.len < 64 || hardware_blocks(state, data) { return }
   at: usize = 0
-  for #len(data) - at >= 64 {
+  for data.len - at >= 64 {
     block(state, data[at..at + 64])
     at += 64
   }
 }
 
 fn block(state: *[8]u32, input: []const u8) {
-  if #len(input) < 64 { return }
+  if input.len < 64 { return }
   words: [64]u32
   for i in 0..16 {
     at := i * 4
@@ -93,7 +92,7 @@ pub fn sha256_update(context: *Sha256, input: []const u8) {
     sha256_init(context)
   }
   if context.failed { return }
-  input_length: u64 = #len(input)
+  input_length: u64 = input.len
   maximum: u64 = 2305843009213693951
   if input_length > maximum - context.length {
     context.failed = true
@@ -104,7 +103,7 @@ pub fn sha256_update(context: *Sha256, input: []const u8) {
   if context.tail_length != 0 {
     block_size: usize = 64
     needed := block_size - context.tail_length
-    take: usize = #len(input)
+    take: usize = input.len
     if take > needed {
       take = needed
     }
@@ -120,11 +119,11 @@ pub fn sha256_update(context: *Sha256, input: []const u8) {
       return
     }
   }
-  whole := (#len(input) - at) / 64 * 64
+  whole := (input.len - at) / 64 * 64
   blocks(&context.state, input[at..at + whole])
   at += whole
   rest: usize = 0
-  for at + rest < #len(input) {
+  for at + rest < input.len {
     context.tail[rest] = input[at + rest]
     rest += 1
   }
@@ -138,7 +137,7 @@ pub fn sha256_finish(context: *Sha256, destination: []u8) []u8 {
     sha256_init(context)
   }
   if context.failed { return destination[..0] }
-  if #len(destination) < 32 { return destination[..0] }
+  if destination.len < 32 { return destination[..0] }
   tail: [128]u8
   remaining := context.tail_length
   i: usize = 0
@@ -186,13 +185,13 @@ pub struct HmacSha256 { inner: Sha256, outer: Sha256 }
 pub fn hmac_sha256_init(state: *HmacSha256, key: []const u8) {
   state.* = HmacSha256{}
   key_block: [64]u8
-  if #len(key) > 64 {
-    if #len(sha256(key_block[..32], key)) != 32 {
+  if key.len > 64 {
+    if sha256(key_block[..32], key).len != 32 {
       state.inner.failed = true
       return
     }
   } else {
-    for i in 0..#len(key) {
+    for i in 0..key.len {
       key_block[i] = key[i]
     }
   }
@@ -215,11 +214,11 @@ pub fn hmac_sha256_init(state: *HmacSha256, key: []const u8) {
 // Every PBKDF2 round takes this path.
 fn hmac_sha256_short(state: *const HmacSha256, destination: []u8, message: []const u8) []u8 {
   work: [64]u8
-  for i in 0..#len(message) {
+  for i in 0..message.len {
     work[i] = message[i]
   }
-  work[#len(message)] = 128
-  bits := (64 + #len(message)) * 8
+  work[message.len] = 128
+  bits := (64 + message.len) * 8
   work[62] = #cast(u8, bits >> 8)
   work[63] = #cast(u8, bits)
   inner := state.inner.state
@@ -249,8 +248,8 @@ fn hmac_sha256_short(state: *const HmacSha256, destination: []u8, message: []con
 }
 
 pub fn hmac_sha256_sum(state: *const HmacSha256, destination: []u8, message: []const u8) []u8 {
-  if #len(destination) < 32 { return destination[..0] }
-  if #len(message) <= 55 && state.inner.initialized && !state.inner.failed && state.inner.length == 64 &&
+  if destination.len < 32 { return destination[..0] }
+  if message.len <= 55 && state.inner.initialized && !state.inner.failed && state.inner.length == 64 &&
     state.outer.initialized && state.outer.length == 64 {
     return hmac_sha256_short(state, destination, message)
   }
@@ -258,7 +257,7 @@ pub fn hmac_sha256_sum(state: *const HmacSha256, destination: []u8, message: []c
   if inner.failed || !inner.initialized { return destination[..0] }
   sha256_update(&inner, message)
   inner_digest: [32]u8
-  if #len(sha256_finish(&inner, inner_digest[..])) != 32 { return destination[..0] }
+  if sha256_finish(&inner, inner_digest[..]).len != 32 { return destination[..0] }
   outer := state.outer
   sha256_update(&outer, inner_digest[..])
   return sha256_finish(&outer, destination)
@@ -266,23 +265,17 @@ pub fn hmac_sha256_sum(state: *const HmacSha256, destination: []u8, message: []c
 
 pub fn hmac_sha256(destination: []u8, key: []const u8, message: []const u8) []u8 {
   state := HmacSha256{}
-  if #len(destination) < 32 { return destination[..0] }
+  if destination.len < 32 { return destination[..0] }
   hmac_sha256_init(&state, key)
   return hmac_sha256_sum(&state, destination, message)
 }
 
 pub fn equal_constant_time(left: []const u8, right: []const u8) bool {
-  if #len(left) != #len(right) { return false }
+  if left.len != right.len { return false }
   difference: u8 = 0
-  for i in 0..#len(left) {
+  for i in 0..left.len {
     difference = difference | (left[i] ^ right[i])
   }
   return difference == 0
 }
 
-// The system random source failed: System, with its code in native.
-fn random_failed(status: *fail.Status, code: isize) {
-  failure := fail.make(fail.Kind.System, "read random bytes", "", "the system random source failed")
-  failure.native = code
-  fail.set(status, failure)
-}

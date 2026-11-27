@@ -6,20 +6,20 @@
 
 use "std/mem"
 
-pub struct Stack(T) {
+pub struct Stack<T> {
   items: []T,       // the used front of storage
   storage: []T,
   arena: *mem.Arena,
 }
 
 // $T at a parameter means "infer T from this argument".
-pub fn init(s: *Stack($T), arena: *mem.Arena) {
+pub fn init<T>(s: *Stack<T>, arena: *mem.Arena) {
   s.arena = arena
 }
 
-pub fn push(s: *Stack($T), value: $T) {
-  used := #len(s.items)
-  if used == #len(s.storage) {
+pub fn push<T>(s: *Stack<T>, value: T) {
+  used := s.items.len
+  if used == s.storage.len {
     // Out of room: move to storage twice the size in the same arena. The
     // old storage stays in the arena until it is reset; arenas never free
     // one allocation at a time.
@@ -27,7 +27,7 @@ pub fn push(s: *Stack($T), value: $T) {
     if capacity < 8 {
       capacity = 8
     }
-    grown := mem.push_array(T, s.arena, capacity)
+    grown := mem.push_array<T>(s.arena, capacity)
     _ = mem.copy(grown, s.items)
     s.storage = grown
   }
@@ -37,8 +37,8 @@ pub fn push(s: *Stack($T), value: $T) {
 
 // The top item, removed. An empty stack gives T's zero value, which is
 // always safe to read: check count first when that matters.
-pub fn pop(s: *Stack($T)) T {
-  used := #len(s.items)
+pub fn pop<T>(s: *Stack<T>) T {
+  used := s.items.len
   if used == 0 {
     empty: T
     return empty
@@ -48,10 +48,10 @@ pub fn pop(s: *Stack($T)) T {
   return value
 }
 
-pub fn clear(s: *Stack($T)) {
+pub fn clear<T>(s: *Stack<T>) {
   s.items = s.storage[..0]
 }
 
-pub fn count(s: *const Stack($T)) usize {
-  return #len(s.items)
+pub fn count<T>(s: *const Stack<T>) usize {
+  return s.items.len
 }

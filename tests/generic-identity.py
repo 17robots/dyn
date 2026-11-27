@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-generic-identity-') as directory:
     for name, size in (('left', 1), ('right', 7)):
         package = work / name
         package.mkdir()
-        (package / 'main.dyn').write_text('''use "std/mem" mem
+        (package / 'main.dyn').write_text('''use mem "std/mem"
 pub struct Event { bytes: [''' + str(size) + ''']u64 }
 pub enum Mode { A, B }
 pub distinct type Id = u64
@@ -20,14 +20,14 @@ type Transform = fn(Event) Event
 pub fn exercise() usize {
   arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
-  events := mem.push_array(Event, arena, 2)
-  pointers := mem.push_array(*Event, arena, 2)
-  arrays := mem.push_array([2]Event, arena, 2)
-  slices := mem.push_array([]const Event, arena, 2)
-  functions := mem.push_array(Transform, arena, 2)
-  modes := mem.push_array(Mode, arena, 2)
-  ids := mem.push_array(Id, arena, 2)
-  return #sizeof(Event) + #len(events) + #len(pointers) + #len(arrays) + #len(slices) + #len(functions) + #len(modes) + #len(ids)
+  events := mem.push_array<Event>(arena, 2)
+  pointers := mem.push_array<*Event>(arena, 2)
+  arrays := mem.push_array<[2]Event>(arena, 2)
+  slices := mem.push_array<[]const Event>(arena, 2)
+  functions := mem.push_array<Transform>(arena, 2)
+  modes := mem.push_array<Mode>(arena, 2)
+  ids := mem.push_array<Id>(arena, 2)
+  return #sizeof(Event) + events.len + pointers.len + arrays.len + slices.len + functions.len + modes.len + ids.len
 }
 ''')
     (work / 'main.dyn').write_text('''use "left"

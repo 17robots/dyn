@@ -21,18 +21,18 @@ Tasks are saved in `./todo.txt`, or the file named by `TODO_FILE`. See
   a zero `Task` is an open task. `case` must name every variant.
 - **`case` on text** compares bytes: `case command { "list" => {...} _ => {...} }`.
   A text case always needs `_`.
-- **A growing array.** `array.Array(Task)` keeps its items in an arena;
+- **A growing array.** `array.Array<Task>` keeps its items in an arena;
   `array.push` adds, `array.pop` removes the last one and says whether it found one.
-- **A parser that fails.** `parse_task` takes a `*fail.Status` like anything
-  else that can fail; `parse.malformed` records what went wrong and the byte
-  offset. `load` gives each line its own status, so its message can name the
-  line. `parse.u64_decimal` reports bad numbers the same way.
-- **A status for loading and saving.** `load` and `save` take a
-  `*fail.Status`; `main` checks it once after each. Inside `save`, a failed
-  write makes the rename do nothing, so no check sits between them.
-- **Reacting to one kind of failure.** `load` reads with a status of its own
-  and treats `fail.Kind.NotFound` as an empty list; any other failure goes on
-  to the caller with `fail.set`.
+- **A parser that fails.** `parse_task` returns `Task!parse.ParseErr`, like
+  the std parsers: `fail .Invalid(offset)` gives the byte where the line went
+  wrong. `parse.u64_decimal` reports bad numbers the same way.
+- **An error enum of your own.** `load` returns `!(io.IoErr | StoreErr)`:
+  either the read failed, or `StoreErr.BadLine` names the line that is not a
+  task. `report` uses `case` to print each kind. `save` returns `!io.IoErr`:
+  `try` stops it at a failed write, before the rename.
+- **Reacting to one kind of failure.** `load` catches the read's failure and
+  treats `.NotFound` as an empty list; `fail err` passes any other failure on
+  to the caller.
 - **Borrowing the file's text.** `fs.read_all` loads the whole file into the
   arena, and every `Task.text` is a slice of that text. Nothing is copied
   and nothing is freed one task at a time.

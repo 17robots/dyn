@@ -3,22 +3,22 @@
 // addresses never change. Use List(Enemy), or declare structs with the same
 // field names to pick another chunk size. A zero list is empty.
 
-use "std/mem" mem
+use mem "std/mem"
 
-pub struct Chunk(T) { next: *Chunk(T), count: usize, items: [64]T }
-pub struct List(T) { first: *Chunk(T), last: *Chunk(T), total: usize }
+pub struct Chunk<T> { next: *Chunk<T>, count: usize, items: [64]T }
+pub struct List<T> { first: *Chunk<T>, last: *Chunk<T>, total: usize }
 
 // Pushes a zeroed value typed like the like argument. Lets push allocate a
 // chunk without naming the chunk type.
-fn push_like(arena: *mem.Arena, like: *$C) *C {
-  return mem.push(C, arena)
+fn push_like<C>(arena: *mem.Arena, like: *C) *C {
+  return mem.push<C>(arena)
 }
 
 // Appends value and returns its stable address. Pushes a new chunk from arena
 // when the last one is full. Panics when the arena is exhausted.
-pub fn push(arena: *mem.Arena, list: *$L, value: $E) *E {
+pub fn push<L, E>(arena: *mem.Arena, list: *L, value: E) *E {
   chunk := list.last
-  if chunk == nil || chunk.count == #len(chunk.items) {
+  if chunk == nil || chunk.count == chunk.items.len {
     chunk = push_like(arena, list.last)
     if list.last == nil { list.first = chunk } else { list.last.next = chunk }
     list.last = chunk
@@ -32,7 +32,7 @@ pub fn push(arena: *mem.Arena, list: *$L, value: $E) *E {
 
 // Element number index, or nil_node when index is past the end. Walks the
 // chunks, so prefer iterating chunk by chunk for whole-list passes.
-pub fn at(list: *const $L, index: usize, nil_node: *const $E) *E {
+pub fn at<L, E>(list: *const L, index: usize, nil_node: *const E) *E {
   if index >= list.total { return #cast(*E, nil_node) }
   remaining := index
   chunk := list.first
@@ -45,8 +45,8 @@ pub fn at(list: *const $L, index: usize, nil_node: *const $E) *E {
 }
 
 // Copies every element, in order, into one new contiguous slice from arena.
-pub fn to_slice(T: type, arena: *mem.Arena, list: *const $L) []T {
-  result := mem.push_array(T, arena, list.total)
+pub fn to_slice<T, L>(arena: *mem.Arena, list: *const L) []T {
+  result := mem.push_array<T>(arena, list.total)
   at: usize = 0
   chunk := list.first
   for chunk != nil {

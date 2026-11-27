@@ -1,5 +1,4 @@
-use "std/encoding/binary" binary
-use "std/fail"
+use binary "std/encoding/binary"
 // RFC 8439 section 2.5. A one-time authenticator: NEVER reuse a key.
 // Five base-2^26 limbs; secret arithmetic has fixed loop bounds, no secret
 // indexes, and no secret-dependent branches. Message lengths are public.
@@ -11,13 +10,8 @@ fn load(source: []const u8, at: usize) u64 {
   return binary.load_u32_le(source[at..at+4])
 }
 // A key that is not 32 bytes fails with InvalidInput.
-pub fn init(status: *fail.Status, key: []const u8) State {
-  if status == nil { return init(&fail.Status{}, key) }
-  if status.failed { return State{} }
-  if #len(key) != 32 {
-    fail.invalid(status, "Poly1305", "", "the key must be 32 bytes")
-    return State{}
-  }
+pub fn init(key: []const u8) State! {
+  if key.len != 32 { fail }
   state := State{ keyed: true }
   state.r[0] = load(key, 0) & 0x3ffffff
   state.r[1] = (load(key, 3) >> 2) & 0x3ffff03
@@ -61,7 +55,7 @@ pub fn update(state: *State, input: []const u8) {
   if !state.keyed { return }
   at: usize = 0
   if state.used != 0 {
-    for at < #len(input) && state.used < 16 {
+    for at < input.len && state.used < 16 {
       state.buffer[state.used] = input[at]
       state.used += 1
       at += 1
@@ -71,11 +65,11 @@ pub fn update(state: *State, input: []const u8) {
       state.used = 0
     }
   }
-  for #len(input) - at >= 16 {
+  for input.len - at >= 16 {
     block(state, input[at..at+16], 1 << 24)
     at += 16
   }
-  for at < #len(input) {
+  for at < input.len {
     state.buffer[state.used] = input[at]
     state.used += 1
     at += 1
@@ -83,14 +77,9 @@ pub fn update(state: *State, input: []const u8) {
 }
 // The 16-byte tag. finish consumes the state: finishing a state that is not
 // keyed (never initialized, or finished already) fails with InvalidState.
-pub fn finish(status: *fail.Status, state: *State) [16]u8 {
-  if status == nil { return finish(&fail.Status{}, state) }
+pub fn finish(state: *State) [16]u8! {
   tag: [16]u8
-  if status.failed { return tag }
-  if !state.keyed {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "Poly1305", "", "the state is not keyed"))
-    return tag
-  }
+  if !state.keyed { fail }
   if state.used != 0 {
     state.buffer[state.used] = 1
     for i in state.used+1..16 {
@@ -129,15 +118,14 @@ pub fn finish(status: *fail.Status, state: *State) [16]u8 {
   state.* = State{}
   return tag
 }
-pub fn authenticate(status: *fail.Status, message: []const u8, key: []const u8) [16]u8 {
-  if status == nil { return authenticate(&fail.Status{}, message, key) }
-  state := init(status, key)
+pub fn authenticate(message: []const u8, key: []const u8) [16]u8! {
+  state := try init(key)
   update(&state, message)
-  return finish(status, &state)
+  return try finish(&state)
 }
 // Fixed 16-byte comparison; length is public.
 pub fn equal(left: []const u8, right: []const u8) bool {
-  if #len(left) != 16 || #len(right) != 16 { return false }
+  if left.len != 16 || right.len != 16 { return false }
   difference: u32 = 0
   for i in 0..16 {
     difference |= left[i] ^ right[i]

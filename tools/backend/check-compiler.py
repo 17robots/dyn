@@ -33,7 +33,7 @@ fn next() u64 { counter+=1
 return counter }
 first:u64=next()
 second:u64=next()
-fn identity(x:$T) T { return x }
+fn identity<T>(x:T) T { return x }
 fn main() {
  if first!=1 || second!=2 || identity(counter)!=2 { #panic("startup") }
  io.println("native compiler ok")
@@ -49,7 +49,7 @@ fn main() {
         (model/'main.dyn').write_text('pub struct Pair { first:u64, second:u8 }\n')
         original=source.read_text()
         source.write_text('''use "model"
-fn write(text:[]const u8) { _ = #syscall(1,1,&text[0],#len(text)) }
+fn write(text:[]const u8) { _ = #syscall(1,1,&text[0],text.len) }
 fn main() {
  info:=#typeof(model.Pair)
  if info.kind!=TypeKind.Struct || info.size!=16 || info.alignment!=8 || info.member_count!=2 { #panic("reflection layout") }

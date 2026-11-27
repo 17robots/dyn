@@ -12,7 +12,7 @@ SUFFIX = '.exe' if os.name == 'nt' else ''
 DYN = str(Path(os.environ.get('DYN', ROOT/('build/dyn-release'+SUFFIX))).resolve())
 CC = shlex.split(os.environ.get('CC','cc'))
 HAVE_CC = bool(CC) and shutil.which(CC[0]) is not None
-SOURCE = r'''use "vendor/window/events" events
+SOURCE = r'''use events "vendor/window/events"
 fn check(ok: bool) { if !ok { #panic("ordered event queue") } }
 fn main() {
   queue := events.Queue{}
@@ -52,27 +52,45 @@ void *dyn_wake_thread(int (*wake)(void*),void *context) {
 }
 int dyn_join_wake(void*p){Work*w=p;pthread_join(w->thread,NULL);int result=w->result;free(w);return result;}
 '''
-X11 = r'''use "std/io" io
-use "vendor/window" window
-use "vendor/window/events" events
-use "std/time" time
-use "std/fail"
-fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
-  status: fail.Status
-  window.open(&status, p0, p1, p2, p3)
-  return status.failure
+X11 = r'''use io "std/io"
+use window "vendor/window"
+use events "vendor/window/events"
+use time "std/time"
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) Failure {
+  window.open(p0, p1, p2, p3) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_poll(p0: *window.Window) fail.Failure {
-  status: fail.Status
-  window.poll(&status, p0)
-  return status.failure
+fn window_poll(p0: *window.Window) Failure {
+  window.poll(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_wake(p0: *const window.Window) fail.Failure {
-  status: fail.Status
-  window.wake(&status, p0)
-  return status.failure
+fn window_wake(p0: *const window.Window) Failure {
+  window.wake(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
 #link("pthread")
@@ -83,7 +101,7 @@ extern fn wake_thread "dyn_wake_thread"(callback:fn(rawptr)i32,context:rawptr) r
 extern fn join_wake "dyn_join_wake"(worker:rawptr) i32
 fn check(ok:bool) { if !ok { #panic("ordered X11 events") } }
 fn callback(context:rawptr) i32 {
-  if window_wake(#cast(*window.Window,context)).kind == fail.Kind.Ok { return 1 }
+  if window_wake(#cast(*window.Window,context)).kind == Kind.Ok { return 1 }
   return 0
 }
 fn drain(host:*window.Window) {
@@ -92,13 +110,13 @@ fn drain(host:*window.Window) {
 }
 fn main() {
  host := window.Window{}
- check(window_open(&host,"ordered events",80,80).kind == fail.Kind.Ok)
+ check(window_open(&host,"ordered events",80,80).kind == Kind.Ok)
  defer { window.close(&host) }
  _ = window_poll(&host)
  event := window.Event{}
  // Listening is explicitly opt-in; legacy summary clients accumulate nothing.
  key(host.display,host.handle,0x61,0,1)
- check(window_poll(&host).kind == fail.Kind.Ok && !window.next_event(&host,&event))
+ check(window_poll(&host).kind == Kind.Ok && !window.next_event(&host,&event))
  key(host.display,host.handle,0x61,0,0)
  _ = window_poll(&host)
  window.listen_events(&host,true)
@@ -106,7 +124,7 @@ fn main() {
  key(host.display,host.handle,0x61,0,0)
  key(host.display,host.handle,0xff51,4,1)
  key(host.display,host.handle,0xff51,4,0)
- check(window_poll(&host).kind == fail.Kind.Ok)
+ check(window_poll(&host).kind == Kind.Ok)
  check(window.next_event(&host,&event) && event.kind == events.Kind.KeyDown && event.key == 97 && event.repeated == 0 && event.scancode != 0)
  check(window.next_event(&host,&event) && event.kind == events.Kind.Text && event.text_length == 1 && event.text[0] == 97)
  saved := event
@@ -116,7 +134,7 @@ fn main() {
  check(!window.next_event(&host,&event) && saved.text[0] == 97)
  key(host.display,host.handle,0x62,0,1)
  key(host.display,host.handle,0x62,0,1)
- check(window_poll(&host).kind == fail.Kind.Ok)
+ check(window_poll(&host).kind == Kind.Ok)
  check(window.next_event(&host,&event) && event.kind == events.Kind.KeyDown && event.repeated == 0)
  check(window.next_event(&host,&event) && event.kind == events.Kind.Text && event.text[0] == 98)
  check(window.next_event(&host,&event) && event.kind == events.Kind.KeyDown && event.repeated == 1)
@@ -127,7 +145,7 @@ fn main() {
  drain(&host)
  for i in 0..200 { _ = i
    key(host.display,host.handle,0xff51,0,1) }
- check(window_poll(&host).kind == fail.Kind.Ok)
+ check(window_poll(&host).kind == Kind.Ok)
  for i in 0..128 { _ = i
    check(window.next_event(&host,&event) && event.kind == events.Kind.KeyDown && event.key == events.Left) }
  check(window.next_event(&host,&event) && event.kind == events.Kind.Overflow && event.dropped == 72)
@@ -144,37 +162,55 @@ fn main() {
  found := false
  for !found {
    window.wait(&host,1000)
-   check(window_poll(&host).kind == fail.Kind.Ok)
+   check(window_poll(&host).kind == Kind.Ok)
    for window.next_event(&host,&event) { if event.kind == events.Kind.Wake { found = true } }
    check(time.elapsed(now,time.monotonic_now()) < 500000000)
  }
  check(join_wake(worker) == 1)
  close_event(host.display,host.handle,host.protocol_atom,host.close_atom)
- check(window_poll(&host).kind == fail.Kind.Ok && host.close_requested)
+ check(window_poll(&host).kind == Kind.Ok && host.close_requested)
  check(window.next_event(&host,&event) && event.kind == events.Kind.Close)
 }
 '''
-WAYLAND_WAKE = r'''use "std/io" io
-use "vendor/window/wayland" window
-use "vendor/window/events" events
-use "std/time" time
-use "std/fail"
-fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
-  status: fail.Status
-  window.open(&status, p0, p1, p2, p3)
-  return status.failure
+WAYLAND_WAKE = r'''use io "std/io"
+use window "vendor/window/wayland"
+use events "vendor/window/events"
+use time "std/time"
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) Failure {
+  window.open(p0, p1, p2, p3) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_poll(p0: *window.Window) fail.Failure {
-  status: fail.Status
-  window.poll(&status, p0)
-  return status.failure
+fn window_poll(p0: *window.Window) Failure {
+  window.poll(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_wake(p0: *const window.Window) fail.Failure {
-  status: fail.Status
-  window.wake(&status, p0)
-  return status.failure
+fn window_wake(p0: *const window.Window) Failure {
+  window.wake(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
 #link("pthread")
@@ -182,14 +218,14 @@ fn window_wake(p0: *const window.Window) fail.Failure {
 extern fn wake_thread "dyn_wake_thread"(callback:fn(rawptr)i32,context:rawptr) rawptr
 extern fn join_wake "dyn_join_wake"(worker:rawptr) i32
 fn check(ok:bool){if !ok{#panic("Wayland external wake")}}
-fn callback(context:rawptr)i32 { if window_wake(#cast(*window.Window,context)).kind == fail.Kind.Ok{return 1}
+fn callback(context:rawptr)i32 { if window_wake(#cast(*window.Window,context)).kind == Kind.Ok{return 1}
  return 0 }
 fn main(){
  host:=window.Window{}
- check(window_open(&host,"Wayland external wake",64,64).kind == fail.Kind.Ok)
+ check(window_open(&host,"Wayland external wake",64,64).kind == Kind.Ok)
  defer{window.close(&host)}
  window.listen_events(&host,true)
- check(window_poll(&host).kind == fail.Kind.Ok)
+ check(window_poll(&host).kind == Kind.Ok)
  event:=window.Event{}
  for window.next_event(&host,&event){}
  worker:=wake_thread(callback,&host)
@@ -198,7 +234,7 @@ fn main(){
  found:=false
  for !found {
   window.wait(&host,1000)
-  check(window_poll(&host).kind == fail.Kind.Ok)
+  check(window_poll(&host).kind == Kind.Ok)
   for window.next_event(&host,&event){if event.kind==events.Kind.Wake {found=true}}
   check(time.elapsed(started,time.monotonic_now())<500000000)
  }
@@ -219,23 +255,42 @@ int Xutf8LookupString(XIC context,XKeyPressedEvent *event,char *buffer,int capac
  *status=XLookupBoth;return needed;
 }
 '''
-XIM_SOURCE = r'''use "std/io" io
-use "vendor/window" window
-use "vendor/window/events" events
-use "std/unicode/utf8" utf8
-use "std/process" process
-use "std/mem" mem
-use "std/fail"
-fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
-  status: fail.Status
-  window.open(&status, p0, p1, p2, p3)
-  return status.failure
+XIM_SOURCE = r'''use io "std/io"
+use window "vendor/window"
+use events "vendor/window/events"
+use utf8 "std/unicode/utf8"
+use process "std/process"
+use mem "std/mem"
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) Failure {
+  window.open(p0, p1, p2, p3) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_poll(p0: *window.Window) fail.Failure {
-  status: fail.Status
-  window.poll(&status, p0)
-  return status.failure
+fn window_poll(p0: *window.Window) Failure {
+  window.poll(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
 extern fn key "dyn_send_key"(display:rawptr,handle:usize,symbol:usize,modifiers:u32,down:i32)
@@ -243,9 +298,9 @@ fn check(ok:bool){if !ok{#panic("XIM commit bounds")}}
 fn main(){
  arena:=mem.arena_alloc(0)
  defer{mem.arena_release(arena)}
- split:=#len(process.environment_or(arena,"DYN_TEST_SPLIT_COMMIT","")) != 0
+ split:=process.environment_or(arena,"DYN_TEST_SPLIT_COMMIT","").len != 0
  host:=window.Window{}
- check(window_open(&host,"XIM commit bounds",64,64).kind == fail.Kind.Ok)
+ check(window_open(&host,"XIM commit bounds",64,64).kind == Kind.Ok)
  defer{window.close(&host)}
  _=window_poll(&host)
  window.listen_events(&host,true)
@@ -255,7 +310,7 @@ fn main(){
  host.desktop.context=#cast(rawptr,1)
  key(host.display,host.handle,0x61,0,1)
  if split {key(host.display,host.handle,0x62,0,1)}
- check(window_poll(&host).kind == fail.Kind.Ok)
+ check(window_poll(&host).kind == Kind.Ok)
  host.desktop.context=original
  event:=window.Event{}
  check(window.next_event(&host,&event)&&event.kind==events.Kind.KeyDown)
@@ -271,7 +326,7 @@ fn main(){
  check((total==700&&!overflow)||(total==259&&!overflow&&split)||(total==0&&overflow))
  summary:=window.box_input(&host).text
  check(utf8.valid(summary))
- if split{check(#len(summary)==255)}
+ if split{check(summary.len==255)}
 }
 '''
 WAYLAND_MOCK = r'''#include <assert.h>

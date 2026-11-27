@@ -22,11 +22,13 @@ _start:
 .type dyn_panic,%function
 dyn_panic:
     stp x0, x1, [sp, #-16]!
+#ifndef DYN_RELEASE
     // The trace begins at the caller: its return address and frame pointer.
     mov x0, x30
     mov x1, x29
     bl dyn_trace_capture
     ldp x0, x1, [sp]
+#endif
     bl dyn_unwind_begin
     ldp x0, x1, [sp], #16
     cbz x1, 1f
@@ -101,6 +103,49 @@ dyn_atomic_compare_exchange_u64:
 2:  clrex; mov w0, #0; ret
 
 // clone-based thread. Caller owns stack until join completes.
+// void dyn_fiber_switch(usize *save, usize load): saves x19-x30 and d8-d15
+// on the current stack, stores its pointer in *save and resumes the stack at
+// load. A new fiber's first frame returns into dyn_fiber_boot with
+// x19 = entry and x20 = argument.
+.section .text.dyn_fiber_switch,"ax",%progbits
+.global dyn_fiber_switch
+.type dyn_fiber_switch,%function
+dyn_fiber_switch:
+    sub sp, sp, #160
+    stp x19, x20, [sp, #0]
+    stp x21, x22, [sp, #16]
+    stp x23, x24, [sp, #32]
+    stp x25, x26, [sp, #48]
+    stp x27, x28, [sp, #64]
+    stp x29, x30, [sp, #80]
+    stp d8, d9, [sp, #96]
+    stp d10, d11, [sp, #112]
+    stp d12, d13, [sp, #128]
+    stp d14, d15, [sp, #144]
+    mov x2, sp
+    str x2, [x0]
+    mov sp, x1
+    ldp x19, x20, [sp, #0]
+    ldp x21, x22, [sp, #16]
+    ldp x23, x24, [sp, #32]
+    ldp x25, x26, [sp, #48]
+    ldp x27, x28, [sp, #64]
+    ldp x29, x30, [sp, #80]
+    ldp d8, d9, [sp, #96]
+    ldp d10, d11, [sp, #112]
+    ldp d12, d13, [sp, #128]
+    ldp d14, d15, [sp, #144]
+    add sp, sp, #160
+    ret
+
+.section .text.dyn_fiber_boot,"ax",%progbits
+.global dyn_fiber_boot
+.type dyn_fiber_boot,%function
+dyn_fiber_boot:
+    mov x0, x20
+    blr x19
+    brk #0
+
 // isize dyn_thread_spawn(void *base, usize size, fn, context, u32 *tid)
 .section .text.dyn_thread_spawn,"ax",%progbits
 .global dyn_thread_spawn

@@ -61,7 +61,7 @@ fn main() {
   number: f32 = 1.25
   wide := #cast(f64, number)
   if wide + 0.75 != 2.0 || #cast(i32, wide) != 1 { #panic("float") }
-  if checked(3) != 4 || counter != 1 || #len(message) != 15 { #panic("cleanup globals") }
+  if checked(3) != 4 || counter != 1 || message.len != 15 { #panic("cleanup globals") }
 }
 '''
 TARGETS = [('x86_64-linux', 'x86_64-unknown-linux-gnu'),

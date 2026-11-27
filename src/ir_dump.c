@@ -179,6 +179,9 @@ static void expression(Dump *d, const DynIrExpr *e) {
     K(INDIRECT_CALL,"indirect_call"); K(SIZE,"size"); K(ALIGN,"align");
     K(TYPEOF,"typeof"); K(CAST,"cast"); K(BITCAST,"bitcast");
     K(SYSCALL,"syscall"); K(TYPE,"type"); K(OFFSET,"offset");
+    /* Error lowering replaces these with new nodes and leaves the originals
+       in the table, unreferenced (generic templates keep theirs too). */
+    K(TRY,"source"); K(CATCH,"source"); K(TAKE,"source");
 #undef K
     default: d->valid=false; return;
   }
@@ -242,9 +245,9 @@ static void expression(Dump *d, const DynIrExpr *e) {
       } else EX("operand",e->left);
       break;
     case DYN_EXPR_OFFSET:
-      /* Source-byte field selectors cannot be represented by lowered IR.
-         Sema must have folded this node before a semantic snapshot. */
+      /* Source-only nodes that sema must lower before IR. */
       d->valid=false; break;
+    case DYN_EXPR_TRY: case DYN_EXPR_CATCH: case DYN_EXPR_TAKE: break;
     case DYN_EXPR_NIL: case DYN_EXPR_TYPE: break;
   }
 }
@@ -288,6 +291,8 @@ static void statement(Dump *d,const DynIrStmt *s) {
       flag(d,"block",s->defer_block);
       BODY("body",s->body_start,s->body_count);
       break;
+    case DYN_STMT_FAIL: case DYN_STMT_ERRDEFER:
+      d->valid=false; break;
   }
 }
 

@@ -1,0 +1,69 @@
+use io "std/io"
+use mem "std/mem"
+use heap "std/mem/heap"
+
+fn check(ok: bool, what: str) {
+  if !ok { #panic(what) }
+}
+
+struct Node {
+  value: u64,
+  next: *Node,
+  tag: u32 = 7,
+}
+
+struct Wide {
+  bytes: [100]u8,
+}
+
+fn main() {
+  arena := mem.arena_alloc(1 << 26)
+  defer mem.arena_release(arena)
+  h := heap.heap(arena)
+
+  // Fresh values honor defaults, and a freed block is reused.
+  a := heap.alloc<Node>(&h)
+  check(a.tag == 7 && a.value == 0 && a.next == nil, "fresh node")
+  a.value = 99
+  a.tag = 1
+  heap.free(&h, a)
+  b := heap.alloc<Node>(&h)
+  check(b == a, "same class reuses freed block")
+  check(b.tag == 7 && b.value == 0, "reused block is fresh")
+
+  // Churn: memory stays flat while objects come and go.
+  live: [64]*Node
+  for i in 0..live.len {
+    live[i] = heap.alloc<Node>(&h)
+  }
+  used := mem.arena_used(arena)
+  for round in 0..1000 {
+    slot := round % live.len
+    heap.free(&h, live[slot])
+    live[slot] = heap.alloc<Node>(&h)
+    live[slot].value = #cast(u64, round)
+  }
+  check(mem.arena_used(arena) == used, "churn does not grow the arena")
+
+  // Arrays, resize and alignment.
+  w := heap.alloc<Wide>(&h)
+  check(#cast(usize, w) % 128 == 0, "block aligned to its class")
+  numbers := heap.alloc_array<u32>(&h, 10)
+  for i in 0..numbers.len {
+    numbers[i] = #cast(u32, i)
+  }
+  numbers = heap.resize_array(&h, numbers, 1000)
+  check(numbers.len == 1000 && numbers[9] == 9 && numbers[10] == 0, "resize keeps prefix")
+  heap.free_array(&h, numbers)
+
+  // Large blocks are reused first-fit.
+  big := heap.alloc_array<u8>(&h, 200000)
+  big[199999] = 1
+  heap.free_array(&h, big)
+  again := heap.alloc_array<u8>(&h, 150000)
+  check(&again[0] == &big[0], "large block reused")
+  check(again[149999] == 0, "large reuse is zeroed")
+  check(heap.alloc_array<u8>(&h, 0).len == 0, "empty array")
+  heap.free<Node>(&h, nil)
+  io.println("heap ok")
+}

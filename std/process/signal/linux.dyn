@@ -1,5 +1,4 @@
-use "std/io" io
-use "std/fail"
+use io "std/io"
 use "std/os/linux/sys"
 #target(kernel: linux)
 
@@ -19,20 +18,15 @@ fn mask_of(set: Set) u64 {
   return mask
 }
 
-fn watch_failed(status: *fail.Status, code: isize) Watch {
-  fail.set(status, io.from_linux("watch signals", "", code))
-  return Watch{}
-}
-
-fn platform_watch(status: *fail.Status, set: Set) Watch {
+fn platform_watch(set: Set) Watch!io.IoErr {
   mask := mask_of(set)
   code := #syscall(sys.RtSigprocmask, 0, &mask, 0, 8)
-  if code < 0 { return watch_failed(status, code) }
+  if code < 0 { fail io.linux_err(code) }
   // SFD_NONBLOCK | SFD_CLOEXEC.
   descriptor := #syscall(sys.Signalfd4, -1, &mask, 8, 526336)
   if descriptor < 0 {
     _ = #syscall(sys.RtSigprocmask, 1, &mask, 0, 8)
-    return watch_failed(status, descriptor)
+    fail io.linux_err(descriptor)
   }
   return Watch{ handle: descriptor, set: set, active: true }
 }
@@ -44,7 +38,7 @@ fn kind_of(number: u32) Kind {
   return Kind.None
 }
 
-fn platform_next(status: *fail.Status, state: *Watch, block: bool) Kind {
+fn platform_next(state: *Watch, block: bool) Kind!io.IoErr {
   info: [128]u8
   for true {
     count := #syscall(sys.Read, state.handle, &info[0], 128)
@@ -63,17 +57,12 @@ fn platform_next(status: *fail.Status, state: *Watch, block: bool) Kind {
       entry[3] = descriptor >> 24
       entry[4] = 1
       waited := #syscall(sys.Ppoll, &entry[0], 1, 0, 0, 8)
-      if waited < 0 && waited != -4 { return next_failed(status, waited) }
+      if waited < 0 && waited != -4 { fail io.linux_err(waited) }
     } else if count != -4 {
-      if count >= 0 { return next_failed(status, -5) }
-      return next_failed(status, count)
+      if count >= 0 { fail io.linux_err(-5) }
+      fail io.linux_err(count)
     }
   }
-  return Kind.None
-}
-
-fn next_failed(status: *fail.Status, code: isize) Kind {
-  fail.set(status, io.from_linux("read signal", "", code))
   return Kind.None
 }
 

@@ -4,9 +4,9 @@ pub fn progress(storage: []Node) Progress {
   return Progress{ nodes: storage, length: 0, dropped: 0 }
 }
 pub fn begin(state: *Progress, name: []const u8, total: u64) usize {
-  if state.length == #len(state.nodes) {
+  if state.length == state.nodes.len {
     state.dropped += 1
-    return #len(state.nodes)
+    return state.nodes.len
   }
   index := state.length
   state.length += 1

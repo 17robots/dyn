@@ -1,6 +1,8 @@
-use "std/fail"
-use "std/mem" mem
-use "std/math" math
+use parse "std/parse"
+// What stopped the decoder.
+enum Problem { None, Invalid, TooLarge, Unsupported }
+use mem "std/mem"
+use math "std/math"
 // ITU-T T.81 baseline sequential Huffman JPEG, 8-bit gray/RGB/YCbCr.
 // Interleaved and separate scans, restart markers, 1..4 sampling factors.
 // No progressive/arithmetic/lossless, CMYK, DNL or color-profile processing.
@@ -10,7 +12,7 @@ pub struct Image { info: Info, pixels: []u8 }
 struct Huffman { counts: [16]u16, first: [16]u32, offsets: [16]u16, values: [256]u8, valid: bool }
 struct Component { id: u8, h: u8, v: u8, quant: u8, dc_table: u8, ac_table: u8, prediction: i32, stride: usize, rows: usize, pixels: []u8, decoded: bool }
 struct Decoder {
-  source: []const u8, at: usize, kind: fail.Kind,
+  source: []const u8, at: usize, kind: Problem,
   width: usize, height: usize, count: usize, hmax: u8, vmax: u8,
   components: [3]Component, quant: [4][64]u16, quant_valid: [4]bool,
   dc: [4]Huffman, ac: [4]Huffman, basis: [64]f64, restart: usize,
@@ -23,19 +25,19 @@ fn be16(data: []const u8, at: usize) u16 {
   return (#cast(u16, data[at]) << 8) | #cast(u16, data[at + 1])
 }
 fn invalid(decoder: *Decoder) bool {
-  decoder.kind = fail.Kind.InvalidInput
+  decoder.kind = Problem.Invalid
   return false
 }
 fn take(bits: *Bits, count: u8) u32 {
   for bits.count < count {
-    if bits.at >= #len(bits.source) {
+    if bits.at >= bits.source.len {
       bits.failed = true
       return 0
     }
     value := bits.source[bits.at]
     bits.at += 1
     if value == 255 {
-      if bits.at == #len(bits.source) || bits.source[bits.at] != 0 {
+      if bits.at == bits.source.len || bits.source[bits.at] != 0 {
         bits.failed = true
         return 0
       }
@@ -141,15 +143,15 @@ fn block(decoder: *Decoder, bits: *Bits, component: *Component, bx, by: usize) b
 }
 fn quantization(decoder: *Decoder, payload: []const u8) bool {
   at: usize = 0
-  for at < #len(payload) {
+  for at < payload.len {
     descriptor := payload[at]
     at += 1
     if (descriptor >> 4) != 0 {
-      decoder.kind = fail.Kind.Unsupported
+      decoder.kind = Problem.Unsupported
       return false
     }
     id := #cast(usize, descriptor & 15)
-    if id >= 4 || #len(payload) - at < 64 { return invalid(decoder) }
+    if id >= 4 || payload.len - at < 64 { return invalid(decoder) }
     for i in 0..64 {
       if payload[at + i] == 0 { return invalid(decoder) }
       decoder.quant[id][i] = payload[at + i]
@@ -161,8 +163,8 @@ fn quantization(decoder: *Decoder, payload: []const u8) bool {
 }
 fn huffman(decoder: *Decoder, payload: []const u8) bool {
   at: usize = 0
-  for at < #len(payload) {
-    if #len(payload) - at < 17 { return invalid(decoder) }
+  for at < payload.len {
+    if payload.len - at < 17 { return invalid(decoder) }
     descriptor := payload[at]
     at += 1
     id := #cast(usize, descriptor & 15)
@@ -187,7 +189,7 @@ fn huffman(decoder: *Decoder, payload: []const u8) bool {
       code = (code + #cast(u32, n)) << 1
     }
     at += 16
-    if count == 0 || count > #len(payload) - at { return invalid(decoder) }
+    if count == 0 || count > payload.len - at { return invalid(decoder) }
     for i in 0..count {
       table.values[i] = payload[at + i]
     }
@@ -197,25 +199,25 @@ fn huffman(decoder: *Decoder, payload: []const u8) bool {
   return true
 }
 fn frame(_arena: *mem.Arena, decoder: *Decoder, payload: []const u8) bool {
-  if decoder.count != 0 || #len(payload) < 6 { return invalid(decoder) }
+  if decoder.count != 0 || payload.len < 6 { return invalid(decoder) }
   if payload[0] != 8 {
-    decoder.kind = fail.Kind.Unsupported
+    decoder.kind = Problem.Unsupported
     return false
   }
   decoder.height = be16(payload, 1)
   decoder.width = be16(payload, 3)
   count := #cast(usize, payload[5])
   if decoder.width == 0 || decoder.height == 0 {
-    decoder.kind = fail.Kind.Unsupported
+    decoder.kind = Problem.Unsupported
     return false
   }
   if count != 1 && count != 3 {
-    decoder.kind = fail.Kind.Unsupported
+    decoder.kind = Problem.Unsupported
     return false
   }
-  if #len(payload) != 6 + count * 3 { return invalid(decoder) }
+  if payload.len != 6 + count * 3 { return invalid(decoder) }
   if #cast(u64, decoder.width) * #cast(u64, decoder.height) > 16777216 {
-    decoder.kind = fail.Kind.Capacity
+    decoder.kind = Problem.TooLarge
     return false
   }
   blocks: usize = 0
@@ -251,11 +253,11 @@ fn allocate_planes(arena: *mem.Arena, decoder: *Decoder) bool {
     component.rows = rows * component.v * 8
     size := #cast(u64, component.stride) * #cast(u64, component.rows)
     if size > 67108864 - total {
-      decoder.kind = fail.Kind.Capacity
+      decoder.kind = Problem.TooLarge
       return false
     }
     total += size
-    component.pixels = mem.push_array(u8, arena, #cast(usize, size))
+    component.pixels = mem.push_array<u8>(arena, #cast(usize, size))
   }
   return true
 }
@@ -264,13 +266,13 @@ fn padding(bits: *const Bits) bool {
   return !bits.failed && (bits.buffer & mask) == mask
 }
 fn scan(decoder: *Decoder, payload: []const u8) bool {
-  if decoder.count == 0 || #len(payload) < 6 { return invalid(decoder) }
+  if decoder.count == 0 || payload.len < 6 { return invalid(decoder) }
   count := #cast(usize, payload[0])
-  if count == 0 || count > decoder.count || #len(payload) != 1 + count * 2 + 3 {
+  if count == 0 || count > decoder.count || payload.len != 1 + count * 2 + 3 {
     return invalid(decoder)
   }
   if payload[1 + count * 2] != 0 || payload[2 + count * 2] != 63 || payload[3 + count * 2] != 0 {
-    decoder.kind = fail.Kind.Unsupported
+    decoder.kind = Problem.Unsupported
     return false
   }
   selected: [3]usize
@@ -312,11 +314,11 @@ fn scan(decoder: *Decoder, payload: []const u8) bool {
         if !padding(&bits) { return invalid(decoder) }
         bits.count = 0
         bits.buffer = 0
-        if bits.at == #len(bits.source) || bits.source[bits.at] != 255 { return invalid(decoder) }
-        for bits.at < #len(bits.source) && bits.source[bits.at] == 255 {
+        if bits.at == bits.source.len || bits.source[bits.at] != 255 { return invalid(decoder) }
+        for bits.at < bits.source.len && bits.source[bits.at] == 255 {
           bits.at += 1
         }
-        if bits.at == #len(bits.source) || bits.source[bits.at] != 208 + restart {
+        if bits.at == bits.source.len || bits.source[bits.at] != 208 + restart {
           return invalid(decoder)
         }
         bits.at += 1
@@ -361,13 +363,8 @@ fn channel(decoder: *const Decoder, index: usize, x, y: usize) i32 {
 // Ownership: pixels borrow arena backing; source is read only during this call.
 // Inputs must not borrow unused backing of the output arena.
 // Invalid/unsupported input restores the arena mark. Allocation exhaustion panics.
-pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image {
-  if status == nil { return decode(arena, &fail.Status{}, source) }
-  if status.failed { return Image{} }
-  if #len(source) < 4 || source[0] != 255 || source[1] != 216 {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "decode JPEG", "", "malformed JPEG"))
-    return Image{}
-  }
+pub fn decode(arena: *mem.Arena, source: []const u8) Image!parse.ParseErr {
+  if source.len < 4 || source[0] != 255 || source[1] != 216 { fail parse.ParseErr.Invalid(0) }
   decoder := Decoder{ source: source, at: 2 }
   for x in 0..8 {
     for u in 0..8 {
@@ -385,35 +382,20 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
     if success { mem.arena_rewind(arena, scratch) } else { mem.arena_rewind(arena, mark) }
   }
   pixels: []u8
-  for decoder.at < #len(source) {
-    if source[decoder.at] != 255 {
-      fail.at(status, fail.Kind.InvalidInput, "decode JPEG", "malformed JPEG", decoder.at)
-      return Image{}
-    }
-    for decoder.at < #len(source) && source[decoder.at] == 255 {
+  for decoder.at < source.len {
+    if source[decoder.at] != 255 { fail parse.ParseErr.Invalid(decoder.at) }
+    for decoder.at < source.len && source[decoder.at] == 255 {
       decoder.at += 1
     }
-    if decoder.at == #len(source) {
-      fail.at(status, fail.Kind.InvalidInput, "decode JPEG", "malformed JPEG", decoder.at)
-      return Image{}
-    }
+    if decoder.at == source.len { fail parse.ParseErr.Invalid(decoder.at) }
     marker := source[decoder.at]
     decoder.at += 1
     if marker == 217 {
-      if decoder.count == 0 {
-        fail.at(status, fail.Kind.InvalidInput, "decode JPEG", "malformed JPEG", decoder.at)
-        return Image{}
-      }
+      if decoder.count == 0 { fail parse.ParseErr.Invalid(decoder.at) }
       for i in 0..decoder.count {
-        if !decoder.components[i].decoded {
-          fail.at(status, fail.Kind.InvalidInput, "decode JPEG", "malformed JPEG", decoder.at)
-          return Image{}
-        }
+        if !decoder.components[i].decoded { fail parse.ParseErr.Invalid(decoder.at) }
       }
-      if decoder.has_adobe && decoder.adobe > 1 {
-        fail.at(status, fail.Kind.Unsupported, "decode JPEG", "unsupported JPEG feature", decoder.at)
-        return Image{}
-      }
+      if decoder.has_adobe && decoder.adobe > 1 { fail parse.ParseErr.Unsupported(decoder.at) }
       direct := decoder.has_adobe && decoder.adobe == 0
       indices: [3]usize = [0, 1, 2]
       if decoder.count == 3 {
@@ -472,25 +454,18 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
       return Image{ info: Info{ width: decoder.width, height: decoder.height, channels: 4 }, pixels: pixels }
     }
     if marker == 0 || marker == 216 || marker == 1 || (marker >= 208 && marker <= 215) {
-      fail.at(status, fail.Kind.InvalidInput, "decode JPEG", "malformed JPEG", decoder.at - 1)
-      return Image{}
+      fail parse.ParseErr.Invalid(decoder.at - 1)
     }
-    if #len(source) - decoder.at < 2 {
-      fail.at(status, fail.Kind.InvalidInput, "decode JPEG", "malformed JPEG", decoder.at)
-      return Image{}
-    }
+    if source.len - decoder.at < 2 { fail parse.ParseErr.Invalid(decoder.at) }
     length := #cast(usize, be16(source, decoder.at))
-    if length < 2 || length > #len(source) - decoder.at {
-      fail.at(status, fail.Kind.InvalidInput, "decode JPEG", "malformed JPEG", decoder.at)
-      return Image{}
-    }
+    if length < 2 || length > source.len - decoder.at { fail parse.ParseErr.Invalid(decoder.at) }
     payload := source[decoder.at + 2..decoder.at + length]
     decoder.at += length
     ok := true
     if marker == 192 {
       ok = frame(arena, &decoder, payload)
       if ok {
-        pixels = mem.push_array(u8, arena, #cast(usize, decoder.width) * #cast(usize, decoder.height) * 4)
+        pixels = mem.push_array<u8>(arena, #cast(usize, decoder.width) * #cast(usize, decoder.height) * 4)
         scratch = mem.arena_mark(arena)
         ok = allocate_planes(arena, &decoder)
       }
@@ -501,31 +476,22 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image
     } else if marker == 218 {
       ok = scan(&decoder, payload)
     } else if marker == 221 {
-      if #len(payload) != 2 { ok = invalid(&decoder) } else { decoder.restart = be16(payload, 0) }
-    } else if marker == 238 && #len(payload) >= 12 && payload[0] == 65 && payload[1] == 100 && payload[2] == 111 && payload[3] == 98 && payload[4] == 101 {
+      if payload.len != 2 { ok = invalid(&decoder) } else { decoder.restart = be16(payload, 0) }
+    } else if marker == 238 && payload.len >= 12 && payload[0] == 65 && payload[1] == 100 && payload[2] == 111 && payload[3] == 98 && payload[4] == 101 {
       decoder.has_adobe = true
       decoder.adobe = payload[11]
     } else if marker >= 193 && marker <= 207 && marker != 196 && marker != 200 && marker != 204 {
-      decoder.kind = fail.Kind.Unsupported
+      decoder.kind = Problem.Unsupported
       ok = false
     } else if marker == 204 || marker == 220 {
-      decoder.kind = fail.Kind.Unsupported
+      decoder.kind = Problem.Unsupported
       ok = false
     }
     if !ok {
-      message: []const u8 = "malformed JPEG"
-      if decoder.kind == fail.Kind.Ok {
-        decoder.kind = fail.Kind.InvalidInput
-      }
-      if decoder.kind == fail.Kind.Unsupported {
-        message = "unsupported JPEG feature"
-      } else if decoder.kind == fail.Kind.Capacity {
-        message = "the JPEG exceeds the decoder's limits"
-      }
-      fail.at(status, decoder.kind, "decode JPEG", message, decoder.at)
-      return Image{}
+      if decoder.kind == Problem.Unsupported { fail parse.ParseErr.Unsupported(decoder.at) }
+      if decoder.kind == Problem.TooLarge { fail parse.ParseErr.TooLarge(decoder.at) }
+      fail parse.ParseErr.Invalid(decoder.at)
     }
   }
-  fail.at(status, fail.Kind.InvalidInput, "decode JPEG", "malformed JPEG", decoder.at)
-  return Image{}
+  fail parse.ParseErr.Invalid(decoder.at)
 }

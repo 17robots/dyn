@@ -16,7 +16,7 @@ for message in ('unsafe: #slice', 'unsafe: pointer cast', 'unsafe: size multipli
     assert message in full.stderr, (message, full.stderr)
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
-    (root/'main.dyn').write_text('use "std/mem"\nuse "std/fmt" f\nfn main() {\n  helper()\n}\n')
+    (root/'main.dyn').write_text('use "std/mem"\nuse f "std/fmt"\nfn main() {\n  helper()\n}\n')
     (root/'other.dyn').write_text('fn helper() {\n  arena := mem.arena_alloc(4096)\n  mem.arena_release(arena)\n}\n')
     imports = subprocess.run([DYN, 'vet', str(root)], capture_output=True, text=True, timeout=60)
     assert imports.returncode == 1 and imports.stderr.count('import is never used') == 1, imports
@@ -65,8 +65,8 @@ fn main() {
     # A cast through a per-target alias is reported only when no target
     # needs it: c.char is u8 on AArch64 Linux, net.Descriptor is isize on
     # Windows, c.long is i32 or i64 and widens to i64 everywhere.
-    (root/'main.dyn').write_text('''use "std/c" c
-use "std/net" net
+    (root/'main.dyn').write_text('''use c "std/c"
+use net "std/net"
 fn narrow(value: i8) i8 { return value }
 fn descriptor(value: i32) i32 { return value }
 fn wide(value: i64) i64 { return value }

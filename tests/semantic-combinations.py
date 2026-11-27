@@ -11,7 +11,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-semantic-combinations-') as d:
     for alias in ('lib','data'):
       for comment in ('','/* between import and declaration */'):
        for expression in (f'{alias}.Base + 2',f'#cast({alias}.Count, 42)'):
-        use='use "./lib"'+(' data' if alias=='data' else '')
+        use='use '+('data ' if alias=='data' else '')+'"./lib"'
         source=f'''{use}
 {comment}
 const Expected: {alias}.Count = {expression}
@@ -52,10 +52,10 @@ fn main() {{
         subprocess.run([DYN,'build',str(root),'--quiet','--no-cache','--output',str(root/'run')]+(['--release'] if release else []),check=True)
         subprocess.run([str(root/'run')],check=True)
     for source in ('struct Bad { value: i64 = 1.5 }\nfn main() {}',
-                   'use "./lib" data\nconst Bad: data.Count = 1.5\nfn main() {}',
+                   'use data "./lib"\nconst Bad: data.Count = 1.5\nfn main() {}',
                    'const A: i64 = B\nconst B: i64 = A\nfn main() {}',
-                   'use "./lib" data\nfn main() { _ = data.Pair(i32)\n{value: 1} }',
-                   'use "./lib" data\nfn f(x: data.Pair) data.Pair { return x }\nfn main() { callback: fn(i32) i32 = f\n_ = callback(1) }'):
+                   'use data "./lib"\nfn main() { _ = data.Pair(i32)\n{value: 1} }',
+                   'use data "./lib"\nfn f(x: data.Pair) data.Pair { return x }\nfn main() { callback: fn(i32) i32 = f\n_ = callback(1) }'):
         (root/'main.dyn').write_text(source)
         for command in ('check','build'):
             r=subprocess.run([DYN,command,str(root),'--quiet','--no-cache','--output',str(root/'run')],capture_output=True,text=True,timeout=30)

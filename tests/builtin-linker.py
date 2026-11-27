@@ -49,8 +49,8 @@ fn main() {
   if used(1) != 111 { #panic("second call") }
 }
 '''
-RELEASE = '''use "std/io" io
-use "std/mem" mem
+RELEASE = '''use io "std/io"
+use mem "std/mem"
 fn mix(x: u64) u64 {
   return (x ^ 0x9e3779b9) * 2654435761
 }

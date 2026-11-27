@@ -22,22 +22,22 @@ def run(args, **kwargs):
 FUNCTIONS = r'''
 pub fn count_eq(source:[]const u8, initial:u64) u64 {
  count:=initial
- for i in 0..#len(source) { if source[i]==34 { count+=1 } }
+ for i in 0..source.len { if source[i]==34 { count+=1 } }
  return count
 }
 pub fn count_lt(source:[]const u8, initial:u64) u64 {
  count:=initial
- for i in 0..#len(source) { if source[i]<128 { count+=1 } }
+ for i in 0..source.len { if source[i]<128 { count+=1 } }
  return count
 }
 pub fn count_usize(source:[]const u8, initial:usize) usize {
  count:=initial
- for i in 0..#len(source) { if source[i]==34 { count+=1 } }
+ for i in 0..source.len { if source[i]==34 { count+=1 } }
  return count
 }
 pub fn count_union(source:[]const u8, initial:u64) u64 {
  count:=initial
- for i in 0..#len(source) { b:=source[i]
+ for i in 0..source.len { b:=source[i]
  if b==34 || b==92 || b<32 { count+=1 } }
  return count
 }
@@ -52,22 +52,22 @@ pub fn count_rounds(p:*const u8,n:usize,rounds:usize) u64 {
 }
 pub fn count_live(source:[]const u8,initial:u64,a,b,c,d,e,f,g,h:f64) f64 {
  count:=initial
- for i in 0..#len(source) { if source[i]<128 { count+=1 } }
+ for i in 0..source.len { if source[i]<128 { count+=1 } }
  return a+b*2.0+c*3.0+d*4.0+e*5.0+f*6.0+g*7.0+h*8.0+#cast(f64,count)
 }
 pub fn count_low(source:[]const u8) u64 {
  count:u64=0
- for i in 0..#len(source) { if source[i]<1 { count+=1 } }
+ for i in 0..source.len { if source[i]<1 { count+=1 } }
  return count
 }
 pub fn count_high(source:[]const u8) u64 {
  count:u64=0
- for i in 0..#len(source) { if source[i]<255 || source[i]==255 { count+=1 } }
+ for i in 0..source.len { if source[i]<255 || source[i]==255 { count+=1 } }
  return count
 }
 pub fn count_duplicate(source:[]const u8) u64 {
  count:u64=0
- for i in 0..#len(source) { if source[i]==34 || source[i]<128 { count+=1 } }
+ for i in 0..source.len { if source[i]==34 || source[i]<128 { count+=1 } }
  return count
 }
 '''
@@ -88,14 +88,14 @@ INVERSE_PREDICATES = {
 for name, (predicate, _) in INVERSE_PREDICATES.items():
     FUNCTIONS += f'''pub fn {name}(source:[]const u8,initial:u64) u64 {{
  count:=initial
- for i in 0..#len(source) {{ b:=source[i]
+ for i in 0..source.len {{ b:=source[i]
  if {predicate} {{ count+=1 }} }}
  return count
 }}
 '''
 FUNCTIONS += '''pub fn count_inverse_live(source:[]const u8,initial:u64,a,b,c,d,e,f,g,h:f64) f64 {
  count:=initial
- for i in 0..#len(source) { if source[i]>=128 { count+=1 } }
+ for i in 0..source.len { if source[i]>=128 { count+=1 } }
  return a+b*2.0+c*3.0+d*4.0+e*5.0+f*6.0+g*7.0+h*8.0+#cast(f64,count)
 }
 '''
@@ -106,17 +106,17 @@ extern fn expose(value:*u64)
 pub fn rejected_exposed(source:[]const u8) u64 {
  count:u64=0
  expose(&count)
- for i in 0..#len(source) { if source[i]==34 { count+=1 } }
+ for i in 0..source.len { if source[i]==34 { count+=1 } }
  return count
 }
 pub fn rejected_call(source:[]const u8) u64 {
  count:u64=0
- for i in 0..#len(source) { if effect(source[i]) { count+=1 } }
+ for i in 0..source.len { if effect(source[i]) { count+=1 } }
  return count
 }
 pub fn rejected_narrow(source:[]const u8) u8 {
  count:u8=0
- for i in 0..#len(source) { if source[i]==34 { count+=1 } }
+ for i in 0..source.len { if source[i]==34 { count+=1 } }
  return count
 }
 pub fn rejected_partial(source:[]const u8,n:usize) u64 {
@@ -126,18 +126,18 @@ pub fn rejected_partial(source:[]const u8,n:usize) u64 {
 }
 pub fn rejected_signed(source:[]const u8) i64 {
  count:i64=0
- for i in 0..#len(source) { if source[i]==34 { count+=1 } }
+ for i in 0..source.len { if source[i]==34 { count+=1 } }
  return count
 }
 pub fn rejected_wrap(source:[]const u8) u64 {
  count:u64=0
- for i in 0..#len(source) { if source[i]==34 { count=(count+1) } }
+ for i in 0..source.len { if source[i]==34 { count=(count+1) } }
  return count
 }
 pub fn rejected_cleanup(source:[]const u8) u64 {
  defer { _=effect(3) }
  count:u64=0
- for i in 0..#len(source) { if source[i]==34 { count+=1 } }
+ for i in 0..source.len { if source[i]==34 { count+=1 } }
  return count
 }
 pub fn rejected_mutated_stop(p:*const u8,n:usize,rounds:usize) u64 {

@@ -13,10 +13,10 @@ pub struct Handle { index: u32, generation: u32 }
 
 // Prepares a fresh or reused slot: zeroes every field except generation and
 // marks the slot live.
-pub fn reset(node: *$T) {
+pub fn reset<T>(node: *T) {
   generation := node.generation
   bytes := #slice(#cast(*u8, node), #sizeof(T))
-  for i in 0..#len(bytes) {
+  for i in 0..bytes.len {
     bytes[i] = 0
   }
   if generation % 2 == 0 {
@@ -26,21 +26,21 @@ pub fn reset(node: *$T) {
 }
 
 // Marks a live slot free. Outstanding handles to it stop resolving.
-pub fn retire(node: *$T) {
+pub fn retire<T>(node: *T) {
   if node.generation % 2 == 1 {
     node.generation = node.generation + 1
   }
 }
 
-pub fn is_live(node: *const $T) bool {
+pub fn is_live<T>(node: *const T) bool {
   return node.generation % 2 == 1
 }
 
 // The handle for node, which must be an element of slots.
-pub fn handle_of(slots: []$T, node: *const $T) Handle {
+pub fn handle_of<T>(slots: []T, node: *const T) Handle {
   base := #cast(usize, &slots[0])
   address := #cast(usize, node)
-  if address < base || (address - base) % #sizeof(T) != 0 || (address - base) / #sizeof(T) >= #len(slots) {
+  if address < base || (address - base) % #sizeof(T) != 0 || (address - base) / #sizeof(T) >= slots.len {
     #panic("handle_of: node is not an element of slots")
   }
   return Handle{ index: #cast(u32, (address - base) / #sizeof(T)), generation: node.generation }
@@ -48,9 +48,9 @@ pub fn handle_of(slots: []$T, node: *const $T) Handle {
 
 // The live slot the handle was made for, or nil_node when the handle is stale,
 // zero, or out of range.
-pub fn resolve(slots: []$T, handle: Handle, nil_node: *const $T) *T {
+pub fn resolve<T>(slots: []T, handle: Handle, nil_node: *const T) *T {
   index := #cast(usize, handle.index)
-  if index >= #len(slots) || handle.generation % 2 == 0 || slots[index].generation != handle.generation {
+  if index >= slots.len || handle.generation % 2 == 0 || slots[index].generation != handle.generation {
     return #cast(*T, nil_node)
   }
   return &slots[index]

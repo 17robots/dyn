@@ -313,6 +313,19 @@ static bool reserve_variant(DynAstProgram *a) {
   a->variant_capacity = c;
   return true;
 }
+static bool reserve_variants(DynAstProgram *a, size_t extra) {
+  if (a->variant_count + extra <= a->variant_capacity) return true;
+  size_t c = a->variant_capacity ? a->variant_capacity * 2 : 16;
+  while (c < a->variant_count + extra) c *= 2;
+  void *p = realloc(a->variants, c * sizeof(*a->variants));
+  if (!p) {
+    a->allocation_failed = true;
+    return false;
+  }
+  a->variants = p;
+  a->variant_capacity = c;
+  return true;
+}
 static bool reserve_param(DynAstProgram *a) {
   if (a->param_count < a->param_capacity) {
     return true;
@@ -771,6 +784,13 @@ static uint32_t parse_string(DynSpan n, const DynSource *s, DynAstProgram *a,
     diagnostic(n, s, errors, "out of memory");
     return UINT32_MAX;
   }
+  if (s->text[n.start_byte] == '`') {
+    count = end - begin;
+    if (count) memcpy(out, s->text + begin, count);
+    uint32_t id = (uint32_t)a->string_count;
+    a->strings[a->string_count++] = (DynAstString){out, count};
+    return id;
+  }
   for (uint32_t i = begin; i < end; ++i) {
     unsigned char c = (unsigned char)s->text[i];
     if (c != '\\') {
@@ -828,21 +848,15 @@ static DynType parse_type_name(DynSpan p, const DynSource *s, DynAstProgram *a) 
            {"usize", DYN_TYPE_USIZE}, {"f32", DYN_TYPE_F32},
            {"f64", DYN_TYPE_F64},     {"rawptr", DYN_TYPE_RAWPTR},
            {"any", DYN_TYPE_ANY}};
+  if (p.end_byte - p.start_byte == 3 && !memcmp(s->text + p.start_byte, "str", 3))
+    return intern_slice(a, DYN_TYPE_U8, true);
   for (size_t i = 0; i < sizeof(m) / sizeof(m[0]); ++i)
     if (p.end_byte - p.start_byte == strlen(m[i].n) &&
         !memcmp(s->text + p.start_byte, m[i].n, strlen(m[i].n))) {
       return m[i].t;
     }
   DynType bound = scope_type(a, p, s, false);
-  if (bound != DYN_TYPE_ERROR) {
-    if (a->binding_params && bound >= DYN_TYPE_PARAM_BASE &&
-        bound < DYN_TYPE_PARAM_BASE + DYN_MAX_TYPE_PARAMS &&
-        !a->scope_explicit[bound - DYN_TYPE_PARAM_BASE]) {
-      a->type_param_error = "an inferred type is written `$T` in every parameter that supplies it";
-      return DYN_TYPE_ERROR;
-    }
-    return bound;
-  }
+  if (bound != DYN_TYPE_ERROR) return bound;
   uint32_t alias = find_alias(a, p, s);
   if (alias != UINT32_MAX) {
     return resolve_alias(a, alias, s);
@@ -1003,7 +1017,7 @@ DynType dyn_ast_struct_instance(DynAstProgram *a, uint32_t template_id, const Dy
     return DYN_TYPE_ERROR;
   }
   DynAstStruct model = a->structs[template_id];
-  DynAstStruct st = {.span = model.span, .packed = model.packed,
+  DynAstStruct st = {.span = model.span, .packed = model.packed, .nocopy = model.nocopy,
                      .is_public = model.is_public, .module_owner = model.module_owner,
                      .template_of = template_id + 1, .type_param_count = count};
   for (uint32_t i = 0; i < count; ++i) {
@@ -1044,11 +1058,136 @@ DynType dyn_ast_enum_instance(DynAstProgram *a, uint32_t template_id, const DynT
   }
   return DYN_TYPE_ENUM_BASE + id;
 }
+DynType dyn_ast_intern_error_union(DynAstProgram *a, const DynType *members, uint32_t count) {
+  DynType flat[64];
+  uint32_t n = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    DynType m = members[i];
+    if (m == DYN_TYPE_ERROR) return DYN_TYPE_ERROR;
+    if (dyn_type_is_enum(m)) {
+      DynAstEnum *en = &a->enums[m - DYN_TYPE_ENUM_BASE];
+      if (en->is_fallible || en->is_template) {
+        a->type_param_error = "error union members must be concrete enum types";
+        return DYN_TYPE_ERROR;
+      }
+      if (en->is_error_union) {
+        for (uint32_t k = 0; k < en->variant_count; ++k) {
+          if (n >= 64) { a->type_param_error = "error union has too many member enums"; return DYN_TYPE_ERROR; }
+          flat[n++] = a->variants[en->variant_start + k].payload_type;
+        }
+        continue;
+      }
+    } else if (!dyn_type_is_param(m)) {
+      a->type_param_error = "error union members must be enum types";
+      return DYN_TYPE_ERROR;
+    }
+    if (n >= 64) { a->type_param_error = "error union has too many member enums"; return DYN_TYPE_ERROR; }
+    flat[n++] = m;
+  }
+  if (!n) return DYN_TYPE_ERROR;
+  /* Sort ascending by DynType id and deduplicate for canonical identity. */
+  for (uint32_t i = 1; i < n; ++i) {
+    DynType key = flat[i];
+    uint32_t j = i;
+    while (j > 0 && flat[j - 1] > key) { flat[j] = flat[j - 1]; --j; }
+    flat[j] = key;
+  }
+  uint32_t unique = 1;
+  for (uint32_t i = 1; i < n; ++i)
+    if (flat[i] != flat[unique - 1]) flat[unique++] = flat[i];
+  n = unique;
+  if (n == 1) return flat[0];
+  for (uint32_t i = 0; i < a->enum_count; ++i) {
+    DynAstEnum *en = &a->enums[i];
+    if (!en->is_error_union || en->variant_count != n) continue;
+    bool same = true;
+    for (uint32_t k = 0; k < n; ++k)
+      if (a->variants[en->variant_start + k].payload_type != flat[k]) { same = false; break; }
+    if (same) return DYN_TYPE_ENUM_BASE + i;
+  }
+  if (a->enum_count >= DYN_TYPE_POINTER_BASE - DYN_TYPE_ENUM_BASE || !reserve_enum(a)) {
+    a->allocation_failed = true;
+    return DYN_TYPE_ERROR;
+  }
+  if (!reserve_variants(a, n)) { a->allocation_failed = true; return DYN_TYPE_ERROR; }
+  uint32_t vstart = (uint32_t)a->variant_count;
+  bool is_open = false;
+  for (uint32_t k = 0; k < n; ++k) {
+    is_open |= dyn_ast_type_is_open(a, flat[k]);
+    a->variants[a->variant_count++] = (DynAstVariant){.payload_type = flat[k], .tag = k};
+  }
+  DynAstEnum en = {.tag_type = n <= 256 ? DYN_TYPE_U8 : DYN_TYPE_U32,
+                   .variant_start = vstart, .variant_count = n,
+                   .alignment = 1, .has_payload = true, .is_public = true,
+                   .open_instance = is_open, .is_error_union = true};
+  uint32_t id = (uint32_t)a->enum_count;
+  a->enums[a->enum_count++] = en;
+  if (!a->structs_open && !a->filling_instances && !is_open) {
+    fill_instances(a);
+    layout_instances(a);
+  }
+  return DYN_TYPE_ENUM_BASE + id;
+}
+DynType dyn_ast_intern_fallible(DynAstProgram *a, DynType ok_type, DynType err_type) {
+  if (ok_type == DYN_TYPE_ERROR || err_type == DYN_TYPE_ERROR) return DYN_TYPE_ERROR;
+  if (dyn_type_is_enum(ok_type) && a->enums[ok_type - DYN_TYPE_ENUM_BASE].is_fallible) {
+    a->type_param_error = "nested fallible types 'T!E!E2' are not allowed";
+    return DYN_TYPE_ERROR;
+  }
+  if (err_type != DYN_TYPE_VOID && !dyn_type_is_param(err_type)) {
+    if (!dyn_type_is_enum(err_type) ||
+        a->enums[err_type - DYN_TYPE_ENUM_BASE].is_fallible ||
+        a->enums[err_type - DYN_TYPE_ENUM_BASE].is_template) {
+      a->type_param_error = "error type after '!' must be an enum or enum union";
+      return DYN_TYPE_ERROR;
+    }
+  }
+  for (uint32_t i = 0; i < a->enum_count; ++i) {
+    DynAstEnum *en = &a->enums[i];
+    if (en->is_fallible && en->ok_type == ok_type && en->err_type == err_type)
+      return DYN_TYPE_ENUM_BASE + i;
+  }
+  if (a->enum_count >= DYN_TYPE_POINTER_BASE - DYN_TYPE_ENUM_BASE || !reserve_enum(a)) {
+    a->allocation_failed = true;
+    return DYN_TYPE_ERROR;
+  }
+  if (!reserve_variants(a, 2)) { a->allocation_failed = true; return DYN_TYPE_ERROR; }
+  uint32_t vstart = (uint32_t)a->variant_count;
+  a->variants[a->variant_count++] = (DynAstVariant){.payload_type = ok_type, .tag = 0};
+  a->variants[a->variant_count++] = (DynAstVariant){.payload_type = err_type, .tag = 1};
+  bool is_open = (ok_type != DYN_TYPE_VOID && dyn_ast_type_is_open(a, ok_type)) ||
+                 (err_type != DYN_TYPE_VOID && dyn_ast_type_is_open(a, err_type));
+  bool has_payload = ok_type != DYN_TYPE_VOID || err_type != DYN_TYPE_VOID;
+  DynAstEnum en = {.tag_type = DYN_TYPE_U8,
+                   .variant_start = vstart, .variant_count = 2,
+                   .alignment = 1, .has_payload = has_payload, .is_public = true,
+                   .open_instance = is_open, .is_fallible = true,
+                   .ok_type = ok_type, .err_type = err_type};
+  uint32_t id = (uint32_t)a->enum_count;
+  a->enums[a->enum_count++] = en;
+  if (!a->structs_open && !a->filling_instances && !is_open) {
+    fill_instances(a);
+    layout_instances(a);
+  }
+  return DYN_TYPE_ENUM_BASE + id;
+}
 DynType dyn_ast_substitute(DynAstProgram *a, DynType t, const DynType *args) {
   if (dyn_type_is_param(t))
     return args[t - DYN_TYPE_PARAM_BASE];
   if (dyn_type_is_enum(t) && a->enums[t - DYN_TYPE_ENUM_BASE].open_instance) {
     DynAstEnum en = a->enums[t - DYN_TYPE_ENUM_BASE];
+    if (en.is_fallible) {
+      DynType ok_t = en.ok_type == DYN_TYPE_VOID ? DYN_TYPE_VOID : dyn_ast_substitute(a, en.ok_type, args);
+      DynType err_t = en.err_type == DYN_TYPE_VOID ? DYN_TYPE_VOID : dyn_ast_substitute(a, en.err_type, args);
+      return dyn_ast_intern_fallible(a, ok_t, err_t);
+    }
+    if (en.is_error_union) {
+      DynType members[64];
+      uint32_t n = en.variant_count < 64 ? en.variant_count : 64;
+      for (uint32_t i = 0; i < n; ++i)
+        members[i] = dyn_ast_substitute(a, a->variants[en.variant_start + i].payload_type, args);
+      return dyn_ast_intern_error_union(a, members, n);
+    }
     DynType concrete[DYN_MAX_TYPE_PARAMS];
     for (uint32_t i = 0; i < en.type_param_count; ++i)
       concrete[i] = dyn_ast_substitute(a, en.type_args[i], args);

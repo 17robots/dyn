@@ -17,13 +17,13 @@ fn fill(bytes: []u8) { for *b in bytes { b.* = 171 } }
 // Header fields are live mutable metadata; dirty only bytes outside that region.
 fn fill_payload(bytes: []u8, arena: *mem.Arena) {
   header := #cast(usize,arena)-#cast(usize,&bytes[0])
-  for i in 0..#len(bytes) {
+  for i in 0..bytes.len {
     if i < header || i-header >= mem.ArenaHeader { bytes[i]=171 }
   }
 }
 fn verify(bytes: []u8, arena: *mem.Arena, start: usize, size: usize) {
   header := #cast(usize,arena)-#cast(usize,&bytes[0])
-  for i in 0..#len(bytes) {
+  for i in 0..bytes.len {
     if i >= header && i-header < mem.ArenaHeader { continue }
     if i >= start && i-start < size { expect(bytes[i] == 0) }
     else { expect(bytes[i] == 171) }
@@ -31,12 +31,12 @@ fn verify(bytes: []u8, arena: *mem.Arena, start: usize, size: usize) {
 }
 // count zeroed values of T in a dirty caller buffer at offset: aligned,
 // zeroed, nothing around them touched, and zeroed again after a poisoned reset.
-fn typed_array(T:type, count:usize, offset:usize) {
+fn typed_array<T>(count:usize, offset:usize) {
   backing:[1400]u8
   fill(backing[..])
   arena:=mem.arena_from_buffer(backing[offset..1300])
-  values:=mem.push_array(T,arena,count)
-  expect(#len(values)==count)
+  values:=mem.push_array<T>(arena, count)
+  expect(values.len==count)
   if count==0 {
     expect(arena.offset==mem.ArenaHeader)
     verify(backing[..],arena,0,0)
@@ -50,28 +50,28 @@ fn typed_array(T:type, count:usize, offset:usize) {
   fill_payload(backing[..],arena)
   arena.poison_on_rewind=true
   mem.arena_reset(arena)
-  reused:=mem.push_array(T,arena,count)
+  reused:=mem.push_array<T>(arena, count)
   expect(&reused[0]==&values[0])
   verify(backing[..],arena,start,count*#sizeof(T))
 }
 fn main() {
   for offset in 0..16 {
     for count in 0..130 {
-      typed_array(u8,count,offset)
-      typed_array(u16,count,offset)
-      typed_array(u32,count,offset)
-      typed_array(u64,count,offset)
+      typed_array<u8>(count, offset)
+      typed_array<u16>(count, offset)
+      typed_array<u32>(count, offset)
+      typed_array<u64>(count, offset)
     }
     for count in 0..8 {
-      typed_array(Padded,count,offset)
+      typed_array<Padded>(count, offset)
     }
   }
   absent:*mem.Arena=nil
-  expect(#len(mem.push_array(u64,absent,0))==0)
+  expect(mem.push_array<u64>(absent, 0).len==0)
   backing: [512]u8
   fill(backing[..])
   arena := mem.arena_from_buffer(backing[..mem.ArenaBufferOverhead+64])
-  item := mem.push(Padded, arena)
+  item := mem.push<Padded>(arena)
   start := #cast(usize, item)-#cast(usize, &backing[0])
   verify(backing[..], arena, start, #sizeof(Padded))
   before := arena.offset
@@ -79,7 +79,7 @@ fn main() {
   arena.poison_on_rewind = true
   mem.arena_reset(arena)
   for i in start..start+before-mem.ArenaHeader { expect(backing[i] == 221) }
-  reused := mem.push(Padded, arena)
+  reused := mem.push<Padded>(arena)
   expect(reused == item)
   verify(backing[..], arena, start, #sizeof(Padded))
   fill(backing[..])
@@ -125,7 +125,7 @@ def run(work):
             print('PASS arena zero', name, flush=True)
     for failure in ('overflow', 'exhaustion'):
         count = '(~#cast(usize,0))/#sizeof(u64)+1' if failure == 'overflow' else '8'
-        source = '''use "std/mem" mem
+        source = '''use mem "std/mem"
 use "std/io"
 use "std/panic"
 failure_backing:[mem.ArenaBufferOverhead+16]u8
@@ -140,7 +140,7 @@ fn main() {
  failure_arena=arena
  panic.set_handler(report)
  count:usize=COUNT
- _=mem.push_array(u64,arena,count)
+ _=mem.push_array<u64>(arena, count)
 }
 '''.replace('COUNT', count)
         (project / 'main.dyn').write_text(source)

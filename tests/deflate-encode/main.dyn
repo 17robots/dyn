@@ -1,6 +1,5 @@
 // Compresses a file with std/compress/gzip: deflate-encode LEVEL INPUT OUTPUT.
 use "std/compress/gzip"
-use "std/fail"
 use "std/fs"
 use "std/io"
 use "std/mem"
@@ -11,8 +10,7 @@ use "std/time"
 fn main() {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
+  arguments := process.arguments(arena) catch { #panic("cannot read arguments") }
   level := arguments[1][0] - '0'
   read := fs_read_file(arena, arguments[2], 1 << 30)
   started := time.monotonic_now()
@@ -20,18 +18,18 @@ fn main() {
   ended := time.monotonic_now()
   elapsed := time.elapsed(started, ended)
   _ = fs_write_file(arguments[3], encoded)
-  io.println("{} -> {} in {} us", #len(read), #len(encoded), elapsed / 1000)
+  io.println("{} -> {} in {} us", read.len, encoded.len, elapsed / 1000)
 }
 
 // Writes data to path; whether it worked.
 fn fs_write_file(path: []const u8, data: []const u8) bool {
-  status: fail.Status
-  fs.write_all(&status, path, data)
-  return !status.failed
+  fs.write_all(path, data) catch { return false }
+  return true
 }
 
 // The whole file at path; empty when it cannot be read.
 fn fs_read_file(arena: *mem.Arena, path: []const u8, maximum: usize) []u8 {
-  status: fail.Status
-  return fs.read_all(arena, &status, path, maximum)
+  empty: []u8
+  data := fs.read_all(arena, path, maximum) catch { return empty }
+  return data
 }

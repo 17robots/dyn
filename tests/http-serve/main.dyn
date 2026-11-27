@@ -4,7 +4,6 @@
 // slower than Config.slow_handler_microseconds.
 use "std/bytes"
 use "std/fmt"
-use "std/fail"
 use "std/io"
 use "std/log"
 use "std/mem"
@@ -15,9 +14,9 @@ use "std/thread/pool"
 use "std/thread/posix"
 use "std/time"
 
-fn hello(status: *fail.Status, response: *http.Response, request: *const http.Request) {
+fn hello(response: *http.Response, request: *const http.Request) !io.IoErr {
   if bytes.equal(request.path, "/slow") { time.sleep(20 * time.Millisecond) }
-  http.text(status, response, 200, "hello\n")
+  try http.text(response, 200, "hello\n")
 }
 
 fn main() i32 {
@@ -28,17 +27,14 @@ fn main() i32 {
   config.slow_handler_microseconds = 10000
   arena := mem.arena_alloc(evented.storage_size(config, 2) + 2 * mem.MiB)
   defer mem.arena_release(arena)
-  status: fail.Status
-  raw := pool.start(arena, &status, 2, 16, 64 * mem.KiB)
+  raw := pool.start(arena, 2, 16, 64 * mem.KiB) catch { return 1 }
   spawner := posix.spawner()
-  libc := pool.start_spawned(arena, &status, 2, 16, 64 * mem.KiB, &spawner)
-  if status.failed { return 1 }
+  libc := pool.start_spawned(arena, 2, 16, 64 * mem.KiB, &spawner) catch { return 1 }
   workers: [2]evented.Worker
   // Port 18097: the test connects there.
-  evented.serve(arena, &status, workers[..], net.ipv4(127, 0, 0, 1, 18097), config, hello, nil)
-  pool.stop(&status, raw)
-  pool.stop(&status, libc)
-  if status.failed { return 1 }
-  io.println("stopped {}", #len(workers))
+  evented.serve(arena, workers[..], net.ipv4(127, 0, 0, 1, 18097), config, hello, nil) catch { return 1 }
+  pool.stop(raw) catch { return 1 }
+  pool.stop(libc) catch { return 1 }
+  io.println("stopped {}", workers.len)
   return 0
 }

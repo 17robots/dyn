@@ -12,11 +12,11 @@ dyn check path/to/project
 
 ```dyn
 // Before
-fn zero($T: type) T { ... }
+fn zero<T>(T: type) T { ... }
 
 // After
-fn zero(T: type) T { ... }
-fn pair(K, V: type) Map(K, V) { ... }
+fn zero<T>() T { ... }
+fn pair<V>(K) Map(K, V) { ... }
 ```
 
 Calls do not change: `zero(u32)`.
@@ -27,10 +27,10 @@ Write `$T` at every parameter that supplies `T`. The result type and the body us
 
 ```dyn
 // Before
-fn eql(a: $T, b: T) bool { ... }
+fn eql<T>(a: T, b: T) bool { ... }
 
 // After
-fn eql(a: $T, b: $T) bool { ... }
+fn eql<T>(a: T, b: T) bool { ... }
 ```
 
 If a function took `T: type` and also a parameter whose type contains `T`, drop the type
@@ -38,12 +38,12 @@ parameter and let the argument supply it. You have to make this change by hand:
 
 ```dyn
 // Before
-fn first(T: type, items: []T) T { ... }
-x := first(u32, items)
+fn first<T>(items: []T) T { ... }
+x := first<u32>(items)
 
 // After
-fn first(items: []$T) T { ... }
-x := first(items)
+fn first<T>(items: []T) T { ... }
+x := first<items>()
 ```
 
 ## Structs and enums
@@ -52,12 +52,12 @@ Their parentheses hold only types, so the names are bare:
 
 ```dyn
 // Before
-struct Map($K: type, $V: type) { ... }
-enum(u8) Slot($T: type) { Empty, Full: T }
+struct Map<$K: type, $V: type> { ... }
+enum(u8) Slot<$T: type> { Empty, Full: T }
 
 // After
-struct Map(K, V) { ... }
-enum(u8) Slot(T) { Empty, Full: T }
+struct Map<K, V> { ... }
+enum(u8) Slot<T> { Empty, Full: T }
 ```
 
 ## Instances as function values
@@ -70,7 +70,7 @@ per type parameter in declaration order. You have to make this change by hand:
 hash := key_hash(u32)
 
 // After
-hash := #instance(key_hash, u32)
+hash := key_hash<u32>
 ```
 
 ## Float literals

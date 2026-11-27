@@ -1,5 +1,4 @@
 use "std/bytes"
-use "std/fail"
 use "std/fmt"
 use "std/fs"
 use "std/io"
@@ -7,14 +6,9 @@ use "std/mem"
 use "std/path"
 use "std/process"
 
-fn report(failure: fail.Failure) {
-  storage: [512]u8
-  io.eprintln("summary: {}", fail.describe(storage[..], failure))
-}
-
 fn main() i32 {
   program := process.start()
-  if #len(program.args) != 3 {
+  if program.args.len != 3 {
     io.eprintln("summary: usage: summary SOURCE OUTPUT")
     return 1
   }
@@ -22,24 +16,36 @@ fn main() i32 {
   output := program.args[2]
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  status: fail.Status
-  entries := fs.list(arena, &status, source)
+  entries := fs.list(arena, source) catch err {
+    io.eprintln("summary: {}: {}", source, err)
+    return 1
+  }
   text := mem.push_bytes(arena, 64 * 1024)
-  lines := fmt.buffer(&status, text)
+  lines := fmt.buffer(text)
   total: usize = 0
   for entry in entries {
-    if status.failed { break }
     if !bytes.ends_with(entry.name, ".txt") { continue }
-    content := fs.read_all(arena, &status, path.join(arena, source, entry.name), 1 << 30)
+    file := path.join(arena, source, entry.name)
+    content := fs.read_all(arena, file, 1 << 30) catch err {
+      io.eprintln("summary: {}: {}", file, err)
+      return 1
+    }
     count := bytes.count_occurrences(content, "\n")
     fmt.print(&lines, "{} {}\n", entry.name, count)
     total += count
   }
   fmt.print(&lines, "total {}\n", total)
-  fs.make_directory(&status, output)
-  fs.write_all(&status, path.join(arena, output, "summary.txt"), fmt.bytes(&lines))
-  if status.failed {
-    report(status.failure)
+  if fmt.overflowed(&lines) {
+    io.eprintln("summary: the summary does not fit 64 KiB")
+    return 1
+  }
+  fs.make_directory(output) catch err {
+    io.eprintln("summary: {}: {}", output, err)
+    return 1
+  }
+  target := path.join(arena, output, "summary.txt")
+  fs.write_all(target, fmt.bytes(&lines)) catch err {
+    io.eprintln("summary: {}: {}", target, err)
     return 1
   }
   return 0

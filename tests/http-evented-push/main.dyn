@@ -5,13 +5,12 @@ use "std/bytes"
 use "std/crypto/password"
 use "std/encoding/json"
 use "std/fmt"
-use "std/fail"
 use "std/io"
 use "std/mem"
 use "std/net"
 use "std/net/http"
 use "std/net/http/evented"
-use "std/net/http/evented/tls" https
+use https "std/net/http/evented/tls"
 use "std/parse"
 use "std/process"
 use "std/sync"
@@ -29,8 +28,8 @@ struct App {
   abandoned: sync.AtomicU32,
   workers: []evented.Worker,
   assets: http.Assets,
-  router: http.Routes(App),
-  route_storage: [19]http.TypedRoute(App),
+  router: http.Routes<App>,
+  route_storage: [19]http.TypedRoute<App>,
   // Requests deferred with later on each worker in the current pass, and the
   // size of the batch the last finish closed.
   pending: [WorkerCount]usize,
@@ -40,44 +39,52 @@ struct App {
 
 struct Hash { input: [64]u8, length: usize, digest: [32]u8, ok: bool }
 
-fn text(status: *fail.Status, response: *http.Response, code: u16, body: []const u8) {
-  http.respond(status, response, body, http.ResponseOptions{ status: code, content_type: "text/plain" })
+// The JSON a writer finished, or "" when it failed.
+fn finished(w: *const json.Writer) []const u8 {
+  return json.finish(w) catch ""
+}
+// Whether finishing the writer fails.
+fn finish_failed(w: *const json.Writer) bool {
+  _ = json.finish(w) catch { return true }
+  return false
+}
+fn text(response: *http.Response, code: u16, body: []const u8) !io.IoErr {
+  try http.respond(response, body, http.ResponseOptions{ status: code, content_type: "text/plain" })
 }
 
-fn health(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
-  text(status, response, 200, "ok\n")
+fn health(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
+  try text(response, 200, "ok\n")
 }
 
 // The request arena: 4 KiB per call, never freed; the server empties it
 // before each handler, so thousands of calls fit a 1 MiB arena.
-fn scratch(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
+fn scratch(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
   arena := evented.arena(response)
   if arena == nil {
-    text(status, response, 500, "no arena")
+    try text(response, 500, "no arena")
     return
   }
   block := mem.push_bytes(arena, 4096)
-  out := json.writer(status, block)
+  out := json.writer(block)
   json.object_begin(&out)
   json.field(&out, "worker", evented.worker_index(response))
   json.field(&out, "path", request.path)
   json.field(&out, "ok", true)
   json.object_end(&out)
-  http.json(status, response, 200, json.output(&out))
+  try http.json(response, 200, finished(&out))
 }
 
 // Larger than a 64 KiB HTTP/2 window: the handler waits for WINDOW_UPDATE.
-fn big(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
-  text(status, response, 200, app.big[..])
+fn big(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
+  try text(response, 200, app.big[..])
 }
 
 // A dynamic JSON body, gzipped when the client accepts it; ?n= sets its rows.
-fn report(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
+fn report(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
   storage: [64 * mem.KiB]u8
-  page := fmt.buffer(status, storage[..])
+  page := fmt.buffer(storage[..])
   count_storage: [8]u8
-  optional: fail.Status
-  count := http.query_value(&optional, request, "n", count_storage[..])
+  count := http.query_value(request, "n", count_storage[..]) catch count_storage[..0]
   rows := 400
   if bytes.equal(count, "2") {
     rows = 2
@@ -91,144 +98,134 @@ fn report(status: *fail.Status, response: *http.Response, request: *const http.R
   }
   fmt.write(&page, "]")
   cache: [1]http.Header = [http.Header{ name: "Cache-Control", value: "no-store" }]
-  evented.respond_compressed(status, response, request, fmt.bytes(&page), http.ResponseOptions{ content_type: "application/json", headers: cache[..] })
+  try evented.respond_compressed(response, request, fmt.bytes(&page), http.ResponseOptions{ content_type: "application/json", headers: cache[..] })
 }
 
 fn hash_work(job: *Hash) {
   scratch: [20]u8
   salt: [16]u8
-  hashing: fail.Status
-  password.pbkdf2_sha256(&hashing, job.digest[..], job.input[..job.length], salt[..], 20000, scratch[..])
-  job.ok = !hashing.failed
+  job.ok = true
+  password.pbkdf2_sha256(job.digest[..], job.input[..job.length], salt[..], 20000, scratch[..]) catch { job.ok = false }
 }
 
-fn hash_finish(status: *fail.Status, response: *http.Response, request: *const http.Request, job: *Hash) {
+fn hash_finish(response: *http.Response, request: *const http.Request, job: *Hash) !io.IoErr {
   if !job.ok {
-    text(status, response, 500, "hash failed\n")
+    try text(response, 500, "hash failed\n")
     return
   }
   storage: [80]u8
-  out := fmt.buffer(status, storage[..])
+  out := fmt.buffer(storage[..])
   digits := "0123456789abcdef"
   for byte in job.digest {
     fmt.write_byte(&out, digits[byte >> 4])
     fmt.write_byte(&out, digits[byte & 15])
   }
   fmt.write_byte(&out, '\n')
-  text(status, response, 200, fmt.bytes(&out))
+  try text(response, 200, fmt.bytes(&out))
 }
 
 struct Tally { app: *App, worker: usize, number: usize }
 
 // The first finish of a pass closes the batch; every reply names its size.
-fn later_finish(status: *fail.Status, response: *http.Response, request: *const http.Request, job: *Tally) {
+fn later_finish(response: *http.Response, request: *const http.Request, job: *Tally) !io.IoErr {
   app := job.app
   if app.pending[job.worker] > 0 {
     app.batch[job.worker] = app.pending[job.worker]
     app.pending[job.worker] = 0
   }
   storage: [64]u8
-  out := fmt.buffer(status, storage[..])
+  out := fmt.buffer(storage[..])
   fmt.print(&out, "later {} of {}\n", job.number, app.batch[job.worker])
-  text(status, response, 200, fmt.bytes(&out))
+  try text(response, 200, fmt.bytes(&out))
 }
 
-fn deferred(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
-  job := evented.job(Tally, response)
+fn deferred(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
+  job := evented.job<Tally>(response)
   if job == nil {
-    text(status, response, 500, "no job storage\n")
+    try text(response, 500, "no job storage\n")
     return
   }
   worker := evented.worker_index(response)
   app.pending[worker] += 1
   job.* = Tally{ app: app, worker: worker, number: app.pending[worker] }
-  deferring: fail.Status
-  evented.later(&deferring, response, job, later_finish)
-  if deferring.failed {
-    text(status, response, 500, "later failed\n")
-  }
+  evented.later(response, job, later_finish) catch { try text(response, 500, "later failed\n") }
 }
 
-fn hash(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
-  job := evented.job(Hash, response)
-  if job == nil || #len(request.body) > #len(job.input) {
-    text(status, response, 500, "no job storage\n")
+fn hash(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
+  job := evented.job<Hash>(response)
+  if job == nil || request.body.len > job.input.len {
+    try text(response, 500, "no job storage\n")
     return
   }
   job.length = mem.copy(job.input[..], request.body)
-  ran: fail.Status
-  evented.run(&ran, response, job, hash_work, hash_finish)
-  if ran.failed {
-    text(status, response, 503, "pool busy\n")
-  }
+  evented.run(response, job, hash_work, hash_finish) catch { try text(response, 503, "pool busy\n") }
 }
 
-fn events(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
+fn events(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
   headers: [1]http.Header = [http.Header{ name: "Cache-Control", value: "no-store" }]
-  opening: fail.Status
-  opened := evented.open_stream(&opening, response, http.ResponseOptions{ content_type: "text/event-stream", headers: headers[..] }, EventsTopic)
-  if opening.failed {
-    text(status, response, 500, "stream failed\n")
+  opened := evented.open_stream(response, http.ResponseOptions{ content_type: "text/event-stream", headers: headers[..] }, EventsTopic) catch {
+    try text(response, 500, "stream failed\n")
     return
   }
   storage: [128]u8
-  hello := http.sse_event(status, storage[..], "hello", "", "connected")
-  evented.send(status, app.workers, opened, hello, false)
+  hello := try http.sse_event(storage[..], "hello", "", "connected")
+  try evented.send(app.workers, opened, hello, false)
 }
 
-fn chat(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
-  upgrading: fail.Status
-  _ = evented.upgrade(&upgrading, response, request, ChatTopic)
-  if upgrading.failed {
-    text(status, response, 400, "not a websocket upgrade\n")
+fn chat(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
+  _ = evented.upgrade(response, request, ChatTopic) catch {
+    try text(response, 400, "not a websocket upgrade\n")
+    return
   }
 }
 
 // POST body goes to every SSE stream as an event and every socket as text.
-fn broadcast(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
+fn broadcast(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
   storage: [1024]u8
-  event := http.sse_event(status, storage[..], "message", "7", request.body)
-  posting: fail.Status
-  evented.publish(&posting, app.workers, EventsTopic, event, false)
-  evented.publish(&posting, app.workers, ChatTopic, request.body, false)
-  if posting.failed {
-    text(status, response, 503, "inbox full\n")
+  event := try http.sse_event(storage[..], "message", "7", request.body)
+  publish_both(app, event, request.body) catch {
+    try text(response, 503, "inbox full\n")
     return
   }
-  text(status, response, 200, "sent\n")
+  try text(response, 200, "sent\n")
 }
 
-fn asset(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
-  found := http.find_asset(&app.assets, http.param(status, request, "name"))
+fn publish_both(app: *App, event: []const u8, text: []const u8) !io.IoErr {
+  try evented.publish(app.workers, EventsTopic, event, false)
+  try evented.publish(app.workers, ChatTopic, text, false)
+}
+
+fn asset(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
+  found := http.find_asset(&app.assets, try http.param(request, "name"))
   if found == nil {
-    text(status, response, 404, "no asset\n")
+    try text(response, 404, "no asset\n")
     return
   }
-  http.serve_asset(status, response, request, found, "public, max-age=60")
+  try http.serve_asset(response, request, found, "public, max-age=60")
 }
 
-fn client(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
+fn client(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
   storage: [64]u8
-  text(status, response, 200, net.ip_text(storage[..], evented.client_ip(response)))
+  try text(response, 200, net.ip_text(storage[..], evented.client_ip(response)))
 }
 
 // Upload: answers the body's length and byte sum.
-fn upload(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
+fn upload(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
   sum: u64 = 0
   for byte in request.body {
     sum += byte
   }
   storage: [64]u8
-  out := fmt.buffer(status, storage[..])
-  fmt.write_u64(&out, #len(request.body))
+  out := fmt.buffer(storage[..])
+  fmt.write_u64(&out, request.body.len)
   fmt.write_byte(&out, ' ')
   fmt.write_u64(&out, sum)
-  text(status, response, 200, fmt.bytes(&out))
+  try text(response, 200, fmt.bytes(&out))
 }
 
-fn quit(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
+fn quit(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
   sync.store_u32(&app.quit, 1)
-  text(status, response, 200, "bye\n")
+  try text(response, 200, "bye\n")
 }
 
 // Echo each message to its sender, with a prefix; "all:" messages go to every
@@ -238,22 +235,18 @@ fn on_message(message: *const evented.Message) {
   app := #cast(*App, message.context)
   if message.kind == evented.MessageKind.Closed { return }
   if bytes.starts_with(message.payload, "all:") {
-    posting: fail.Status
-    evented.publish(&posting, app.workers, ChatTopic, message.payload[4..], false)
+    evented.publish(app.workers, ChatTopic, message.payload[4..], false) catch {}
     return
   }
   if bytes.equal(message.payload, "bye") {
-    closing: fail.Status
-    evented.close_peer(&closing, app.workers, message.peer)
+    evented.close_peer(app.workers, message.peer) catch {}
     return
   }
   storage: [8 * 1024]u8
-  out_status: fail.Status
-  out := fmt.buffer(&out_status, storage[..])
+  out := fmt.buffer(storage[..])
   fmt.write(&out, "echo:")
   fmt.write(&out, message.payload)
-  sending: fail.Status
-  evented.send(&sending, app.workers, message.peer, fmt.bytes(&out), message.kind == evented.MessageKind.Binary)
+  evented.send(app.workers, message.peer, fmt.bytes(&out), message.kind == evented.MessageKind.Binary) catch {}
 }
 
 // Bodies larger than any upload block, read as they arrive: POST /large
@@ -265,26 +258,26 @@ fn large_chunk(job: *Upload, piece: []const u8) bool {
   for byte in piece {
     job.sum += #cast(u64, byte)
   }
-  job.count += #len(piece)
+  job.count += piece.len
   return job.limit == 0 || job.count <= job.limit
 }
 
-fn large_finish(status: *fail.Status, response: *http.Response, request: *const http.Request, job: *Upload, end: evented.BodyEnd) {
+fn large_finish(response: *http.Response, request: *const http.Request, job: *Upload, end: evented.BodyEnd) !io.IoErr {
   storage: [64]u8
-  line := fmt.buffer(status, storage[..])
+  line := fmt.buffer(storage[..])
   case end {
     evented.BodyEnd.Complete => {
       fmt.print(&line, "{} {}", job.count, job.sum)
-      text(status, response, 200, fmt.bytes(&line))
+      try text(response, 200, fmt.bytes(&line))
       return
     }
     evented.BodyEnd.Stopped => {
       fmt.print(&line, "stopped after {}", job.count)
-      text(status, response, http.StatusPayloadTooLarge, fmt.bytes(&line))
+      try text(response, http.StatusPayloadTooLarge, fmt.bytes(&line))
       return
     }
     evented.BodyEnd.Invalid => {
-      text(status, response, http.StatusBadRequest, "bad chunks\n")
+      try text(response, http.StatusBadRequest, "bad chunks\n")
       return
     }
     evented.BodyEnd.Closed => {
@@ -294,67 +287,63 @@ fn large_finish(status: *fail.Status, response: *http.Response, request: *const 
   }
 }
 
-fn large_body(status: *fail.Status, response: *http.Response, request: *const http.Request) {
-  typed := #cast(*http.Typed(App), request.context)
+fn large_body(response: *http.Response, request: *const http.Request) !io.IoErr {
+  typed := #cast(*http.Typed<App>, request.context)
   if !bytes.equal(request.path, "/large") {
-    text(status, response, http.StatusPayloadTooLarge, "too large\n")
+    try text(response, http.StatusPayloadTooLarge, "too large\n")
     return
   }
-  job := evented.job(Upload, response)
+  job := evented.job<Upload>(response)
   if job == nil {
-    text(status, response, http.StatusServiceUnavailable, "busy\n")
+    try text(response, http.StatusServiceUnavailable, "busy\n")
     return
   }
   job.app = typed.state
   storage: [16]u8
-  optional: fail.Status
-  limit := http.query_value(&optional, request, "limit", storage[..])
-  if !optional.failed {
-    parsing: fail.Status
-    job.limit = #cast(usize, parse.u64_decimal(&parsing, limit))
+  limit := http.query_value(request, "limit", storage[..]) catch storage[..0]
+  if limit.len > 0 {
+    job.limit = #cast(usize, parse.u64_decimal(limit) catch 0)
   }
-  reading: fail.Status
-  evented.receive_body(&reading, response, job, large_chunk, large_finish)
-  if reading.failed {
-    text(status, response, http.StatusInternalServerError, "cannot read\n")
+  evented.receive_body(response, job, large_chunk, large_finish) catch {
+    try text(response, http.StatusInternalServerError, "cannot read\n")
   }
 }
 
-fn abandoned(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
+fn abandoned(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
   storage: [16]u8
-  line := fmt.buffer(status, storage[..])
+  line := fmt.buffer(storage[..])
   fmt.print(&line, "{}", sync.load_u32(&app.abandoned))
-  text(status, response, 200, fmt.bytes(&line))
+  try text(response, 200, fmt.bytes(&line))
 }
 
 // Fails before responding: the server answers 500.
-fn failing(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
+fn failing(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
   _ = response
   _ = request
   _ = app
-  fail.invalid(status, "failing route", "", "on purpose")
+  fail .InvalidInput
 }
 
 // Cookies from ResponseOptions; query_has picks the body.
-fn cookies(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
+fn cookies(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
   _ = app
   set: [1]http.Cookie = [http.Cookie{ name: "theme", value: "dark", path: "/" }]
   body: []const u8 = "plain\n"
   if http.query_has(request, "debug") {
     body = "debug\n"
   }
-  http.respond(status, response, body, http.ResponseOptions{ content_type: "text/plain", cookies: set[..] })
+  try http.respond(response, body, http.ResponseOptions{ content_type: "text/plain", cookies: set[..] })
 }
 
-fn handle(status: *fail.Status, response: *http.Response, request: *const http.Request, app: *App) {
-  http.serve_routes(status, &app.router, response, request)
+fn handle(response: *http.Response, request: *const http.Request, app: *App) !io.IoErr {
+  try http.serve_routes(&app.router, response, request)
 }
 
 // The server's 503 replaced: a client turned away gets this instead.
-fn busy(status: *fail.Status, response: *http.Response, request: *const http.Request) {
+fn busy(response: *http.Response, request: *const http.Request) !io.IoErr {
   _ = request
   retry: [1]http.Header = [http.Header{ name: "Retry-After", value: "2" }]
-  http.respond(status, response, "busy, try again\n", http.ResponseOptions{ status: http.StatusServiceUnavailable,
+  try http.respond(response, "busy, try again\n", http.ResponseOptions{ status: http.StatusServiceUnavailable,
     content_type: "text/plain", headers: retry[..] })
 }
 
@@ -362,42 +351,41 @@ fn main() {
   arena := mem.arena_alloc(64 * mem.MiB)
   defer mem.arena_release(arena)
   spawner := posix.spawner()
-  setup := fail.Status{ on_failure: fail.panic_on_failure }
-  jobs := pool.start_spawned(arena, &setup, 2, 64, 256 * mem.KiB, &spawner)
+  jobs := pool.start_spawned(arena, 2, 64, 256 * mem.KiB, &spawner) catch { #panic("unexpected failure") }
   workers: [WorkerCount]evented.Worker
   app := App{ workers: workers[..] }
   asset_storage: [2]http.Asset
   style: [4096]u8
   rule := "body { color: red; } "
-  for i in 0..#len(style) {
-    style[i] = rule[i % #len(rule)]
+  for i in 0..style.len {
+    style[i] = rule[i % rule.len]
   }
   asset_storage[0] = http.make_asset(arena, "style.css", style[..])
   asset_storage[0].modified = 784111777
   asset_storage[1] = http.make_asset(arena, "logo.png", "\x89PNG not really")
   app.assets = http.Assets{ items: asset_storage[..], count: 2 }
   http.sort_assets(&app.assets)
-  for i in 0..#len(app.big) {
+  for i in 0..app.big.len {
     app.big[i] = #cast(u8, 'a' + i % 26)
   }
   app.router = http.typed_routes(app.route_storage[..], &app)
-  http.add(&setup, &app.router, "GET", "/health", health)
-  http.add(&setup, &app.router, "GET", "/fail", failing)
-  http.add(&setup, &app.router, "GET", "/cookies", cookies)
-  http.add(&setup, &app.router, "GET", "/report", report)
-  http.add(&setup, &app.router, "GET", "/abandoned", abandoned)
-  http.add(&setup, &app.router, "GET", "/big", big)
-  http.add(&setup, &app.router, "GET", "/scratch", scratch)
-  http.add(&setup, &app.router, "GET", "/later", deferred)
-  http.add(&setup, &app.router, "POST", "/hash", hash)
-  http.add(&setup, &app.router, "GET", "/events", events)
-  http.add(&setup, &app.router, "GET", "/chat", chat)
-  http.add(&setup, &app.router, "POST", "/broadcast", broadcast)
-  http.add(&setup, &app.router, "POST", "/quit", quit)
-  http.add(&setup, &app.router, "GET", "/static/:name", asset)
-  http.add(&setup, &app.router, "GET", "/ip", client)
-  http.add(&setup, &app.router, "POST", "/upload", upload)
-  typed := http.Typed(App){ state: &app, handler: handle }
+  http.add(&app.router, "GET", "/health", health) catch { #panic("add route") }
+  http.add(&app.router, "GET", "/fail", failing) catch { #panic("add route") }
+  http.add(&app.router, "GET", "/cookies", cookies) catch { #panic("add route") }
+  http.add(&app.router, "GET", "/report", report) catch { #panic("add route") }
+  http.add(&app.router, "GET", "/abandoned", abandoned) catch { #panic("add route") }
+  http.add(&app.router, "GET", "/big", big) catch { #panic("add route") }
+  http.add(&app.router, "GET", "/scratch", scratch) catch { #panic("add route") }
+  http.add(&app.router, "GET", "/later", deferred) catch { #panic("add route") }
+  http.add(&app.router, "POST", "/hash", hash) catch { #panic("add route") }
+  http.add(&app.router, "GET", "/events", events) catch { #panic("add route") }
+  http.add(&app.router, "GET", "/chat", chat) catch { #panic("add route") }
+  http.add(&app.router, "POST", "/broadcast", broadcast) catch { #panic("add route") }
+  http.add(&app.router, "POST", "/quit", quit) catch { #panic("add route") }
+  http.add(&app.router, "GET", "/static/:name", asset) catch { #panic("add route") }
+  http.add(&app.router, "GET", "/ip", client) catch { #panic("add route") }
+  http.add(&app.router, "POST", "/upload", upload) catch { #panic("add route") }
+  typed := http.Typed<App>{ state: &app, handler: handle }
   binding := http.bind(&typed)
   config := evented.default_config()
   config.connections_per_worker = 8
@@ -414,20 +402,19 @@ fn main() {
   config.idle_timeout_milliseconds = 60000
   config.overflow = evented.Overflow.Reject
   config.on_busy = busy
-  arguments_status: fail.Status
-  arguments := process.arguments(arena, &arguments_status)
-  if #len(arguments) > 1 && bytes.equal(arguments[1], "wait") {
+  arguments := process.arguments(arena) catch { #panic("cannot read arguments") }
+  if arguments.len > 1 && bytes.equal(arguments[1], "wait") {
     config.overflow = evented.Overflow.Wait
   }
   quic_stack := evented.Quic{}
-  if #len(arguments) == 4 && bytes.equal(arguments[1], "h3") {
+  if arguments.len == 4 && bytes.equal(arguments[1], "h3") {
     // HTTP/3 over QUIC, which brings its own TLS; TCP stays cleartext.
-    quic_context := https.quic_context(arena, &setup, arguments[2], arguments[3])
+    quic_context := https.quic_context(arena, arguments[2], arguments[3]) catch { #panic("QUIC context") }
     quic_stack = https.quic(quic_context)
     config.http3 = evented.http3()
     config.quic = &quic_stack
   }
-  if #len(arguments) > 1 && (bytes.equal(arguments[1], "h2") || bytes.equal(arguments[1], "h3")) {
+  if arguments.len > 1 && (bytes.equal(arguments[1], "h2") || bytes.equal(arguments[1], "h3")) {
     // HTTP/2 needs room for a whole 16 KiB frame.
     config.http2 = evented.http2()
     config.receive_size = 32 * mem.KiB
@@ -439,16 +426,16 @@ fn main() {
   config.large_body = evented.large_bodies(large_body)
   storage := mem.arena_from_source(mem.within(arena, evented.storage_size(config, WorkerCount) + mem.MiB))
   address := net.ipv4(127, 0, 0, 1, 0)
-  listener := net.tcp_listen_ipv4(&setup, &address, 64)
-  _ = evented.start(storage, &setup, workers[..], &listener, config, binding.handler, binding.context)
+  listener := net.tcp_listen_ipv4(&address, 64) catch { #panic("listen") }
+  evented.start(storage, workers[..], &listener, config, binding.handler, binding.context) catch { #panic("start server") }
   io.println("port {}", evented.local_port(workers[..]))
   for sync.load_u32(&app.quit) == 0 {
     time.sleep(20 * time.Millisecond)
   }
   evented.stop(workers[..])
-  evented.join(&setup, workers[..])
+  evented.join(workers[..]) catch { #panic("join server") }
   net.listener_close(&listener)
-  pool.stop(&setup, jobs)
+  pool.stop(jobs) catch { #panic("unexpected failure") }
   evicted: u64 = 0
   refused: u64 = 0
   for *worker in workers {

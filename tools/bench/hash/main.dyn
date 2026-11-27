@@ -11,7 +11,7 @@ fn fnv(data: []const u8) u64 {
 }
 
 fn main() {
-  for i in 0..#len(text) {
+  for i in 0..text.len {
     text[i] = #cast(u8, (i % 251))
   }
   total: u64 = 0

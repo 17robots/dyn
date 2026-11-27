@@ -12,7 +12,7 @@ if at >= 0 { base = name[..#cast(usize, at)] }
 // After
 at := strings.find(name, ".")
 base := name[..at] // the whole name when there is no "."
-if at < #len(name) { ... } // only where the miss matters
+if at < name.len { ... } // only where the miss matters
 ```
 
 The compiler rejects `x < 0` and `x >= 0` on unsigned values, so leftover
@@ -26,8 +26,8 @@ port: u64
 if !strings.parse_u64(text, &port) { report() }
 
 // After
-if !strings.valid(u16, text) { report() }
-port := strings.parse(u16, text) // zero on bad input
+if !strings.valid<u16>(text) { report() }
+port := strings.parse<u16>(text) // zero on bad input
 ```
 
 ## JSON
@@ -38,8 +38,8 @@ hp := json.object_get(item, "hp")
 if hp != nil && json.is_number(hp) { value: i64 ... strings.parse_i64(hp.text, &value) }
 
 // After
-hp := json.get(i32, item, "hp") // zero when missing or not a number
-tags := json.get(*const json.Value, item, "tags") // &json.nil_value when missing
+hp := json.get<i32>(item, "hp") // zero when missing or not a number
+tags := json.get<*const json.Value>(item, "tags") // &json.nil_value when missing
 ```
 
 `object_get`, `array_get` and a failed `parse` return `&json.nil_value`, never

@@ -7,17 +7,17 @@ extern fn swap_extensions "glXQueryExtensionsString"(display: rawptr, screen: i3
 
 fn swap_extension(list: []const u8, wanted: []const u8) bool {
   at:usize=0
-  for at<#len(list) {
-    for at<#len(list) && list[at]==32 {
+  for at<list.len {
+    for at<list.len && list[at]==32 {
       at+=1
     }
     first:=at
-    for at<#len(list) && list[at]!=32 {
+    for at<list.len && list[at]!=32 {
       at+=1
     }
-    if at-first==#len(wanted) {
+    if at-first==wanted.len {
       equal:=true
-      for i in 0..#len(wanted) {
+      for i in 0..wanted.len {
         if list[first+i]!=wanted[i] {
           equal=false
           break
@@ -33,20 +33,11 @@ fn swap_extension(list: []const u8, wanted: []const u8) bool {
 // install process-global error handlers. Missing extensions return Unsupported;
 // a non-nil GLX procedure address alone does not establish driver support.
 // Only immediate (0) and one-refresh (1) intervals are part of this contract.
-pub fn set_swap_interval(status: *fail.Status, window:*Window, interval:i32) {
-  if status == nil {
-    set_swap_interval(&fail.Status{}, window, interval)
-    return
-  }
-  if status.failed { return }
+pub fn set_swap_interval(window:*Window, interval:i32) !io.IoErr {
   if window==nil || window.display==nil || window.context==nil || window.handle==0 {
-    window_failed(status, fail.Kind.InvalidState, "set swap interval")
-    return
+    fail .InvalidInput
   }
-  if interval!=0 && interval!=1 {
-    window_failed(status, fail.Kind.InvalidInput, "set swap interval")
-    return
-  }
+  if interval!=0 && interval!=1 { fail .InvalidInput }
   saved_display:=context_error_display
   saved_seen:=context_error_seen
   saved_previous:=context_previous_handler
@@ -62,28 +53,16 @@ pub fn set_swap_interval(status: *fail.Status, window:*Window, interval:i32) {
   // Drain old requests before attributing errors to the interval operation.
   _=sync(window.display, 0)
   context_error_seen=false
-  current: fail.Status
-  make_current(&current, window)
-  if current.failed {
+  make_current(window) catch {
     _=sync(window.display, 0)
-    window_failed(status, fail.Kind.System, "set swap interval")
-    return
+    fail io.IoErr.System(#cast(isize, 0))
   }
   pointer:=swap_extensions(window.display, screen(window.display))
   _=sync(window.display, 0)
-  if context_error_seen {
-    window_failed(status, fail.Kind.System, "set swap interval")
-    return
-  }
-  if pointer==nil {
-    window_failed(status, fail.Kind.Unsupported, "set swap interval")
-    return
-  }
+  if context_error_seen { fail io.IoErr.System(#cast(isize, 0)) }
+  if pointer==nil { fail .Unsupported }
   length:=c.string_length(pointer, 65536)
-  if length==65536 {
-    window_failed(status, fail.Kind.Capacity, "set swap interval")
-    return
-  }
+  if length==65536 { fail .Capacity }
   extensions:=#slice(pointer, length)
   if swap_extension(extensions, "GLX_EXT_swap_control") {
     name:="glXSwapIntervalEXT\x00"
@@ -91,10 +70,7 @@ pub fn set_swap_interval(status: *fail.Status, window:*Window, interval:i32) {
     if apply!=nil {
       apply(window.display, window.handle, interval)
       _=sync(window.display, 0)
-      if context_error_seen {
-        window_failed(status, fail.Kind.System, "set swap interval")
-        return
-      }
+      if context_error_seen { fail io.IoErr.System(#cast(isize, 0)) }
       return
     }
   }
@@ -104,10 +80,7 @@ pub fn set_swap_interval(status: *fail.Status, window:*Window, interval:i32) {
     if apply!=nil {
       code:=apply(#cast(u32, interval))
       _=sync(window.display, 0)
-      if code!=0 || context_error_seen {
-        window_failed(status, fail.Kind.System, "set swap interval")
-        return
-      }
+      if code!=0 || context_error_seen { fail io.IoErr.System(#cast(isize, 0)) }
       return
     }
   }
@@ -117,17 +90,11 @@ pub fn set_swap_interval(status: *fail.Status, window:*Window, interval:i32) {
     if apply!=nil {
       code:=apply(interval)
       _=sync(window.display, 0)
-      if code!=0 || context_error_seen {
-        window_failed(status, fail.Kind.System, "set swap interval")
-        return
-      }
+      if code!=0 || context_error_seen { fail io.IoErr.System(#cast(isize, 0)) }
       return
     }
   }
   _=sync(window.display, 0)
-  if context_error_seen {
-    window_failed(status, fail.Kind.System, "set swap interval")
-    return
-  }
-  window_failed(status, fail.Kind.Unsupported, "set swap interval")
+  if context_error_seen { fail io.IoErr.System(#cast(isize, 0)) }
+  fail .Unsupported
 }

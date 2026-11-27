@@ -8,29 +8,35 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "std/text/edit" edit
-use "std/mem" mem
-use "std/bytes" bytes
-use "std/fail"
-use "vendor/window/events" events
+SOURCE=r'''use edit "std/text/edit"
+use mem "std/mem"
+use bytes "std/bytes"
+use events "vendor/window/events"
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
-fn broken(failure: fail.Failure) bool { return failure.kind != fail.Kind.Ok }
-struct Snap { value: edit.Context, failure: fail.Failure }
+// A call's failure as a kind; Ok when it worked.
+enum Kind { Ok, InvalidInput, Capacity, Stale }
+struct Failure { kind: Kind }
+fn failure_of(err: edit.EditErr) Failure {
+  case err {
+    .InvalidInput => { return Failure{ kind: Kind.InvalidInput } }
+    .Capacity => { return Failure{ kind: Kind.Capacity } }
+    .Stale => { return Failure{ kind: Kind.Stale } }
+  }
+}
+fn broken(failure: Failure) bool { return failure.kind != Kind.Ok }
+struct Snap { value: edit.Context, failure: Failure }
 fn snapshot(tracker: *edit.Tracker, owner: u64, text: []const u8, cursor, anchor: usize, cause: edit.Cause) Snap {
-  status: fail.Status
-  value := edit.snapshot(&status, tracker, owner, text, cursor, anchor, cause)
-  return Snap{ value: value, failure: status.failure }
+  value := edit.snapshot(tracker, owner, text, cursor, anchor, cause) catch err { return Snap{ failure: failure_of(err) } }
+  return Snap{ value: value }
 }
-fn apply(scratch: *mem.Arena, buffer: *edit.Buffer, replacement: *const edit.Replacement) fail.Failure {
-  status: fail.Status
-  edit.apply(scratch, &status, buffer, replacement)
-  return status.failure
+fn apply(scratch: *mem.Arena, buffer: *edit.Buffer, replacement: *const edit.Replacement) Failure {
+  edit.apply(scratch, buffer, replacement) catch err { return failure_of(err) }
+  return Failure{}
 }
-struct Collected { value: edit.Replacement, ready: bool, failure: fail.Failure }
+struct Collected { value: edit.Replacement, ready: bool, failure: Failure }
 fn collect(buffer: *events.EditBuffer, event: *const events.Event) Collected {
-  status: fail.Status
-  result := events.collect_edit(&status, buffer, event)
-  return Collected{ value: result.value, ready: result.ready, failure: status.failure }
+  result := events.collect_edit(buffer, event) catch { return Collected{ failure: Failure{ kind: Kind.InvalidInput } } }
+  return Collected{ value: result.value, ready: result.ready }
 }
 fn main() {
   arena := mem.arena_alloc(0)
@@ -44,22 +50,22 @@ fn main() {
   buffer := edit.Buffer{storage:storage[..],length:9,cursor:3,anchor:3,token:first.value.token}
   replacement := edit.Replacement{start:3,end:9,text:"😀",token:first.value.token}
   mark := mem.arena_mark(arena)
-  check(apply(arena,&buffer,&replacement).kind == fail.Kind.Ok && buffer.length == 7 && buffer.cursor == 7 && buffer.anchor == 7 && buffer.token == 0,"atomic Unicode replacement")
+  check(apply(arena,&buffer,&replacement).kind == Kind.Ok && buffer.length == 7 && buffer.cursor == 7 && buffer.anchor == 7 && buffer.token == 0,"atomic Unicode replacement")
   check(bytes.equal(storage[..7],"hé😀") && mem.arena_mark(arena)==mark,"bytes and scratch lifetime")
-  check(apply(arena,&buffer,&replacement).kind == fail.Kind.InvalidState && bytes.equal(storage[..7],"hé😀"),"replay rejected")
+  check(apply(arena,&buffer,&replacement).kind == Kind.Stale && bytes.equal(storage[..7],"hé😀"),"replay rejected")
   next := snapshot(&tracker,7,storage[..7],7,7,edit.Cause.InputMethod)
   check(!broken(next.failure) && next.value.token != first.value.token && next.value.cause == edit.Cause.InputMethod,"changed context identity and cause")
   same := snapshot(&tracker,7,storage[..7],7,7,edit.Cause.Other)
   check(same.value.token == next.value.token && same.value.cause == edit.Cause.InputMethod,"unchanged cause is retained")
   buffer.token = next.value.token
   replacement = edit.Replacement{start:2,end:3,text:"x",token:buffer.token}
-  check(apply(arena,&buffer,&replacement).kind == fail.Kind.InvalidInput && buffer.length == 7 && buffer.token == next.value.token && bytes.equal(storage[..7],"hé😀"),"split codepoint rejected without mutation")
+  check(apply(arena,&buffer,&replacement).kind == Kind.InvalidInput && buffer.length == 7 && buffer.token == next.value.token && bytes.equal(storage[..7],"hé😀"),"split codepoint rejected without mutation")
   replacement = edit.Replacement{start:0,end:0,text:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",token:buffer.token}
-  check(apply(arena,&buffer,&replacement).kind == fail.Kind.Capacity && bytes.equal(storage[..7],"hé😀"),"capacity failure preserves bytes")
+  check(apply(arena,&buffer,&replacement).kind == Kind.Capacity && bytes.equal(storage[..7],"hé😀"),"capacity failure preserves bytes")
   _ = mem.copy(storage[..6],"abcdef")
   buffer = edit.Buffer{storage:storage[..],length:6,cursor:3,anchor:0,token:99}
   replacement = edit.Replacement{start:0,end:3,text:storage[..2],token:99}
-  check(apply(arena,&buffer,&replacement).kind == fail.Kind.Ok && bytes.equal(storage[..buffer.length],"abdef"),"aliased replacement")
+  check(apply(arena,&buffer,&replacement).kind == Kind.Ok && bytes.equal(storage[..buffer.length],"abdef"),"aliased replacement")
   scratch_backing: [64 + mem.ArenaBufferOverhead]u8
   scratch := mem.arena_from_buffer(scratch_backing[..])
   scratch_bytes := scratch.data[mem.ArenaHeader..]
@@ -67,14 +73,14 @@ fn main() {
   scratch.poison_on_rewind = true
   buffer = edit.Buffer{storage:scratch_bytes[..16],length:6,cursor:0,anchor:0,token:99}
   replacement = edit.Replacement{start:0,end:1,text:"new",token:99}
-  check(apply(scratch,&buffer,&replacement).kind == fail.Kind.InvalidInput && mem.arena_used(scratch)==0 && bytes.equal(scratch_bytes[..6],"abcdef"),"pending scratch alias rejected")
+  check(apply(scratch,&buffer,&replacement).kind == Kind.InvalidInput && mem.arena_used(scratch)==0 && bytes.equal(scratch_bytes[..6],"abcdef"),"pending scratch alias rejected")
   failed := snapshot(&tracker,7,"é",1,0,edit.Cause.Other)
   check(broken(failed.failure) && tracker.token == 0,"invalid publication invalidates old identity")
   back := snapshot(&tracker,7,"hé😀",7,7,edit.Cause.Other)
   check(back.value.token != next.value.token,"returning content never revives stale token")
   tracker.serial = 18446744073709551615
   failed = snapshot(&tracker,8,"new",0,0,edit.Cause.Other)
-  check(failed.failure.kind == fail.Kind.Overflow && tracker.token == 0,"token exhaustion fails closed")
+  check(failed.failure.kind == Kind.Stale && tracker.token == 0,"token exhaustion fails closed")
   collector := events.EditBuffer{}
   event := events.Event{kind:events.Kind.Edit,key:17,modifiers:2,x:0,y:3,width:260,text_length:256}
   for i in 0..256 { event.text[i] = 'x' }
@@ -89,11 +95,11 @@ fn main() {
   event.button = 1
   complete := collect(&collector,&event)
   event.text[0] = 'z'
-  check(!broken(complete.failure) && complete.ready && #len(complete.value.text)==260 && complete.value.token == 8589934609 && complete.value.text[256] == 0xf0,"owned complete transaction")
+  check(!broken(complete.failure) && complete.ready && complete.value.text.len==260 && complete.value.token == 8589934609 && complete.value.text[256] == 0xf0,"owned complete transaction")
   large: [512]u8
   _ = mem.copy(large[..3],"old")
   buffer = edit.Buffer{storage:large[..],length:3,cursor:3,anchor:3,token:complete.value.token}
-  check(apply(arena,&buffer,&complete.value).kind == fail.Kind.Ok && buffer.length==260 && large[259]==0x80,"assembled transaction applies")
+  check(apply(arena,&buffer,&complete.value).kind == Kind.Ok && buffer.length==260 && large[259]==0x80,"assembled transaction applies")
   event = events.Event{kind:events.Kind.Edit,key:1,width:2,text_length:1}
   event.text[0] = 'a'
   check(!broken(collect(&collector,&event).failure),"new transaction")
@@ -119,7 +125,7 @@ for _ in range(64):
     GOLDEN+=f' _ = mem.copy(storage[..{len(original)}],{literal(original)})\n'
     GOLDEN+=f' buffer := edit.Buffer{{storage:storage[..],length:{len(original)},cursor:{start},anchor:{end},token:37}}\n'
     GOLDEN+=f' replacement := edit.Replacement{{start:{start},end:{end},text:{literal(incoming)},token:37}}\n'
-    GOLDEN+=f' check(apply(arena,&buffer,&replacement).kind == fail.Kind.Ok && bytes.equal(storage[..buffer.length],{literal(expected)}) && buffer.cursor=={start+len(incoming)},"Python independent slice oracle")\n }}\n'
+    GOLDEN+=f' check(apply(arena,&buffer,&replacement).kind == Kind.Ok && bytes.equal(storage[..buffer.length],{literal(expected)}) && buffer.cursor=={start+len(incoming)},"Python independent slice oracle")\n }}\n'
 GOLDEN+='}\n'
 # Host qualification fixture includes the independent generated vectors.
 SOURCE+=GOLDEN

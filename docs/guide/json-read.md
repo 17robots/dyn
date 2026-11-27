@@ -6,26 +6,22 @@ the input in the caller's arena. This is an experimental API, not a replacement
 for the existing mutable tree, constructors, or writer.
 
 ```dyn
-use "std/encoding/json/read" json
-use "std/fail"
+use json "std/encoding/json/read"
 use "std/mem"
 
 fn main() {
   arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
-  status: fail.Status
-  root := json.parse(arena, &status, "{\"count\":12}")
-  if status.failed {
-    return
-  }
+  root := json.parse(arena, "{\"count\":12}") catch { return }
   count := json.as_u64(json.get(root, "count"))
   _ = count
 }
 ```
 
-`parse` returns the root. Malformed input fails with `InvalidInput` (or
-`Overflow`, below), with the parser's offset in the failure; a failed parse
-returns `&json.nil_value` and rewinds its allocations. Arena exhaustion panics.
+`parse` returns the root, or fails with `parse.ParseErr`: `Invalid` for
+malformed input, `TooLarge` for a number past binary64 (below), with the
+parser's offset. A failed parse rewinds its allocations. Arena exhaustion
+panics, and so does input that lies in the arena's free space.
 Errors within strings may name the beginning of the string's contents rather
 than the exact offending escape byte.
 
@@ -56,7 +52,7 @@ through `next`. Copying an iterator copies its position and borrowed document.
 Positive integers through `u64::MAX` and negative integers through `i64::MIN`
 are retained exactly. Other integers and decimal/exponent forms become binary64,
 with its rounding and signed-zero behavior. Nonfinite real overflow is rejected
-with `Overflow`. Original number spelling
+with `TooLarge`. Original number spelling
 and arbitrary-precision integers are not retained. These rules differ from the
 mutable parser, which preserves number text. Strict UTF-8 and paired Unicode
 surrogates are required; maximum container nesting is 256.
@@ -64,8 +60,8 @@ surrogates are required; maximum container nesting is 256.
 The value buffer grows geometrically within the stable arena. Containers start
 with up to 32 slots; scalar roots need one slot. Unused tail storage is reclaimed
 after success, but peak storage can exceed the final retained size. Size a fixed
-arena for peak requirements, not just the final node count. Invalid overlap with
-unused arena storage is rejected before writing.
+arena for peak requirements, not just the final node count. Input that
+overlaps unused arena storage panics before anything is written.
 
 The [measured experiment](../performance/2026-10-24-compact-json/README.md)
 compares this read-only DOM with the existing mutable DOM and yyjson on one host.

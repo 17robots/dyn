@@ -53,11 +53,11 @@ for a, b in cases:
     exponent = abs(a) % 4096
     out += [pow(a, exponent, modulus) if modulus > 0 else 'none']
     expected.append(' '.join(str(x) for x in out))
-SOURCE = '''use "std/fail"
-use "std/math/big" big
-use "std/io" io
-use "std/mem" mem
-use "std/bytes" bytes
+SOURCE = '''use big "std/math/big"
+use parse "std/parse"
+use io "std/io"
+use mem "std/mem"
+use bytes "std/bytes"
 
 const data: []const u8 = #load("cases.txt")
 
@@ -65,60 +65,64 @@ fn show(arena: *mem.Arena, value: big.Int) {
   io.print("{} ", big.format(arena, value, 10))
 }
 
+fn show_division(arena: *mem.Arena, a: big.Int, b: big.Int) {
+  divided := big.divide(arena, a, b) catch {
+    io.print("none none ")
+    return
+  }
+  show(arena, divided.quotient)
+  show(arena, divided.remainder)
+}
+fn remainder(arena: *mem.Arena, a: big.Int, b: big.Int) big.Int {
+  divided := big.divide(arena, a, b) catch { #panic("divide") }
+  return divided.remainder
+}
+fn show_power(arena: *mem.Arena, base: big.Int, exponent: big.Int, modulus: big.Int) {
+  powered := big.power_mod(arena, base, exponent, modulus) catch {
+    io.println("none")
+    return
+  }
+  io.println("{}", big.format(arena, powered, 10))
+}
+fn parse_offset(arena: *mem.Arena, text: []const u8, base: u32) usize {
+  _ = big.parse(arena, text, base) catch err { return parse.offset(err) }
+  return 999
+}
 fn main() {
   arena := mem.arena_alloc(268435456)
   defer {
     mem.arena_release(arena)
   }
   at: usize = 0
-  for at < #len(data) {
+  for at < data.len {
     end := at + bytes.find_byte(data[at..], 10)
     line := data[at..end]
     at = end + 1
     space := bytes.find_byte(line, 32)
     mark := mem.arena_mark(arena)
-    numbers := fail.Status{ on_failure: fail.panic_on_failure }
-    a := big.parse(arena, &numbers, line[..space], 10)
-    b := big.parse(arena, &numbers, line[space + 1..], 10)
+    a := big.parse(arena, line[..space], 10) catch { #panic("parse") }
+    b := big.parse(arena, line[space + 1..], 10) catch { #panic("parse") }
     show(arena, big.add(arena, a, b))
     show(arena, big.subtract(arena, a, b))
     show(arena, big.multiply(arena, a, b))
-    division: fail.Status
-    divided := big.divide(arena, &division, a, b)
-    if !division.failed {
-      show(arena, divided.quotient)
-      show(arena, divided.remainder)
-    }
-    else {
-      io.print("none none ")
-    }
-    shift_bits := big.divide(arena, &numbers, big.absolute(b), big.from_u64(arena, 300)).remainder
-    shift := big.to_u64(&numbers, shift_bits)
+    show_division(arena, a, b)
+    shift_bits := remainder(arena, big.absolute(b), big.from_u64(arena, 300))
+    shift := big.to_u64(shift_bits) catch { #panic("to_u64") }
     show(arena, big.shift_left(arena, a, #cast(usize, shift)))
     show(arena, big.shift_right(arena, a, #cast(usize, shift)))
     io.print("{} {} ", big.compare(a, b), big.bit_length(a))
     io.print("{} {} ", big.format(arena, a, 16), big.format(arena, a, 2))
     show(arena, big.from_bytes(arena, big.to_bytes(arena, a)))
     show(arena, big.gcd(arena, a, b))
-    exponent := big.divide(arena, &numbers, big.absolute(a), big.from_u64(arena, 4096)).remainder
-    modular: fail.Status
-    powered := big.power_mod(arena, &modular, a, exponent, big.absolute(b))
-    if !modular.failed {
-      io.println("{}", big.format(arena, powered, 10))
-    }
-    else {
-      io.println("none")
-    }
+    exponent := remainder(arena, big.absolute(a), big.from_u64(arena, 4096))
+    show_power(arena, a, exponent, big.absolute(b))
     mem.arena_rewind(arena, mark)
   }
-  bad: fail.Status
-  _ = big.parse(arena, &bad, "12x4", 10)
-  if !bad.failed || bad.failure.offset != 2 {
+  if parse_offset(arena, "12x4", 10) != 2 {
     #panic("parse failure")
   }
-  parsing: fail.Status
-  hex := big.parse(arena, &parsing, "-FfeE", 16)
-  if parsing.failed || !mem.equal(big.format(arena, hex, 36), "-1ejy") {
+  hex := big.parse(arena, "-FfeE", 16) catch { #panic("bases") }
+  if !mem.equal(big.format(arena, hex, 36), "-1ejy") {
     #panic("bases")
   }
 }

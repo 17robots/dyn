@@ -130,7 +130,7 @@ pointers borrow storage; they do not own it.
 storage: [64]u8
 whole := storage[..]
 prefix := whole[..8]
-length := #len(prefix)
+length := prefix.len
 ```
 
 Use arrays for fixed-size owned values and slices for views or API boundaries. Prefer slices over a
@@ -185,98 +185,79 @@ borrowed; inspect them with an exhaustive type `case` and do not retain them.
 
 ## Errors and cleanup
 
-A function that can fail takes a `*fail.Status`, the way a function that
-allocates takes a `*mem.Arena`, so its signature says it can fail. The first
-failure is recorded in the status and stays there; every later call given that
-status does nothing and returns zero or empty. Code does not check after each
-call: it checks `status.failed` once, before it acts on the results, and prints
-`status.failure` with `fail.describe`, such as
-`open app.json: no such file or directory`.
+A function that can fail returns `T!E`: its value, or an error `E`. `E` is
+an enum, or a union of enums (`FsErr | ParseErr`) when a function can fail in
+more than one module's way. `try` passes a failure up, running `defer` and
+`errdefer` on the way; `catch` handles it where the program knows what to do.
+`std/io`, `std/fs` and `std/process` fail with `io.IoErr`, and printing one
+gives its meaning ("not found"). The error does not carry the path, so the
+code that catches it names what it was working on:
 
 ```dyn
-status: fail.Status
-text := fs.read_all(arena, &status, path, 1 << 20)   // fails: empty
-fs.write_all(&status, copy_path, text)               // already failed: writes nothing
-if status.failed {
-  storage: [512]u8
-  io.eprintln("tool: {}", fail.describe(storage[..], status.failure))
+fn copy(arena: *mem.Arena, path: []const u8, copy_path: []const u8) !io.IoErr {
+  text := try fs.read_all(arena, path, 1 << 20)
+  try fs.write_all(copy_path, text)
+}
+```
+
+```dyn
+copy(arena, path, copy_path) catch err {
+  io.eprintln("tool: copy {}: {}", path, err)
   return 1
 }
 ```
 
-Three rules cover every std and vendor call:
+React to one kind with `case`: `.NotFound => { ... }`, `_ => { fail err }`.
 
-1. **If it can fail, it takes `&status`.** Its result is the value itself,
-   zero or empty after a failure.
-2. **A lookup always returns a usable value.** When it is not there the value
-   is zero or empty and the status records `NotFound`; when it is there but
-   wrong, `InvalidInput`. Read an optional value with a status of its own, so
-   a missing one stops nothing else, or pass `nil` when you do not care why:
+Parsers and decoders (`std/encoding/*`, `std/parse`, `std/semver`, URLs and
+HTTP heads) fail with `parse.ParseErr`: `Invalid(offset)` for malformed input
+or `TooLarge(offset)` past a limit, with the byte offset where it went wrong.
+A lookup fails with `NotFound` when the value is missing and `InvalidInput`
+when it is there but wrong, so an optional value takes a default:
 
-   ```dyn
-   status: fail.Status
-   port := json.get(i64, &status, root, "port")   // required
-   debug := json.get(bool, nil, root, "debug")    // false when missing
-   ```
+```dyn
+fn settings(root: *const json.Value) Settings!io.IoErr {
+  port := try json.get<i64>(root, "port")         // required
+  debug := json.get<bool>(root, "debug") catch false
+  return Settings{ port: port, debug: debug }
+}
+```
 
-   `nil` works for every std and vendor call that takes a status: the call
-   does its work, records nothing, and returns zero or empty if it fails.
-   Inside, it still sees its own failures, so a reader given `nil` still
-   ends and a writer that runs out of room stops.
-
-   Iterators return their value too. The end of the input is not a failure,
-   so it does not go on the status: the call sets `ended` on the state you
-   passed (`scan.ended`, `reader.ended`) and returns zero.
-3. **Check `status.failed` before you use what you got:** before printing
-   results, reporting success, or using a computed number as a size or index.
-
-In a loop that keeps going after a failure (a server, a command loop, each of
-many files), give each item its own status. Cleanup uses functions that take
-no status (`fs.close`, `*_free_owned`, `*_destroy`), so it works after a
-failure. To react to one kind of failure, such as falling back when a file is
-missing, give that step its own status and look at `status.failure.kind`. An
-empty result is not a failure test; `status.failed` is, and `dyn vet` warns
-about a status that is never read, one given a new value before it is read, and
-an empty result used as the test.
-A failure keeps its own copy of its text; read the parts with
-`fail.operation_text`, `fail.path_text` and `fail.message_text`.
+Iterators return their value and set `ended` on their state at the end;
+the end of the input is not a failure. Cleanup cannot fail (`fs.close`,
+`mem.arena_release`), so it works in a `defer` after any failure.
 
 ### Writing a library
 
-The same three rules, from the other side:
-
-1. **Take `status`, return the value.** No result struct, no error type of
-   your own: return zero or empty after a failure.
-2. **Pass the same status to everything you call.** A failure from `fs` or
-   `json` reaches your caller with its own operation, path and reason; there is
-   nothing to translate. Record your own failures one of three ways:
-   `fail.invalid(status, "config", path, "port out of range")` for bad input,
-   `fail.at(status, fail.Kind.InvalidInput, "read config", "expected '='",
-   offset)` for a place in the input, and `fail.set(status, fail.make(kind,
-   operation, path, message))` for anything else. Native codes become
-   failures with `io.from_linux` and its siblings.
-3. **Guard with `if status.failed { return }` only before work that does not
-   take the status:** raw system calls, writes into caller memory, loops that
-   only end on data. A function made only of status-taking calls needs no
-   check at all.
+1. **Return `T!E`.** System work fails with `io.IoErr`; decoders fail with
+   `parse.ParseErr` and the byte offset. A module whose failures mean
+   something of their own declares an enum for them, such as `flags.ArgsErr`
+   or `text_edits.EditErr`. A core module that cannot use `std/io`, such as a
+   crypto primitive, fails with a bare `!`.
+2. **Pass failures up with `try`.** A failure from `fs` or `json` reaches your
+   caller unchanged; there is nothing to translate. Fail with your own with
+   `fail .InvalidInput` or `fail .Invalid(offset)`. A native error code
+   becomes an `io.IoErr` with `io.linux_err` and its siblings.
+3. **A builder keeps its first failure.** A writer into fixed storage
+   (`fmt.Buffer`, the HTML and JSON writers) does nothing after a write does
+   not fit, and its `finish` fails once at the end, so the writes read
+   straight through.
 
 ```dyn
-pub fn load(arena: *mem.Arena, status: *fail.Status, path: []const u8) Config {
-  doc := json.parse(arena, status, fs.read_all(arena, status, path, 1 << 20))
-  port := json.get(i64, status, doc, "port")
-  if port > 65535 {
-    fail.invalid(status, "config", path, "port out of range")
+pub fn unpack(arena: *mem.Arena, data: []const u8, limit: usize) []const u8!parse.ParseErr {
+  inflated := try deflate.inflate(arena, data)
+  if inflated.value.len > limit {
+    fail .TooLarge(limit)
   }
-  return Config{ port: port }
+  return inflated.value
 }
 ```
 
 Other outcomes are values, not failures:
 
 - **Absence in memory you own:** `map.get` returns `nil`, tree navigation
-  returns an empty stub, and every byte `find*` returns `#len(text)` on a
-  miss. Lookups into input (JSON, INI, HTTP, the environment) record
-  `NotFound` instead (rule 2).
+  returns an empty stub, and every byte `find*` returns `text.len` on a
+  miss. Lookups into input (JSON, INI, HTTP) fail with `NotFound` instead.
 - **The end of an iterator** is `ended` on its state, set by the call that
   found nothing left. A step with several normal outcomes says so in an
   enum, such as `Want.Read`/`Want.Write` for a nonblocking socket.
@@ -286,22 +267,16 @@ Other outcomes are values, not failures:
   gives the zero value.
 - **A broken invariant** is `#panic`. There is no recovery.
 
-A scanner takes the status like any other call, so a loop over it reads
-straight through and checks once at the end. A failure also sets `ended`, so
-the loop stops either way:
+A scanner loop passes a failure up with `try` and stops at `ended`:
 
 ```dyn
-status: fail.Status
-scan := ini.scanner(text)
+reader := bufio.reader(input, storage[..])
 for {
-  item := ini.next(&status, &scan)
-  if scan.ended {
+  line := try bufio.read_line(&reader)
+  if reader.ended {
     break
   }
-  apply(item)
-}
-if status.failed {
-  report(status.failure)
+  apply(line)
 }
 ```
 
@@ -327,12 +302,12 @@ Prefer early returns for invalid input and failure. Use `case` when modeling a c
 must be exhaustive. Use a kind enum beside a struct when the alternatives carry different data.
 
 ```dyn
-enum State { Pending, Complete: usize }
+enum State { Pending, Complete(usize) }
 
 fn describe(state: State) []const u8 {
   case state {
     State.Pending => { return "pending" }
-    State.Complete _ => { return "complete" }
+    State.Complete(_) => { return "complete" }
   }
 }
 ```
@@ -355,25 +330,23 @@ choice, not an arbitrary collection of flags.
 storage. None of these require printing to be a compiler builtin or allocate implicitly.
 
 ```dyn
-use "std/fail"
 use "std/io"
 
 io.println("count: {}", count)
-status: fail.Status
-io.println_to(&status, log_file, "count: {}", count)
+try io.println_to(log_file, "count: {}", count)
 ```
 
 `io.print` and `io.println` write to standard output and `io.eprint` and `io.eprintln` to standard
 error; they ignore write failures such as a closed pipe. `io.print_to` and `io.println_to` take any
-writer and a status, like every call that can fail. All of them support `{}` substitutions and
-`{{`/`}}` literal braces. `std/terminal` provides terminal controls.
+writer and return `!io.IoErr`. All of them support `{}` substitutions and `{{`/`}}` literal braces.
+`std/terminal` provides terminal controls.
 
-A `Reader` or `Writer` is a data pointer and one function that takes the status. `io.read` returns
-the count read, 0 at the end of the stream and after a failure, so a read loop ends by itself:
+A `Reader` or `Writer` is a data pointer and one function that returns `usize!io.IoErr`. `io.read`
+returns the count read, 0 at the end of the stream:
 
 ```dyn
 for {
-  count := io.read(status, reader, chunk[..])
+  count := try io.read(reader, chunk[..])
   if count == 0 { break }
   use_bytes(chunk[..count])
 }
@@ -411,22 +384,20 @@ promoted types. Do not expose Dyn slices, strings, or `any` as if they were C va
 
 ## Check errors once
 
-When several steps can fail, pass one status through them and check it at the end. Each step does
-nothing once a failure is recorded, and the failure names the operation and the path.
+When several steps can fail, `try` each one and handle the failure once, where the program knows
+what to do with it.
 
 ```dyn
-use "std/fail"
 use "std/fs"
+use "std/io"
 
-fn save(status: *fail.Status, path: []const u8) {
-  file := fs.create(status, path)
+fn save(path: []const u8) !io.IoErr {
+  file := try fs.create(path)
   defer fs.close(&file)
-  fs.write(status, &file, "name: ")
-  fs.write(status, &file, "dyn\n")
+  try fs.write(&file, "name: ")
+  try fs.write(&file, "dyn\n")
 }
 ```
 
-A function of your own that can fail takes the status the same way, and does not need to check it
-unless it is about to act on a result.
-
-The code stays straight, a failure stops the remaining work, and there is one `if` at the end.
+The code stays straight, a failure stops the remaining work, and the `defer` still closes the
+file.

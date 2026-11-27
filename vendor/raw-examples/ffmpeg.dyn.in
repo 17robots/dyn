@@ -1,5 +1,5 @@
-use "vendor/ffmpeg/raw" av
-use "std/io" io
+use av "vendor/ffmpeg/raw"
+use "std/io"
 
 // Minimal real decoder lifecycle. Native buffers are released with FFmpeg calls.
 fn main() {

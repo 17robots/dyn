@@ -1,6 +1,5 @@
-use "std/mem" mem
-use "std/fail"
-use "std/os/macos" platform
+use mem "std/mem"
+use platform "std/os/macos"
 
 #target(arch: aarch64, kernel: darwin, abi: aapcs)
 
@@ -9,14 +8,12 @@ fn main() {
   memory := mem.push_bytes(arena, 4096)
   memory[0] = 42
   mem.arena_release(arena)
-  status: fail.Status
-  descriptor := platform.file_open(&status, "/dev/null", false, false)
-  if !status.failed {
-    platform.file_close(&status, descriptor)
+  descriptor := platform.file_open("/dev/null", false, false) catch -1
+  if descriptor >= 0 {
+    platform.file_close(descriptor) catch {}
   }
-  opening: fail.Status
-  socket := platform.socket_open(&opening, 2, 1, 6)
-  if !opening.failed { _ = platform.socket_close(#cast(usize, socket)) }
+  socket := platform.socket_open(2, 1, 6)
+  if socket >= 0 { _ = platform.socket_close(#cast(usize, socket)) }
   events: [1]platform.PollDescriptor
   _ = platform.event_poll(events[..0], 0)
 }

@@ -7,7 +7,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/fail"
+SOURCE = r'''use "std/parse"
 use "std/bytes"
 use "std/encoding/mdesk"
 use "std/mem"
@@ -18,19 +18,25 @@ fn expect(condition: bool, message: []const u8) {
   }
 }
 
+// message names the problem for a reader; the failure carries only offset.
 fn fails(arena: *mem.Arena, source: []const u8, message: []const u8, offset: usize) {
-  status: fail.Status
-  root := mdesk.parse(arena, &status, source)
-  expect(status.failure.kind == fail.Kind.InvalidInput && bytes.equal(fail.message_text(&status.failure), message) && status.failure.offset == offset, source)
-  expect(root == &mdesk.nil_node && mdesk.is_nil(root), "stub root on failure")
+  mark := mem.arena_mark(arena)
+  _ = mdesk.parse(arena, source) catch err {
+    case err {
+      .Invalid(at) => { expect(at == offset, message) }
+      _ => { #panic(message) }
+    }
+    expect(mem.arena_mark(arena) == mark, "rewind on failure")
+    return
+  }
+  #panic(message)
 }
 
 fn main() {
   arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
   source := #load("types.mdesk")
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  root := mdesk.parse(arena, &status, source)
+  root := mdesk.parse(arena, source) catch { #panic("parse types.mdesk") }
   expect(root.kind == mdesk.Kind.Root && mdesk.child_count(root) == 6, "root children")
 
   types := mdesk.child(root, "Types")
@@ -49,15 +55,15 @@ fn main() {
   expect(bytes.equal(mdesk.child_at(title, 0).string, "Hello, world"), "string")
   expect(bytes.equal(mdesk.child_at(mdesk.child(root, "path"), 0).string, "a \"b\" c"), "triple string")
   empty_string := mdesk.child_at(mdesk.child(root, "empty"), 0)
-  expect(empty_string.label == mdesk.Label.String && #len(empty_string.string) == 0, "empty string")
-  nested := mdesk.parse(arena, &status, "op: + version: 1.2.3 a: b: c")
+  expect(empty_string.label == mdesk.Label.String && empty_string.string.len == 0, "empty string")
+  nested := mdesk.parse(arena, "op: + version: 1.2.3 a: b: c") catch { #panic("parse nested") }
   expect(mdesk.child_count(nested) == 3, "chained children")
   expect(mdesk.child_at(mdesk.child(nested, "op"), 0).label == mdesk.Label.Symbol, "symbol")
   expect(bytes.equal(mdesk.child(mdesk.child(mdesk.child(nested, "a"), "b"), "c").string, "c"), "a: b: c")
 
   missing := mdesk.child(mdesk.child_at(mdesk.child(root, "Nope"), 4), "deeper")
   expect(mdesk.is_nil(missing) && missing == mdesk.empty(), "nil chain")
-  expect(#len(missing.string) == 0 && mdesk.child_count(missing) == 0 && !mdesk.has_tag(missing, "x"), "nil reads")
+  expect(missing.string.len == 0 && mdesk.child_count(missing) == 0 && !mdesk.has_tag(missing, "x"), "nil reads")
   expect(mdesk.line_of(source, types.offset) == 3, "line_of")
 
   fails(arena, "a: {b c", "unclosed scope", 3)

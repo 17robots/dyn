@@ -3,14 +3,14 @@
 // keeps sessions where it likes (a SQLite table, say): start makes a new
 // one to store, cached answers from memory, remember adds what the store
 // returned, and forget invalidates every worker's cache after a logout.
-use "std/bytes" bytes
-use "std/cache" versions
-use "std/crypto/core" crypto
-use "std/fail"
-use "std/crypto/random" random
-use "std/encoding/hex" hex
-use "std/mem" mem
-use "std/net/http" http
+use bytes "std/bytes"
+use versions "std/cache"
+use crypto "std/crypto/core"
+use io "std/io"
+use random "std/crypto/random"
+use hex "std/encoding/hex"
+use mem "std/mem"
+use http "std/net/http"
 
 // The cookie's name, and the lengths of a token and a CSRF secret (hex).
 pub const CookieName: []const u8 = "sid"
@@ -38,19 +38,15 @@ pub struct New { token: []const u8, csrf: []const u8, cookie: http.Cookie }
 // The request's session token, or empty when it has none of the right form.
 pub fn token(request: *const http.Request) []const u8 {
   // No session cookie is the usual case for a new visitor.
-  optional: fail.Status
-  value := http.cookie(&optional, request, CookieName)
-  _ = optional
-  if #len(value) != TokenLength { return "" }
+  value := http.cookie(request, CookieName) catch ""
+  if value.len != TokenLength { return "" }
   return value
 }
 
 // The session for token from the cache: a store answer for it that is
 // unexpired at now and not forgotten since. NotFound when there is none;
 // then ask the store and remember its answer.
-pub fn cached(status: *fail.Status, cache: *Cache, shared: *Shared, token: []const u8, now: i64) Session {
-  if status == nil { return cached(&fail.Status{}, cache, shared, token, now) }
-  if status.failed { return Session{} }
+pub fn cached(cache: *Cache, shared: *Shared, token: []const u8, now: i64) Session!io.IoErr {
   seen := versions.stale(&cache.copy, &shared.sessions)
   if seen != 0 {
     for i in 0..Slots {
@@ -58,30 +54,20 @@ pub fn cached(status: *fail.Status, cache: *Cache, shared: *Shared, token: []con
     }
     versions.rebuilt(&cache.copy, seen)
   }
-  if #len(token) != TokenLength {
-    fail.set(status, fail.make(fail.Kind.NotFound, "find session", "", "no session token"))
-    return Session{}
-  }
+  // No session token, or not cached.
+  if token.len != TokenLength { fail .NotFound }
   slot := slot_of(cache, token)
-  if slot.expires <= now || !bytes.equal(slot.token[..], token) {
-    fail.set(status, fail.make(fail.Kind.NotFound, "find session", "", "not cached"))
-    return Session{}
-  }
+  if slot.expires <= now || !bytes.equal(slot.token[..], token) { fail .NotFound }
   return Session{ user: slot.user, csrf: slot.csrf[..], data: slot.data[..slot.data_length] }
 }
 
 // Caches what the store returned for token and returns it as a Session.
 // InvalidInput when token or csrf has the wrong length or data is too long.
-pub fn remember(status: *fail.Status, cache: *Cache, token: []const u8, user: i64, csrf: []const u8, data: []const u8,
-  expires: i64) Session {
-  if status == nil { return remember(&fail.Status{}, cache, token, user, csrf, data, expires) }
-  if status.failed { return Session{} }
-  if #len(token) != TokenLength || #len(csrf) != CsrfLength || #len(data) > DataSize {
-    fail.invalid(status, "remember session", "", "token, csrf or data has the wrong length")
-    return Session{}
-  }
+pub fn remember(cache: *Cache, token: []const u8, user: i64, csrf: []const u8, data: []const u8,
+  expires: i64) Session!io.IoErr {
+  if token.len != TokenLength || csrf.len != CsrfLength || data.len > DataSize { fail .InvalidInput }
   slot := slot_of(cache, token)
-  slot.* = Slot{ user: user, data_length: #len(data), expires: expires }
+  slot.* = Slot{ user: user, data_length: data.len, expires: expires }
   _ = mem.copy(slot.token[..], token)
   _ = mem.copy(slot.csrf[..], csrf)
   _ = mem.copy(slot.data[..], data)
@@ -92,15 +78,11 @@ pub fn remember(status: *fail.Status, cache: *Cache, token: []const u8, user: i6
 // token for a session of seconds (HttpOnly, SameSite=Lax, Path=/): pass it in
 // ResponseOptions.cookies or to http.redirect. Fails with System when the
 // system has no randomness.
-pub fn start(arena: *mem.Arena, status: *fail.Status, seconds: i64) New {
-  if status == nil { return start(arena, &fail.Status{}, seconds) }
-  if status.failed { return New{} }
+pub fn start(arena: *mem.Arena, seconds: i64) New!io.IoErr {
   raw: [32]u8
-  random.fill(status, raw[..])
-  if status.failed { return New{} }
+  random.fill(raw[..]) catch { fail io.IoErr.System(0) }
   token := hex.encode(arena, raw[..], false)
-  random.fill(status, raw[..16])
-  if status.failed { return New{} }
+  random.fill(raw[..16]) catch { fail io.IoErr.System(0) }
   csrf := hex.encode(arena, raw[..16], false)
   cookie := http.Cookie{ name: CookieName, value: token, path: "/", max_age: seconds, http_only: true, same_site: http.SameSite.Lax }
   return New{ token: token, csrf: csrf, cookie: cookie }
@@ -116,7 +98,7 @@ pub fn forget(shared: *Shared) http.Cookie {
 // Whether presented (a form field or header) is the session's CSRF secret,
 // compared in constant time. Always false for an empty Session.
 pub fn csrf_ok(session: *const Session, presented: []const u8) bool {
-  return #len(session.csrf) == CsrfLength && crypto.equal_constant_time(presented, session.csrf)
+  return session.csrf.len == CsrfLength && crypto.equal_constant_time(presented, session.csrf)
 }
 
 // The token's last bytes are random hex: they pick its slot.

@@ -12,13 +12,53 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.41
 
-- The removed-API hints and their `dyn fix` renames work from an installed
-  SDK. They matched the module's path as `std/mem`, which only a checkout
-  has; installed SDKs keep std modules in `share/dyn/mem`, so preview 40's
-  release gave the plain "has no pub member" error instead of
-  "'mem.push_bytes_uninit' was removed: use mem.push_bytes(arena, count)".
+Breaking: the next-design redesign ([docs/migrations/0.1.0-preview.41.md](docs/migrations/0.1.0-preview.41.md)
+and [docs/internals/next-design.md](docs/internals/next-design.md)).
+Each removed form is an error whose message gives the new spelling; the
+[language reference](docs/guide/language.md) and [rules](docs/guide/rules.md) describe
+the result.
+
+Language:
+
+- Generics take `<T>`: `fn max<T>(a: T, b: T) T`, `struct Box<T>`, `enum Slot<T>`, and
+  `mem.push<Node>(arena)` where a call cannot infer the type. `$T`, `T: type`, `Box(T)`
+  and `#instance(f, T)` are gone; a generic function value is `f<T>`. `case T` chooses
+  code by type inside a generic body.
+- Errors are return values: `T!E`, `!E`, `T!` and `!`, with `fail`, `try`, `catch` and
+  `errdefer`. `E` is an enum or a union of enums, `A | B`.
+- Enum payloads are `Variant(T)` and bindings `Variant(name) =>` or `Variant(*name) =>`,
+  where `*name` is a real pointer. Variant 0 may carry a payload. `.Variant` works where
+  one enum type is expected. Type patterns on `any` are `i32(n) =>`.
+- `nocopy struct` types cannot be copied; `#take(&value)` moves one out and leaves the
+  name fresh. `mem.Arena` and other owners are `nocopy`.
+- Newlines end statements, except inside parentheses or brackets and after `,`, `{` or a
+  binary operator. Import aliases come first: `use files "std/fs"`. Raw backtick strings,
+  labeled `break`/`continue`, `str` for `[]const u8`, and `xs.len` (`#len` is gone). Float
+  literals need a digit after the dot (`2.0`). A struct literal in an `if`/`for`/`case`
+  header needs parentheses.
+- Tooling: `dyn run file.dyn` and shebangs, `dyn test`, `dyn bench` and `dyn fuzz`,
+  `--race` and `--check-lifetimes`.
+
+Library:
+
+- `std/fail` is removed. std and every vendor package return `T!io.IoErr`, with one shared
+  set of kinds (`NotFound`, `PermissionDenied`, `AlreadyExists`, `InvalidInput`,
+  `WouldBlock`, `Interrupted`, `Unsupported`, `Capacity`, `System(code)`), or
+  `T!parse.ParseErr` (`Invalid`, `TooLarge`, `Unsupported`, each with a byte offset) for
+  parsers and decoders. Crypto and other core primitives fail with a bare `!`. Failure text is
+  not carried; `io.text(err)` and printing an error with `{}` give its meaning.
+- Drop the `&status` argument from every call and handle the result: `try`, `catch value`
+  or `catch err { ... }`. A lookup fails with `NotFound` instead of returning a zero, so an
+  optional value reads `header(request, "x-tag") catch ""`.
+- Builders into fixed storage (`fmt.Buffer`, the HTML and JSON writers) keep their first
+  overflow; `fmt.overflowed` checks it and `finish` fails once.
+- New error enums: `flags.ArgsErr`, `text_edits.EditErr`; `x509.inspect` returns
+  `View!Reason`. `sqlite.constraint(err)` reads a constraint failure, which is
+  `System(code)` with SQLite's code.
+- New: `std/collections`, `std/slice`, `std/simd`, `std/mem/heap`, `std/fiber` (Linux),
+  `sync.Channel<T>`, `thread.Scope` and typed `pool.submit<C>`.
 - `evented.Config.on_large_body` becomes `Config.large_body`, set with
   `evented.large_bodies(handler)`, as `http2()` and `http3()` are: a server
   that never calls it links none of the streaming-body code (about 6 KB),
@@ -26,8 +66,17 @@ servers so they pick up the new `dyn`.
   `config.large_body = evented.large_bodies(upload)` where you had
   `config.on_large_body = upload`. `receive_body` is unchanged.
 
-Fixes:
+Fixes and performance:
 
+- Native release optimizer improvements: in-place loop element reads, hoisting
+  past small constants, short-loop straightening, pointer-parameter aliasing
+  when given `&local`, and tighter SSA lowering, plus faster `std/sort` and
+  `std/unicode/utf8` hot paths.
+- The removed-API hints and their `dyn fix` renames work from an installed
+  SDK. They matched the module's path as `std/mem`, which only a checkout
+  has; installed SDKs keep std modules in `share/dyn/mem`, so preview 40's
+  release gave the plain "has no pub member" error instead of
+  "'mem.push_bytes_uninit' was removed: use mem.push_bytes(arena, count)".
 - Release builds could compute wrong results when two adjacent `f32` fields
   were stored together and the same values had been read earlier in the
   function by a condition spanning several blocks (`a && x > p.x && ...`).

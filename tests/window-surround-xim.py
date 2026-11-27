@@ -8,16 +8,38 @@ import sys
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-ORACLE=r'''fn surround_check(ok: bool, reason: []const u8) { if !ok { #panic(reason) } }
-fn surround_result(window: *Window, text: []const u8, cursor, anchor: usize, token: u64) fail.Failure {
-  status: fail.Status
-  set_surrounding_text(&status, window, text, cursor, anchor, token)
-  return status.failure
+ORACLE=r'''use io "std/io"
+fn surround_check(ok: bool, reason: []const u8) { if !ok { #panic(reason) } }
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+fn surround_result(window: *Window, text: []const u8, cursor, anchor: usize, token: u64) Failure {
+  set_surrounding_text(window, text, cursor, anchor, token) catch err { return failure_of(err) }
+  return Failure{}
 }
 pub fn surround_oracle() {
   host := Window{}
   result := surround_result(&host,"text",4,4,1)
-  surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.InvalidState,"closed window")
+  surround_check(result.kind != Kind.Ok && result.kind == Kind.InvalidInput,"closed window")
   // Sentinel native handles intentionally cannot be called. This backend
   // must not attempt to register an unqualified string-conversion callback.
   host.display = #cast(rawptr,1)
@@ -37,33 +59,33 @@ pub fn surround_oracle() {
   host.desktop.text_length = 1
   host.desktop.text[0] = 'x'
   result = surround_result(&host,"text",4,4,1)
-  surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.InvalidState,"ordered consumer required")
+  surround_check(result.kind != Kind.Ok && result.kind == Kind.InvalidInput,"ordered consumer required")
   host.events_enabled = true
   ordered_push(&host,ordered.Event{kind:ordered.Kind.Wake,x:37})
   result = surround_result(&host,"hé😀",3,7,0x100000001)
-  surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.Unsupported,"valid publication unsupported")
+  surround_check(result.kind != Kind.Ok && result.kind == Kind.Unsupported,"valid publication unsupported")
   result = surround_result(&host,"",0,0,1)
-  surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.Unsupported,"empty valid context unsupported")
+  surround_check(result.kind != Kind.Ok && result.kind == Kind.Unsupported,"empty valid context unsupported")
   result = surround_result(&host,"abc",4,0,1)
-  surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.InvalidInput,"cursor range")
+  surround_check(result.kind != Kind.Ok && result.kind == Kind.InvalidInput,"cursor range")
   result = surround_result(&host,"abc",0,4,1)
-  surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.InvalidInput,"anchor range")
+  surround_check(result.kind != Kind.Ok && result.kind == Kind.InvalidInput,"anchor range")
   result = surround_result(&host,"hé",2,0,1)
-  surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.InvalidInput,"cursor boundary")
+  surround_check(result.kind != Kind.Ok && result.kind == Kind.InvalidInput,"cursor boundary")
   result = surround_result(&host,"hé",0,2,1)
-  surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.InvalidInput,"anchor boundary")
+  surround_check(result.kind != Kind.Ok && result.kind == Kind.InvalidInput,"anchor boundary")
   result = surround_result(&host,"\xff",0,0,1)
-  surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.InvalidInput,"invalid UTF8")
+  surround_check(result.kind != Kind.Ok && result.kind == Kind.InvalidInput,"invalid UTF8")
   result = surround_result(&host,"a\0b",0,0,1)
-  surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.InvalidInput,"native string NUL")
+  surround_check(result.kind != Kind.Ok && result.kind == Kind.InvalidInput,"native string NUL")
   result = surround_result(&host,"abc",0,0,0)
-  surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.InvalidInput,"zero revision")
+  surround_check(result.kind != Kind.Ok && result.kind == Kind.InvalidInput,"zero revision")
   large: [4097]u8
-  for i in 0..#len(large) { large[i] = 'a' }
+  for i in 0..large.len { large[i] = 'a' }
   result = surround_result(&host,large[..],0,0,1)
-  surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.Capacity,"context byte cap")
+  surround_check(result.kind != Kind.Ok && result.kind == Kind.Capacity,"context byte cap")
   result = surround_result(&host,large[..4096],4096,0,1)
-  surround_check(result.kind != fail.Kind.Ok && result.kind == fail.Kind.Unsupported,"maximum valid context")
+  surround_check(result.kind != Kind.Ok && result.kind == Kind.Unsupported,"maximum valid context")
   surround_check(host.desktop.context == #cast(rawptr,2) && host.desktop.method == #cast(rawptr,3) && host.desktop.text_input && host.desktop.style == 0x402,"focus and method unchanged")
   surround_check(host.desktop.preedit_count == 2 && host.desktop.preedit[0] == 'a' && host.desktop.preedit[1] == 'b' && host.desktop.composition.active == 1 && host.desktop.composition.text_length == 2 && host.desktop.composition.text[1] == 'b',"preedit unchanged")
   surround_check(host.desktop.text_length == 1 && host.desktop.text[0] == 'x',"legacy commit unchanged")
@@ -85,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-xim-surround-') as directory:
         raise SystemExit(0)
     shutil.copytree(ROOT/'vendor/window/x11',work/'x11')
     (work/'x11/surround_oracle.dyn').write_text(ORACLE,encoding='utf-8')
-    (work/'main.dyn').write_text('use "./x11" x11\nfn main() { x11.surround_oracle() }\n')
+    (work/'main.dyn').write_text('use x11 "./x11"\nfn main() { x11.surround_oracle() }\n')
     for flags in (['--debug'],['--release'],['--release','--opt-level','3']):
         output=work/'test'
         subprocess.run([DYN,'build',str(work),*flags,'--quiet','--output',str(output)],check=True,timeout=120)

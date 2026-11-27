@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 DYN=os.environ.get('DYN',str(ROOT/'build/dyn'))
 source=r'''
-use "std/mem" mem
+use mem "std/mem"
 arenas: [8]*mem.Arena
 pub fn allocate(slot: usize, size: usize) usize {
   made := mem.arena_alloc(size + mem.ArenaHeader)
@@ -26,13 +26,13 @@ pub fn fixed() bool {
 }
 pub fn growing() bool {
   arena := mem.arena_alloc(65536 + mem.ArenaHeader)
-  first := mem.push_array(u64, arena, 8192)
+  first := mem.push_array<u64>(arena, 8192)
   first[0] = 42
-  second := mem.push_array(u64, arena, 8192)
+  second := mem.push_array<u64>(arena, 8192)
   second[0] = 17
   if first[0] != 42 || arena.current == arena || arena.current.previous != arena { return false }
   mem.arena_reset(arena)
-  reused := mem.push_array(u64, arena, 8192)
+  reused := mem.push_array<u64>(arena, 8192)
   ok := arena.current == arena && reused[0] == 0
   mem.arena_release(arena)
   return ok

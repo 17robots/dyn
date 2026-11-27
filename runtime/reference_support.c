@@ -15,6 +15,13 @@ static void run_panic_hook(const unsigned char *message, uint64_t length) {
   dyn_panic_hook = 0;
   if (hook) hook(message, length);
 }
+static uint64_t dyn_lifetime_checks_flag = 0;
+void dyn_set_lifetime_checks(uint64_t enabled) { dyn_lifetime_checks_flag = enabled; }
+uint8_t dyn_lifetime_checks_enabled(void) { return dyn_lifetime_checks_flag != 0; }
+void dyn_race_sync(void) {}
+void dyn_race_read(uint64_t address, uint64_t size) { (void)address; (void)size; }
+void dyn_race_write(uint64_t address, uint64_t size) { (void)address; (void)size; }
+
 void dyn_unwind_begin(const unsigned char *message, uint64_t length) {
   /* A panic does not run defers: the handler runs, then dyn_panic reports. */
   run_panic_hook(message, length);

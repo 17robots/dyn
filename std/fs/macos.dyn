@@ -1,14 +1,12 @@
-use "std/fail"
 #target(kernel: darwin)
-use "std/io" io
-use "std/mem" mem
-use "std/c" cstrings
+use io "std/io"
+use mem "std/mem"
+use cstrings "std/c"
 use "std/os/macos/sys"
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
-  if #len(path) == 0 { return nil }
-  status: fail.Status
-  return cstrings.string_into(&status, storage, path)
+  if path.len == 0 { return nil }
+  return cstrings.string_into(storage, path) catch nil
 }
 // A descriptor, or a negative code: -22 for a path that cannot be passed.
 fn native_open(path: []const u8, mode: u8) isize {
@@ -29,10 +27,10 @@ fn native_close(handle: isize) isize {
   return #syscall(sys.Close, handle)
 }
 fn native_read(handle: isize, destination: []u8) isize {
-  return #syscall(sys.Read, handle, &destination[0], #len(destination))
+  return #syscall(sys.Read, handle, &destination[0], destination.len)
 }
 fn native_write(handle: isize, source: []const u8) isize {
-  return #syscall(sys.Write, handle, &source[0], #len(source))
+  return #syscall(sys.Write, handle, &source[0], source.len)
 }
 fn native_seek(handle: isize, offset: isize, origin: usize) isize {
   return #syscall(sys.Lseek, handle, offset, origin)
@@ -40,8 +38,8 @@ fn native_seek(handle: isize, offset: isize, origin: usize) isize {
 fn native_sync(handle: isize) isize {
   return #syscall(sys.Fsync, handle)
 }
-fn native_kind(code: isize) fail.Kind {
-  return io.darwin(code)
+fn native_err(code: isize) io.IoErr {
+  return io.darwin_err(code)
 }
 fn native_valid(handle: isize) bool {
   return handle >= 0
@@ -55,7 +53,4 @@ fn native_map(handle: isize, size: usize) isize {
 }
 fn native_unmap(address: usize, size: usize) isize {
   return #syscall(sys.Munmap, address, size)
-}
-fn native_text(code: isize) []const u8 {
-  return io.darwin_text(code)
 }

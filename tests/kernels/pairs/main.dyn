@@ -12,8 +12,8 @@ fn dot(a: V, b: V) f32 {
 }
 fn main() {
   arena := mem.arena_alloc(0)
-  ps := mem.push_array(V, arena, 10000)
-  vs := mem.push_array(V, arena, 10000)
+  ps := mem.push_array<V>(arena, 10000)
+  vs := mem.push_array<V>(arena, 10000)
   for i in 0..10000 {
     f := #cast(f32, i)
     ps[i] = V{ x: f, y: 1.0 }

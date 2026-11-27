@@ -5,31 +5,22 @@ extern fn native_symbol "dlsym"(handle: rawptr, name: *const u8) rawptr
 extern fn native_close "dlclose"(handle: rawptr) i32
 extern fn native_error "dlerror"() *const u8
 
-fn platform_open(status: *fail.Status, path: *const u8, text: []const u8, flags: i32) Handle {
+fn platform_open(path: *const u8, flags: i32) Handle!io.IoErr {
   _ = native_error()
   value := native_open(path, flags)
-  if value == nil {
-    loader_failed(status, "load library", text, native_error())
-  }
+  if value == nil { fail .NotFound }
   return value
 }
 
-fn platform_symbol(status: *fail.Status, handle: Handle, name: *const u8, text: []const u8) rawptr {
+fn platform_symbol(handle: Handle, name: *const u8) rawptr!io.IoErr {
   // POSIX requires clearing prior error because a valid symbol may be null.
   _ = native_error()
   value := native_symbol(handle, name)
-  error := native_error()
-  if error != nil {
-    loader_failed(status, "find symbol", text, error)
-    return nil
-  }
+  if native_error() != nil { fail .NotFound }
   return value
 }
 
-fn platform_close(status: *fail.Status, handle: Handle) {
+fn platform_close(handle: Handle) !io.IoErr {
   _ = native_error()
-  if native_close(handle) != 0 {
-    loader_failed(status, "close library", "", native_error())
-  }
+  if native_close(handle) != 0 { fail .InvalidInput }
 }
-

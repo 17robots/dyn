@@ -1,5 +1,4 @@
-use "std/io" io
-use "std/fail"
+use io "std/io"
 use "std/os/macos/sys"
 #target(kernel: darwin)
 
@@ -10,31 +9,17 @@ fn control(descriptor: isize, request: isize, bytes: *const u8) isize {
 }
 
 // The terminal settings of descriptor; fails when it is not a terminal.
-pub fn read_state(status: *fail.Status, descriptor: isize) State {
-  if status == nil { return read_state(&fail.Status{}, descriptor) }
+pub fn read_state(descriptor: isize) State!io.IoErr {
   result: State
-  if status.failed { return result }
   code := control(descriptor, 1078490131, &result.bytes[0])
-  if code < 0 {
-    fail.set(status, io.from_darwin("read terminal", "", code))
-  }
+  if code < 0 { fail io.darwin_err(code) }
   return result
 }
 
-pub fn restore(status: *fail.Status, descriptor: isize, saved: *const State) {
-  if status == nil {
-    restore(&fail.Status{}, descriptor, saved)
-    return
-  }
-  if status.failed { return }
-  if saved == nil {
-    fail.invalid(status, "restore terminal", "", "no saved settings")
-    return
-  }
+pub fn restore(descriptor: isize, saved: *const State) !io.IoErr {
+  if saved == nil { fail .InvalidInput }
   code := control(descriptor, 2152231956, &saved.bytes[0])
-  if code < 0 {
-    fail.set(status, io.from_darwin("restore terminal", "", code))
-  }
+  if code < 0 { fail io.darwin_err(code) }
 }
 
 // cfmakeraw in the Darwin termios layout: 64-bit iflag, oflag, cflag and
@@ -50,15 +35,10 @@ fn make_raw(_descriptor: isize, state: *State) {
   state.bytes[49] = 0
 }
 
-pub fn size(status: *fail.Status, descriptor: isize) Size {
-  if status == nil { return size(&fail.Status{}, descriptor) }
-  if status.failed { return Size{} }
+pub fn size(descriptor: isize) Size!io.IoErr {
   bytes: [8]u8
   code := control(descriptor, 1074295912, &bytes[0])
-  if code < 0 {
-    fail.set(status, io.from_darwin("terminal size", "", code))
-    return Size{}
-  }
+  if code < 0 { fail io.darwin_err(code) }
   rows := #cast(usize, bytes[0]) + #cast(usize, bytes[1]) * 256
   columns := #cast(usize, bytes[2]) + #cast(usize, bytes[3]) * 256
   return Size{ columns: columns, rows: rows }

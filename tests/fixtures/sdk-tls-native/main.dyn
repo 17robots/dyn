@@ -1,20 +1,27 @@
 use "std/net/tls"
-use "std/fail"
+use "std/io"
 use "std/mem"
+fn invalid_descriptor(arena: *mem.Arena, context: tls.Context) bool {
+  _ = tls.client_connection_create(arena, context, -1, "example.test") catch err {
+    case err {
+      .InvalidInput => { return true }
+      _ => { return false }
+    }
+  }
+  return false
+}
+fn missing_files(arena: *mem.Arena) bool {
+  _ = tls.server_config_create(arena, "/dyn/nonexistent/certificate.pem", "/dyn/nonexistent/key.pem") catch { return true }
+  return false
+}
 fn main() {
-  status: fail.Status
-  context := tls.client_config_create(&status)
-  if status.failed { #panic("native TLS trust configuration") }
+  context := tls.client_config_create() catch { #panic("native TLS trust configuration") }
   defer tls.config_release(&context)
   backing: [256]u8
   arena := mem.arena_from_buffer(backing[..])
-  held := mem.push(u8, arena)
+  held := mem.push<u8>(arena)
   held.* = 42
   mark := mem.arena_mark(arena)
-  invalid: fail.Status
-  failed := tls.client_connection_create(arena, &invalid, context, -1, "example.test")
-  if !invalid.failed || failed != nil || invalid.failure.kind != fail.Kind.InvalidInput || invalid.failure.native != 0 { #panic("native TLS invalid descriptor") }
-  missing: fail.Status
-  server := tls.server_config_create(arena, &missing, "/dyn/nonexistent/certificate.pem", "/dyn/nonexistent/key.pem")
-  if !missing.failed || server != nil || mem.arena_mark(arena) != mark || held.* != 42 { #panic("native TLS failed setup rollback") }
+  if !invalid_descriptor(arena, context) { #panic("native TLS invalid descriptor") }
+  if !missing_files(arena) || mem.arena_mark(arena) != mark || held.* != 42 { #panic("native TLS failed setup rollback") }
 }

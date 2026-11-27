@@ -211,7 +211,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-math-float-') as tmp:
     source.mkdir()
     # Copy only the owned implementation; use the existing std integer helper.
     (source / 'float.dyn').write_text((ROOT / 'std/math/float.dyn').read_text())
-    driver = ['use "std/math" integer', 'fn leading_zeros(x:u64) u32 { return integer.leading_zeros(x) }',
+    driver = ['use integer "std/math"', 'fn leading_zeros(x:u64) u32 { return integer.leading_zeros(x) }',
               'extern fn run_oracle(f:fn(u64,u64,u64,u64) u64,count:u64,seed:u64) i32',
               'fn dispatch(op:u64,a:u64,b:u64,c:u64) u64 { case op {']
     for wide in (False, True):

@@ -1,62 +1,62 @@
-use "std/fail"
-// Number parsing shared by the parsers and decoders. A failure names where the
-// input went wrong: InvalidInput (or Overflow) with fail.at, the offset in
-// bytes from the start of the input, and a short message.
+// Number parsing shared by the parsers and decoders, and ParseErr, the
+// failure every parser and decoder reports.
 
-// Whole text as a decimal u64: one or more ASCII digits, nothing else (no
-// sign, space or underscore). InvalidInput at the first bad byte; Overflow
-// past the u64 range.
-pub fn u64_decimal(status: *fail.Status, text: []const u8) u64 {
-  if status == nil { return u64_decimal(&fail.Status{}, text) }
-  if status.failed { return 0 }
-  if #len(text) == 0 {
-    fail.at(status, fail.Kind.InvalidInput, "parse number", "expected digits", 0)
-    return 0
-  }
+// Whole text as a decimal u64: one or more ASCII digits, nothing else.
+// Invalid at the first bad byte (0 for empty text); TooLarge past the u64
+// range.
+pub fn u64_decimal(text: []const u8) u64!ParseErr {
+  if text.len == 0 { fail ParseErr.Invalid(0) }
   value: u64 = 0
-  for i in 0..#len(text) {
+  for i in 0..text.len {
     byte := text[i]
-    if byte < '0' || byte > '9' {
-      fail.at(status, fail.Kind.InvalidInput, "parse number", "expected a digit", i)
-      return 0
-    }
+    if byte < '0' || byte > '9' { fail ParseErr.Invalid(i) }
     digit := #cast(u64, byte - '0')
-    if value > (18446744073709551615 - digit) / 10 {
-      fail.at(status, fail.Kind.Overflow, "parse number", "number exceeds u64", i)
-      return 0
-    }
+    if value > (18446744073709551615 - digit) / 10 { fail ParseErr.TooLarge(i) }
     value = value * 10 + digit
   }
   return value
 }
 
 // Whole text as a decimal i64 with an optional leading '-'.
-pub fn i64_decimal(status: *fail.Status, text: []const u8) i64 {
-  if status == nil { return i64_decimal(&fail.Status{}, text) }
-  if status.failed { return 0 }
-  negative := #len(text) > 0 && text[0] == '-'
+pub fn i64_decimal(text: []const u8) i64!ParseErr {
+  if text.len == 0 { fail ParseErr.Invalid(0) }
+  negative := text[0] == '-'
   start: usize = 0
+  if negative { start = 1 }
+  magnitude := u64_decimal(text[start..]) catch err { fail shifted(err, start) }
   if negative {
-    start = 1
-  }
-  digits: fail.Status
-  magnitude := u64_decimal(&digits, text[start..])
-  if digits.failed {
-    failure := digits.failure
-    failure.offset += start
-    fail.set(status, failure)
-    return 0
-  }
-  if negative {
-    if magnitude > 9223372036854775808 {
-      fail.at(status, fail.Kind.Overflow, "parse number", "number below i64 minimum", start)
-      return 0
-    }
+    if magnitude > 9223372036854775808 { fail ParseErr.TooLarge(start) }
     return #cast(i64, #wrapping(0 - magnitude))
   }
-  if magnitude > 9223372036854775807 {
-    fail.at(status, fail.Kind.Overflow, "parse number", "number exceeds i64", start)
-    return 0
-  }
+  if magnitude > 9223372036854775807 { fail ParseErr.TooLarge(start) }
   return #cast(i64, magnitude)
+}
+
+// Why input could not be parsed, with the byte offset from the start of the
+// input where it went wrong: Invalid for malformed input, TooLarge for a value
+// or a piece of input past a limit, Unsupported for well-formed input that uses
+// a feature the decoder does not handle. Every parser and decoder fails with
+// it.
+pub enum ParseErr {
+  Invalid(usize),
+  TooLarge(usize),
+  Unsupported(usize),
+}
+
+// The offset where err happened.
+pub fn offset(err: ParseErr) usize {
+  case err {
+    .Invalid(at) => { return at }
+    .TooLarge(at) => { return at }
+    .Unsupported(at) => { return at }
+  }
+}
+
+// err moved by start bytes, for a parser that worked on a part of its input.
+pub fn shifted(err: ParseErr, start: usize) ParseErr {
+  case err {
+    .Invalid(at) => { return ParseErr.Invalid(at + start) }
+    .TooLarge(at) => { return ParseErr.TooLarge(at + start) }
+    .Unsupported(at) => { return ParseErr.Unsupported(at + start) }
+  }
 }

@@ -3,7 +3,7 @@ use "std/c"
 use "std/strings"
 use "std/bytes"
 use "std/io"
-use "vendor/lua/raw" lua
+use lua "vendor/lua/raw"
 
 fn main() {
   // Application-owned storage is an arena. Lua owns its own native state.
@@ -15,7 +15,7 @@ fn main() {
 
   source: []const u8 = "return 'retained result'"
   name: [5]u8 = ['t', 'o', 'u', 'r', 0]
-  if lua.luaL_loadbuffer(state, #cast(*const c.char, &source[0]), #len(source), #cast(*const c.char, &name[0])) != 0 || lua.lua_pcall(state, 0, 1, 0) != 0 {
+  if lua.luaL_loadbuffer(state, #cast(*const c.char, &source[0]), source.len, #cast(*const c.char, &name[0])) != 0 || lua.lua_pcall(state, 0, 1, 0) != 0 {
     #panic("Lua execution failed")
   }
   count: usize = 0

@@ -422,6 +422,264 @@ static int fix_command(DynOptions *options, const char *compiler) {
   check.command = "check";
   return execute_command(&check, compiler);
 }
+static bool strbuf_append(char **buf, size_t *len, size_t *cap, const char *text) {
+  size_t add = strlen(text);
+  if (*len + add + 1 > *cap) {
+    size_t next = *cap ? *cap * 2 : 1024;
+    while (next < *len + add + 1) next *= 2;
+    char *grown = realloc(*buf, next);
+    if (!grown) return false;
+    *buf = grown;
+    *cap = next;
+  }
+  memcpy(*buf + *len, text, add);
+  *len += add;
+  (*buf)[*len] = 0;
+  return true;
+}
+
+typedef struct {
+  char name[256];
+  bool is_fallible;
+} HarnessTarget;
+
+static bool harness_discover_and_append(const DynContext *context, DynSources *sources,
+                                        const DynOptions *options, const char *input_dir,
+                                        bool is_test, bool is_bench, bool is_fuzz,
+                                        size_t *found_count) {
+  const char *prefix = is_test ? "test_" : is_bench ? "bench_" : "fuzz_";
+  size_t prefix_len = strlen(prefix);
+  HarnessTarget *targets = NULL;
+  size_t target_count = 0, target_cap = 0;
+  for (size_t i = 0; i < sources->count; ++i) {
+    DynSource *src = &sources->items[i];
+    if (dyn_source_target_enabled(src) == 0) continue;
+    const ExpSnapshotTree *tree = dyn_compact_tree(src);
+    if (!tree || tree->root == UINT32_MAX) continue;
+    bool renamed_main = false;
+    uint32_t main_start = 0;
+    for (uint32_t d = tree->nodes[tree->root].first; d != UINT32_MAX; d = tree->nodes[d].next) {
+      if (tree->nodes[d].kind != SRC_DECLARATION) continue;
+      uint32_t fn = tree->nodes[d].first;
+      if (fn == UINT32_MAX || tree->nodes[fn].kind != SRC_FN) continue;
+      uint32_t name_node = tree->nodes[fn].first;
+      if (name_node == UINT32_MAX || tree->nodes[name_node].kind != EXP_NAME) continue;
+      uint32_t ns = tree->nodes[name_node].start, ne = tree->nodes[name_node].end;
+      size_t nlen = ne - ns;
+      if (nlen == 4 && !memcmp(src->text + ns, "main", 4)) {
+        renamed_main = true;
+        main_start = ns;
+        continue;
+      }
+      if (nlen <= prefix_len || nlen >= 255 || memcmp(src->text + ns, prefix, prefix_len) != 0)
+        continue;
+      uint32_t param_count = 0;
+      bool is_generic = false, is_fallible = false, has_nonvoid_ret = false;
+      for (uint32_t c = tree->nodes[name_node].next; c != UINT32_MAX; c = tree->nodes[c].next) {
+        uint16_t ck = tree->nodes[c].kind;
+        if (ck == EXP_TYPE_PARAMETER) is_generic = true;
+        else if (ck == SRC_FN_PARAM || ck == SRC_VARIADIC_PARAM) ++param_count;
+        else if (ck == EXP_FALLIBLE_TYPE) {
+          if (tree->nodes[c].flags & EXP_FALLIBLE_VOID) is_fallible = true;
+          else has_nonvoid_ret = true;
+        } else if (ck == EXP_TYPE) {
+          uint32_t inner = tree->nodes[c].first;
+          if (inner != UINT32_MAX && tree->nodes[inner].kind == EXP_FALLIBLE_TYPE &&
+              (tree->nodes[inner].flags & EXP_FALLIBLE_VOID))
+            is_fallible = true;
+          else
+            has_nonvoid_ret = true;
+        }
+      }
+      if (is_generic || has_nonvoid_ret) continue;
+      if ((is_test || is_bench) && param_count != 0) continue;
+      if (is_fuzz && param_count != 1) continue;
+      if ((is_bench || is_fuzz) && is_fallible) continue;
+      char fname[256];
+      memcpy(fname, src->text + ns, nlen);
+      fname[nlen] = 0;
+      if (options->filter && !strstr(fname, options->filter)) continue;
+      if (target_count == target_cap) {
+        size_t nc = target_cap ? target_cap * 2 : 16;
+        HarnessTarget *grown = realloc(targets, nc * sizeof(*grown));
+        if (!grown) { free(targets); return false; }
+        targets = grown;
+        target_cap = nc;
+      }
+      strcpy(targets[target_count].name, fname);
+      targets[target_count].is_fallible = is_fallible;
+      ++target_count;
+    }
+    if (renamed_main) {
+      memcpy(src->text + main_start, "_m_n", 4);
+      dyn_source_prepare(src);
+    }
+  }
+  *found_count = target_count;
+  if (!target_count) {
+    free(targets);
+    return true;
+  }
+  char *code = NULL;
+  size_t len = 0, cap = 0;
+  bool ok = strbuf_append(&code, &len, &cap,
+                          "use __dyn_io \"std/io\"\n"
+                          "use __dyn_fmt \"std/fmt\"\n");
+  if (is_bench)
+    ok = ok && strbuf_append(&code, &len, &cap, "use __dyn_time \"std/time\"\n");
+  ok = ok && strbuf_append(&code, &len, &cap,
+                           "fn main() {\n"
+                           "  __dyn_buf: [1024]u8\n");
+  if (is_test) {
+    ok = ok && strbuf_append(&code, &len, &cap,
+                             "  __dyn_passed: u64 = 0\n"
+                             "  __dyn_failed: u64 = 0\n");
+    for (size_t i = 0; ok && i < target_count; ++i) {
+      char line[2048];
+      if (targets[i].is_fallible) {
+        snprintf(line, sizeof(line),
+                 "  __dyn_ok_%zu := true\n"
+                 "  %s() catch { __dyn_ok_%zu = false }\n"
+                 "  if __dyn_ok_%zu {\n"
+                 "    __dyn_passed += 1\n"
+                 "    __dyn_io.println(\"PASS %s\")\n"
+                 "  } else {\n"
+                 "    __dyn_failed += 1\n"
+                 "    __dyn_io.println(\"FAIL %s\")\n"
+                 "  }\n",
+                 i, targets[i].name, i, i, targets[i].name, targets[i].name);
+      } else {
+        snprintf(line, sizeof(line),
+                 "  %s()\n"
+                 "  __dyn_passed += 1\n"
+                 "  __dyn_io.println(\"PASS %s\")\n",
+                 targets[i].name, targets[i].name);
+      }
+      ok = strbuf_append(&code, &len, &cap, line);
+    }
+    ok = ok && strbuf_append(&code, &len, &cap,
+                             "  __dyn_out := __dyn_fmt.buffer(__dyn_buf[..])\n"
+                             "  if __dyn_failed == 0 {\n"
+                             "    __dyn_fmt.write(&__dyn_out, \"test result: ok. \")\n"
+                             "  } else {\n"
+                             "    __dyn_fmt.write(&__dyn_out, \"test result: FAILED. \")\n"
+                             "  }\n"
+                             "  __dyn_fmt.write_u64(&__dyn_out, __dyn_passed)\n"
+                             "  __dyn_fmt.write(&__dyn_out, \" passed; \")\n"
+                             "  __dyn_fmt.write_u64(&__dyn_out, __dyn_failed)\n"
+                             "  __dyn_fmt.write(&__dyn_out, \" failed\")\n"
+                             "  __dyn_io.println(__dyn_fmt.bytes(&__dyn_out))\n"
+                             "  if __dyn_failed != 0 { #panic(\"tests failed\") }\n");
+  } else if (is_bench) {
+    unsigned long long iters = options->iterations ? (unsigned long long)options->iterations : 1000ULL;
+    char hdr[256];
+    snprintf(hdr, sizeof(hdr), "  __dyn_iters: u64 = %llu\n  __dyn_samples: [11]i64\n", iters);
+    ok = ok && strbuf_append(&code, &len, &cap, hdr);
+    for (size_t i = 0; ok && i < target_count; ++i) {
+      char blk[4096];
+      snprintf(blk, sizeof(blk),
+               "  for __dyn_w in 0..10 { %s() }\n"
+               "  for __dyn_s in 0..11 {\n"
+               "    __dyn_t0 := __dyn_time.monotonic_now()\n"
+               "    __dyn_k: u64 = 0\n"
+               "    for __dyn_k < __dyn_iters { %s()\n __dyn_k += 1 }\n"
+               "    __dyn_t1 := __dyn_time.monotonic_now()\n"
+               "    __dyn_dt := __dyn_time.elapsed(__dyn_t0, __dyn_t1)\n"
+               "    if __dyn_dt < 0 { __dyn_dt = 0 }\n"
+               "    __dyn_samples[__dyn_s] = __dyn_dt / #cast(i64, __dyn_iters)\n"
+               "  }\n"
+               "  for __dyn_a in 0..11 {\n"
+               "    for __dyn_b in __dyn_a + 1..11 {\n"
+               "      if __dyn_samples[__dyn_b] < __dyn_samples[__dyn_a] {\n"
+               "        __dyn_tmp := __dyn_samples[__dyn_a]\n"
+               "        __dyn_samples[__dyn_a] = __dyn_samples[__dyn_b]\n"
+               "        __dyn_samples[__dyn_b] = __dyn_tmp\n"
+               "      }\n"
+               "    }\n"
+               "  }\n"
+               "  __dyn_bo_%zu := __dyn_fmt.buffer(__dyn_buf[..])\n"
+               "  __dyn_fmt.write(&__dyn_bo_%zu, \"BENCH %s: iters=\")\n"
+               "  __dyn_fmt.write_u64(&__dyn_bo_%zu, __dyn_iters)\n"
+               "  __dyn_fmt.write(&__dyn_bo_%zu, \" median=\")\n"
+               "  __dyn_fmt.write_i64(&__dyn_bo_%zu, __dyn_samples[5])\n"
+               "  __dyn_fmt.write(&__dyn_bo_%zu, \" ns/op p95=\")\n"
+               "  __dyn_fmt.write_i64(&__dyn_bo_%zu, __dyn_samples[10])\n"
+               "  __dyn_fmt.write(&__dyn_bo_%zu, \" ns/op\")\n"
+               "  __dyn_io.println(__dyn_fmt.bytes(&__dyn_bo_%zu))\n",
+               targets[i].name, targets[i].name,
+               i, i, targets[i].name, i, i, i, i, i, i, i);
+      ok = strbuf_append(&code, &len, &cap, blk);
+    }
+  } else {
+    unsigned long long iters = options->iterations ? (unsigned long long)options->iterations : 1000ULL;
+    char hdr[256];
+    snprintf(hdr, sizeof(hdr),
+             "  __dyn_iters: u64 = %llu\n"
+             "  __dyn_seed: u64 = 0x9e3779b97f4a7c15\n"
+             "  __dyn_fbuf: [256]u8\n",
+             iters);
+    ok = ok && strbuf_append(&code, &len, &cap, hdr);
+    for (size_t i = 0; ok && i < target_count; ++i) {
+      char blk[4096];
+      snprintf(blk, sizeof(blk),
+               "  __dyn_k_%zu: u64 = 0\n"
+               "  for __dyn_k_%zu < __dyn_iters {\n"
+               "    __dyn_seed ^= __dyn_seed << 13\n"
+               "    __dyn_seed ^= __dyn_seed >> 7\n"
+               "    __dyn_seed ^= __dyn_seed << 17\n"
+               "    __dyn_flen: usize = 0\n"
+               "    if __dyn_k_%zu == 0 {\n"
+               "      __dyn_flen = 0\n"
+               "    } else if __dyn_k_%zu == 1 {\n"
+               "      __dyn_flen = 1\n"
+               "      __dyn_fbuf[0] = 0\n"
+               "    } else if __dyn_k_%zu == 2 {\n"
+               "      __dyn_flen = 1\n"
+               "      __dyn_fbuf[0] = 255\n"
+               "    } else {\n"
+               "      __dyn_flen = #cast(usize, __dyn_seed & 63)\n"
+               "      for __dyn_j in 0..__dyn_flen {\n"
+               "        __dyn_seed ^= __dyn_seed << 13\n"
+               "        __dyn_seed ^= __dyn_seed >> 7\n"
+               "        __dyn_seed ^= __dyn_seed << 17\n"
+               "        __dyn_fbuf[__dyn_j] = #cast(u8, __dyn_seed & 255)\n"
+               "      }\n"
+               "    }\n"
+               "    %s(__dyn_fbuf[..__dyn_flen])\n"
+               "    __dyn_k_%zu += 1\n"
+               "  }\n"
+               "  __dyn_fo_%zu := __dyn_fmt.buffer(__dyn_buf[..])\n"
+               "  __dyn_fmt.write(&__dyn_fo_%zu, \"FUZZ %s: OK (\")\n"
+               "  __dyn_fmt.write_u64(&__dyn_fo_%zu, __dyn_iters)\n"
+               "  __dyn_fmt.write(&__dyn_fo_%zu, \" iterations)\")\n"
+               "  __dyn_io.println(__dyn_fmt.bytes(&__dyn_fo_%zu))\n",
+               i, i, i, i, i, targets[i].name, i,
+               i, i, targets[i].name, i, i, i);
+      ok = strbuf_append(&code, &len, &cap, blk);
+    }
+  }
+  ok = ok && strbuf_append(&code, &len, &cap, "}\n");
+  free(targets);
+  if (!ok) { free(code); return false; }
+  char *hpath = dyn_path_join(input_dir, "__dyn_harness.dyn");
+  if (!hpath) { free(code); return false; }
+  DynSource *grown = realloc(sources->items, (sources->count + 1) * sizeof(*grown));
+  if (!grown) { free(hpath); free(code); return false; }
+  sources->items = grown;
+  DynSource hs = {0};
+  hs.path = hpath;
+  hs.text = code;
+  hs.length = len;
+  hs.context = *context;
+  dyn_source_target_record(&hs);
+  if (!dyn_source_prepare(&hs)) {
+    dyn_source_free(&hs);
+    return false;
+  }
+  sources->items[sources->count++] = hs;
+  return true;
+}
+
 static int execute_command(DynOptions *options, const char *compiler) {
   DynWork work = {.remaining = options->max_work};
   unsigned vet_findings = 0;
@@ -461,7 +719,21 @@ static int execute_command(DynOptions *options, const char *compiler) {
     free(sdk_path);
     return result;
   }
-  bool run = is_command(options, "run");
+  bool test_cmd = is_command(options, "test");
+  bool bench_cmd = is_command(options, "bench");
+  bool fuzz_cmd = is_command(options, "fuzz");
+  bool harness_cmd = test_cmd || bench_cmd || fuzz_cmd;
+  bool run = is_command(options, "run") || harness_cmd;
+  if (harness_cmd) {
+    if (!options->input) options->input = ".";
+    if (bench_cmd && !options->release) {
+      options->release = true;
+      if (!options->debug_info_set) options->debug_info = false;
+    }
+    context.include_tests = true;
+    options->no_cache = true;
+    if (!options->verbose) options->quiet = true;
+  }
   if (!is_command(options, "check") && !vet && !is_command(options, "build") && !is_command(options, "query") && !run) {
     fprintf(stderr, "error: command '%s' is not implemented\n", options->command);
     return 2;
@@ -557,6 +829,20 @@ static int execute_command(DynOptions *options, const char *compiler) {
   DynSources sources;
   int result = dyn_sources_load(&context, options->input, &sources);
   if (result) return result;
+  if (harness_cmd) {
+    size_t found = 0;
+    if (!harness_discover_and_append(&context, &sources, options, options->input,
+                                     test_cmd, bench_cmd, fuzz_cmd, &found)) {
+      fprintf(stderr, "error: failed to construct %s harness\n", options->command);
+      dyn_sources_free(&sources);
+      return 2;
+    }
+    if (!found) {
+      printf("no matching %s functions found\n", options->command);
+      dyn_sources_free(&sources);
+      return 0;
+    }
+  }
   DynSources project_sources = {0};
   result = dyn_module_load_project(options->input, &sources, &project_sources);
   if (result) {
@@ -575,7 +861,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
       }
   }
   if (options->timings) fprintf(stderr, "timing load %.3f ms\n", elapsed_ms(phase));
-  char *main_path = dyn_path_join(options->input, single_file_name ? single_file_name : "main.dyn");
+  char *main_path = dyn_path_join(options->input, harness_cmd ? "__dyn_harness.dyn" : (single_file_name ? single_file_name : "main.dyn"));
   if (options->emit_ir) {
     result = main_path ? emit_ir_dump(&sources, main_path, options) : 2;
     dyn_sources_free(&sources);
@@ -604,7 +890,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
   }
   DynCheckResult checked = {0};
   if (vet) checked = dyn_vet_sources(&sources, main_path, options->input);
-  else if (!build) checked = dyn_check_sources(&sources, main_path, false);
+  else if (!build) checked = dyn_check_sources_owned(&sources, main_path, false);
   if (checked.errors || vet_findings) {
     dyn_sources_free(&sources);
     free(main_path);
@@ -689,6 +975,8 @@ static int execute_command(DynOptions *options, const char *compiler) {
   if (!restored) {
     DynSource module_source = {0};
     result = dyn_sources_merge(&sources, main_path, &module_source);
+    if (!result && (!cacheable || options->no_cache))
+      dyn_sources_free(&sources);
     module_source.context = context;
     DynIrProgram prepared;
     bool have_ir = false;

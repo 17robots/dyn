@@ -10,7 +10,6 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/sync"
 use "std/time"
-use "std/fail"
 #link("sync_timeout_probe")
 extern fn start "probe_start"(entry: fn(rawptr) rawptr, context: rawptr) i32
 extern fn join "probe_join"() i32
@@ -27,28 +26,37 @@ fn worker(context: rawptr) rawptr {
   sync.unlock(&shared.mutex)
   return nil
 }
+fn wait(condition: *sync.Condition, mutex: *sync.Mutex, timeout: i64) sync.Wait {
+  return sync.condition_wait_timeout(condition, mutex, timeout) catch { #panic("wait failed") }
+}
+fn wait_invalid(condition: *sync.Condition, mutex: *sync.Mutex, timeout: i64) bool {
+  _ = sync.condition_wait_timeout(condition, mutex, timeout) catch err {
+    case err {
+      .InvalidInput => { return true }
+      _ => { return false }
+    }
+  }
+  return false
+}
 fn main() {
   shared := Shared{}
   sync.lock(&shared.mutex)
-  invalid: fail.Status
-  _ = sync.condition_wait_timeout(&invalid,&shared.condition,&shared.mutex,-1)
-  check(invalid.failure.kind==fail.Kind.InvalidInput)
-  status: fail.Status
+  check(wait_invalid(&shared.condition,&shared.mutex,-1))
   check(!sync.try_lock(&shared.mutex))
-  zero := sync.condition_wait_timeout(&status,&shared.condition,&shared.mutex,0)
-  check(!status.failed && zero==sync.Wait.TimedOut)
+  zero := wait(&shared.condition,&shared.mutex,0)
+  check(zero==sync.Wait.TimedOut)
   check(!sync.try_lock(&shared.mutex))
   before := time.monotonic_now()
-  timeout := sync.condition_wait_timeout(&status,&shared.condition,&shared.mutex,15*time.Millisecond)
+  timeout := wait(&shared.condition,&shared.mutex,15*time.Millisecond)
   after := time.monotonic_now()
   elapsed := time.elapsed(before,after)
-  check(!status.failed && timeout==sync.Wait.TimedOut)
+  check(timeout==sync.Wait.TimedOut)
   check(elapsed>=15*time.Millisecond)
   check(!sync.try_lock(&shared.mutex))
   check(start(worker,#cast(rawptr,&shared))==0)
   for !shared.ready {
-    result := sync.condition_wait_timeout(&status,&shared.condition,&shared.mutex,time.Second)
-    check(!status.failed && result==sync.Wait.Signaled)
+    result := wait(&shared.condition,&shared.mutex,time.Second)
+    check(result==sync.Wait.Signaled)
   }
   check(!sync.try_lock(&shared.mutex))
   sync.unlock(&shared.mutex)
@@ -56,10 +64,10 @@ fn main() {
   sync.lock(&shared.mutex)
   check(interrupts()==0)
   before = time.monotonic_now()
-  interrupted := sync.condition_wait_timeout(&status,&shared.condition,&shared.mutex,80*time.Millisecond)
+  interrupted := wait(&shared.condition,&shared.mutex,80*time.Millisecond)
   after = time.monotonic_now()
   elapsed = time.elapsed(before,after)
-  check(!status.failed && interrupted==sync.Wait.TimedOut)
+  check(interrupted==sync.Wait.TimedOut)
   check(elapsed>=80*time.Millisecond && elapsed<400*time.Millisecond)
   check(!sync.try_lock(&shared.mutex))
   sync.unlock(&shared.mutex)
@@ -112,15 +120,22 @@ with tempfile.TemporaryDirectory(prefix='dyn-sync-timeout-') as temporary:
     end=text.index('fn native_sync_failure',start)
     text=text[:start]+"fn native_wait_timeout(address: *AtomicU32, expected: u32, duration: i64) isize {\n _ = address\n _ = expected\n _ = duration\n return -22\n}\n"+text[end:]
     backend.write_text(text)
-    (work/'main.dyn').write_text("""use \"sync\" sync
-use \"std/fail\"
+    (work/'main.dyn').write_text("""use sync \"sync\"
+// The native error reaches the caller, here EINVAL as InvalidInput.
+fn native_invalid(condition: *sync.Condition, mutex: *sync.Mutex) bool {
+ _ = sync.condition_wait_timeout(condition,mutex,1000000000) catch err {
+  case err {
+   .InvalidInput => { return true }
+   _ => { return false }
+  }
+ }
+ return false
+}
 fn main() {
  mutex := sync.mutex()
  condition := sync.condition()
  sync.lock(&mutex)
- status: fail.Status
- _ = sync.condition_wait_timeout(&status,&condition,&mutex,1000000000)
- if !status.failed || status.failure.native != -22 || status.failure.kind != fail.Kind.InvalidInput { #panic(\"native error\") }
+ if !native_invalid(&condition,&mutex) { #panic(\"native error\") }
  if sync.try_lock(&mutex) { #panic(\"mutex not reacquired\") }
  sync.unlock(&mutex)
 }
@@ -136,7 +151,8 @@ fn main() {
     windows=windows.replace('extern fn wake_all "dyn_sync_all"(address: *u32)','fn wake_all(address: *u32) { _ = address }')
     windows=windows.replace('extern fn wait_error "dyn_sync_error"() u32','fn wait_error() u32 { return 4 }')
     backend.write_text(windows)
-    source=(work/'main.dyn').read_text().replace('status.failure.native != -22','status.failure.native != -4').replace('fail.Kind.InvalidInput','fail.Kind.System').replace('1000000000','10000000')
+    # Windows error 4 is no interrupt there: it reaches the caller as System.
+    source=(work/'main.dyn').read_text().replace('.InvalidInput => { return true }','.System(_) => { return true }').replace('1000000000','10000000')
     (work/'main.dyn').write_text(source)
     subprocess.run([DYN,'build',str(work),'--release','--quiet','--no-cache','--output',str(work/'windows-error')],check=True,timeout=120)
     subprocess.run([str(work/'windows-error')],check=True,timeout=10)

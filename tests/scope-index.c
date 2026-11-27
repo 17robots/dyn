@@ -63,13 +63,13 @@ static void compare(const DynSource *source, const DynScopeIndex *index) {
 }
 int main(void) {
   const char *cases[] = {
-    "use \"./m\" m\nfn helper(m: i32, values: ...i32) {\n_ = m\n_ = values\n}\nfn main() { m.call() }",
+    "use m \"./m\"\nfn helper(m: i32, values: ...i32) {\n_ = m\n_ = values\n}\nfn main() { m.call() }",
     "fn main() {\n_ = m.call()\nm := m.call()\n_ = m.value\nif true {\nlocal := m\n_ = local\n}\n_ = local\n}",
     "fn main() {\nconst constant := 1\n_ = constant\nif true {\nm := constant\n_ = m.value\n}\n_ = m.value\n}",
     "fn helper(values: []i32) {\nfor item in values {\n_ = item\n_ = values\n}\n_ = item\n}",
     "fn helper(values: []i32) {\nfor *item in values { _ = item }\n_ = item\n}",
-    "fn helper(value: any) {\ncase value {\ni32 item => { _ = item }\n_ => { _ = item }\n}\n_ = item\n}",
-    "enum Choice { Item: i32, None }\nfn helper(value: Choice) {\ncase value {\nChoice.Item item => { _ = item }\nChoice.None => {}\n}\n}",
+    "fn helper(value: any) {\ncase value {\ni32(item) => { _ = item }\n_ => { _ = item }\n}\n_ = item\n}",
+    "enum Choice { Item(i32), None }\nfn helper(value: Choice) {\ncase value {\nChoice.Item(item) => { _ = item }\nChoice.None => {}\n}\n}",
     "// 😀\nfn helper(m: i32) { /* comment */ _ = m }",
     "fn helper(m: i32) { _ = m\n x := )\n _ = m }", // Recovered statements bind nothing.
     "fn main() { // comments do not define locals\n m := 1 // next use\n _ = #sizeof(m)\n _ = #typeof(m)\n}",

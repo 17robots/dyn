@@ -293,9 +293,9 @@ def fixtures():
     source=r'''use "std/io"
     extern fn cpacr() u32
     fn mark(s:[]const u8) { io.print("{}", s) }
-    fn checkany(x:any) { case x { u64 n => { if n!=0x1122334455667788 { #panic("any") }
+    fn checkany(x:any) { case x { u64(n) => { if n!=0x1122334455667788 { #panic("any") }
     mark("ANY\n") } _ => { #panic("type") } } }
-    fn mutable(x:[]u8) { if #len(x)!=3 || x[2]!=67 { #panic("slice") }
+    fn mutable(x:[]u8) { if x.len!=3 || x[2]!=67 { #panic("slice") }
     mark("SLICE\n") }
     fn scalar(x:u64) { if x!=0xdeadbeef87654321 { #panic("scalar") }
     mark("SCALAR\n") }

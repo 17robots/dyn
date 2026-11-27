@@ -13,9 +13,9 @@ There are two layers:
 
 - **Wrappers** such as `vendor/sqlite` or `vendor/sdl3` are small, hand-written,
   Dyn-shaped APIs with documented ownership. They follow std's failure model: a
-  call that can fail takes a `*fail.Status` and returns its value, carrying the
-  library's own message and code (`failure.native`); destroy and close functions
-  take none.
+  call that can fail returns `T!io.IoErr`, with `System(code)` keeping the
+  library's own code where no portable kind fits; destroy and close functions
+  cannot fail.
 - **Raw bindings** under `vendor/<name>/raw` are generated from the installed C
   headers and expose the full C API. See [raw bindings](#raw-bindings).
 
@@ -458,7 +458,7 @@ OpenSSL internal names beginning with `_` are excluded.
 ### Calling and storage
 
 ```dyn
-use "vendor/box2d/raw" box
+use box "vendor/box2d/raw"
 
 fn main() {
   if !box.verify_layout() { #panic("binding/header mismatch") }

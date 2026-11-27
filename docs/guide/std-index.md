@@ -11,27 +11,27 @@ Layer: heap
 
 - `struct ArchiveReader { source: []const u8, offset: usize, defaults: Overrides, ended: bool }`: offset is the position after the last entry.
 - `fn reader(source: []const u8) ArchiveReader`
-- `fn next(status: *fail.Status, state: *ArchiveReader) Entry`: Names and payload borrow source.
+- `fn next(state: *ArchiveReader) Entry!parse.ParseErr`: Names and payload borrow source.
 - `struct Entry { name: []const u8, prefix: []const u8, link_name: []const u8, size: u64, kind: u8, data: []const u8, }`
-- `struct StreamReader { source_reader: stream.Reader, metadata: []u8, spare: []u8, metadata_used: usize, defaults: Overrides, header_storage: []u8, remaining: usize, padding: usize, active: bool, // Turns true when next_stream returns no entry, at the end of the archive // or after a failure. ended: bool, offset: usize, failed: bool, failure: fail.Failure, }`
+- `struct StreamReader { source_reader: stream.Reader, metadata: []u8, spare: []u8, metadata_used: usize, defaults: Overrides, header_storage: []u8, remaining: usize, padding: usize, active: bool, // Turns true when next_stream returns no entry, at the end of the archive // or after a failure. ended: bool, offset: usize, failed: bool, failure: stream.IoErr, }`
 - `struct StreamEntry { name: []const u8, prefix: []const u8, link_name: []const u8, size: u64, typeflag: u8, offset: usize, }`: typeflag is the TAR protocol byte.
 - `fn stream_reader(input: stream.Reader, header_storage: []u8, metadata: []u8) StreamReader`: Header and metadata storage must not overlap;
-- `fn next_stream(status: *fail.Status, state: *StreamReader) StreamEntry`: Input, header, and metadata storage must be disjoint.
-- `fn read_stream(status: *fail.Status, state: *StreamReader, destination: []u8) usize`: Reads the current entry's payload incrementally;
+- `fn next_stream(state: *StreamReader) StreamEntry!stream.IoErr`: Input, header, and metadata storage must be disjoint.
+- `fn read_stream(state: *StreamReader, destination: []u8) usize!stream.IoErr`: Reads the current entry's payload incrementally;
 
 ## std/archive/zip
 
 Layer: heap
 
-- `fn open_checked(status: *fail.Status, source: []const u8) ArchiveReader`: Checks directory framing and every local-header/descriptor relationship up front.
+- `fn open_checked(source: []const u8) ArchiveReader!stream.IoErr`: Checks directory framing and every local-header/descriptor relationship up front.
 - `struct Entry { name: []const u8, payload: []const u8, method: u16, flags: u16, checksum: u32, compressed_size: usize, uncompressed_size: usize, directory: bool, }`
-- `struct ArchiveReader { source: []const u8, offset: usize, indexed: bool, directory_start: usize, directory_end: usize, remaining: usize, failed: bool, failure: fail.Failure, ended: bool }`: After a failure a reader stays failed: next fails the same way again.
-- `struct StreamReader { source_reader: stream.Reader, header_storage: []u8, name_storage: []u8, payload_storage: []u8, ended: bool, offset: usize, failed: bool, failure: fail.Failure, }`
+- `struct ArchiveReader { source: []const u8, offset: usize, indexed: bool, directory_start: usize, directory_end: usize, remaining: usize, failed: bool, failure: stream.IoErr, ended: bool }`: After a failure a reader stays failed: next fails the same way again.
+- `struct StreamReader { source_reader: stream.Reader, header_storage: []u8, name_storage: []u8, payload_storage: []u8, ended: bool, offset: usize, failed: bool, failure: stream.IoErr, }`
 - `fn stream_reader(input: stream.Reader, header_storage: []u8, name_storage: []u8, payload_storage: []u8) StreamReader`: The three storages must not overlap;
-- `fn next_stream(status: *fail.Status, state: *StreamReader) Entry`: Reads one local-file entry from a stream.
+- `fn next_stream(state: *StreamReader) Entry!stream.IoErr`: Reads one local-file entry from a stream.
 - `fn open(source: []const u8) ArchiveReader`
-- `fn next(status: *fail.Status, state: *ArchiveReader) Entry`: Reads the next entry of an archive in memory, with the same failures as next_stream.
-- `fn extract(arena: *mem.Arena, status: *fail.Status, archive_entry: Entry) []u8`: The entry's bytes, decompressed and checksum-verified, in arena.
+- `fn next(state: *ArchiveReader) Entry!stream.IoErr`: Reads the next entry of an archive in memory, with the same failures as next_stream.
+- `fn extract(arena: *mem.Arena, archive_entry: Entry) []u8!stream.IoErr`: The entry's bytes, decompressed and checksum-verified, in arena.
 
 ## std/audio/wav
 
@@ -39,8 +39,8 @@ Layer: heap
 
 - `enum Encoding { Pcm8, Pcm16, Pcm24, Pcm32, Float32 }`
 - `struct Audio { samples: []f32, rate: u32, channels: u16, channel_mask: u32 }`: Interleaved normalized samples;
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Audio`: RIFF WAVE: PCM 8/16/24/32 and IEEE float 32/64, including extensible subformats.
-- `fn encode(arena: *mem.Arena, status: *fail.Status, audio: *const Audio, encoding: Encoding) []u8`: Integer encoding clamps to [-1,1] and rounds ties toward positive infinity.
+- `fn decode(arena: *mem.Arena, source: []const u8) Audio!parse.ParseErr`: RIFF WAVE: PCM 8/16/24/32 and IEEE float 32/64, including extensible subformats.
+- `fn encode(arena: *mem.Arena, audio: *const Audio, encoding: Encoding) []u8!io.IoErr`: Integer encoding clamps to [-1,1] and rounds ties toward positive infinity.
 
 ## std/bufio
 
@@ -49,15 +49,15 @@ Layer: heap
 - `struct Writer { destination: io.Writer, storage: []u8, used: usize, }`: Collects small writes in storage and passes them on in large ones.
 - `fn writer(destination: io.Writer, storage: []u8) Writer`
 - `fn writer_buffered(state: *const Writer) usize`
-- `fn writer_flush(status: *fail.Status, state: *Writer)`: Writes everything buffered.
+- `fn writer_flush(state: *Writer) !io.IoErr`: Writes everything buffered.
 - `fn writer_adapter(state: *Writer) io.Writer`
 - `struct Reader { source: io.Reader, storage: []u8, start: usize, end: usize, // The source reported its end. input_done: bool, pending: [2]u8, pending_count: usize, // Set by a read_line call that returns no line: at the end of the input, // or after a failure. ended: bool, // read_line is dropping the rest of a line too long for storage. skipping: bool, }`: Reads source a buffer at a time.
 - `fn reader(source: io.Reader, storage: []u8) Reader`
 - `fn reader_adapter(state: *Reader) io.Reader`
 - `enum ReadStatus { Complete, End, More }`: How a record read ended: at its delimiter (Complete), at the end of the input (End, possibly with a final unterminated fragment), or ...
 - `struct ReadResult { transferred: usize, status: ReadStatus, }`
-- `fn read_until(status: *fail.Status, state: *Reader, destination: []u8, delimiter: u8) ReadResult`: Reads up to delimiter, which is consumed and left out.
-- `fn read_line(status: *fail.Status, state: *Reader) []const u8`: The next line, without its LF or CRLF;
+- `fn read_until(state: *Reader, destination: []u8, delimiter: u8) ReadResult!io.IoErr`: Reads up to delimiter, which is consumed and left out.
+- `fn read_line(state: *Reader) []const u8!io.IoErr`: The next line, without its LF or CRLF;
 
 ## std/bytes
 
@@ -93,7 +93,7 @@ Layer: heap
 - `fn bytes(state: *const Builder) []const u8`: Ownership: returned view borrows builder storage;
 - `fn clear(state: *Builder)`: Empties the builder.
 - `fn reserve(arena: *memory.Arena, state: *Builder, capacity: usize)`: Exact capacity reservation.
-- `fn append(status: *fail.Status, state: *Builder, source: []const u8)`: Bounded append supports overlap/self-append.
+- `fn append(state: *Builder, source: []const u8) !`: Bounded append supports overlap/self-append.
 - `fn append_grow(arena: *memory.Arena, state: *Builder, source: []const u8)`: Geometric growth.
 
 ## std/bytes/search
@@ -101,8 +101,8 @@ Layer: heap
 Layer: core
 
 - `struct Pattern { needle: []const u8, table: []const usize }`: Prepared, allocation-free KMP search.
-- `fn prepare(status: *fail.Status, needle: []const u8, table: []usize) Pattern`: A table shorter than needle fails with Capacity and is left untouched.
-- `fn find(pattern: Pattern, text: []const u8) usize`: First byte offset, or #len(text) on a miss.
+- `fn prepare(needle: []const u8, table: []usize) Pattern!`: A table shorter than needle fails and is left untouched.
+- `fn find(pattern: Pattern, text: []const u8) usize`: First byte offset, or text.len on a miss.
 
 ## std/c
 
@@ -131,11 +131,11 @@ Layer: heap
 - `type mutable_string = *u8`
 - `type pointer = rawptr`
 - `fn string_length(value: string, maximum: usize) usize`: Bounded scan: never reads beyond `maximum`;
-- `fn bytes_from_string(status: *fail.Status, value: string, maximum: usize) []const u8`: The bytes of a NUL-terminated string, borrowed.
+- `fn bytes_from_string(value: string, maximum: usize) []const u8!io.IoErr`: The bytes of a NUL-terminated string, borrowed.
 - `fn errno_from_result(value: isize) isize`
 - `fn succeeded(value: isize) bool`
-- `fn string_into(status: *fail.Status, destination: []u8, source: []const u8) string`: Raw C-ABI scratch conversion.
-- `fn string_from_bytes(arena: *memory.Arena, status: *fail.Status, source: []const u8) string`: source with a NUL appended, in arena.
+- `fn string_into(destination: []u8, source: []const u8) string!io.IoErr`: Raw C-ABI scratch conversion.
+- `fn string_from_bytes(arena: *memory.Arena, source: []const u8) string!io.IoErr`: source with a NUL appended, in arena.
 - `type char = u8`: Default C ABI;
 - `type long = i64`
 - `type unsigned_long = u64`
@@ -150,12 +150,43 @@ Layer: std
 - `fn stale(copy: *const Copy, shared: *Shared) u64`: Zero when copy is current;
 - `fn rebuilt(copy: *Copy, version: u64)`: Stamps copy with the version stale returned before the rebuild.
 
+## std/collections
+
+Layer: heap
+
+- `struct Array<T> { items: []T, storage: []T, arena: *mem.Arena, }`: Growing array on an arena.
+- `fn array<T>(arena: *mem.Arena) Array<T>`: Creates an empty arena-backed array.
+- `fn push<T>(a: *Array<T>, value: T)`: Appends `value` to the end of `a`.
+- `fn push_ref<T>(a: *Array<T>, value: T) *T`: Appends `value` to `a` and returns a pointer to the stored slot (valid until the next growth).
+- `fn push_all<T>(a: *Array<T>, values: []const T)`: Appends every element of `values` to `a`.
+- `fn get<T>(a: *const Array<T>, index: usize) *T`: Returns a pointer to element `index`, or `nil` when out of bounds.
+- `fn pop<T>(a: *Array<T>) T`: Removes and returns the last element, or the zero value if empty.
+- `fn clear<T>(a: *Array<T>)`: Clears all elements while keeping the backing slice in the arena.
+- `struct Entry<K, V> { key: K, value: V, }`: Hash map entry.
+- `struct Map<K, V> { tags: []u8, entries: []Entry<K, V>, count: usize, arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool, }`: Open-addressed hash map on an arena with 1-byte tag probes.
+- `struct Walk<K, V> { map: *const Map<K, V>, at: usize, entry: Entry<K, V>, }`: Map iterator.
+- `fn map<K, V>(arena: *mem.Arena) Map<K, V>`: Creates an empty arena-backed map using the default hash/equality for `K`.
+- `fn map_seeded<K, V>(arena: *mem.Arena, seed: u64) Map<K, V>`: Creates an empty arena-backed map with a caller-chosen hash seed.
+- `fn map_with<K, V>(arena: *mem.Arena, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) Map<K, V>`: Creates an empty arena-backed map with custom hash and equality functions.
+- `fn map_seeded_with<K, V>(arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) Map<K, V>`: Creates an empty arena-backed map with a custom seed, hash, and equality.
+- `fn map_insert<K, V>(m: *Map<K, V>, key: K, value: V)`: Inserts or overwrites `key` with `value`.
+- `fn map_get<K, V>(m: *const Map<K, V>, key: K) *V`: Returns a pointer to the value for `key`, or `nil` when absent.
+- `fn map_upsert<K, V>(m: *Map<K, V>, key: K, initial: V) *V`: Inserts `initial` if `key` is absent and returns a pointer to its value slot.
+- `fn map_contains<K, V>(m: *const Map<K, V>, key: K) bool`: Returns true when `key` is in `m`.
+- `fn map_remove<K, V>(m: *Map<K, V>, key: K) bool`: Removes `key` from `m`.
+- `fn map_walk<K, V>(m: *const Map<K, V>) Walk<K, V>`: Starts an iteration over `m`.
+- `fn map_next<K, V>(it: *Walk<K, V>) bool`: Advances `it` to the next live entry.
+- `struct Ring<T> { data: []T, read: usize, count: usize, }`: Fixed-capacity generic ring buffer backed by an arena slice.
+- `fn ring<T>(arena: *mem.Arena, capacity: usize) Ring<T>`: Creates a ring buffer with `capacity` slots in `arena`.
+- `fn ring_push<T>(r: *Ring<T>, value: T) bool`: Pushes `value` into `r`.
+- `fn ring_pop<T>(r: *Ring<T>) T`: Pops the oldest element from `r`, or the zero value when empty.
+
 ## std/compress/deflate
 
 Layer: heap
 
 - `struct Result { written: usize, consumed: usize, done: bool }`: done is false while the codec needs more input or output space;
-- `struct Decoder { engine: InflateState, source_reader: stream.Reader, compressed_storage: []u8, output_storage: []u8, compressed_used: usize, offset: usize, source_ended: bool, finished: bool, error: isize, gzip: bool, phase: u8, flags: u8, extra: usize, header_crc: u32, checksum: u32, member_size: u32, members: usize, }`: Both buffers and this state must remain alive and disjoint while reading.
+- `struct Decoder { engine: InflateState, source_reader: stream.Reader, compressed_storage: []u8, output_storage: []u8, compressed_used: usize, offset: usize, source_ended: bool, finished: bool, error: isize, // The source's own failure, after error -5. source_err: stream.IoErr, gzip: bool, phase: u8, flags: u8, extra: usize, header_crc: u32, checksum: u32, member_size: u32, members: usize, }`: Both buffers and this state must remain alive and disjoint while reading.
 - `fn decoder(input: stream.Reader, compressed_bytes: []u8, history: []u8) Decoder`
 - `fn decoder_reader(state: *Decoder) stream.Reader`
 - `fn deflate_stored_chunk(destination: []u8, input: []const u8, final: bool) Result`: Emits byte-aligned stored DEFLATE blocks.
@@ -164,8 +195,8 @@ Layer: heap
 - `struct InflateState { reader: Bits, literal: Huffman, distance: Huffman, stage: u8, final: u32, stored: usize, written: usize, error: isize, output_full: bool, }`: State retains block trees and bit position.
 - `fn resume(state: *InflateState, destination: []u8, input: []const u8) Result`
 - `struct Inflated { value: []u8, consumed: usize }`: Output in arena and the input bytes used.
-- `fn inflate(arena: *mem.Arena, status: *fail.Status, input: []const u8) Inflated`: RFC 1951 stored, fixed-Huffman, and dynamic-Huffman DEFLATE, into arena.
-- `fn gunzip(arena: *mem.Arena, status: *fail.Status, input: []const u8) Inflated`: One RFC 1952 gzip member, into arena.
+- `fn inflate(arena: *mem.Arena, input: []const u8) Inflated!parse.ParseErr`: RFC 1951 stored, fixed-Huffman, and dynamic-Huffman DEFLATE, into arena.
+- `fn gunzip(arena: *mem.Arena, input: []const u8) Inflated!parse.ParseErr`: One RFC 1952 gzip member, into arena.
 - `struct GzipState { engine: InflateState, stage: u8, at: usize, flags: u8, error: isize }`: A single gzip member.
 - `fn resume_gzip(state: *GzipState, destination: []u8, input: []const u8) Result`
 - `const MinLevel: u8 = 1`
@@ -173,7 +204,7 @@ Layer: heap
 - `const DefaultLevel: u8 = 6`
 - `struct Encoder { head: [HashSize]u32, previous: [WindowSize]u32, // Block symbols: length 0 is a literal byte in value, otherwise a match of // length bytes at distance value. lengths: [BlockSymbols]u16, values: [BlockSymbols]u16, symbol_count: usize, // Small inputs use fewer hash bits: less table to clear per call. hash_shift: u32, literal_counts: [LiteralCodes]u32, distance_counts: [DistanceCodes]u32, literal_lengths: [LiteralCodes]u8, distance_lengths: [DistanceCodes]u8, literal_codes: [LiteralCodes]u16, distance_codes: [DistanceCodes]u16, length_symbol: [MaxMatch + 1]u8, distance_symbol: [512]u8, // Huffman construction scratch, for up to LiteralCodes leaves. order: [LiteralCodes]u16, weights: [2 * LiteralCodes]u32, parents: [2 * LiteralCodes]u16, depths: [2 * LiteralCodes]u8, }`: Workspace for deflate.
 - `fn deflate_bound(size: usize) usize`: Bytes enough for any input of size bytes at any level: stored blocks of at most 65535 bytes, five bytes of header each, plus one block's ...
-- `fn deflate(status: *fail.Status, destination: []u8, source: []const u8, level: u8, encoder: *Encoder) []u8`: Raw DEFLATE stream of source into destination at level (1-9;
+- `fn deflate(destination: []u8, source: []const u8, level: u8, encoder: *Encoder) []u8!`: Raw DEFLATE stream of source into destination at level (1-9;
 
 ## std/compress/gzip
 
@@ -182,12 +213,12 @@ Layer: heap
 - `type Result = deflate.Result`
 - `type Decoder = deflate.Decoder`
 - `type Inflated = deflate.Inflated`
-- `fn decompress(arena: *mem.Arena, status: *fail.Status, source: []const u8) Inflated`: One member, into arena;
+- `fn decompress(arena: *mem.Arena, source: []const u8) Inflated!parse.ParseErr`: One member, into arena;
 - `fn decoder(input: stream.Reader, compressed_bytes: []u8, history: []u8) Decoder`: Reads concatenated members through EOF, verifying every header/trailer.
 - `fn decoder_reader(state: *Decoder) stream.Reader`
 - `type Encoder = deflate.Encoder`
 - `fn compress_bound(size: usize) usize`: Destination bytes that always hold write's output for size bytes.
-- `fn write(status: *fail.Status, destination: []u8, source: []const u8, level: u8, encoder: *Encoder) []u8`: One gzip member (RFC 1952) holding source, compressed at level (1-9, see std/compress/deflate) into destination;
+- `fn write(destination: []u8, source: []const u8, level: u8, encoder: *Encoder) []u8!`: One gzip member (RFC 1952) holding source, compressed at level (1-9, see std/compress/deflate) into destination;
 - `fn compress(arena: *mem.Arena, source: []const u8, level: u8) []u8`: write with output in arena.
 
 ## std/compress/zstd
@@ -195,12 +226,12 @@ Layer: heap
 Layer: std
 
 - `struct FrameSize { size: u64, known: bool }`: A frame's decompressed size, when the frame header records it.
-- `struct Decoder { source_reader: stream.Reader, compressed_storage: []u8, context: provider.StreamContext, used: usize, offset: usize, source_ended: bool, frame_ended: bool, saw_frame: bool, finished: bool, failed: bool, failure: fail.Failure, }`: A failed decoder stays failed: later reads report the same failure.
+- `struct Decoder { source_reader: stream.Reader, compressed_storage: []u8, context: provider.StreamContext, used: usize, offset: usize, source_ended: bool, frame_ended: bool, saw_frame: bool, finished: bool, failed: bool, failure: stream.IoErr, }`: A failed decoder stays failed: later reads report the same failure.
 - `fn version() u32`
 - `fn compress_bound(source_size: usize) usize`
-- `fn compress(arena: *memory.Arena, status: *fail.Status, source: []const u8, level: i32) []u8`: Compresses source into arena at level.
-- `fn decompress(arena: *memory.Arena, status: *fail.Status, source: []const u8) []u8`: One frame whose header records its size, into arena.
-- `fn frame_size(status: *fail.Status, source: []const u8) FrameSize`
+- `fn compress(arena: *memory.Arena, source: []const u8, level: i32) []u8!stream.IoErr`: Compresses source into arena at level.
+- `fn decompress(arena: *memory.Arena, source: []const u8) []u8!stream.IoErr`: One frame whose header records its size, into arena.
+- `fn frame_size(source: []const u8) FrameSize!stream.IoErr`
 - `fn error_name(code: usize, maximum: usize) []const u8`
 - `fn decoder_workspace_size(window_log: u32) usize`: Workspace and input storage must remain alive and disjoint from output.
 - `fn decoder(input: stream.Reader, compressed_bytes: []u8, workspace: []u8, window_log: u32) Decoder`
@@ -210,14 +241,14 @@ Layer: std
 
 Layer: heap
 
-- `struct Array(T) { items: []T, storage: []T, arena: *mem.Arena, }`: items is the used front of storage.
-- `fn init(a: *Array($T), arena: *mem.Arena)`: Sets up an empty array.
-- `fn push(a: *Array($T), value: $T)`: Adds value at the end.
-- `fn push_ref(a: *Array($T), value: $T) *T`: Adds value at the end and returns its address, which goes stale at the next push.
-- `fn push_all(a: *Array($T), values: []const $T)`: Adds every value at the end.
-- `fn get(a: *const Array($T), index: usize) *T`: The element at index, or nil past the end.
-- `fn pop(a: *Array($T)) T`: The last element, removed, or the zero value when the array is empty.
-- `fn clear(a: *Array($T))`: Empties the array.
+- `struct Array<T> { items: []T, storage: []T, arena: *mem.Arena, }`: items is the used front of storage.
+- `fn init<T>(a: *Array<T>, arena: *mem.Arena)`: Sets up an empty array.
+- `fn push<T>(a: *Array<T>, value: T)`: Adds value at the end.
+- `fn push_ref<T>(a: *Array<T>, value: T) *T`: Adds value at the end and returns its address, which goes stale at the next push.
+- `fn push_all<T>(a: *Array<T>, values: []const T)`: Adds every value at the end.
+- `fn get<T>(a: *const Array<T>, index: usize) *T`: The element at index, or nil past the end.
+- `fn pop<T>(a: *Array<T>) T`: The last element, removed, or the zero value when the array is empty.
+- `fn clear<T>(a: *Array<T>)`: Empties the array.
 
 ## std/container/bit_set
 
@@ -231,61 +262,61 @@ Layer: core
 
 Layer: heap
 
-- `struct Chunk(T) { next: *Chunk(T), count: usize, items: [64]T }`
-- `struct List(T) { first: *Chunk(T), last: *Chunk(T), total: usize }`
-- `fn push(arena: *mem.Arena, list: *$L, value: $E) *E`: Appends value and returns its stable address.
-- `fn at(list: *const $L, index: usize, nil_node: *const $E) *E`: Element number index, or nil_node when index is past the end.
-- `fn to_slice(T: type, arena: *mem.Arena, list: *const $L) []T`: Copies every element, in order, into one new contiguous slice from arena.
+- `struct Chunk<T> { next: *Chunk<T>, count: usize, items: [64]T }`
+- `struct List<T> { first: *Chunk<T>, last: *Chunk<T>, total: usize }`
+- `fn push<L, E>(arena: *mem.Arena, list: *L, value: E) *E`: Appends value and returns its stable address.
+- `fn at<L, E>(list: *const L, index: usize, nil_node: *const E) *E`: Element number index, or nil_node when index is past the end.
+- `fn to_slice<T, L>(arena: *mem.Arena, list: *const L) []T`: Copies every element, in order, into one new contiguous slice from arena.
 
 ## std/container/hash
 
 Layer: heap
 
-- `fn slots(T: type, arena: *mem.Arena, count: usize) []*T`: Returns count empty slots from arena.
-- `fn find(slots: []*$T, hash: u64, key: []const u8, nil_node: *const $T) *T`: Finds the node with this hash and key, or returns nil_node.
-- `fn insert(slots: []*$T, node: *$T)`: Adds node at the front of its chain.
-- `fn remove(slots: []*$T, node: *$T) bool`: Unlinks node from its chain.
+- `fn slots<T>(arena: *mem.Arena, count: usize) []*T`: Returns count empty slots from arena.
+- `fn find<T>(slots: []*T, hash: u64, key: []const u8, nil_node: *const T) *T`: Finds the node with this hash and key, or returns nil_node.
+- `fn insert<T>(slots: []*T, node: *T)`: Adds node at the front of its chain.
+- `fn remove<T>(slots: []*T, node: *T) bool`: Unlinks node from its chain.
 - `fn hash_bytes(seed: u64, key: []const u8) u64`: SipHash-1-3 keyed by seed.
 
 ## std/container/list
 
 Layer: core
 
-- `fn sll_stack_push(first: **$T, node: *$T)`: Singly linked stack through next.
-- `fn sll_stack_pop(first: **$T, nil_node: *const $T) *T`: Pops the top node, or returns nil_node when the stack is empty.
-- `fn sll_queue_push(first, last: **$T, node: *$T)`: Singly linked queue through next: push at the back, pop from the front.
-- `fn sll_queue_push_front(first, last: **$T, node: *$T)`
-- `fn sll_queue_pop(first, last: **$T, nil_node: *const $T) *T`: Pops the front node, or returns nil_node when the queue is empty.
-- `fn dll_push_back(first, last: **$T, node: *$T)`: Doubly linked list through next and prev.
-- `fn dll_push_front(first, last: **$T, node: *$T)`
-- `fn dll_insert_after(first, last: **$T, after: *$T, node: *$T)`: Inserts node directly after after, which must already be in the list.
-- `fn dll_remove(first, last: **$T, node: *$T)`: Unlinks node, which must be in the list, and clears its links.
-- `fn tree_push_child(parent: *$T, node: *$T)`: Trees: each node has parent, first, last, next and prev.
-- `fn tree_remove(node: *$T)`: Detaches node from its parent.
-- `fn free_push(first_free: **$T, node: *$T)`: Free lists through free_next, a link separate from next so that freeing a node cannot corrupt another list it is still in.
-- `fn free_pop(first_free: **$T, nil_node: *const $T) *T`: Takes a node back from the free list, or returns nil_node when it is empty.
+- `fn sll_stack_push<T>(first: **T, node: *T)`: Singly linked stack through next.
+- `fn sll_stack_pop<T>(first: **T, nil_node: *const T) *T`: Pops the top node, or returns nil_node when the stack is empty.
+- `fn sll_queue_push<T>(first, last: **T, node: *T)`: Singly linked queue through next: push at the back, pop from the front.
+- `fn sll_queue_push_front<T>(first, last: **T, node: *T)`
+- `fn sll_queue_pop<T>(first, last: **T, nil_node: *const T) *T`: Pops the front node, or returns nil_node when the queue is empty.
+- `fn dll_push_back<T>(first, last: **T, node: *T)`: Doubly linked list through next and prev.
+- `fn dll_push_front<T>(first, last: **T, node: *T)`
+- `fn dll_insert_after<T>(first, last: **T, after: *T, node: *T)`: Inserts node directly after after, which must already be in the list.
+- `fn dll_remove<T>(first, last: **T, node: *T)`: Unlinks node, which must be in the list, and clears its links.
+- `fn tree_push_child<T>(parent: *T, node: *T)`: Trees: each node has parent, first, last, next and prev.
+- `fn tree_remove<T>(node: *T)`: Detaches node from its parent.
+- `fn free_push<T>(first_free: **T, node: *T)`: Free lists through free_next, a link separate from next so that freeing a node cannot corrupt another list it is still in.
+- `fn free_pop<T>(first_free: **T, nil_node: *const T) *T`: Takes a node back from the free list, or returns nil_node when it is empty.
 
 ## std/container/map
 
 Layer: heap
 
-- `struct Entry(K, V) { key: K, value: V }`
-- `struct Map(K, V) { tags: []u8, entries: []Entry(K, V), count: usize, arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool, }`: Two parallel arrays.
-- `fn init(m: *Map($K, $V), arena: *mem.Arena)`: Sets up an empty map.
-- `fn init_seeded(m: *Map($K, $V), arena: *mem.Arena, seed: u64)`: init with a chosen seed, for keys an attacker may choose.
-- `fn init_with(m: *Map($K, $V), arena: *mem.Arena, hash_key: fn(u64, $K) u64, equal_key: fn($K, $K) bool)`: init with the key's hash and equality: fn(seed, key) u64 and fn(a, b) bool.
-- `fn init_seeded_with(m: *Map($K, $V), arena: *mem.Arena, seed: u64, hash_key: fn(u64, $K) u64, equal_key: fn($K, $K) bool)`: init_with and a chosen seed, passed to every hash_key call.
+- `struct Entry<K, V> { key: K, value: V }`
+- `struct Map<K, V> { tags: []u8, entries: []Entry<K, V>, count: usize, arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool, }`: Two parallel arrays.
+- `fn init<K, V>(m: *Map<K, V>, arena: *mem.Arena)`: Sets up an empty map.
+- `fn init_seeded<K, V>(m: *Map<K, V>, arena: *mem.Arena, seed: u64)`: init with a chosen seed, for keys an attacker may choose.
+- `fn init_with<K, V>(m: *Map<K, V>, arena: *mem.Arena, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool)`: init with the key's hash and equality: fn(seed, key) u64 and fn(a, b) bool.
+- `fn init_seeded_with<K, V>(m: *Map<K, V>, arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool)`: init_with and a chosen seed, passed to every hash_key call.
 - `fn text_hash(seed: u64, key: []const u8) u64`
 - `fn text_equal(left: []const u8, right: []const u8) bool`
 - `fn integer_hash(seed: u64, key: u64) u64`: Finalizer from MurmurHash3: sequential integers must not cluster.
 - `fn integer_equal(left: u64, right: u64) bool`
-- `fn insert(m: *Map($K, $V), key: $K, value: $V)`: Sets key to value, adding it when absent.
-- `fn upsert(m: *Map($K, $V), key: $K, initial: $V) *V`: The value for key, added as initial when absent: one lookup for counting, as in map.upsert(&counts, word, 0).* += 1.
-- `fn get(m: *const Map($K, $V), key: $K) *V`: The value for key, or nil when key is absent.
-- `fn remove(m: *Map($K, $V), key: $K) bool`: Removes key.
-- `struct Walk(K, V) { map: *const Map(K, V), at: usize, entry: *Entry(K, V) }`: A walk over a map's entries.
-- `fn walk(m: *const Map($K, $V)) Walk(K, V)`
-- `fn next(it: *Walk($K, $V)) bool`: Moves to the next entry and sets it.entry, or returns false at the end.
+- `fn insert<K, V>(m: *Map<K, V>, key: K, value: V)`: Sets key to value, adding it when absent.
+- `fn upsert<K, V>(m: *Map<K, V>, key: K, initial: V) *V`: The value for key, added as initial when absent: one lookup for counting, as in map.upsert(&counts, word, 0).* += 1.
+- `fn get<K, V>(m: *const Map<K, V>, key: K) *V`: The value for key, or nil when key is absent.
+- `fn remove<K, V>(m: *Map<K, V>, key: K) bool`: Removes key.
+- `struct Walk<K, V> { map: *const Map<K, V>, at: usize, entry: *Entry<K, V> }`: A walk over a map's entries.
+- `fn walk<K, V>(m: *const Map<K, V>) Walk<K, V>`
+- `fn next<K, V>(it: *Walk<K, V>) bool`: Moves to the next entry and sets it.entry, or returns false at the end.
 
 ## std/container/ring
 
@@ -294,7 +325,7 @@ Layer: core
 - `struct Ring { data: []u8, read: usize, length: usize, }`
 - `fn init(backing: []u8) Ring`
 - `fn length(state: *const Ring) usize`
-- `fn push(status: *fail.Status, state: *Ring, byte: u8)`: A full ring fails with Capacity and keeps its bytes.
+- `fn push(state: *Ring, byte: u8) !`: A full ring fails and keeps its bytes.
 - `fn pop(state: *Ring) u8`: The oldest byte, or 0 when the ring is empty.
 
 ## std/container/slot_map
@@ -302,11 +333,11 @@ Layer: core
 Layer: core
 
 - `struct Handle { index: u32, generation: u32 }`
-- `fn reset(node: *$T)`: Prepares a fresh or reused slot: zeroes every field except generation and marks the slot live.
-- `fn retire(node: *$T)`: Marks a live slot free.
-- `fn is_live(node: *const $T) bool`
-- `fn handle_of(slots: []$T, node: *const $T) Handle`: The handle for node, which must be an element of slots.
-- `fn resolve(slots: []$T, handle: Handle, nil_node: *const $T) *T`: The live slot the handle was made for, or nil_node when the handle is stale, zero, or out of range.
+- `fn reset<T>(node: *T)`: Prepares a fresh or reused slot: zeroes every field except generation and marks the slot live.
+- `fn retire<T>(node: *T)`: Marks a live slot free.
+- `fn is_live<T>(node: *const T) bool`
+- `fn handle_of<T>(slots: []T, node: *const T) Handle`: The handle for node, which must be an element of slots.
+- `fn resolve<T>(slots: []T, handle: Handle, nil_node: *const T) *T`: The live slot the handle was made for, or nil_node when the handle is stale, zero, or out of range.
 
 ## std/crypto/aead
 
@@ -314,22 +345,22 @@ Layer: heap
 
 - `enum Cipher { Aes256Gcm, Chacha20Poly1305 }`
 - `struct Sealed { ciphertext: []u8, tag: []u8 }`
-- `fn seal(arena: *mem.Arena, status: *fail.Status, kind: Cipher, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Sealed`: Produces arena-owned ciphertext (same length as plaintext) and a 16-byte tag.
-- `fn open(arena: *mem.Arena, status: *fail.Status, kind: Cipher, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) []u8`: Produces arena-owned authenticated plaintext of ciphertext length.
+- `fn seal(arena: *mem.Arena, kind: Cipher, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Sealed!`: Produces arena-owned ciphertext (same length as plaintext) and a 16-byte tag.
+- `fn open(arena: *mem.Arena, kind: Cipher, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) []u8!`: Produces arena-owned authenticated plaintext of ciphertext length.
 
 ## std/crypto/aes
 
 Layer: heap
 
-- `fn gcm_seal(arena: *mem.Arena, status: *fail.Status, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) aead.Sealed`: AES-256-GCM: arena-owned ciphertext and 16-byte tag.
-- `fn gcm_open(arena: *mem.Arena, status: *fail.Status, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) []u8`: Returns arena-owned authenticated plaintext;
+- `fn gcm_seal(arena: *mem.Arena, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) aead.Sealed!`: AES-256-GCM: arena-owned ciphertext and 16-byte tag.
+- `fn gcm_open(arena: *mem.Arena, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) []u8!`: Returns arena-owned authenticated plaintext;
 
 ## std/crypto/aesgcm
 
 Layer: core
 
-- `fn seal(status: *fail.Status, output: []u8, authentication: []u8, input: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8)`: Exact in-place payload operation is allowed.
-- `fn open(status: *fail.Status, output: []u8, input: []const u8, authentication: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8)`
+- `fn seal(output: []u8, authentication: []u8, input: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8) !`: Exact in-place payload operation is allowed.
+- `fn open(output: []u8, input: []const u8, authentication: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8) !`
 
 ## std/crypto/blake2b
 
@@ -339,29 +370,29 @@ Layer: core
 - `fn init(length: usize, key: []const u8) State`: A state for a length-byte digest (1-64), keyed when key is not empty (at most 64 bytes).
 - `fn update(state: *State, input: []const u8)`
 - `fn finish(state: *State, destination: []u8) []u8`: Writes the digest into the first length bytes of destination;
-- `fn sum(destination: []u8, input: []const u8) []u8`: One-shot digest of input, #len(destination) bytes long (1-64), unkeyed.
+- `fn sum(destination: []u8, input: []const u8) []u8`: One-shot digest of input, destination.len bytes long (1-64), unkeyed.
 
 ## std/crypto/certificate
 
 Layer: core
 
 - `struct Certificate { encoded: []const u8, tbs: []const u8, signature_algorithm: []const u8, signature_bits: []const u8 }`: Borrowed DER envelope;
-- `fn parse(status: *fail.Status, encoded: []const u8) Certificate`: Malformed DER fails with InvalidInput (Overflow for an impossible length) at the offending byte.
+- `fn parse(encoded: []const u8) Certificate!parse.ParseErr`: Malformed DER fails with Invalid (TooLarge for an impossible length) at the offending byte.
 - `fn fingerprint_sha256(destination: []u8, certificate: Certificate) []u8`
 
 ## std/crypto/chacha20
 
 Layer: core
 
-- `fn block(status: *fail.Status, destination: []u8, key: []const u8, nonce: []const u8, counter: u32)`: One 64-byte keystream block.
-- `fn xor(status: *fail.Status, destination: []u8, input: []const u8, key: []const u8, nonce: []const u8, counter: u32)`: IETF ChaCha20.
+- `fn block(destination: []u8, key: []const u8, nonce: []const u8, counter: u32) !`: One 64-byte keystream block.
+- `fn xor(destination: []u8, input: []const u8, key: []const u8, nonce: []const u8, counter: u32) !`: IETF ChaCha20.
 
 ## std/crypto/chacha20poly1305
 
 Layer: core
 
-- `fn seal(status: *fail.Status, output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8)`
-- `fn open(status: *fail.Status, output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8)`
+- `fn seal(output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) !`
+- `fn open(output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) !`
 
 ## std/crypto/core
 
@@ -377,7 +408,7 @@ Layer: core
 - `fn hmac_sha256_sum(state: *const HmacSha256, destination: []u8, message: []const u8) []u8`
 - `fn hmac_sha256(destination: []u8, key: []const u8, message: []const u8) []u8`
 - `fn equal_constant_time(left: []const u8, right: []const u8) bool`
-- `fn secure_random(status: *fail.Status, destination: []u8)`: Linux getrandom, filling all of destination;
+- `fn secure_random(destination: []u8) !`: Linux getrandom, filling all of destination;
 
 ## std/crypto/curve25519
 
@@ -402,9 +433,9 @@ Layer: core
 Layer: core
 
 - `struct Element { tag: u8, content: []const u8, encoded: []const u8, constructed: bool }`
-- `struct Cursor { source: []const u8, offset: usize, failed: bool, error_kind: fail.Kind, error_offset: usize, start: usize, ended: bool }`: After a failure the cursor stays failed: next fails the same way again.
+- `struct Cursor { source: []const u8, offset: usize, failed: bool, too_large: bool, error_offset: usize, start: usize, ended: bool }`: After a failure the cursor stays failed: next fails the same way again.
 - `fn cursor(source: []const u8) Cursor`
-- `fn next(status: *fail.Status, state: *Cursor) Element`: Malformed input fails with InvalidInput, a length past usize with Overflow, both at the offending byte.
+- `fn next(state: *Cursor) Element!parse.ParseErr`: Malformed input fails with Invalid, a length past usize with TooLarge, both at the offending byte.
 - `fn enter(element: Element) Cursor`
 - `fn finished(state: *const Cursor) bool`
 
@@ -412,8 +443,8 @@ Layer: core
 
 Layer: core
 
-- `fn public_key(status: *fail.Status, output: []u8, key: []const u8)`: Destination/input overlaps are rejected, including destination tails.
-- `fn sign(status: *fail.Status, output: []u8, message: []const u8, key: []const u8)`
+- `fn public_key(output: []u8, key: []const u8) !`: Destination/input overlaps are rejected, including destination tails.
+- `fn sign(output: []u8, message: []const u8, key: []const u8) !`
 - `fn valid_public_key(key: []const u8) bool`
 - `fn verify(signature: []const u8, message: []const u8, key: []const u8) bool`
 
@@ -421,8 +452,8 @@ Layer: core
 
 Layer: core
 
-- `fn x25519_public(status: *fail.Status, destination: []u8, private_key: []const u8) []u8`: Destination must not overlap either borrowed input, including in its tail.
-- `fn x25519(status: *fail.Status, destination: []u8, private_key: []const u8, peer_public_key: []const u8) []u8`
+- `fn x25519_public(destination: []u8, private_key: []const u8) []u8!`: Destination must not overlap either borrowed input, including in its tail.
+- `fn x25519(destination: []u8, private_key: []const u8, peer_public_key: []const u8) []u8!`
 
 ## std/crypto/hmac
 
@@ -438,8 +469,8 @@ Layer: core
 Layer: core
 
 - `fn hkdf_extract(destination: []u8, salt: []const u8, input_key_material: []const u8) []u8`
-- `fn hkdf_expand(status: *fail.Status, destination: []u8, pseudorandom_key: []const u8, info: []const u8, scratch: []u8)`: scratch needs 32 + len(info) + 1 bytes.
-- `fn hkdf(status: *fail.Status, destination: []u8, salt: []const u8, input_key_material: []const u8, info: []const u8, scratch: []u8)`
+- `fn hkdf_expand(destination: []u8, pseudorandom_key: []const u8, info: []const u8, scratch: []u8) !`: scratch needs 32 + len(info) + 1 bytes.
+- `fn hkdf(destination: []u8, salt: []const u8, input_key_material: []const u8, info: []const u8, scratch: []u8) !`
 
 ## std/crypto/p256
 
@@ -448,9 +479,9 @@ Layer: core
 - `fn valid_public_key(public_key: []const u8) bool`
 - `fn verify_hash(signature: []const u8, digest: []const u8, public_key: []const u8) bool`
 - `fn verify(signature: []const u8, message: []const u8, public_key: []const u8) bool`
-- `fn public_key(status: *fail.Status, output: []u8, private_key: []const u8)`
-- `fn sign_hash(status: *fail.Status, output: []u8, digest: []const u8, private_key: []const u8)`: RFC6979 deterministic ECDSA.
-- `fn sign(status: *fail.Status, output: []u8, message: []const u8, private_key: []const u8)`
+- `fn public_key(output: []u8, private_key: []const u8) !`
+- `fn sign_hash(output: []u8, digest: []const u8, private_key: []const u8) !`: RFC6979 deterministic ECDSA.
+- `fn sign(output: []u8, message: []const u8, private_key: []const u8) !`
 
 ## std/crypto/password
 
@@ -459,38 +490,38 @@ Layer: core
 - `struct Argon2Parameters { // Memory in KiB blocks, at least 8 per lane. memory: u32, iterations: u32, parallelism: u32, }`
 - `const Argon2Recommended: Argon2Parameters = Argon2Parameters{ memory: 19456, iterations: 2, parallelism: 1 }`: OWASP's first Argon2id configuration: 19 MiB, two passes, one lane.
 - `fn argon2id_workspace_words(parameters: Argon2Parameters) usize`: u64 words of workspace argon2id needs for parameters.
-- `fn argon2id_keyed(status: *fail.Status, destination: []u8, password: []const u8, salt: []const u8, secret: []const u8, associated: []const u8, parameters: Argon2Parameters, workspace: []u64)`: Argon2id of password with salt (at least 8 bytes), and optional secret and associated data, into all of destination (4 bytes or more).
-- `fn argon2id(status: *fail.Status, destination: []u8, password: []const u8, salt: []const u8, parameters: Argon2Parameters, workspace: []u64)`
+- `fn argon2id_keyed(destination: []u8, password: []const u8, salt: []const u8, secret: []const u8, associated: []const u8, parameters: Argon2Parameters, workspace: []u64) !`: Argon2id of password with salt (at least 8 bytes), and optional secret and associated data, into all of destination (4 bytes or more).
+- `fn argon2id(destination: []u8, password: []const u8, salt: []const u8, parameters: Argon2Parameters, workspace: []u64) !`
 - `fn argon2id_encode(destination: []u8, parameters: Argon2Parameters, salt: []const u8, hash: []const u8) []u8`: The PHC string for a hash: "$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>", salt and hash in unpadded base64.
 - `struct Argon2Hash { parameters: Argon2Parameters, salt: []u8, hash: []u8 }`
-- `fn argon2id_decode(status: *fail.Status, encoded: []const u8, storage: []u8) Argon2Hash`: Parses a PHC string from argon2id_encode;
-- `fn argon2id_verify_words(status: *fail.Status, encoded: []const u8) usize`: u64 words verify needs for encoded.
-- `fn argon2id_verify(status: *fail.Status, encoded: []const u8, password: []const u8, workspace: []u64) bool`: Whether password matches encoded, comparing in constant time.
-- `fn pbkdf2_sha256(status: *fail.Status, destination: []u8, password: []const u8, salt: []const u8, iterations: u32, scratch: []u8)`: PBKDF2-HMAC-SHA256.
+- `fn argon2id_decode(encoded: []const u8, storage: []u8) Argon2Hash!`: Parses a PHC string from argon2id_encode;
+- `fn argon2id_verify_words(encoded: []const u8) usize!`: u64 words verify needs for encoded.
+- `fn argon2id_verify(encoded: []const u8, password: []const u8, workspace: []u64) bool!`: Whether password matches encoded, comparing in constant time.
+- `fn pbkdf2_sha256(destination: []u8, password: []const u8, salt: []const u8, iterations: u32, scratch: []u8) !`: PBKDF2-HMAC-SHA256.
 
 ## std/crypto/pem
 
 Layer: heap
 
 - `struct Block { data: []u8, label: []const u8, consumed: usize }`: A decoded block: data is arena-owned, label borrows the source, consumed counts the source bytes through the END line.
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Block`: Decodes the first PEM block.
+- `fn decode(arena: *mem.Arena, source: []const u8) Block!parse.ParseErr`: Decodes the first PEM block.
 
 ## std/crypto/poly1305
 
 Layer: core
 
 - `struct State { r: [5]u64, h: [5]u64, pad: [4]u32, buffer: [16]u8, used: usize, keyed: bool }`: RFC 8439 section 2.5.
-- `fn init(status: *fail.Status, key: []const u8) State`: A key that is not 32 bytes fails with InvalidInput.
+- `fn init(key: []const u8) State!`: A key that is not 32 bytes fails with InvalidInput.
 - `fn update(state: *State, input: []const u8)`: Adds input.
-- `fn finish(status: *fail.Status, state: *State) [16]u8`: The 16-byte tag.
-- `fn authenticate(status: *fail.Status, message: []const u8, key: []const u8) [16]u8`
+- `fn finish(state: *State) [16]u8!`: The 16-byte tag.
+- `fn authenticate(message: []const u8, key: []const u8) [16]u8!`
 - `fn equal(left: []const u8, right: []const u8) bool`: Fixed 16-byte comparison;
 
 ## std/crypto/random
 
 Layer: std
 
-- `fn fill(status: *fail.Status, destination: []u8)`: Fills destination with cryptographically secure random bytes.
+- `fn fill(destination: []u8) !`: Fills destination with cryptographically secure random bytes.
 
 ## std/crypto/sha2
 
@@ -517,19 +548,19 @@ Layer: core
 
 Layer: core
 
-- `fn ed25519_public(status: *fail.Status, destination: []u8, private_key: []const u8) []u8`: Destination must not overlap any borrowed input, including in its tail.
-- `fn ed25519_sign(status: *fail.Status, destination: []u8, message: []const u8, private_key: []const u8) []u8`
+- `fn ed25519_public(destination: []u8, private_key: []const u8) []u8!`: Destination must not overlap any borrowed input, including in its tail.
+- `fn ed25519_sign(destination: []u8, message: []const u8, private_key: []const u8) []u8!`
 - `fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool`
-- `fn p256_public(status: *fail.Status, destination: []u8, private_key: []const u8) []u8`: P-256 private keys are 32-byte big-endian scalars in 1..n-1.
-- `fn p256_sign(status: *fail.Status, destination: []u8, message: []const u8, private_key: []const u8) []u8`
+- `fn p256_public(destination: []u8, private_key: []const u8) []u8!`: P-256 private keys are 32-byte big-endian scalars in 1..n-1.
+- `fn p256_sign(destination: []u8, message: []const u8, private_key: []const u8) []u8!`
 - `fn p256_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool`
 
 ## std/crypto/x25519
 
 Layer: core
 
-- `fn shared(status: *fail.Status, destination: []u8, private_key: []const u8, peer: []const u8)`: RFC 7748.
-- `fn public_key(status: *fail.Status, destination: []u8, private_key: []const u8)`
+- `fn shared(destination: []u8, private_key: []const u8, peer: []const u8) !`: RFC 7748.
+- `fn public_key(destination: []u8, private_key: []const u8) !`
 
 ## std/crypto/x509
 
@@ -541,7 +572,7 @@ Layer: core
 - `struct View { envelope: certificate.Certificate, issuer: []const u8, subject: []const u8, public_key: []const u8, key_algorithm: Algorithm, signature_algorithm: Algorithm, not_before: i64, not_after: i64, ca: bool, basic_constraints: bool, basic_critical: bool, has_path_length: bool, path_length: i64, has_usage: bool, usage: u16, has_extended_usage: bool, server: bool, client: bool, san: []const u8, san_critical: bool, }`
 - `struct Options { now: i64, hostname: []const u8, ip: []const u8, purpose: Purpose }`
 - `struct Validation { reason: Reason, index: usize, anchor: usize, valid: bool }`: The verdict on a chain: valid, or the reason it is not and the index of the certificate at fault.
-- `fn inspect(status: *fail.Status, encoded: []const u8) View`: All returned slices borrow the original DER, including the envelope.
+- `fn inspect(encoded: []const u8) View!Reason`: All returned slices borrow the original DER, including the envelope.
 - `fn validate(chain: []const []const u8, anchors: []const []const u8, options: Options) Validation`: Exact anchor DER matching permits a directly pinned end certificate.
 
 ## std/debug
@@ -561,9 +592,9 @@ Layer: std
 - `const Now: i32 = 2`
 - `const Local: i32 = 0`
 - `const Global: i32 = 256`
-- `fn open(status: *fail.Status, path: []const u8, flags: i32) Handle`: Opens the library at path;
-- `fn symbol(status: *fail.Status, handle: Handle, name: []const u8) rawptr`: The address of the symbol called name;
-- `fn close(status: *fail.Status, handle: *Handle)`: Clears the owned handle only after a successful close.
+- `fn open(path: []const u8, flags: i32) Handle!io.IoErr`: Opens the library at path.
+- `fn symbol(handle: Handle, name: []const u8) rawptr!io.IoErr`: The address of the symbol called name.
+- `fn close(handle: *Handle) !io.IoErr`: Clears the owned handle only after a successful close.
 
 ## std/embedded/interrupt
 
@@ -589,7 +620,7 @@ Layer: core
 - `fn disarm(timer: *const MachineTimer)`
 - `struct SysTick { base: usize }`
 - `const systick: SysTick = SysTick{ base: 0xe000e010 }`
-- `fn start(status: *fail.Status, timer: *const SysTick, period: u32, interrupt: bool, processor_clock: bool)`: periods are 2..2^24 clock ticks.
+- `fn start(timer: *const SysTick, period: u32, interrupt: bool, processor_clock: bool) !`: periods are 2..2^24 clock ticks.
 - `fn stop(timer: *const SysTick)`
 - `fn current(timer: *const SysTick) u32`
 - `fn elapsed(timer: *const SysTick) bool`
@@ -611,14 +642,14 @@ Layer: core
 Layer: heap
 
 - `fn encode(arena: *mem.Arena, source: []const u8) []u8`: Encodes source into arena.
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8`: Decodes validated input into arena.
+- `fn decode(arena: *mem.Arena, source: []const u8) []u8!parse.ParseErr`: Decodes validated input into arena.
 
 ## std/encoding/base64
 
 Layer: heap
 
 - `fn encode(arena: *mem.Arena, source: []const u8) []u8`: Encodes source into arena.
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8`: Decodes validated input into arena.
+- `fn decode(arena: *mem.Arena, source: []const u8) []u8!parse.ParseErr`: Decodes validated input into arena.
 
 ## std/encoding/binary
 
@@ -648,10 +679,10 @@ Layer: heap
 - `enum Kind { Unsigned, Negative, Bytes, Text, Array, Map, Tag, Bool, Null, Undefined, Simple, Float, End }`: RFC 8949: https://www.rfc-editor.org/rfc/rfc8949.html Borrowed preorder tokens, with End only for indefinite containers/strings.
 - `struct Token { kind: Kind, value: u64, bytes: []const u8, real: f64, boolean: bool, indefinite: bool }`
 - `struct Frame { kind: Kind, remaining: u64, indefinite: bool, odd: bool }`
-- `struct Reader { source: []const u8, offset: usize, frames: [64]Frame, depth: usize, failed: bool, error_kind: fail.Kind, error_offset: usize, start: usize, ended: bool }`: After a failure the reader stays failed: next fails the same way again.
+- `struct Reader { source: []const u8, offset: usize, frames: [64]Frame, depth: usize, failed: bool, error_kind: Problem, error_offset: usize, start: usize, ended: bool }`: After a failure the reader stays failed: next fails the same way again.
 - `fn reader(source: []const u8) Reader`
-- `fn next(status: *fail.Status, state: *Reader) Token`: The next token.
-- `fn encode(arena: *mem.Arena, status: *fail.Status, tokens: []const Token) []u8`: Arena-owned output.
+- `fn next(state: *Reader) Token!parse.ParseErr`: The next token.
+- `fn encode(arena: *mem.Arena, tokens: []const Token) []u8!parse.ParseErr`: Arena-owned output.
 
 ## std/encoding/csv
 
@@ -663,17 +694,17 @@ Layer: heap
 - `struct Writer { sink: stream.Writer, fields: usize }`
 - `fn scanner(source: []const u8) Scanner`
 - `fn stream_scanner(input: stream.Reader) StreamScanner`
-- `fn next_stream(status: *fail.Status, state: *StreamScanner, destination: []u8) Field`: Reads one field from an arbitrarily chunked input stream.
+- `fn next_stream(state: *StreamScanner, destination: []u8) Field!stream.IoErr`: Reads one field from an arbitrarily chunked input stream.
 - `fn writer(destination_writer: stream.Writer) Writer`
-- `fn write_field(status: *fail.Status, state: *Writer, value: []const u8, end_record: bool)`: Writes one field.
-- `fn next(status: *fail.Status, state: *Scanner, destination: []u8) Field`
+- `fn write_field(state: *Writer, value: []const u8, end_record: bool) !stream.IoErr`: Writes one field.
+- `fn next(state: *Scanner, destination: []u8) Field!parse.ParseErr`
 
 ## std/encoding/hex
 
 Layer: heap
 
 - `fn encode(arena: *mem.Arena, source: []const u8, uppercase: bool) []u8`: Encodes source into arena.
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8`: Decodes validated input into arena.
+- `fn decode(arena: *mem.Arena, source: []const u8) []u8!parse.ParseErr`: Decodes validated input into arena.
 
 ## std/encoding/ini
 
@@ -683,9 +714,9 @@ Layer: heap
 - `struct Entry { section: []const u8, key: []const u8, value: []const u8, kind: Kind, line: usize }`
 - `struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, failed: bool, error_offset: usize, error_line: usize, ended: bool }`: line counts the lines read so far, so a zero Scanner{ source: text } is ready to use.
 - `fn scanner(source: []const u8) Scanner`
-- `fn next(status: *fail.Status, state: *Scanner) Entry`
-- `fn find(status: *fail.Status, source: []const u8, section: []const u8, key: []const u8) []const u8`: The value of key in section, borrowing source;
-- `fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) []Entry`: A materialized entry table.
+- `fn next(state: *Scanner) Entry!parse.ParseErr`
+- `fn find(source: []const u8, section: []const u8, key: []const u8) []const u8!io.IoErr`: The value of key in section, borrowing source.
+- `fn parse(arena: *mem.Arena, source: []const u8) []Entry!parse.ParseErr`: A materialized entry table.
 
 ## std/encoding/json
 
@@ -706,7 +737,7 @@ Layer: heap
 - `fn tokenizer(source: []const u8) Tokenizer`
 - `fn token_next(state: *Tokenizer) Token`
 - `fn valid(source: []const u8) bool`
-- `fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *const Value`: Nodes, decoded strings, and object keys live in arena.
+- `fn parse(arena: *memory.Arena, source: []const u8) *const Value!parse.ParseErr`: Nodes, decoded strings, and object keys live in arena.
 - `fn push_null(arena: *memory.Arena) *Value`
 - `fn push_bool(arena: *memory.Arena, value: bool) *Value`
 - `fn push_number(arena: *memory.Arena, content: []const u8) *Value`: Retains text as a borrowed view;
@@ -716,8 +747,8 @@ Layer: heap
 - `fn add(parent: *Value, child: *Value) bool`
 - `fn add_member(parent: *Value, key: []const u8, child: *Value) bool`
 - `fn object_get(object: *const Value, key: []const u8) *const Value`: The member named key, or &nil_value.
-- `fn get(T: type, status: *fail.Status, object: *const Value, key: []const u8) T`: Reads member key of object as T: an integer type, f32, f64, bool, []const u8 (string text), or *const Value (the member itself).
-- `fn as(T: type, status: *fail.Status, value: *const Value) T`: Reads value itself as T, by the same rules as get.
+- `fn get<T>(object: *const Value, key: []const u8) T!stream.IoErr`: Reads member key of object as T: an integer type, f32, f64, bool, []const u8 (string text), or *const Value (the member itself).
+- `fn as<T>(value: *const Value) T!stream.IoErr`: Reads value itself as T, by the same rules as get.
 - `fn array_length(array: *const Value) usize`
 - `fn array_get(array: *const Value, index: usize) *const Value`: Element number index, or &nil_value.
 - `fn is_missing(value: *const Value) bool`
@@ -727,14 +758,14 @@ Layer: heap
 - `fn is_string(value: *const Value) bool`
 - `fn is_array(value: *const Value) bool`
 - `fn is_object(value: *const Value) bool`
-- `fn write(status: *fail.Status, destination: stream.Writer, value: *const Value)`: Writes value as compact JSON.
+- `fn write(destination: stream.Writer, value: *const Value) !stream.IoErr`: Writes value as compact JSON.
 - `fn write_string(arena: *memory.Arena, source: []const u8) []u8`: source as a quoted JSON string, in arena.
 - `fn encode(arena: *memory.Arena, value: *const Value) []u8`: value as compact JSON, in arena.
 - `fn encode_pretty(arena: *memory.Arena, value: *const Value, indent: usize) []u8`: value as JSON indented by indent spaces per level, in arena.
 - `const MaxDepth: usize = 64`: JSON output into bounded caller storage, without a Value tree.
-- `struct Writer { buffer: format.Buffer, // Per open container: true for an object; whether it holds a member yet. objects: [MaxDepth]bool, members: [MaxDepth]bool, depth: usize, // An object member's key was written and its value is due. keyed: bool, }`
-- `fn writer(status: *fail.Status, storage: []u8) Writer`
-- `fn output(target: *const Writer) []const u8`: The JSON written so far, or empty when failed or a container is still open.
+- `struct Writer { buffer: format.Buffer, // Per open container: true for an object; whether it holds a member yet. objects: [MaxDepth]bool, members: [MaxDepth]bool, depth: usize, // An object member's key was written and its value is due. keyed: bool, // Misuse or a value JSON cannot hold stopped the writer. invalid: bool, }`
+- `fn writer(storage: []u8) Writer`
+- `fn finish(target: *const Writer) []const u8!stream.IoErr`: The JSON written.
 - `fn object_begin(target: *Writer)`
 - `fn object_end(target: *Writer)`
 - `fn array_begin(target: *Writer)`
@@ -748,8 +779,8 @@ Layer: heap
 - `fn null(target: *Writer)`
 - `fn raw(target: *Writer, encoded: []const u8)`: Already-encoded JSON, written as is: output of another Writer or encode.
 - `fn field(target: *Writer, name: []const u8, value: any)`: An object member in one call: key, then value written as text ([]const u8 or []u8), integer (any width), unsigned, float or bool.
-- `fn object_of(target: *Writer, value: $T)`: Writes the struct value as a JSON object: each field by name, in declaration order.
-- `fn array_of(target: *Writer, values: []const $T)`: Writes the structs in values as a JSON array of objects (see object_of).
+- `fn object_of<T>(target: *Writer, value: T)`: Writes the struct value as a JSON object: each field by name, in declaration order.
+- `fn array_of<T>(target: *Writer, values: []const T)`: Writes the structs in values as a JSON array of objects (see object_of).
 
 ## std/encoding/json/read
 
@@ -764,7 +795,7 @@ Layer: heap
 - `const KindObject: u8 = 6`
 - `struct Value { tag: u64, bits: u64 }`: Experimental read-only DOM.
 - `const nil_value: Value = Value{}`
-- `fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) *const Value`: @ownership All values and text live in arena;
+- `fn parse(arena: *memory.Arena, source: []const u8) *const Value!parse.ParseErr`: @ownership All values and text live in arena;
 - `fn kind(value: *const Value) u8`
 - `fn length(value: *const Value) usize`
 - `fn as_text(value: *const Value) []const u8`
@@ -794,7 +825,7 @@ Layer: heap
 - `enum Label { None, Identifier, Number, String, Symbol }`
 - `struct Node { kind: Kind, label: Label, // Label text. Strings exclude their quotes and keep escapes as written. string: []const u8, // Byte offset of the node in the source. offset: usize, // '{', '(' or '[' when the children came from a group, otherwise 0. group: u8, parent: *Node, first: *Node, last: *Node, next: *Node, first_tag: *Node, last_tag: *Node, }`
 - `const nil_node: Node = Node{}`: The read-only stub returned for every miss.
-- `fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *Node`: Nodes are pushed with mem.push, so a full fixed arena panics.
+- `fn parse(arena: *mem.Arena, source: []const u8) *Node!parse.ParseErr`: Nodes are pushed with mem.push, so a full fixed arena panics.
 - `fn empty() *Node`: The shared nil node.
 - `fn is_nil(node: *const Node) bool`
 - `fn child(node: *const Node, name: []const u8) *Node`: First child labeled name, or the nil node.
@@ -810,10 +841,10 @@ Layer: heap
 
 - `enum Kind { Nil, Bool, Unsigned, Signed, Float, Text, Bytes, Array, Map, Extension }`: MessagePack specification: https://github.com/msgpack/msgpack/blob/master/spec.md Flattened preorder tokens.
 - `struct Token { kind: Kind, value: u64, integer: i64, real: f64, boolean: bool, bytes: []const u8, extension: i8 }`
-- `struct Reader { source: []const u8, offset: usize, remaining: [64]u64, depth: usize, failed: bool, error_kind: fail.Kind, error_offset: usize, start: usize, ended: bool }`: After a failure the reader stays failed: next fails the same way again.
+- `struct Reader { source: []const u8, offset: usize, remaining: [64]u64, depth: usize, failed: bool, error_kind: Problem, error_offset: usize, start: usize, ended: bool }`: After a failure the reader stays failed: next fails the same way again.
 - `fn reader(source: []const u8) Reader`
-- `fn next(status: *fail.Status, state: *Reader) Token`: The next token.
-- `fn encode(arena: *mem.Arena, status: *fail.Status, tokens: []const Token) []u8`: Tokens must be a complete preorder sequence.
+- `fn next(state: *Reader) Token!parse.ParseErr`: The next token.
+- `fn encode(arena: *mem.Arena, tokens: []const Token) []u8!parse.ParseErr`: Tokens must be a complete preorder sequence.
 
 ## std/encoding/protobuf
 
@@ -821,12 +852,12 @@ Layer: heap
 
 - `enum Wire { Varint, Fixed64, Bytes, StartGroup, EndGroup, Fixed32 }`
 - `struct Field { number: u32, wire: Wire, value: u64, bytes: []const u8 }`
-- `struct Reader { source: []const u8, offset: usize, failed: bool, kind: fail.Kind, error_offset: usize, groups: [64]u32, depth: usize, start: usize, ended: bool }`: Input and field bytes are borrowed.
+- `struct Reader { source: []const u8, offset: usize, failed: bool, error_kind: Problem, error_offset: usize, groups: [64]u32, depth: usize, start: usize, ended: bool }`: Input and field bytes are borrowed.
 - `fn reader(source: []const u8) Reader`
-- `fn next(status: *fail.Status, state: *Reader) Field`: The next field.
+- `fn next(state: *Reader) Field!parse.ParseErr`: The next field.
 - `fn zigzag(value: i64) u64`
 - `fn unzigzag(value: u64) i64`
-- `fn encode(arena: *mem.Arena, status: *fail.Status, fields: []const Field) []u8`: A schema-free wire encoder.
+- `fn encode(arena: *mem.Arena, fields: []const Field) []u8!parse.ParseErr`: A schema-free wire encoder.
 
 ## std/encoding/toml
 
@@ -837,8 +868,8 @@ Layer: heap
 - `const nil_value: Value = Value{}`
 - `fn member(parent: *const Value, key: []const u8) *const Value`
 - `fn index(parent: *const Value, at: usize) *const Value`
-- `fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *const Value`: Inputs must not borrow unused backing of the output arena.
-- `fn encode(arena: *mem.Arena, status: *fail.Status, root: *const Value) []u8`: Normalized writer uses quoted keys and inline tables, preserving scalar lexemes.
+- `fn parse(arena: *mem.Arena, source: []const u8) *const Value!parse.ParseErr`: Inputs must not borrow unused backing of the output arena.
+- `fn encode(arena: *mem.Arena, root: *const Value) []u8!io.IoErr`: Normalized writer uses quoted keys and inline tables, preserving scalar lexemes.
 
 ## std/encoding/xml
 
@@ -849,9 +880,9 @@ Layer: heap
 - `struct Namespaces { bindings: []NamespaceBinding, frames: []NamespaceFrame, storage: []u8, count: usize, depth: usize, used: usize, }`
 - `struct ExpandedName { prefix: []const u8, local: []const u8, uri: []const u8 }`
 - `fn namespaces(bindings: []NamespaceBinding, frames: []NamespaceFrame, storage: []u8) Namespaces`
-- `fn namespace_resolve(status: *fail.Status, state: *const Namespaces, name: []const u8, attribute: bool) ExpandedName`: The expanded name of an element or attribute name in the current scope.
-- `fn namespace_enter(status: *fail.Status, state: *Namespaces, event: Event) ExpandedName`: Enter every Start, including self-closing tags;
-- `fn namespace_leave(status: *fail.Status, state: *Namespaces, name: []const u8)`: Leaves element name;
+- `fn namespace_resolve(state: *const Namespaces, name: []const u8, attribute: bool) ExpandedName!stream.IoErr`: The expanded name of an element or attribute name in the current scope.
+- `fn namespace_enter(state: *Namespaces, event: Event) ExpandedName!stream.IoErr`: Enter every Start, including self-closing tags;
+- `fn namespace_leave(state: *Namespaces, name: []const u8) !stream.IoErr`: Leaves element name;
 - `enum NodeKind { Missing, Document, Element, Text, Comment, Processing, Cdata }`: Arena-owned links, borrowed source slices.
 - `struct Node { kind: NodeKind, name: []const u8, text: []const u8, attributes: []const u8, first: *Node, last: *Node, next: *Node, parent: *Node, }`
 - `const nil_node: Node = Node{}`
@@ -859,9 +890,9 @@ Layer: heap
 - `fn next_sibling(node: *const Node) *const Node`
 - `fn child(node: *const Node, name: []const u8) *const Node`
 - `fn at(node: *const Node, index: usize) *const Node`
-- `fn parse(arena: *tree_memory.Arena, status: *fail.Status, source: []const u8) *const Node`: On validation failure rewind exactly the entry mark and return a read-only Missing stub.
+- `fn parse(arena: *tree_memory.Arena, source: []const u8) *const Node!parse.ParseErr`: On validation failure rewind exactly the entry mark and fail with Invalid.
 - `enum Kind { Start, End, Text, Comment, Processing, Cdata }`
-- `struct Event { kind: Kind, name: []const u8, text: []const u8, attributes: []const u8, self_closing: bool }`: Malformed text fails with InvalidInput at its offset.
+- `struct Event { kind: Kind, name: []const u8, text: []const u8, attributes: []const u8, self_closing: bool }`: Malformed text fails with Invalid at its offset (a stream scanner: with InvalidInput, or Capacity for an event larger than storage).
 - `struct Scanner { source: []const u8, offset: usize, failed: bool, ended: bool }`
 - `struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, input_done: bool, failed: bool, ended: bool }`
 - `struct AttributeScanner { source: []const u8, offset: usize, failed: bool, ended: bool }`
@@ -869,25 +900,25 @@ Layer: heap
 - `struct Writer { sink: stream.Writer }`
 - `fn scanner(source: []const u8) Scanner`
 - `fn stream_scanner(input: stream.Reader, storage: []u8) StreamScanner`
-- `fn next_stream(status: *fail.Status, state: *StreamScanner) Event`
+- `fn next_stream(state: *StreamScanner) Event!stream.IoErr`
 - `fn writer(destination_writer: stream.Writer) Writer`
-- `fn write_text(status: *fail.Status, state: *Writer, value: []const u8)`
-- `fn write_start(status: *fail.Status, state: *Writer, name: []const u8)`
-- `fn write_attribute(status: *fail.Status, state: *Writer, name: []const u8, value: []const u8)`
-- `fn write_start_end(status: *fail.Status, state: *Writer, self_closing: bool)`
-- `fn write_end(status: *fail.Status, state: *Writer, name: []const u8)`
-- `fn next(status: *fail.Status, state: *Scanner) Event`
+- `fn write_text(state: *Writer, value: []const u8) !stream.IoErr`: Names and text that XML cannot hold fail with InvalidInput before any byte is written.
+- `fn write_start(state: *Writer, name: []const u8) !stream.IoErr`
+- `fn write_attribute(state: *Writer, name: []const u8, value: []const u8) !stream.IoErr`
+- `fn write_start_end(state: *Writer, self_closing: bool) !stream.IoErr`
+- `fn write_end(state: *Writer, name: []const u8) !stream.IoErr`
+- `fn next(state: *Scanner) Event!parse.ParseErr`
 - `fn attributes(event: Event) AttributeScanner`
-- `fn next_attribute(status: *fail.Status, state: *AttributeScanner) Attribute`
+- `fn next_attribute(state: *AttributeScanner) Attribute!parse.ParseErr`
 - `fn valid(source: []const u8, stack: [][]const u8) bool`
 
 ## std/enums
 
 Layer: core
 
-- `fn count(E: type) usize`
-- `fn from_int(E: type, value: u64) E`: The variant with this tag, or the first variant when no variant has it.
-- `fn name(value: $E) []const u8`: The variant's source name, or "" for a tag that is not a variant.
+- `fn count<E>() usize`
+- `fn from_int<E>(value: u64) E`: The variant with this tag, or the first variant when no variant has it.
+- `fn name<E>(value: E) []const u8`: The variant's source name, or "" for a tag that is not a variant.
 
 ## std/event
 
@@ -899,35 +930,33 @@ Layer: std
 - `const Hangup: u32 = 16`
 - `struct Event { descriptor: isize, token: u64, events: u32 }`
 - `struct Queue { handle: isize, active: bool, entries: []Entry, failed: bool, free: []u32, free_count: usize, table: []u32, used_slots: usize, batch: usize, // Where the system writes up to batch ready events: made once by open, so // a wait neither allocates nor zeroes it. Empty where the platform builds // its list per wait. native: []u64, }`: One owner, one thread.
-- `fn open(arena: *mem.Arena, status: *fail.Status, capacity: usize) Queue`
-- `fn add(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, token: u64)`
-- `fn modify(status: *fail.Status, queue: *Queue, descriptor: isize, events: u32, token: u64)`
-- `fn remove(status: *fail.Status, queue: *Queue, descriptor: isize)`
-- `fn wait(arena: *mem.Arena, status: *fail.Status, queue: *Queue, timeout_milliseconds: i32) []Event`: Level-triggered readiness.
+- `fn open(arena: *mem.Arena, capacity: usize) Queue!io.IoErr`: A capacity outside 1 to 2147483647 fails with InvalidInput.
+- `fn add(queue: *Queue, descriptor: isize, events: u32, token: u64) !io.IoErr`: events must be Readable and/or Writable on a valid descriptor, else InvalidInput.
+- `fn modify(queue: *Queue, descriptor: isize, events: u32, token: u64) !io.IoErr`: A descriptor not in the queue fails with NotFound.
+- `fn remove(queue: *Queue, descriptor: isize) !io.IoErr`: A descriptor not in the queue fails with NotFound.
+- `fn wait(arena: *mem.Arena, queue: *Queue, timeout_milliseconds: i32) []Event!io.IoErr`: Level-triggered readiness.
 - `fn close(queue: *Queue)`
 - `struct Waker { descriptor: isize, active: bool }`: Wakes a queue's owner from another thread.
-- `fn waker_open(status: *fail.Status) Waker`
+- `fn waker_open() Waker!io.IoErr`
 - `fn wake(waker: *const Waker)`: Never blocks.
 - `fn waker_drain(waker: *const Waker)`: Discards pending wakes.
 - `fn waker_close(waker: *Waker)`
 
-## std/fail
+## std/fiber
 
-Layer: core
+Layer: std
 
-- `enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }`: The portable reason.
-- `struct Failure { kind: Kind, has_offset: bool, operation_length: u16, message_length: u16, path_length: u16, // The system's own code, when the system gave one. native: isize, // For text input: where it went wrong, in bytes from the start. offset: usize, // Where the text starts in the ring. text_at: u64, }`: What went wrong, where, and doing what.
-- `struct Status { failed: bool, failure: Failure, // Optional. Called once, inside the call that failed, when the first // failure is recorded, with context. It cannot undo the failure. on_failure: fn(rawptr, *const Failure), context: rawptr, }`
-- `fn make(kind: Kind, operation: []const u8, path: []const u8, message: []const u8) Failure`: A failure of kind with its text copied into the ring.
-- `fn operation_text(failure: *const Failure) []const u8`: The parts of a failure's text.
-- `fn message_text(failure: *const Failure) []const u8`
-- `fn path_text(failure: *const Failure) []const u8`
-- `fn set(status: *Status, failure: Failure)`: Records failure unless status already holds one;
-- `fn invalid(status: *Status, operation: []const u8, path: []const u8, message: []const u8)`: Records a problem your own code found in its input, such as invalid(&status, "config", path, "port out of range").
-- `fn at(status: *Status, kind: Kind, operation: []const u8, message: []const u8, offset: usize)`: Records a failure of kind at offset bytes into the input being read, such as at(&status, Kind.InvalidInput, "parse config", "expected '='" ...
-- `fn panic_on_failure(context: rawptr, failure: *const Failure)`: For on_failure: ends the program at the first failure, with its description.
-- `fn kind_text(kind: Kind) []const u8`: A short description of kind: "not found", "permission denied".
-- `fn describe(storage: []u8, failure: Failure) []u8`: "operation path: reason" in storage, such as "open /etc/app.conf: no such file or directory" or "parse app.json at 41: expected ','".
+- `enum State { Suspended, Running, Done, Panicked }`
+- `enum FiberErr { InvalidInput, System(isize), Panicked }`: Why a fiber did not start or did not finish.
+- `nocopy struct Fiber { // The saved stack pointer while the fiber is not running. sp: usize, // The resumer's saved stack pointer while the fiber runs. caller: usize, mapping: []u8, work: fn(rawptr), context: rawptr, state: State, isolated: bool, // The fiber that was running when this one was resumed. previous: *Fiber, message: [256]u8, message_length: usize, }`
+- `fn create<C>(arena: *mem.Arena, stack_size: usize, work: fn(*C), context: *C) *Fiber!FiberErr`: A suspended fiber that runs work(context) when first resumed, on an owned stack of stack_size bytes.
+- `fn create_isolated<C>(arena: *mem.Arena, stack_size: usize, work: fn(*C), context: *C) *Fiber!FiberErr`: As create, for a fiber whose panics stop only the fiber: resume returns Panicked instead of the process exiting.
+- `fn resume(f: *Fiber) State`: Runs f until it yields, finishes or (when isolated) panics, and returns its state.
+- `fn yield_now()`: Pauses the running fiber;
+- `fn current() *Fiber`: The running fiber, or nil outside fibers.
+- `fn panic_message(f: *const Fiber) []const u8`: The text of the panic that stopped an isolated fiber, cut to 256 bytes;
+- `fn destroy(f: *Fiber)`: Unmaps f's stack.
+- `fn run_isolated<C>(arena: *mem.Arena, stack_size: usize, work: fn(*C), context: *C) !FiberErr`: Runs work(context) on a new isolated fiber until it finishes, resuming it each time it yields.
 
 ## std/flags
 
@@ -937,9 +966,11 @@ Layer: heap
 - `struct Option { name: []const u8, short: u8, kind: Kind, required: bool, default_value: []const u8, choices: [][]const u8 }`
 - `struct Value { text: []const u8, occurrences: usize }`: occurrences counts the times the option was given;
 - `struct Parsed { values: []Value, positionals: [][]const u8 }`
+- `enum ArgsErr { UnknownOption(usize), UnexpectedValue(usize), MissingValue(usize), TooManyValues(usize), MissingRequired(usize), InvalidValue(usize), }`: Why arguments did not parse.
+- `fn message(err: ArgsErr) []const u8`: What went wrong, such as "unknown option", for a message that names the argument or option too.
 - `fn bool_option(name: []const u8, short: u8) Option`
 - `fn string_option(name: []const u8, short: u8) Option`
-- `fn parse(arena: *memory.Arena, status: *fail.Status, options: []const Option, arguments: [][]const u8) Parsed`: Output arrays belong to arena and live until rewind/reset/release.
+- `fn parse(arena: *memory.Arena, options: []const Option, arguments: [][]const u8) Parsed!ArgsErr`: Output arrays belong to arena and live until rewind/reset/release.
 - `fn usage(arena: *memory.Arena, program: []const u8, options: []const Option) []u8`: Failure writes nothing.
 - `fn required_string_option(name: []const u8, short: u8) Option`
 - `fn integer_option(name: []const u8, short: u8) Option`
@@ -951,16 +982,18 @@ Layer: heap
 
 Layer: heap
 
-- `struct Buffer { data: []u8, length: usize, status: *fail.Status, broken: bool }`: Writes into storage, recording into status: a write that does not fit fails it with Capacity and leaves the buffer as it was before that ...
-- `fn buffer(status: *fail.Status, storage: []u8) Buffer`
-- `fn bytes(state: *const Buffer) []const u8`
+- `struct Buffer { data: []u8, length: usize, broken: bool }`: Writes into storage.
+- `fn buffer(storage: []u8) Buffer`
+- `fn finish(state: *const Buffer) []const u8!`: The text written;
+- `fn overflowed(state: *const Buffer) bool`: Whether a write did not fit.
+- `fn bytes(state: *const Buffer) []const u8`: The text written so far, also after a write that did not fit.
 - `fn remaining(state: *const Buffer) usize`
-- `fn clear(state: *Buffer)`: Empties the buffer.
+- `fn clear(state: *Buffer)`: Empties the buffer and lets it write again.
 - `fn u64_base(arena: *mem.Arena, value: u64, base: u8, uppercase: bool) []u8`: value in base 2 through 36.
 - `fn u64_decimal(arena: *mem.Arena, value: u64) []u8`
 - `fn i64_decimal(arena: *mem.Arena, value: i64) []u8`
 - `fn f64_decimal(arena: *mem.Arena, value: f64, precision: usize) []u8`: Rounded decimal with up to 15 fractional digits;
-- `fn write(state: *Buffer, value: []const u8)`: Sticky writes: each does nothing once the status has failed, and a value that does not fit fails it with Capacity and leaves the buffer as ...
+- `fn write(state: *Buffer, value: []const u8)`: Sticky writes: each does nothing once one did not fit, and a value that does not fit stops the buffer and leaves it as it was.
 - `fn write_byte(state: *Buffer, value: u8)`
 - `fn write_u64(state: *Buffer, value: u64)`
 - `fn write_i64(state: *Buffer, value: i64)`
@@ -982,12 +1015,12 @@ Layer: heap
 
 - `struct Face { data: []const u8, cmap: []const u8, glyf: []const u8, loca: []const u8, hmtx: []const u8, units_per_em: u16, glyphs: u16, metrics: u16, long_loca: bool, ascent: i16, descent: i16, line_gap: i16, kern: []const u8, }`: A face borrows immutable font bytes.
 - `struct Bitmap { pixels: []u8, width: usize, height: usize, x_offset: i32, y_offset: i32, advance: i32 }`
-- `fn open(status: *fail.Status, data: []const u8) Face`
+- `fn open(data: []const u8) Face!parse.ParseErr`
 - `fn glyph_index(face: *const Face, codepoint: u32) u16`: Zero is the font's missing-glyph slot.
-- `fn raster(arena: *mem.Arena, status: *fail.Status, face: *const Face, index: u16, pixels_per_em: usize) Bitmap`: Unhinted 4x4 supersampling for simple and composite glyf outlines.
+- `fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: usize) Bitmap!parse.ParseErr`: Unhinted 4x4 supersampling for simple and composite glyf outlines.
 - `struct AtlasGlyph { codepoint: u32, x: usize, y: usize, width: usize, height: usize, x_offset: i32, y_offset: i32, advance: i32 }`
 - `struct Atlas { pixels: []u8, width: usize, height: usize, line_height: i32, glyphs: []AtlasGlyph }`: Glyphs are sorted by codepoint.
-- `fn atlas(arena: *mem.Arena, status: *fail.Status, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: usize) Atlas`: Shelf packing with one transparent padding pixel.
+- `fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: usize) Atlas!parse.ParseErr`: Shelf packing with one transparent padding pixel.
 - `nil_glyph: AtlasGlyph`
 - `fn atlas_glyph(value: *const Atlas, codepoint: u32) *const AtlasGlyph`
 - `fn kerning(face: *const Face, left, right: u16, pixels_per_em: u16) f64`: Pixel adjustment added between left and right glyphs.
@@ -1011,7 +1044,7 @@ Layer: std
 
 Layer: heap
 
-- `struct Adapter { face: *const font.Face, arena: *mem.Arena, pixels_per_em: u16, failed: bool, failure: fail.Failure }`: Keep this state at a stable address while rendering.
+- `struct Adapter { face: *const font.Face, arena: *mem.Arena, pixels_per_em: u16, failed: bool, failure: parse.ParseErr }`: Keep this state at a stable address while rendering.
 - `fn renderer(state: *Adapter) software.Font`
 - `fn atlas_renderer(atlas: *font.Atlas) software.Font`: No allocation or rerasterization.
 - `struct LayoutAdapter { atlas: *const font.Atlas, face: *const font.Face, pixels_per_em: u16 }`
@@ -1026,54 +1059,54 @@ Layer: std
 - `struct DirectoryEntry { name: []const u8, kind: u8 }`: One directory entry.
 - `fn is_open(file: *const File) bool`
 - `fn adopt_handle(handle: isize) File`: A File for a native handle opened elsewhere;
-- `fn open(status: *fail.Status, path: []const u8) File`: Opens path for reading.
-- `fn create(status: *fail.Status, path: []const u8) File`: Creates path for writing, or empties it when it exists.
-- `fn append(status: *fail.Status, path: []const u8) File`: Opens path for writing at its end, creating it when missing.
-- `fn create_exclusive(status: *fail.Status, path: []const u8) File`: Creates path for writing;
+- `fn open(path: []const u8) File!io.IoErr`: Opens path for reading.
+- `fn create(path: []const u8) File!io.IoErr`: Creates path for writing, or empties it when it exists.
+- `fn append(path: []const u8) File!io.IoErr`: Opens path for writing at its end, creating it when missing.
+- `fn create_exclusive(path: []const u8) File!io.IoErr`: Creates path for writing;
 - `fn close(file: *File)`: Closes the file.
-- `fn read(status: *fail.Status, file: *File, destination: []u8) usize`: Reads into destination and returns the byte count: 0 at the end of the file (file.ended) and after a failure.
-- `fn write(status: *fail.Status, file: *File, source: []const u8)`: Writes all of source.
+- `fn read(file: *File, destination: []u8) usize!io.IoErr`: Reads into destination and returns the byte count: 0 at the end of the file, which also sets file.ended.
+- `fn write(file: *File, source: []const u8) !io.IoErr`: Writes all of source.
 - `fn reader(file: *File) io.Reader`
 - `fn writer(file: *File) io.Writer`
-- `fn seek(status: *fail.Status, file: *File, offset: isize, origin: usize) usize`: Moves the file position and returns it;
-- `fn sync(status: *fail.Status, file: *File)`: Makes written data durable.
-- `fn map(status: *fail.Status, file: *const File) []const u8`: A read-only view of the whole file, owned by the caller until unmap.
+- `fn seek(file: *File, offset: isize, origin: usize) usize!io.IoErr`: Moves the file position and returns it;
+- `fn sync(file: *File) !io.IoErr`: Makes written data durable.
+- `fn map(file: *const File) []const u8!io.IoErr`: A read-only view of the whole file, owned by the caller until unmap.
 - `fn unmap(mapping: *[]const u8)`: Releases a mapping and empties it.
-- `fn read_all(arena: *memory.Arena, status: *fail.Status, path: []const u8, maximum: usize) []u8`: Reads one complete file into arena storage, bounded by maximum.
-- `fn read_contents(arena: *memory.Arena, status: *fail.Status, file: *File, maximum: usize) []u8`: Reads the rest of file into arena storage, bounded by maximum.
-- `fn write_all(status: *fail.Status, path: []const u8, source: []const u8)`: Creates or replaces path with source.
-- `fn metadata(status: *fail.Status, path: []const u8) Metadata`: Metadata for path, following symbolic links.
-- `fn file_metadata(status: *fail.Status, file: *const File) Metadata`: Metadata for an open file.
+- `fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) []u8!io.IoErr`: Reads one complete file into arena storage, bounded by maximum.
+- `fn read_contents(arena: *memory.Arena, file: *File, maximum: usize) []u8!io.IoErr`: Reads the rest of file into arena storage, bounded by maximum.
+- `fn write_all(path: []const u8, source: []const u8) !io.IoErr`: Creates or replaces path with source.
+- `fn metadata(path: []const u8) Metadata!io.IoErr`: Metadata for path, following symbolic links.
+- `fn file_metadata(file: *const File) Metadata!io.IoErr`: Metadata for an open file.
 - `fn is_directory(info: Metadata) bool`: Whether info describes a directory or a regular file.
 - `fn is_file(info: Metadata) bool`
-- `fn remove(status: *fail.Status, path: []const u8)`: Removes the file at path.
-- `fn rename(status: *fail.Status, old_path: []const u8, new_path: []const u8)`: Renames old_path to new_path, replacing new_path when it exists.
-- `fn make_directory(status: *fail.Status, path: []const u8)`: Creates the directory path, readable by everyone and writable by its owner (0o755).
-- `fn make_directory_mode(status: *fail.Status, path: []const u8, mode: usize)`: Like make_directory, with the permission bits mode (ignored on Windows), such as 0o700 for a directory only its owner may enter.
-- `fn make_directory_exclusive(status: *fail.Status, path: []const u8, mode: usize)`: Creates the directory path with mode;
-- `fn remove_directory(status: *fail.Status, path: []const u8)`: Removes the empty directory path.
-- `fn open_directory(status: *fail.Status, path: []const u8, storage: []u8) Directory`: Opens the directory path for listing with directory_next.
-- `fn directory_next(status: *fail.Status, directory: *Directory) DirectoryEntry`: The next entry, without "." and "..".
-- `fn list(arena: *memory.Arena, status: *fail.Status, path: []const u8) []DirectoryEntry`: The names in directory path, copied into arena, without "." and "..".
+- `fn remove(path: []const u8) !io.IoErr`: Removes the file at path.
+- `fn rename(old_path: []const u8, new_path: []const u8) !io.IoErr`: Renames old_path to new_path, replacing new_path when it exists.
+- `fn make_directory(path: []const u8) !io.IoErr`: Creates the directory path, readable by everyone and writable by its owner (0o755).
+- `fn make_directory_mode(path: []const u8, mode: usize) !io.IoErr`: Like make_directory, with the permission bits mode (ignored on Windows), such as 0o700 for a directory only its owner may enter.
+- `fn make_directory_exclusive(path: []const u8, mode: usize) !io.IoErr`: Creates the directory path with mode;
+- `fn remove_directory(path: []const u8) !io.IoErr`: Removes the empty directory path.
+- `fn open_directory(path: []const u8, storage: []u8) Directory!io.IoErr`: Opens the directory path for listing with directory_next.
+- `fn directory_next(directory: *Directory) DirectoryEntry!io.IoErr`: The next entry, without "." and "..".
+- `fn list(arena: *memory.Arena, path: []const u8) []DirectoryEntry!io.IoErr`: The names in directory path, copied into arena, without "." and "..".
 - `enum AppDirectory { Home, Config, Cache, Data, Runtime }`
 - `struct Directory { file: File, storage: []u8, offset: usize, used: usize, path: []const u8, // Set by directory_next when it returns no entry. ended: bool, }`
 - `fn close_directory(directory: *Directory)`
-- `fn copy_file(status: *fail.Status, source: []const u8, destination: []const u8, scratch: []u8) usize`: Copies source to destination, replacing it, and returns the bytes copied.
-- `fn symbolic_link(status: *fail.Status, target: []const u8, link: []const u8)`: Creates the symbolic link link pointing at target.
-- `fn sync_directory(status: *fail.Status, path: []const u8)`: Makes a directory's entries durable, such as a rename into it.
+- `fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) usize!io.IoErr`: Copies source to destination, replacing it, and returns the bytes copied.
+- `fn symbolic_link(target: []const u8, link: []const u8) !io.IoErr`: Creates the symbolic link link pointing at target.
+- `fn sync_directory(path: []const u8) !io.IoErr`: Makes a directory's entries durable, such as a rename into it.
 - `struct AtomicFile { file: File, destination: []const u8, temporary: []const u8, active: bool, }`: A file written under a temporary name and renamed onto its destination when committed, so the destination is never partly written.
-- `fn atomic_begin(status: *fail.Status, destination: []const u8, temporary: []const u8) AtomicFile`: Both paths are borrowed until commit or abort.
-- `fn atomic_commit(status: *fail.Status, transaction: *AtomicFile)`: Syncs and closes the temporary file and renames it onto the destination.
-- `fn atomic_commit_durable(status: *fail.Status, transaction: *AtomicFile, parent_directory: []const u8)`: Also syncs the parent directory, making the committed rename durable across power loss on Linux file systems that honor fsync for ...
+- `fn atomic_begin(destination: []const u8, temporary: []const u8) AtomicFile!io.IoErr`: Both paths are borrowed until commit or abort.
+- `fn atomic_commit(transaction: *AtomicFile) !io.IoErr`: Syncs and closes the temporary file and renames it onto the destination.
+- `fn atomic_commit_durable(transaction: *AtomicFile, parent_directory: []const u8) !io.IoErr`: Also syncs the parent directory, making the committed rename durable across power loss on Linux file systems that honor fsync for ...
 - `fn atomic_abort(transaction: *AtomicFile)`: Closes and removes the temporary file.
-- `fn write_atomic(status: *fail.Status, destination: []const u8, temporary: []const u8, source: []const u8)`: Writes source to destination through the sibling temporary file and renames it into place, so destination is either the old file or all of ...
-- `fn lock(status: *fail.Status, file: *File, operation: usize)`: Locks file with flock(2): operation is LOCK_SH (1), LOCK_EX (2), or either with LOCK_NB (4);
-- `fn truncate(status: *fail.Status, path: []const u8, length: usize)`: Sets the length of the file at path.
-- `fn read_link(arena: *mem.Arena, status: *fail.Status, path: []const u8) []u8`: The target of the symbolic link at path, in arena.
-- `fn app_directory(arena: *mem.Arena, status: *fail.Status, kind: AppDirectory) []u8`: The per-user directory of kind, in arena.
+- `fn write_atomic(destination: []const u8, temporary: []const u8, source: []const u8) !io.IoErr`: Writes source to destination through the sibling temporary file and renames it into place, so destination is either the old file or all of ...
+- `fn lock(file: *File, operation: usize) !io.IoErr`: Locks file with flock(2): operation is LOCK_SH (1), LOCK_EX (2), or either with LOCK_NB (4);
+- `fn truncate(path: []const u8, length: usize) !io.IoErr`: Sets the length of the file at path.
+- `fn read_link(arena: *mem.Arena, path: []const u8) []u8!io.IoErr`: The target of the symbolic link at path, in arena.
+- `fn app_directory(arena: *mem.Arena, kind: AppDirectory) []u8!io.IoErr`: The per-user directory of kind, in arena.
 - `struct Directory { file: File, storage: []u8, offset: usize, used: usize, base: i64, path: []const u8, ended: bool }`: Directory listing through getdirentries64, with the Linux API shape.
 - `struct RemovalFrame { directory: Directory, name: []const u8, parent: isize }`: Scratch frame storage for iterative, descriptor-relative tree removal.
-- `fn remove_tree(status: *fail.Status, path: []const u8, frames: []RemovalFrame, scratch: []u8)`: Removes path and everything under it, without following symbolic links.
+- `fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) !io.IoErr`: Removes path and everything under it, without following symbolic links.
 - `struct Directory { handle: rawptr, storage: []u8, data: [592]u8, pending: bool, active: bool, path: []const u8, ended: bool }`: Directory listing through FindFirstFileW, with the Linux API shape.
 
 ## std/fs/capability
@@ -1081,7 +1114,7 @@ Layer: std
 Layer: std
 
 - `struct Directory { descriptor: isize, active: bool, events: *observe.Log, resource: u64 }`: A borrowed directory descriptor limits file lookup through this interface.
-- `fn read(status: *fail.Status, directory: *const Directory, path: []const u8, destination: []u8) usize`: Kernel-enforced relative lookup: no absolute paths, parent escapes, symlinks or magic links.
+- `fn read(directory: *const Directory, path: []const u8, destination: []u8) usize!io.IoErr`: Kernel-enforced relative lookup: no absolute paths, parent escapes, symlinks or magic links.
 
 ## std/fs/watch
 
@@ -1105,26 +1138,26 @@ Layer: std
 - `const HasDirectoryFlag: bool = true`
 - `const FixedWatchCapacity: usize = 16`
 - `struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }`
-- `struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }`: Owns one bounded allocation: at most 16 streams and 63 queued names (1023 bytes).
-- `fn open(status: *fail.Status, storage: []u8) Watcher`
-- `fn add(status: *fail.Status, watcher: *Watcher, path: []const u8, mask: u32) i32`: Watches path;
-- `fn remove(status: *fail.Status, watcher: *Watcher, id: i32)`
+- `struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, error: io.IoErr, ended: bool }`: Owns one bounded allocation: at most 16 streams and 63 queued names (1023 bytes).
+- `fn open(storage: []u8) Watcher!io.IoErr`
+- `fn add(watcher: *Watcher, path: []const u8, mask: u32) i32!io.IoErr`: Watches path;
+- `fn remove(watcher: *Watcher, id: i32) !io.IoErr`
 - `fn close(watcher: *Watcher)`
-- `fn next(status: *fail.Status, watcher: *Watcher) Event`
+- `fn next(watcher: *Watcher) Event!io.IoErr`
 - `fn acknowledge_rescan(watcher: *Watcher)`
 - `const SupportedEvents: u32 = 4046`
 - `const HasCloseWrite: bool = true`
 - `const HasMoveCookies: bool = true`
 - `const FixedWatchCapacity: usize = 0`: Zero means no fixed userspace slot limit;
-- `struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }`: Zero is a closed watcher: active is false.
-- `fn add(status: *fail.Status, state: *Watcher, path: []const u8, mask: u32) i32`: Watches path;
-- `fn remove(status: *fail.Status, state: *Watcher, watch: i32)`
+- `struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, error: io.IoErr, ended: bool }`: Zero is a closed watcher: active is false.
+- `fn add(state: *Watcher, path: []const u8, mask: u32) i32!io.IoErr`: Watches path;
+- `fn remove(state: *Watcher, watch: i32) !io.IoErr`
 - `fn close(state: *Watcher)`
-- `fn next(status: *fail.Status, state: *Watcher) Event`
+- `fn next(state: *Watcher) Event!io.IoErr`
 - `fn acknowledge_rescan(state: *Watcher)`: Call only after rebuilding the snapshot;
 - `const SupportedEvents: u32 = 966`
 - `const HasDirectoryFlag: bool = false`
-- `struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, failure: fail.Failure, ended: bool }`: Noncopyable owner.
+- `struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, error: io.IoErr, ended: bool }`: Noncopyable owner.
 
 ## std/hash
 
@@ -1142,14 +1175,16 @@ Layer: heap
 
 - `struct Trusted { bytes: []const u8 }`: Markup the program vouches for: literals and output of other Writers.
 - `fn trusted(markup: []const u8) Trusted`: Marks bytes as markup.
-- `struct Writer { buffer: fmt.Buffer }`: Writes markup into storage, recording into status like fmt.Buffer: a write that does not fit fails status with Capacity, and later writes ...
-- `fn writer(status: *fail.Status, storage: []u8) Writer`
+- `struct Writer { buffer: fmt.Buffer }`: Writes markup into storage like fmt.Buffer: a write that does not fit stops the writer, later writes do nothing, and finish fails.
+- `fn writer(storage: []u8) Writer`
 - `fn markup(destination: *Writer, value: Trusted)`
 - `fn text(destination: *Writer, value: []const u8)`: Escaped text.
 - `fn print(destination: *Writer, template: []const u8, values: ...any)`: Writes template with each {} replaced by the next value: Trusted template as it is, and anything else as fmt writes it, escaped: text ...
 - `fn number(destination: *Writer, value: u64)`
 - `fn signed(destination: *Writer, value: i64)`
 - `fn output(source: *const Writer) Trusted`: The page so far, as markup for another Writer or for a response body.
+- `fn overflowed(source: *const Writer) bool`: Whether a write did not fit.
+- `fn finish(source: *const Writer) Trusted!`: The whole page;
 - `fn write_escaped(buffer: *fmt.Buffer, text: []const u8)`
 - `fn entity(byte: u8) []const u8`: Entity for one byte, or empty when the byte needs no escaping.
 
@@ -1159,8 +1194,8 @@ Layer: heap
 
 - `type Template = core.Template`
 - `type Field = core.Field`
-- `fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) Template`
-- `fn render(status: *fail.Status, destination: io.Writer, template: *const Template, fields: []const Field)`: Escapes text and quoted attribute values.
+- `fn parse(arena: *memory.Arena, source: []const u8) Template!parse.ParseErr`
+- `fn render(destination: io.Writer, template: *const Template, fields: []const Field) !io.IoErr`: Escapes text and quoted attribute values.
 
 ## std/image
 
@@ -1178,8 +1213,8 @@ Layer: heap
 
 - `struct Info { width: usize, height: usize, channels: u8 }`: Windows DIB headers, uncompressed indexed/BGR and contiguous bitfields.
 - `struct Image { info: Info, pixels: []u8 }`
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image`: Ownership: pixels borrow arena backing;
-- `fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width, height: usize, channels: u8) []u8`: RGB is written as a 24-bit Windows DIB.
+- `fn decode(arena: *mem.Arena, source: []const u8) Image!parse.ParseErr`: Ownership: pixels borrow arena backing;
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width, height: usize, channels: u8) []u8!io.IoErr`: RGB is written as a 24-bit Windows DIB.
 
 ## std/image/color
 
@@ -1197,7 +1232,7 @@ Layer: heap
 - `struct Info { width: usize, height: usize, channels: u8 }`: Decodes the first composited GIF87a/89a image, including interlace and transparency.
 - `struct Image { info: Info, pixels: []u8 }`
 - `struct Decoded { image: Image, consumed: usize }`: An image and the source bytes it took.
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decoded`: Ownership: pixels borrow arena backing;
+- `fn decode(arena: *mem.Arena, source: []const u8) Decoded!parse.ParseErr`: Ownership: pixels borrow arena backing;
 
 ## std/image/jpeg
 
@@ -1205,17 +1240,17 @@ Layer: heap
 
 - `struct Info { width: usize, height: usize, channels: u8 }`: ITU-T T.81 baseline sequential Huffman JPEG, 8-bit gray/RGB/YCbCr.
 - `struct Image { info: Info, pixels: []u8 }`
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image`: Ownership: pixels borrow arena backing;
+- `fn decode(arena: *mem.Arena, source: []const u8) Image!parse.ParseErr`: Ownership: pixels borrow arena backing;
 
 ## std/image/png
 
 Layer: heap
 
 - `struct Info { width: usize, height: usize, channels: u8 }`
-- `struct Image { info: Info, pixels: []u8 }`: Malformed data fails with InvalidInput (at its offset when known), an impossible size with Overflow, data past the codec's working limits ...
-- `fn inspect(status: *fail.Status, source: []const u8) Info`: The header's description of the image, without decoding it.
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image`
-- `fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8) []u8`
+- `struct Image { info: Info, pixels: []u8 }`: Decoding fails with Invalid for malformed data, at its offset when known, and TooLarge for an impossible size or data past the codec's ...
+- `fn inspect(source: []const u8) Info!parse.ParseErr`: The header's description of the image, without decoding it.
+- `fn decode(arena: *mem.Arena, source: []const u8) Image!parse.ParseErr`
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8) []u8!io.IoErr`
 
 ## std/image/pnm
 
@@ -1224,18 +1259,18 @@ Layer: heap
 - `struct Info { width: usize, height: usize, channels: u8 }`: consumed permits concatenated raw images.
 - `struct Image { info: Info, pixels: []u8 }`
 - `struct Decoded { image: Image, consumed: usize }`: An image and the source bytes it took.
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Decoded`
-- `fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8) []u8`: Emit binary P5 (one channel) or P6 (three channels) with Maxval 255.
+- `fn decode(arena: *mem.Arena, source: []const u8) Decoded!parse.ParseErr`
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8) []u8!io.IoErr`: Emit binary P5 (one channel) or P6 (three channels) with Maxval 255.
 
 ## std/image/qoi
 
 Layer: heap
 
 - `struct Info { width: usize, height: usize, channels: u8, srgb: bool }`
-- `struct Image { info: Info, pixels: []u8 }`: Malformed data fails with InvalidInput (at its offset when known), an impossible size with Overflow, data past the codec's working limits ...
-- `fn inspect(status: *fail.Status, source: []const u8) Info`: The header's description of the image, without decoding it.
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image`
-- `fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) []u8`
+- `struct Image { info: Info, pixels: []u8 }`: Decoding fails with Invalid for malformed data, at its offset when known, and TooLarge for an impossible size or data past the codec's ...
+- `fn inspect(source: []const u8) Info!parse.ParseErr`: The header's description of the image, without decoding it.
+- `fn decode(arena: *mem.Arena, source: []const u8) Image!parse.ParseErr`
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) []u8!io.IoErr`
 
 ## std/image/tga
 
@@ -1243,36 +1278,34 @@ Layer: heap
 
 - `struct Info { width: usize, height: usize, channels: u8 }`: True-color and gray TGA, including RLE and all origin directions.
 - `struct Image { info: Info, pixels: []u8 }`
-- `fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Image`: Ownership: pixels borrow arena backing;
-- `fn encode(arena: *mem.Arena, status: *fail.Status, pixels: []const u8, width, height: usize, channels: u8) []u8`: Ownership: encoded bytes borrow arena backing;
+- `fn decode(arena: *mem.Arena, source: []const u8) Image!parse.ParseErr`: Ownership: pixels borrow arena backing;
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width, height: usize, channels: u8) []u8!io.IoErr`: Ownership: encoded bytes borrow arena backing;
 
 ## std/io
 
 Layer: heap
 
-- `fn from_linux(operation: []const u8, path: []const u8, code: isize) fail.Failure`: A fail.Failure for a native error code: its portable kind, the code in native, and the system's text for it as the message.
-- `fn from_darwin(operation: []const u8, path: []const u8, code: isize) fail.Failure`
-- `fn from_windows(operation: []const u8, path: []const u8, code: isize) fail.Failure`
-- `fn from_wasi(operation: []const u8, path: []const u8, code: isize) fail.Failure`
-- `fn linux(code: isize) fail.Kind`
-- `fn windows(code: isize) fail.Kind`
-- `fn wasi(code: isize) fail.Kind`
-- `fn darwin(code: isize) fail.Kind`
+- `fn linux_err(code: isize) IoErr`: The IoErr for a native error code.
+- `fn windows_err(code: isize) IoErr`
+- `fn wasi_err(code: isize) IoErr`
+- `fn darwin_err(code: isize) IoErr`
 - `fn linux_text(code: isize) []const u8`: The system's own reason for a native code, such as "is a directory" for Linux's -21;
 - `fn darwin_text(code: isize) []const u8`
 - `fn windows_text(code: isize) []const u8`
 - `fn wasi_text(code: isize) []const u8`
-- `struct Reader { data: rawptr, read: fn(rawptr, *fail.Status, []u8) usize, }`: Byte streams.
-- `struct Writer { data: rawptr, write: fn(rawptr, *fail.Status, []const u8) usize, }`: A write returns how many bytes of source it took, possibly fewer than all;
-- `fn read(status: *fail.Status, reader: Reader, destination: []u8) usize`: Reads into destination;
-- `fn read_exact(status: *fail.Status, reader: Reader, destination: []u8) usize`: Fills destination.
-- `fn write(status: *fail.Status, writer: Writer, source: []const u8)`: Writes all of source.
-- `fn print_arguments(status: *fail.Status, writer: Writer, template: []const u8, arguments: []const any)`: print_arguments is the non-variadic entry point used by forwarding wrappers.
-- `fn print_to(status: *fail.Status, writer: Writer, template: []const u8, arguments: ...any)`: Checked formatting to any writer: {} takes the next argument.
-- `fn println_arguments(status: *fail.Status, writer: Writer, template: []const u8, arguments: []const any)`: Like print_arguments, then a newline.
-- `fn println_to(status: *fail.Status, writer: Writer, template: []const u8, arguments: ...any)`
-- `fn copy(status: *fail.Status, writer: Writer, reader: Reader, scratch: []u8) usize`: Copies reader to writer until the end of the reader, through scratch;
-- `fn copy_n(status: *fail.Status, writer: Writer, reader: Reader, amount: usize, scratch: []u8)`: Copies exactly amount bytes;
+- `struct Reader { data: rawptr, read: fn(rawptr, []u8) usize!IoErr, }`: Byte streams.
+- `struct Writer { data: rawptr, write: fn(rawptr, []const u8) usize!IoErr, }`: A write returns how many bytes of source it took, possibly fewer than all;
+- `enum IoErr { NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System(isize), }`: Why an I/O call failed, shared by std/io, std/fs, std/net and std/process.
+- `fn text(err: IoErr) []const u8`: What err means, such as "not found";
+- `fn read(reader: Reader, destination: []u8) usize!IoErr`: Reads into destination;
+- `fn read_exact(reader: Reader, destination: []u8) usize!IoErr`: Fills destination.
+- `fn write(writer: Writer, source: []const u8) !IoErr`: Writes all of source.
+- `fn print_arguments(writer: Writer, template: []const u8, arguments: []const any) !IoErr`: print_arguments is the non-variadic entry point used by forwarding wrappers.
+- `fn print_to(writer: Writer, template: []const u8, arguments: ...any) !IoErr`: Checked formatting to any writer: {} takes the next argument.
+- `fn println_arguments(writer: Writer, template: []const u8, arguments: []const any) !IoErr`: Like print_arguments, then a newline.
+- `fn println_to(writer: Writer, template: []const u8, arguments: ...any) !IoErr`
+- `fn copy(writer: Writer, reader: Reader, scratch: []u8) usize!IoErr`: Copies reader to writer until the end of the reader, through scratch;
+- `fn copy_n(writer: Writer, reader: Reader, amount: usize, scratch: []u8) !IoErr`: Copies exactly amount bytes;
 - `struct Cursor { data: []const u8, offset: usize, }`
 - `fn cursor(data: []const u8) Cursor`
 - `fn cursor_reader(state: *Cursor) Reader`
@@ -1298,7 +1331,7 @@ Layer: heap
 - `struct Field { name: []const u8, value: []const u8 }`
 - `struct Logger { output: stream.Writer, minimum: Level }`
 - `fn logger(output: stream.Writer, minimum: Level) Logger`
-- `fn write(status: *fail.Status, target: *Logger, level: Level, message: []const u8, fields: []const Field)`: Writes one line, "level: message name=value ...", when level is at least the logger's minimum.
+- `fn write(target: *Logger, level: Level, message: []const u8, fields: []const Field) !stream.IoErr`: Writes one line, "level: message name=value ...", when level is at least the logger's minimum.
 
 ## std/math
 
@@ -1314,34 +1347,34 @@ Layer: core
 - `const epsilon32: f32 = 1.1920929e-07`
 - `fn inf() f64`
 - `fn nan() f64`
-- `fn is_nan(x: $T) bool`
-- `fn is_inf(x: $T) bool`
-- `fn is_finite(x: $T) bool`
-- `fn sqrt(x: $T) T`
-- `fn floor(x: $T) T`
-- `fn ceil(x: $T) T`
-- `fn trunc(x: $T) T`
-- `fn round(x: $T) T`: Rounds half away from zero.
-- `fn copysign(x, sign: $T) T`: x's magnitude with sign's sign.
-- `fn fma(x, y, z: $T) T`: x * y + z with one rounding.
-- `fn sin(x: $T) T`
-- `fn cos(x: $T) T`
-- `fn tan(x: $T) T`
-- `fn asin(x: $T) T`
-- `fn acos(x: $T) T`
-- `fn atan(x: $T) T`
-- `fn atan2(y, x: $T) T`
-- `fn exp(x: $T) T`
-- `fn exp2(x: $T) T`
-- `fn log(x: $T) T`
-- `fn log2(x: $T) T`
-- `fn log10(x: $T) T`
-- `fn pow(x, y: $T) T`
-- `fn hypot(x, y: $T) T`: sqrt(x * x + y * y) without intermediate overflow.
-- `fn lerp(a, b, t: $T) T`: a + (b - a) * t.
-- `fn unlerp(a, b, value: $T) T`: The t for which lerp(a, b, t) is value.
-- `fn smoothstep(edge0, edge1, x: $T) T`: Hermite step from 0 at edge0 to 1 at edge1.
-- `fn wrap(x, minimum, maximum: $T) T`: x wrapped into [minimum, maximum).
+- `fn is_nan<T>(x: T) bool`
+- `fn is_inf<T>(x: T) bool`
+- `fn is_finite<T>(x: T) bool`
+- `fn sqrt<T>(x: T) T`
+- `fn floor<T>(x: T) T`
+- `fn ceil<T>(x: T) T`
+- `fn trunc<T>(x: T) T`
+- `fn round<T>(x: T) T`: Rounds half away from zero.
+- `fn copysign<T>(x, sign: T) T`: x's magnitude with sign's sign.
+- `fn fma<T>(x, y, z: T) T`: x * y + z with one rounding.
+- `fn sin<T>(x: T) T`
+- `fn cos<T>(x: T) T`
+- `fn tan<T>(x: T) T`
+- `fn asin<T>(x: T) T`
+- `fn acos<T>(x: T) T`
+- `fn atan<T>(x: T) T`
+- `fn atan2<T>(y, x: T) T`
+- `fn exp<T>(x: T) T`
+- `fn exp2<T>(x: T) T`
+- `fn log<T>(x: T) T`
+- `fn log2<T>(x: T) T`
+- `fn log10<T>(x: T) T`
+- `fn pow<T>(x, y: T) T`
+- `fn hypot<T>(x, y: T) T`: sqrt(x * x + y * y) without intermediate overflow.
+- `fn lerp<T>(a, b, t: T) T`: a + (b - a) * t.
+- `fn unlerp<T>(a, b, value: T) T`: The t for which lerp(a, b, t) is value.
+- `fn smoothstep<T>(edge0, edge1, x: T) T`: Hermite step from 0 at edge0 to 1 at edge1.
+- `fn wrap<T>(x, minimum, maximum: T) T`: x wrapped into [minimum, maximum).
 - `fn copysign64(x, sign: f64) f64`
 - `fn trunc64(x: f64) f64`: #trunc, #floor, #ceil, #round, #sqrt and #fma are compiler builtins: one instruction where the target has it, a software routine elsewhere.
 - `fn floor64(x: f64) f64`
@@ -1363,39 +1396,39 @@ Layer: core
 - `fn asin64(x: f64) f64`
 - `fn acos64(x: f64) f64`
 - `fn pow64(x, y: f64) f64`: x^y, using a compensated logarithm/product for finite positive magnitudes.
-- `fn min(a, b: $T) T`: Operands must support <.
-- `fn max(a, b: $T) T`
-- `fn clamp(value, minimum, maximum: $T) T`
-- `fn abs(value: $T) T`: Integers and floats.
-- `fn sign(value: $T) T`: -1, 0 or 1 for signed integers;
-- `fn narrow(T: type, value: $U) T`: Converts value to T and panics if it does not fit;
-- `fn is_signed(T: type) bool`: Integer type facts.
-- `fn max_value(T: type) T`
-- `fn min_value(T: type) T`
-- `fn count_ones(value: $T) u32`
-- `fn leading_zeros(value: $T) u32`: Zero bits above the highest set bit, within T's width.
-- `fn trailing_zeros(value: $T) u32`: Zero bits below the lowest set bit;
-- `fn rotate_left(value: $T, amount: u32) T`
-- `fn rotate_right(value: $T, amount: u32) T`
-- `fn is_pow2(value: $T) bool`
-- `fn next_pow2(value: $T) T`: The smallest power of two at least value.
-- `fn align_up(value, alignment: $T) T`: value rounded up to a multiple of alignment, a power of two.
-- `fn align_down(value, alignment: $T) T`
-- `fn div_ceil(a, b: $T) T`: Division rounding up, for nonnegative operands.
-- `fn gcd(a, b: $T) T`: The nonnegative gcd;
-- `fn lcm(a, b: $T) T`: Panics when the nonnegative result does not fit in T.
-- `fn isqrt(value: $T) T`: The integer square root: the largest r with r * r <= value.
-- `fn add_overflows(a, b: $T) bool`: Whether a + b, a - b or a * b leaves T's range.
-- `fn sub_overflows(a, b: $T) bool`
-- `fn mul_overflows(a, b: $T) bool`
-- `fn wrapping_add(a, b: $T) T`: Arithmetic that wraps on overflow, even under --check-overflow, for code that means to wrap, such as hashes.
-- `fn wrapping_sub(a, b: $T) T`
-- `fn wrapping_mul(a, b: $T) T`
-- `fn saturating_add(a, b: $T) T`: Arithmetic that stops at T's limits instead of overflowing.
-- `fn saturating_sub(a, b: $T) T`
-- `fn saturating_mul(a, b: $T) T`
-- `fn div_or_zero(a, b: $T) T`: Division that treats a zero divisor as a value: returns 0.
-- `fn rem_or_zero(a, b: $T) T`
+- `fn min<T>(a, b: T) T`: Operands must support <.
+- `fn max<T>(a, b: T) T`
+- `fn clamp<T>(value, minimum, maximum: T) T`
+- `fn abs<T>(value: T) T`: Integers and floats.
+- `fn sign<T>(value: T) T`: -1, 0 or 1 for signed integers;
+- `fn narrow<T, U>(value: U) T`: Converts value to T and panics if it does not fit;
+- `fn is_signed<T>() bool`: Integer type facts.
+- `fn max_value<T>() T`
+- `fn min_value<T>() T`
+- `fn count_ones<T>(value: T) u32`
+- `fn leading_zeros<T>(value: T) u32`: Zero bits above the highest set bit, within T's width.
+- `fn trailing_zeros<T>(value: T) u32`: Zero bits below the lowest set bit;
+- `fn rotate_left<T>(value: T, amount: u32) T`
+- `fn rotate_right<T>(value: T, amount: u32) T`
+- `fn is_pow2<T>(value: T) bool`
+- `fn next_pow2<T>(value: T) T`: The smallest power of two at least value.
+- `fn align_up<T>(value, alignment: T) T`: value rounded up to a multiple of alignment, a power of two.
+- `fn align_down<T>(value, alignment: T) T`
+- `fn div_ceil<T>(a, b: T) T`: Division rounding up, for nonnegative operands.
+- `fn gcd<T>(a, b: T) T`: The nonnegative gcd;
+- `fn lcm<T>(a, b: T) T`: Panics when the nonnegative result does not fit in T.
+- `fn isqrt<T>(value: T) T`: The integer square root: the largest r with r * r <= value.
+- `fn add_overflows<T>(a, b: T) bool`: Whether a + b, a - b or a * b leaves T's range.
+- `fn sub_overflows<T>(a, b: T) bool`
+- `fn mul_overflows<T>(a, b: T) bool`
+- `fn wrapping_add<T>(a, b: T) T`: Arithmetic that wraps on overflow, even under --check-overflow, for code that means to wrap, such as hashes.
+- `fn wrapping_sub<T>(a, b: T) T`
+- `fn wrapping_mul<T>(a, b: T) T`
+- `fn saturating_add<T>(a, b: T) T`: Arithmetic that stops at T's limits instead of overflowing.
+- `fn saturating_sub<T>(a, b: T) T`
+- `fn saturating_mul<T>(a, b: T) T`
+- `fn div_or_zero<T>(a, b: T) T`: Division that treats a zero divisor as a value: returns 0.
+- `fn rem_or_zero<T>(a, b: T) T`
 - `struct Mat3 { c0: Vec3, c1: Vec3, c2: Vec3 }`
 - `struct Mat4 { c0: Vec4, c1: Vec4, c2: Vec4, c3: Vec4 }`
 - `struct Quat { x: f32, y: f32, z: f32, w: f32 }`
@@ -1530,7 +1563,7 @@ Layer: heap
 - `fn from_u64(arena: *mem.Arena, value: u64) Int`
 - `fn from_i64(arena: *mem.Arena, value: i64) Int`
 - `fn is_zero(value: Int) bool`
-- `fn to_u64(status: *fail.Status, value: Int) u64`: The value as a u64.
+- `fn to_u64(value: Int) u64!`: The value as a u64.
 - `fn negate(value: Int) Int`
 - `fn absolute(value: Int) Int`
 - `fn compare(a: Int, b: Int) i32`: -1, 0 or 1 as a is less than, equal to or greater than b.
@@ -1538,13 +1571,13 @@ Layer: heap
 - `fn add(arena: *mem.Arena, a: Int, b: Int) Int`
 - `fn subtract(arena: *mem.Arena, a: Int, b: Int) Int`
 - `fn multiply(arena: *mem.Arena, a: Int, b: Int) Int`
-- `fn divide(arena: *mem.Arena, status: *fail.Status, a: Int, b: Int) Division`: Truncated division: the quotient rounds toward zero and the remainder has the sign of a.
+- `fn divide(arena: *mem.Arena, a: Int, b: Int) Division!`: Truncated division: the quotient rounds toward zero and the remainder has the sign of a.
 - `fn shift_left(arena: *mem.Arena, value: Int, bits: usize) Int`
 - `fn shift_right(arena: *mem.Arena, value: Int, bits: usize) Int`: Shifts the magnitude right;
 - `fn bit_length(value: Int) usize`
-- `fn power_mod(arena: *mem.Arena, status: *fail.Status, base: Int, exponent: Int, modulus: Int) Int`: base^exponent mod modulus by square and multiply.
+- `fn power_mod(arena: *mem.Arena, base: Int, exponent: Int, modulus: Int) Int!`: base^exponent mod modulus by square and multiply.
 - `fn gcd(arena: *mem.Arena, a: Int, b: Int) Int`: Greatest common divisor, never negative.
-- `fn parse(arena: *mem.Arena, status: *fail.Status, text: []const u8, base: u32) Int`: Parses an optional sign and digits in base 2 through 36.
+- `fn parse(arena: *mem.Arena, text: []const u8, base: u32) Int!parse.ParseErr`: Parses an optional sign and digits in base 2 through 36.
 - `fn format(arena: *mem.Arena, value: Int, base: u32) []u8`: The value's digits in base 2 through 36, lowercase, with a leading '-' when negative.
 - `fn from_bytes(arena: *mem.Arena, data: []const u8) Int`: A non-negative value from big-endian bytes.
 - `fn to_bytes(arena: *mem.Arena, value: Int) []u8`: The magnitude as big-endian bytes without leading zeros;
@@ -1553,10 +1586,13 @@ Layer: heap
 
 Layer: heap
 
-- `struct Arena { // First block only: the newest block, where pushes go. current: *Arena, // The block before this one; nil for the first block. previous: *Arena, // This block's bytes, header included. data: []u8, // Position of data[0]. base: usize, // Bytes used in this block, header included. offset: usize, // Bytes of this block ready to use: what the OS has committed of a // mapping (only Windows commits on demand), or a whole caller buffer. committed: usize, // From this offset on, the block was never handed out and still holds the // zeros the OS gave it, so zeroing pushes skip it and its pages stay // untouched. The block's length when its memory may hold old bytes. fresh: usize, // This block is an OS mapping that release returns. owns_memory: bool, // First block only. Never add blocks: set for arena_from_buffer. fixed_buffer: bool, // First block only: where new blocks come from. source: Source, // First block only: backing bytes across all blocks. backing: usize, // First block only. Opt-in diagnostic scribble; does not make expired pointers safe. poison_on_rewind: bool, }`: An arena is a chain of blocks.
+- `nocopy struct Arena { // First block only: the newest block, where pushes go. current: *Arena, // The block before this one; nil for the first block. previous: *Arena, // This block's bytes, header included. data: []u8, // Position of data[0]. base: usize, // Bytes used in this block, header included. offset: usize, // Bytes of this block ready to use: what the OS has committed of a // mapping (only Windows commits on demand), or a whole caller buffer. committed: usize, // From this offset on, the block was never handed out and still holds the // zeros the OS gave it, so zeroing pushes skip it and its pages stay // untouched. The block's length when its memory may hold old bytes. fresh: usize, // This block is an OS mapping that release returns. owns_memory: bool, // First block only. Never add blocks: set for arena_from_buffer. fixed_buffer: bool, // First block only. Opt-in diagnostic scribble; does not make expired pointers safe. poison_on_rewind: bool, // First block only. Opt-in PROT_NONE trapping on rewound/reset OS pages. protect_on_rewind: bool, // First block only. Opt-in thread-affinity check on push/rewind/release. check_thread: bool, // First block only: where new blocks come from. source: Source, // First block only: backing bytes across all blocks. backing: usize, // First block only: bumped on rewind, reset, and release (for mem.Ref<T>). generation: u64, // First block only: thread id owning this arena when check_thread is enabled. owner_thread: u64, // This block only: byte offset from which pages are currently PROT_NONE (0 = none). protected_from: usize, }`: An arena is a chain of blocks.
 - `struct Source { context: rawptr, take: fn(rawptr, usize) []u8, give: fn(rawptr, []u8), // Preferred size of each block; zero picks the default for the source. block_size: usize, // Cap on backing bytes across all blocks, headers included; zero means none. limit: usize, }`: Where an arena's blocks come from.
 - `const ArenaHeader: usize = 144`: Bytes the arena header takes at the start of each block, and of every arena_from_buffer buffer.
 - `const ArenaBufferOverhead: usize = ArenaHeader + 15`: Maximum bytes consumed by the header and aligning arbitrary caller storage.
+- `fn arena_enable_protect(arena: *Arena)`: Enables PROT_NONE trapping on rewound/reset OS pages for this arena.
+- `fn arena_enable_thread_check(arena: *Arena)`: Enables thread-affinity checks on this arena, binding it to the calling thread.
+- `fn arena_transfer(arena: *Arena)`: Transfers thread-affinity ownership of arena to the calling thread.
 - `fn pages(limit: usize) Source`: OS pages for an arena, at most limit bytes in all (zero: no cap).
 - `fn within(parent: *Arena, limit: usize) Source`: Blocks carved from parent, at most limit bytes in all (zero: no cap).
 - `fn arena_from_buffer(backing: []u8) *Arena`: Places an arena in caller storage.
@@ -1571,20 +1607,36 @@ Layer: heap
 - `fn arena_reset(arena: *Arena)`: Takes back everything pushed.
 - `fn arena_rewind(arena: *Arena, mark: usize)`: Takes back everything pushed after mark, and frees the blocks added since.
 - `fn advise_sparse(bytes: []u8)`: Tells the OS that bytes will be touched sparsely, such as one receive buffer per connection of which few are busy: on Linux the whole pages ...
-- `fn push(T: type, arena: *Arena) *T`: Pushes one fresh T: zeroed, then T's field defaults.
-- `fn push_array(T: type, arena: *Arena, count: usize) []T`: Pushes count zeroed elements.
+- `fn push<T>(arena: *Arena) *T`: Pushes one fresh T: zeroed, then T's field defaults.
+- `struct Ref<T> { ptr: *T, arena: *const Arena, generation: u64, }`: Generational arena reference.
+- `fn push_ref<T>(arena: *Arena) Ref<T>`: Pushes one fresh T and returns a generational Ref<T> bound to arena's current generation.
+- `fn deref<T>(ref: Ref<T>) *T`: Validates that ref's arena has not been rewound, reset, or released, and returns *T.
+- `fn ref_valid<T>(ref: Ref<T>) bool`: Reports whether ref still points into a live generation of its arena.
+- `fn push_array<T>(arena: *Arena, count: usize) []T`: Pushes count zeroed elements.
 - `fn push_bytes(arena: *Arena, count: usize) []u8`: Pushes count uninitialized bytes, for buffers that are written before they are read.
-- `fn copy(destination: []$T, source: []const $T) usize`: Copies source into the start of destination and returns the element count.
-- `fn move(destination: []$T, source: []const $T) usize`: Like copy, but source and destination may overlap.
-- `fn zero(items: []$T)`: Sets every element to its zero value.
-- `fn clear(value: *$T)`: Zeroes the value behind a pointer byte by byte, without a temporary copy, so it is safe for structs too large for the stack.
-- `fn fill(items: []$T, value: $T)`
-- `fn swap(a, b: *$T)`
-- `fn equal(left, right: []const $T) bool`: Elementwise ==.
+- `fn copy<T>(destination: []T, source: []const T) usize`: Copies source into the start of destination and returns the element count.
+- `fn move<T>(destination: []T, source: []const T) usize`: Like copy, but source and destination may overlap.
+- `fn zero<T>(items: []T)`: Sets every element to its zero value.
+- `fn clear<T>(value: *T)`: Zeroes the value behind a pointer byte by byte, without a temporary copy, so it is safe for structs too large for the stack.
+- `fn fill<T>(items: []T, value: T)`
+- `fn swap<T>(a, b: *T)`
+- `fn equal<T>(left, right: []const T) bool`: Elementwise ==.
 - `fn compare(left: []const u8, right: []const u8) i32`
 - `const KiB: usize = 1024`: Binary byte units.
 - `const MiB: usize = 1024 * KiB`
 - `const GiB: usize = 1024 * MiB`
+
+## std/mem/heap
+
+Layer: heap
+
+- `nocopy struct Heap { arena: *mem.Arena, free: [13]*Free, large: *Large, }`
+- `fn heap(arena: *mem.Arena) Heap`
+- `fn alloc<T>(h: *Heap) *T`: One fresh T: zeroed, then T's field defaults.
+- `fn free<T>(h: *Heap, value: *T)`: Gives value's block back for reuse.
+- `fn alloc_array<T>(h: *Heap, count: usize) []T`: count fresh elements.
+- `fn free_array<T>(h: *Heap, items: []T)`: Gives a slice from alloc_array or resize_array back, whole.
+- `fn resize_array<T>(h: *Heap, items: []T, count: usize) []T`: A slice of count elements that starts with items' elements;
 
 ## std/mmio
 
@@ -1614,16 +1666,16 @@ Layer: std
 - `fn event(events: u32, data: u64) Event`
 - `fn event_events(value: *const Event) u32`
 - `fn event_data(value: *const Event) u64`
-- `fn event_queue(status: *fail.Status) isize`: A new epoll queue descriptor, or -1 after a failure.
-- `fn event_control(status: *fail.Status, queue: isize, operation: usize, descriptor: isize, value: *Event)`
-- `fn event_add(status: *fail.Status, queue: isize, descriptor: isize, events: u32, data: u64)`: Registration helpers keep epoll's operation numbers and remove-event pointer convention out of application code.
-- `fn event_modify(status: *fail.Status, queue: isize, descriptor: isize, events: u32, data: u64)`
-- `fn event_remove(status: *fail.Status, queue: isize, descriptor: isize)`
-- `fn event_wait(status: *fail.Status, queue: isize, events: []Event, timeout_milliseconds: i32) usize`: Waits for events;
+- `fn event_queue() isize!io.IoErr`: A new epoll queue descriptor.
+- `fn event_control(queue: isize, operation: usize, descriptor: isize, value: *Event) !io.IoErr`
+- `fn event_add(queue: isize, descriptor: isize, events: u32, data: u64) !io.IoErr`: Registration helpers keep epoll's operation numbers and remove-event pointer convention out of application code.
+- `fn event_modify(queue: isize, descriptor: isize, events: u32, data: u64) !io.IoErr`
+- `fn event_remove(queue: isize, descriptor: isize) !io.IoErr`
+- `fn event_wait(queue: isize, events: []Event, timeout_milliseconds: i32) usize!io.IoErr`: Waits for events;
 - `const AddressFamilyIpv6: usize = 10`
 - `type Descriptor = i32`
 - `struct PollDescriptor { descriptor: Descriptor, events: i16, returned: i16 }`
-- `fn receive_packet(status: *fail.Status, descriptor: isize, bytes: []u8) usize`: A value greater than capacity means the datagram was truncated.
+- `fn receive_packet(descriptor: isize, bytes: []u8) usize!io.IoErr`: A value greater than capacity means the datagram was truncated.
 - `struct Event { bytes: [16]u8 }`: Linux UAPI naturally aligns the 64-bit epoll data field on AArch64.
 - `struct Event { bytes: [12]u8 }`: Linux UAPI packs epoll_event only on x86_64.
 - `const AddressFamilyIpv6: usize = 30`
@@ -1646,64 +1698,64 @@ Layer: std
 - `struct Listener { descriptor: isize, active: bool }`
 - `fn connection_from_descriptor(descriptor: isize) Connection`: Wraps an open socket descriptor;
 - `fn listener_from_descriptor(descriptor: isize) Listener`
-- `fn socket(status: *fail.Status, family: usize, kind: usize, protocol: usize) isize`: A new socket descriptor, or -1 after a failure.
+- `fn socket(family: usize, kind: usize, protocol: usize) isize!io.IoErr`: A new socket descriptor.
 - `fn close(descriptor: isize)`: Closes descriptor.
-- `fn listen(status: *fail.Status, descriptor: isize, backlog: usize)`
-- `fn shutdown(status: *fail.Status, descriptor: isize, how: usize)`
+- `fn listen(descriptor: isize, backlog: usize) !io.IoErr`
+- `fn shutdown(descriptor: isize, how: usize) !io.IoErr`
 - `fn ipv4_address(destination: []u8, a: u8, b: u8, c: u8, d: u8, port: u16) []u8`
 - `fn ipv4(a: u8, b: u8, c: u8, d: u8, port: u16) Ipv4Address`
 - `fn ipv6(bytes: [16]u8, port: u16, scope: u32) Ipv6Address`
 - `fn unix(path: []const u8) UnixAddress`: Native sockaddr_un.
-- `fn connect_ipv4(status: *fail.Status, descriptor: isize, address: *const Ipv4Address)`
-- `fn bind_ipv4(status: *fail.Status, descriptor: isize, address: *const Ipv4Address)`
-- `fn connect_ipv6(status: *fail.Status, descriptor: isize, address: *const Ipv6Address)`
-- `fn bind_ipv6(status: *fail.Status, descriptor: isize, address: *const Ipv6Address)`
-- `fn connect_unix(status: *fail.Status, descriptor: isize, address: *const UnixAddress)`
-- `fn bind_unix(status: *fail.Status, descriptor: isize, address: *const UnixAddress)`
-- `fn connect(status: *fail.Status, descriptor: isize, address: []const u8)`
-- `fn bind(status: *fail.Status, descriptor: isize, address: []const u8)`
-- `fn accept(status: *fail.Status, descriptor: isize) isize`: Accepts one connection: its descriptor, or -1 after a failure.
-- `fn tcp_listen_ipv4(status: *fail.Status, address: *const Ipv4Address, backlog: usize) Listener`
-- `fn tcp_listen_ipv4_shared(status: *fail.Status, address: *const Ipv4Address, backlog: usize) Listener`: Like tcp_listen_ipv4 with SO_REUSEPORT set before bind.
-- `fn tcp_connect_ipv4(status: *fail.Status, address: *const Ipv4Address) Connection`
-- `fn tcp_listen_ipv6(status: *fail.Status, address: *const Ipv6Address, backlog: usize) Listener`
-- `fn tcp_connect_ipv6(status: *fail.Status, address: *const Ipv6Address) Connection`
-- `fn unix_listen(status: *fail.Status, address: *const UnixAddress, backlog: usize) Listener`: The caller removes the filesystem socket path after closing the listener.
-- `fn unix_connect(status: *fail.Status, address: *const UnixAddress) Connection`
-- `fn multicast_join_ipv4(status: *fail.Status, descriptor: isize, group: [4]u8, interface: [4]u8)`: IPv4 multicast membership uses network-order octets for both addresses.
-- `fn multicast_leave_ipv4(status: *fail.Status, descriptor: isize, group: [4]u8, interface: [4]u8)`
-- `fn multicast_interface_ipv4(status: *fail.Status, descriptor: isize, interface: [4]u8)`
-- `fn multicast_ttl_ipv4(status: *fail.Status, descriptor: isize, ttl: u8)`
-- `fn multicast_loop_ipv4(status: *fail.Status, descriptor: isize, enabled: bool)`: POSIX controls outgoing loopback;
-- `fn listener_accept(status: *fail.Status, listener: *Listener) Connection`
+- `fn connect_ipv4(descriptor: isize, address: *const Ipv4Address) !io.IoErr`
+- `fn bind_ipv4(descriptor: isize, address: *const Ipv4Address) !io.IoErr`
+- `fn connect_ipv6(descriptor: isize, address: *const Ipv6Address) !io.IoErr`
+- `fn bind_ipv6(descriptor: isize, address: *const Ipv6Address) !io.IoErr`
+- `fn connect_unix(descriptor: isize, address: *const UnixAddress) !io.IoErr`
+- `fn bind_unix(descriptor: isize, address: *const UnixAddress) !io.IoErr`
+- `fn connect(descriptor: isize, address: []const u8) !io.IoErr`: An empty address fails with InvalidInput.
+- `fn bind(descriptor: isize, address: []const u8) !io.IoErr`
+- `fn accept(descriptor: isize) isize!io.IoErr`: Accepts one connection: its descriptor.
+- `fn tcp_listen_ipv4(address: *const Ipv4Address, backlog: usize) Listener!io.IoErr`
+- `fn tcp_listen_ipv4_shared(address: *const Ipv4Address, backlog: usize) Listener!io.IoErr`: Like tcp_listen_ipv4 with SO_REUSEPORT set before bind.
+- `fn tcp_connect_ipv4(address: *const Ipv4Address) Connection!io.IoErr`
+- `fn tcp_listen_ipv6(address: *const Ipv6Address, backlog: usize) Listener!io.IoErr`
+- `fn tcp_connect_ipv6(address: *const Ipv6Address) Connection!io.IoErr`
+- `fn unix_listen(address: *const UnixAddress, backlog: usize) Listener!io.IoErr`: The caller removes the filesystem socket path after closing the listener.
+- `fn unix_connect(address: *const UnixAddress) Connection!io.IoErr`
+- `fn multicast_join_ipv4(descriptor: isize, group: [4]u8, interface: [4]u8) !io.IoErr`: IPv4 multicast membership uses network-order octets for both addresses.
+- `fn multicast_leave_ipv4(descriptor: isize, group: [4]u8, interface: [4]u8) !io.IoErr`
+- `fn multicast_interface_ipv4(descriptor: isize, interface: [4]u8) !io.IoErr`
+- `fn multicast_ttl_ipv4(descriptor: isize, ttl: u8) !io.IoErr`
+- `fn multicast_loop_ipv4(descriptor: isize, enabled: bool) !io.IoErr`: POSIX controls outgoing loopback;
+- `fn listener_accept(listener: *Listener) Connection!io.IoErr`
 - `fn listener_close(listener: *Listener)`
 - `fn connection_close(connection: *Connection)`
-- `fn connection_read(status: *fail.Status, connection: *Connection, destination: []u8) usize`: Reads what is available, up to destination;
-- `fn connection_write(status: *fail.Status, connection: *Connection, source: []const u8) usize`: Writes all of source;
+- `fn connection_read(connection: *Connection, destination: []u8) usize!io.IoErr`: Reads what is available, up to destination;
+- `fn connection_write(connection: *Connection, source: []const u8) !io.IoErr`: Writes all of source.
 - `fn connection_reader(connection: *Connection) io.Reader`
 - `fn connection_writer(connection: *Connection) io.Writer`
-- `fn accept_address(status: *fail.Status, descriptor: isize, address: *Address, nonblocking: bool) isize`: Accepts one connection and records its peer address.
-- `fn try_accept_address(status: *fail.Status, descriptor: isize, address: *Address, nonblocking: bool) Accepted`: Like accept_address on a nonblocking listener, where no pending connection is no failure: -1 with blocked true.
+- `fn accept_address(descriptor: isize, address: *Address, nonblocking: bool) isize!io.IoErr`: Accepts one connection and records its peer address.
+- `fn try_accept_address(descriptor: isize, address: *Address, nonblocking: bool) Accepted!io.IoErr`: Like accept_address on a nonblocking listener, where no pending connection is no failure: -1 with blocked true.
 - `struct Accepted { descriptor: isize, blocked: bool }`
-- `fn local_address(status: *fail.Status, descriptor: isize, address: *Address)`
-- `fn peer_address(status: *fail.Status, descriptor: isize, address: *Address)`
-- `fn send(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize) usize`: Sends what the socket takes now, up to all of bytes;
-- `fn receive(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize) usize`: Receives what is available, up to bytes;
+- `fn local_address(descriptor: isize, address: *Address) !io.IoErr`
+- `fn peer_address(descriptor: isize, address: *Address) !io.IoErr`
+- `fn send(descriptor: isize, bytes: []const u8, flags: usize) usize!io.IoErr`: Sends what the socket takes now, up to all of bytes;
+- `fn receive(descriptor: isize, bytes: []u8, flags: usize) usize!io.IoErr`: Receives what is available, up to bytes;
 - `struct Attempt { count: usize, blocked: bool }`: For nonblocking sockets, where a socket that is not ready is no failure: count is 0 and blocked is true.
-- `fn try_send(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize) Attempt`
-- `fn try_receive(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize) Attempt`
-- `fn send_to(status: *fail.Status, descriptor: isize, bytes: []const u8, flags: usize, address: []const u8) usize`: Sends one datagram to address;
-- `fn receive_from(status: *fail.Status, descriptor: isize, bytes: []u8, flags: usize, address: []u8, address_length: *u32) usize`: Receives one datagram and its sender's address;
-- `fn reuse_address(status: *fail.Status, descriptor: isize, enabled: bool)`
-- `fn no_delay(status: *fail.Status, descriptor: isize, enabled: bool)`: TCP_NODELAY: send small segments at once instead of waiting for the peer's ACK.
-- `fn reuse_port(status: *fail.Status, descriptor: isize, enabled: bool)`: SO_REUSEPORT with kernel load balancing.
-- `fn socket_error(status: *fail.Status, descriptor: isize)`: Completes a nonblocking connect: the connect's failure, read from SO_ERROR.
-- `fn nonblocking(status: *fail.Status, descriptor: isize, enabled: bool)`
-- `fn receive_timeout(status: *fail.Status, descriptor: isize, milliseconds: usize)`
-- `fn send_timeout(status: *fail.Status, descriptor: isize, milliseconds: usize)`
-- `fn would_block(failure: *const fail.Failure) bool`: Whether a failure is a socket timeout or a nonblocking socket that was not ready, rather than a broken connection.
-- `fn poll(status: *fail.Status, descriptors: []PollDescriptor, timeout_milliseconds: i32) usize`: Waits for readiness on descriptors;
-- `fn wait(status: *fail.Status, descriptor: isize, events: i16, timeout_milliseconds: i32) i16`: Waits for events on one descriptor: the events that happened, 0 on timeout.
+- `fn try_send(descriptor: isize, bytes: []const u8, flags: usize) Attempt!io.IoErr`
+- `fn try_receive(descriptor: isize, bytes: []u8, flags: usize) Attempt!io.IoErr`
+- `fn send_to(descriptor: isize, bytes: []const u8, flags: usize, address: []const u8) usize!io.IoErr`: Sends one datagram to address;
+- `fn receive_from(descriptor: isize, bytes: []u8, flags: usize, address: []u8, address_length: *u32) usize!io.IoErr`: Receives one datagram and its sender's address;
+- `fn reuse_address(descriptor: isize, enabled: bool) !io.IoErr`
+- `fn no_delay(descriptor: isize, enabled: bool) !io.IoErr`: TCP_NODELAY: send small segments at once instead of waiting for the peer's ACK.
+- `fn reuse_port(descriptor: isize, enabled: bool) !io.IoErr`: SO_REUSEPORT with kernel load balancing.
+- `fn socket_error(descriptor: isize) !io.IoErr`: Completes a nonblocking connect: the connect's failure, read from SO_ERROR.
+- `fn nonblocking(descriptor: isize, enabled: bool) !io.IoErr`
+- `fn receive_timeout(descriptor: isize, milliseconds: usize) !io.IoErr`
+- `fn send_timeout(descriptor: isize, milliseconds: usize) !io.IoErr`
+- `fn would_block(err: io.IoErr) bool`: Whether err is a socket timeout or a nonblocking socket that was not ready, rather than a broken connection.
+- `fn poll(descriptors: []PollDescriptor, timeout_milliseconds: i32) usize!io.IoErr`: Waits for readiness on descriptors;
+- `fn wait(descriptor: isize, events: i16, timeout_milliseconds: i32) i16!io.IoErr`: Waits for events on one descriptor: the events that happened, 0 on timeout.
 - `fn poll_has(item: *const PollDescriptor, events: i16) bool`
 - `struct Ip { bytes: [16]u8, length: usize, port: u16 }`: The IP of an IPv4 or IPv6 socket address: 4 or 16 bytes in network order, and the port.
 - `fn address_ip(address: *const Address) Ip`
@@ -1718,12 +1770,12 @@ Layer: std
 
 - `struct Ipv4 { a: u8, b: u8, c: u8, d: u8 }`
 - `struct Ipv6 { bytes: [16]u8 }`
-- `fn query_ipv4(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16) []u8`: An A query for name, in arena.
-- `fn query_ipv6(arena: *mem.Arena, status: *fail.Status, name: []const u8, identifier: u16) []u8`: An AAAA query for name, in arena, by the rules of query_ipv4.
-- `fn parse_ipv4(arena: *mem.Arena, status: *fail.Status, packet: []const u8, identifier: u16, name: []const u8) []Ipv4`: Complete arena-owned answers, invalidated by rewind/reset/release.
-- `fn parse_ipv6(arena: *mem.Arena, status: *fail.Status, packet: []const u8, identifier: u16, name: []const u8) []Ipv6`
-- `fn resolve_ipv4(arena: *mem.Arena, status: *fail.Status, name: []const u8, server: *const network.Ipv4Address, timeout_milliseconds: i32) []Ipv4`: The server transport address is IPv4;
-- `fn resolve_ipv6(arena: *mem.Arena, status: *fail.Status, name: []const u8, server: *const network.Ipv4Address, timeout_milliseconds: i32) []Ipv6`
+- `fn query_ipv4(arena: *mem.Arena, name: []const u8, identifier: u16) []u8!io.IoErr`: An A query for name, in arena.
+- `fn query_ipv6(arena: *mem.Arena, name: []const u8, identifier: u16) []u8!io.IoErr`: An AAAA query for name, in arena, by the rules of query_ipv4.
+- `fn parse_ipv4(arena: *mem.Arena, packet: []const u8, identifier: u16, name: []const u8) []Ipv4!io.IoErr`: Complete arena-owned answers, invalidated by rewind/reset/release.
+- `fn parse_ipv6(arena: *mem.Arena, packet: []const u8, identifier: u16, name: []const u8) []Ipv6!io.IoErr`
+- `fn resolve_ipv4(arena: *mem.Arena, name: []const u8, server: *const network.Ipv4Address, timeout_milliseconds: i32) []Ipv4!io.IoErr`: The server transport address is IPv4;
+- `fn resolve_ipv6(arena: *mem.Arena, name: []const u8, server: *const network.Ipv4Address, timeout_milliseconds: i32) []Ipv6!io.IoErr`
 
 ## std/net/http
 
@@ -1731,20 +1783,20 @@ Layer: std
 
 - `const CompressMinimum: usize = 1024`: Bodies shorter than this go out as they are: a gzip member has 18 bytes of framing, and small bodies fit one packet either way.
 - `const CompressHeaders: usize = 30`: Extra headers respond_compressed can carry besides Content-Encoding and Vary.
-- `fn respond_compressed(status: *fail.Status, response: *Response, request: *const Request, body: []const u8, options: ResponseOptions, level: u8, encoder: *gzip.Encoder)`: Like respond, with body gzipped at level (1-9) when that helps: the content type compresses (text, JSON, XML, SVG, JavaScript ...
+- `fn respond_compressed(response: *Response, request: *const Request, body: []const u8, options: ResponseOptions, level: u8, encoder: *gzip.Encoder) !io.IoErr`: Like respond, with body gzipped at level (1-9) when that helps: the content type compresses (text, JSON, XML, SVG, JavaScript ...
 - `enum Framing { None, Length, Chunked, Close }`
 - `struct HttpHead { framing: Framing, code: u16, header_length: usize, content_length: usize, keep_alive: bool, chunked: bool }`: Parser offsets are byte positions in the supplied input;
 - `struct Url { scheme: []const u8, host: []const u8, port: u16, target: []const u8, secure: bool }`
-- `fn parse_response(status: *fail.Status, input: []const u8) HttpHead`: Parses a complete response or request head.
-- `fn parse_request(status: *fail.Status, input: []const u8) HttpHead`
-- `fn header(status: *fail.Status, input: []const u8, name: []const u8) []const u8`: The value of the first header field called name, matched without case, in a complete head;
+- `fn parse_response(input: []const u8) HttpHead!parse.ParseErr`: Parses a complete response or request head.
+- `fn parse_request(input: []const u8) HttpHead!parse.ParseErr`
+- `fn header(input: []const u8, name: []const u8) []const u8!io.IoErr`: The value of the first header field called name, matched without case, in a complete head.
 - `struct ChunkReader { phase: ChunkPhase, size: usize, // Decoded bytes so far. total: usize, // A trailer field name being read: its length and whether it can still be // Content-Length or Transfer-Encoding, which trailers must not carry. name_length: usize, maybe_length: bool, maybe_encoding: bool, }`: Incremental chunked body decoding (RFC 9112 7.1) for bodies read in pieces, such as uploads larger than any buffer.
 - `struct ChunkStep { consumed: usize, data: []const u8, done: bool }`: consumed bytes of input were used;
 - `fn chunk_reader() ChunkReader`
-- `fn chunk_step(status: *fail.Status, reader: *ChunkReader, input: []const u8) ChunkStep`: Reads framing from input until it reaches data, the end of the body or the end of input.
-- `fn decode_chunked(arena: *memory.Arena, status: *fail.Status, input: []const u8) Chunked`: Validate the complete wire before allocating or writing decoded payload.
+- `fn chunk_step(reader: *ChunkReader, input: []const u8) ChunkStep!parse.ParseErr`: Reads framing from input until it reaches data, the end of the body or the end of input.
+- `fn decode_chunked(arena: *memory.Arena, input: []const u8) Chunked!parse.ParseErr`: Validate the complete wire before allocating or writing decoded payload.
 - `struct Chunked { value: []u8, consumed: usize }`: A decoded body, and how many input bytes its framing took.
-- `fn parse_url(status: *fail.Status, input: []const u8) Url`
+- `fn parse_url(input: []const u8) Url!parse.ParseErr`: An http or https URL with its host, port and request target.
 - `const StatusOk: u16 = 200`
 - `const StatusCreated: u16 = 201`
 - `const StatusNoContent: u16 = 204`
@@ -1778,60 +1830,60 @@ Layer: std
 - `const StatusPayloadTooLarge: u16 = 413`
 - `const StatusInternalServerError: u16 = 500`
 - `struct Request { raw: []const u8, method: []const u8, target: []const u8, // target before '?', and after it (empty when absent). Both borrow raw. path: []const u8, query: []const u8, body: []const u8, header_length: usize, keep_alive: bool, // Borrowed application state given to serve_stream or an evented start; nil otherwise. context: rawptr, // Path parameters captured by a Routes pattern such as /users/:id. Read // them with param. params: [MaxParams]Header, param_count: usize, }`
-- `struct Response { output: io.Writer, // Optional transport-owned response storage. Both callbacks use output.data. // reserve_body returns exclusive writable storage until commit or handler return. // commit_body queues a copied head followed by the first length body bytes, // and returns the count queued. reserve_body: fn(rawptr, usize) []u8, commit_body: fn(rawptr, *fail.Status, []const u8, usize) usize, reserved: []u8, started: bool, finished: bool, // The request was HEAD: the head is sent with the Content-Length the body // would have, and the body is dropped. head_only: bool, // Preformatted IMF-fixdate for the Date header, kept current by the server // loop. Empty: response_begin reads the clock itself. date: []const u8, // Set by servers that also speak HTTP/3: an Alt-Svc value (RFC 7838) sent // with every response, such as h3=":443"; ma=86400. Empty sends none. alt_svc: []const u8, // The status sent, once the head is written; 0 before. status: u16, // Set by a server that closes the connection after this response: the // head then says Connection: close whatever the options say. closing: bool, // Optional server-owned scratch of at least 8 KiB, reused for every // response: the head and a small body are composed in it. Empty: // response_begin uses its own stack buffer, zeroed on each call. staging: []u8, }`: A response being written.
+- `struct Response { output: io.Writer, // Optional transport-owned response storage. Both callbacks use output.data. // reserve_body returns exclusive writable storage until commit or handler return. // commit_body queues a copied head followed by the first length body bytes, // and returns the count queued. reserve_body: fn(rawptr, usize) []u8, commit_body: fn(rawptr, []const u8, usize) usize!io.IoErr, reserved: []u8, started: bool, finished: bool, // The request was HEAD: the head is sent with the Content-Length the body // would have, and the body is dropped. head_only: bool, // Preformatted IMF-fixdate for the Date header, kept current by the server // loop. Empty: response_begin reads the clock itself. date: []const u8, // Set by servers that also speak HTTP/3: an Alt-Svc value (RFC 7838) sent // with every response, such as h3=":443"; ma=86400. Empty sends none. alt_svc: []const u8, // The status sent, once the head is written; 0 before. status: u16, // Set by a server that closes the connection after this response: the // head then says Connection: close whatever the options say. closing: bool, // Optional server-owned scratch of at least 8 KiB, reused for every // response: the head and a small body are composed in it. Empty: // response_begin uses its own stack buffer, zeroed on each call. staging: []u8, }`: A response being written.
 - `struct Header { name: []const u8, value: []const u8 }`
 - `struct ResponseOptions { status: u16, reason: []const u8, content_type: []const u8, close_connection: bool, // Leaves out the Date header that every response otherwise carries. omit_date: bool, // Extra response headers, written in order. Names must be tokens and values // must not hold CR, LF or NUL; otherwise respond fails with Invalid before // writing anything, so request data cannot inject headers. headers: []const Header, // Set-Cookie headers, written from each Cookie (see set_cookie for what // is refused). A bad cookie fails respond before anything is written. cookies: []const Cookie, }`
-- `struct Server { failed: bool, ended: bool, input: io.Reader, output: io.Writer, storage: []u8, used: usize, consumed: usize, // Copied into every received Request. context: rawptr, }`: After a failure the stream position is lost, so the server stays failed: later receives fail with InvalidState.
+- `struct Server { failed: bool, ended: bool, input: io.Reader, output: io.Writer, storage: []u8, used: usize, consumed: usize, // Copied into every received Request. context: rawptr, }`: After a failure the stream position is lost, so the server stays failed: later receives fail with InvalidInput.
 - `struct Received { request: Request, response: Response, ended: bool }`: A received request and the response to write.
 - `struct Body { output: io.Writer, finished: bool, // A HEAD response: writes succeed and send nothing. discard: bool, // The response's staging, where small chunks are framed; empty: a stack // buffer, zeroed on each write. staging: []u8, }`: A streamed response body.
-- `type Handler = fn(*fail.Status, *Response, *const Request)`: Handles one request: writes the response, and records any failure in status.
+- `type Handler = fn(*Response, *const Request) !io.IoErr`: Handles one request: writes the response.
 - `struct ClientResponse { raw: []u8, body: []u8, status: u16, }`
-- `struct Typed(T) { state: *T, handler: fn(*fail.Status, *Response, *const Request, *T), }`: Typed application state.
+- `struct Typed<T> { state: *T, handler: fn(*Response, *const Request, *T) !io.IoErr, }`: Typed application state.
 - `struct Binding { handler: Handler, context: rawptr }`
-- `fn bind(typed: *Typed($T)) Binding`
-- `struct TypedRoute(T) { method: []const u8, pattern: []const u8, handler: fn(*fail.Status, *Response, *const Request, *T), }`: Typed router.
-- `struct Routes(T) { routes: []TypedRoute(T), count: usize, state: *T, fallback: fn(*fail.Status, *Response, *const Request, *T), }`
-- `fn typed_routes(storage: []TypedRoute($T), state: *$T) Routes(T)`: Route storage is caller-supplied;
-- `fn add(status: *fail.Status, router: *Routes($T), method: []const u8, pattern: []const u8, handler: fn(*fail.Status, *Response, *const Request, *$T))`: Adds a route.
-- `fn serve_routes(status: *fail.Status, router: *Routes($T), response: *Response, request: *const Request)`: Runs the matching route.
-- `fn bind_routes(router: *Routes($T)) Binding`: Binds a router for a server start, like bind.
+- `fn bind<T>(typed: *Typed<T>) Binding`
+- `struct TypedRoute<T> { method: []const u8, pattern: []const u8, handler: fn(*Response, *const Request, *T) !io.IoErr, }`: Typed router.
+- `struct Routes<T> { routes: []TypedRoute<T>, count: usize, state: *T, fallback: fn(*Response, *const Request, *T) !io.IoErr, }`
+- `fn typed_routes<T>(storage: []TypedRoute<T>, state: *T) Routes<T>`: Route storage is caller-supplied;
+- `fn add<T>(router: *Routes<T>, method: []const u8, pattern: []const u8, handler: fn(*Response, *const Request, *T) !io.IoErr) !io.IoErr`: Adds a route.
+- `fn serve_routes<T>(router: *Routes<T>, response: *Response, request: *const Request) !io.IoErr`: Runs the matching route.
+- `fn bind_routes<T>(router: *Routes<T>) Binding`: Binds a router for a server start, like bind.
 - `fn match_path(pattern: []const u8, path: []const u8, request: *Request) bool`: Matches path against pattern segment by segment, capturing :name segments into request.params.
-- `fn param(status: *fail.Status, request: *const Request, name: []const u8) []const u8`: Path parameter captured by a Routes pattern, still percent-encoded;
+- `fn param(request: *const Request, name: []const u8) []const u8!io.IoErr`: Path parameter captured by a Routes pattern, still percent-encoded.
 - `fn server(input: io.Reader, output: io.Writer, storage: []u8) Server`
 - `enum FrameStatus { Incomplete, Ready, Invalid, Capacity }`
 - `struct FrameResult { status: FrameStatus, request: Request, consumed: usize, offset: usize, total: usize, expect_continue: bool, // frame_request_head: the declared Content-Length, or chunked. body_length: usize, chunked: bool, }`: On Incomplete with a complete head, total is the request's full length and expect_continue says the client waits for 100 Continue before ...
 - `fn frame_request(input: []const u8, capacity: usize) FrameResult`: Frames one request from bytes already buffered, with no I/O, for callers that own their sockets (event loops).
 - `fn frame_request_decoding(input: []u8, capacity: usize) FrameResult`: Like frame_request, and also takes Transfer-Encoding: chunked bodies.
 - `fn frame_request_head(input: []const u8, capacity: usize) FrameResult`: Frames only a request's head, for bodies read separately (see ChunkReader).
-- `fn receive(status: *fail.Status, state: *Server) Received`: The next request.
+- `fn receive(state: *Server) Received!io.IoErr`: The next request.
 - `fn status_reason(status: u16) []const u8`: Reason phrase for status, or "Status" for codes without a registered one.
 - `fn status_has_body(status: u16) bool`: Responses with these codes never carry content (RFC 9110 6.4.1): the head has no Content-Type, Content-Length or Transfer-Encoding.
 - `const DateLength: usize = 29`
 - `fn format_date(destination: []u8, unix_seconds: i64) []u8`: IMF-fixdate (RFC 9110 5.6.7) for unix_seconds, such as "Sun, 06 Nov 1994 08:49:37 GMT", into the first DateLength bytes of destination.
-- `fn parse_date(status: *fail.Status, text: []const u8) i64`: Unix seconds from an IMF-fixdate, as in If-Modified-Since.
-- `fn request_header(status: *fail.Status, request: *const Request, name: []const u8) []const u8`: The value of the first request header named name (ASCII case-insensitive), borrowing request.raw;
-- `fn cookie(status: *fail.Status, request: *const Request, name: []const u8) []const u8`: Value of cookie name from the request's Cookie headers (RFC 6265 5.4).
-- `fn cookie_in(status: *fail.Status, header_value: []const u8, name: []const u8) []const u8`: The cookie named name in one Cookie header value, such as "a=1;
+- `fn parse_date(text: []const u8) i64!parse.ParseErr`: Unix seconds from an IMF-fixdate, as in If-Modified-Since.
+- `fn request_header(request: *const Request, name: []const u8) []const u8!io.IoErr`: The value of the first request header named name (ASCII case-insensitive), borrowing request.raw;
+- `fn cookie(request: *const Request, name: []const u8) []const u8!io.IoErr`: Value of cookie name from the request's Cookie headers (RFC 6265 5.4).
+- `fn cookie_in(header_value: []const u8, name: []const u8) []const u8!io.IoErr`: The cookie named name in one Cookie header value, such as "a=1;
 - `enum SameSite { Default, Lax, Strict, None }`
 - `const CookieLength: usize = 1024`: A Set-Cookie value.
 - `struct Cookie { name: []const u8, value: []const u8, path: []const u8, domain: []const u8, max_age: i64, expires: i64, secure: bool, http_only: bool, same_site: SameSite, partitioned: bool, }`
-- `fn set_cookie(status: *fail.Status, destination: []u8, item: Cookie) []u8`: Writes the Set-Cookie header value for cookie into destination.
-- `fn sse_event(status: *fail.Status, destination: []u8, event: []const u8, id: []const u8, data: []const u8) []u8`: One Server-Sent Events message: optional event and id fields, a data line for each line of data (CR, LF or CRLF), then a blank line.
-- `fn form_decode(status: *fail.Status, destination: []u8, source: []const u8) []u8`: application/x-www-form-urlencoded value into destination: '+' becomes a space and %XX a byte.
-- `fn form_field(status: *fail.Status, form: []const u8, name: []const u8) []const u8`: Raw, still-encoded value of the first field named name in an urlencoded form or query string;
+- `fn set_cookie(destination: []u8, item: Cookie) []u8!io.IoErr`: Writes the Set-Cookie header value for cookie into destination.
+- `fn sse_event(destination: []u8, event: []const u8, id: []const u8, data: []const u8) []u8!io.IoErr`: One Server-Sent Events message: optional event and id fields, a data line for each line of data (CR, LF or CRLF), then a blank line.
+- `fn form_decode(destination: []u8, source: []const u8) []u8!parse.ParseErr`: application/x-www-form-urlencoded value into destination: '+' becomes a space and %XX a byte.
+- `fn form_field(form: []const u8, name: []const u8) []const u8!io.IoErr`: Raw, still-encoded value of the first field named name in an urlencoded form or query string;
 - `fn query_has(request: *const Request, name: []const u8) bool`: Whether the query has a parameter called name, with or without a value ("?debug" and "?debug=1" both have debug).
-- `fn query_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) []u8`: Decoded query parameter name into destination;
-- `fn form_value(status: *fail.Status, request: *const Request, name: []const u8, destination: []u8) []u8`: Decoded urlencoded body field name into destination, by the rules of query_value.
+- `fn query_value(request: *const Request, name: []const u8, destination: []u8) []u8!io.IoErr`: Decoded query parameter name into destination.
+- `fn form_value(request: *const Request, name: []const u8, destination: []u8) []u8!io.IoErr`: Decoded urlencoded body field name into destination, by the rules of query_value.
 - `fn body_buffer(response: *Response, capacity: usize) []u8`: Returns exclusive transport-owned body storage, or empty when unavailable.
-- `fn respond_buffered(status: *fail.Status, response: *Response, length: usize, options: ResponseOptions)`: Commit the initialized prefix of body_buffer without copying its body.
-- `fn respond(status: *fail.Status, response: *Response, body: []const u8, options: ResponseOptions)`: Writes the whole response: head and body.
-- `fn respond_stream(status: *fail.Status, response: *Response, options: ResponseOptions) Body`: Writes the head of a chunked response;
+- `fn respond_buffered(response: *Response, length: usize, options: ResponseOptions) !io.IoErr`: Commit the initialized prefix of body_buffer without copying its body.
+- `fn respond(response: *Response, body: []const u8, options: ResponseOptions) !io.IoErr`: Writes the whole response: head and body.
+- `fn respond_stream(response: *Response, options: ResponseOptions) Body!io.IoErr`: Writes the head of a chunked response;
 - `fn body_writer(body: *Body) io.Writer`: Borrows a stable Body slot: do not move or destroy it during the writer's lifetime.
-- `fn body_finish(status: *fail.Status, body: *Body)`: Ends the body with the last chunk.
+- `fn body_finish(body: *Body) !io.IoErr`: Ends the body with the last chunk.
 - `fn body_abort(body: *Body)`: Stops the body without the last chunk, so the client sees it cut short.
-- `fn serve_stream(status: *fail.Status, input: io.Reader, output: io.Writer, storage: []u8, handler: Handler, context: rawptr)`: Serves HTTP/1.1 on one stream until the client closes or a request fails, one request at a time on the calling thread.
-- `fn client_do(arena: *memory.Arena, status: *fail.Status, input: io.Reader, output: io.Writer, method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse`: Complete exchange;
-- `fn client_do_connection(arena: *memory.Arena, status: *fail.Status, connection: *network.Connection, method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse`
+- `fn serve_stream(input: io.Reader, output: io.Writer, storage: []u8, handler: Handler, context: rawptr) !io.IoErr`: Serves HTTP/1.1 on one stream until the client closes or a request fails, one request at a time on the calling thread.
+- `fn client_do(arena: *memory.Arena, input: io.Reader, output: io.Writer, method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse!io.IoErr`: Complete exchange;
+- `fn client_do_connection(arena: *memory.Arena, connection: *network.Connection, method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse!io.IoErr`
 - `fn write_request(arena: *memory.Arena, method: []const u8, target: []const u8, host: []const u8, body: []const u8) []u8`: A complete HTTP/1.1 request with Connection: close, in arena.
 - `fn write_response(arena: *memory.Arena, code: u16, reason: []const u8, content_type: []const u8, body: []const u8) []u8`: A complete HTTP/1.1 response with Connection: close, in arena.
 - `struct Bucket { key: u64, tokens: i64, updated: i64, used: bool }`: Token buckets keyed by a 64-bit client key (see ip_key), for rate limits such as "5 logins per minute per address".
@@ -1842,13 +1894,13 @@ Layer: std
 - `fn ip_key(ip: []const u8, purpose: u64) u64`: A key for ip bytes (IPv4 or IPv6) and a purpose: FNV-1a over both, so one limiter table can hold several limits.
 - `struct Part { // From Content-Disposition: the field name, and the file name when the // part is a file. Quotes are removed; backslash escapes are kept as sent. name: []const u8, filename: []const u8, has_filename: bool, // Empty means text/plain. content_type: []const u8, body: []const u8, }`
 - `struct Parts { delimiter: [74]u8, delimiter_length: usize, rest: []const u8, done: bool, failed: bool, // Set by a next_part call that returns no part: after the closing // delimiter, or after a failure. ended: bool, }`
-- `fn multipart(status: *fail.Status, request: *const Request) Parts`: Starts reading a multipart/form-data body.
-- `fn next_part(status: *fail.Status, reader: *Parts) Part`
-- `fn text(status: *fail.Status, response: *Response, code: u16, body: []const u8)`: A plain-text body with status.
-- `fn json(status: *fail.Status, response: *Response, code: u16, body: []const u8)`: A JSON body with status, not cached.
-- `fn redirect(status: *fail.Status, response: *Response, location: []const u8, cookies: []const Cookie)`: 303 See Other to location, setting cookies (none is fine): the answer to a form post.
-- `fn page_writer(status: *fail.Status, response: *Response, fallback: []u8) html.Writer`: A Writer for an HTML page (see page): over the response's send buffer when it is free, so the page goes out without a copy, else over ...
-- `fn page(status: *fail.Status, response: *Response, code: u16, rendered: *const html.Writer)`: Sends the page from page_writer with code as text/html, not cached, with Content-Security-Policy default-src 'self' and ...
+- `fn multipart(request: *const Request) Parts!io.IoErr`: Starts reading a multipart/form-data body.
+- `fn next_part(reader: *Parts) Part!io.IoErr`
+- `fn text(response: *Response, code: u16, body: []const u8) !io.IoErr`: A plain-text body with status code.
+- `fn json(response: *Response, code: u16, body: []const u8) !io.IoErr`: A JSON body with status code, not cached.
+- `fn redirect(response: *Response, location: []const u8, cookies: []const Cookie) !io.IoErr`: 303 See Other to location, setting cookies (none is fine): the answer to a form post.
+- `fn page_writer(response: *Response, fallback: []u8) html.Writer`: A Writer for an HTML page (see page): over the response's send buffer when it is free, so the page goes out without a copy, else over ...
+- `fn page(response: *Response, code: u16, rendered: *const html.Writer) !io.IoErr`: Sends the page from page_writer with code as text/html, not cached, with Content-Security-Policy default-src 'self' and ...
 - `struct Asset { // URL path below the mount, without a leading slash: "css/app.css". path: []const u8, content_type: []const u8, body: []const u8, // Empty when gzip would not be smaller. gzip: []const u8, // Quoted strong validator: "\"0123456789abcdef\"". etag: []const u8, // Unix seconds for Last-Modified, or 0 to leave it out. modified: i64, }`
 - `struct Assets { items: []Asset, count: usize }`: Assets in caller storage;
 - `fn content_type(name: []const u8) []const u8`: Content type for a file name by its extension, ASCII case-insensitive: "app.CSS" is text/css.
@@ -1856,12 +1908,12 @@ Layer: std
 - `fn assets_of(arena: *memory.Arena, pairs: ...[]const u8) Assets`: Orders assets by path so find_asset can search them.
 - `fn sort_assets(assets: *Assets)`
 - `fn find_asset(assets: *const Assets, path: []const u8) *const Asset`: The asset at path, or nil.
-- `fn load_directory(arena: *memory.Arena, status: *fail.Status, root: []const u8, storage: []Asset, maximum: usize) Assets`: Every regular file below root, recursively, read into arena as assets in storage, sorted.
+- `fn load_directory(arena: *memory.Arena, root: []const u8, storage: []Asset, maximum: usize) Assets!io.IoErr`: Every regular file below root, recursively, read into arena as assets in storage, sorted.
 - `fn accepts_encoding(request: *const Request, coding: []const u8) bool`: Whether the request's Accept-Encoding allows coding (RFC 9110 12.5.3): it is listed, or "*" is, with a q-value above zero.
 - `fn etag_matches(request: *const Request, etag: []const u8) bool`: If-None-Match against etag: "*" or a listed tag, comparing weakly (W/ prefixes ignored), as RFC 9110 13.1.2 requires for GET and HEAD.
 - `struct ByteRange { start: usize, end: usize }`: A single byte range of a representation, as a half-open interval.
-- `fn byte_range(status: *fail.Status, request: *const Request, length: usize) ByteRange`: The byte range a Range header asks for in a representation length bytes long (RFC 9110 14.1.2): bytes=first-last, bytes=first- or ...
-- `fn serve_asset(status: *fail.Status, response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8)`: Answers request with asset: 304 when If-None-Match matches (or, without If-None-Match, when If-Modified-Since is not older than modified);
+- `fn byte_range(request: *const Request, length: usize) ByteRange!io.IoErr`: The byte range a Range header asks for in a representation length bytes long (RFC 9110 14.1.2): bytes=first-last, bytes=first- or ...
+- `fn serve_asset(response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8) !io.IoErr`: Answers request with asset: 304 when If-None-Match matches (or, without If-None-Match, when If-Modified-Since is not older than modified);
 
 ## std/net/http/evented
 
@@ -1880,34 +1932,34 @@ Layer: std
 - `struct Transport { data: rawptr, open: fn(rawptr, isize) rawptr, handshake: fn(rawptr) TransportIo, read: fn(rawptr, []u8) TransportIo, write: fn(rawptr, []const u8) TransportIo, close: fn(rawptr), // The application protocol the handshake agreed on (TLS ALPN), such as // "h2"; nil when the transport has none. protocol: fn(rawptr) []const u8, // The transport calls C code that keeps per-thread state; start then // requires Config.spawner. needs_native_threads: bool, }`: A byte-stream layer over each accepted nonblocking socket, such as TLS.
 - `fn default_config() Config`
 - `fn storage_size(config: Config, worker_count: usize) usize`: Bytes of backing storage start needs for this many workers.
-- `struct Worker { thread: *threading.Thread, // Handle from Config.spawner, instead of thread. native: rawptr, listener: *network.Listener, // Set by start_shared: this worker's own SO_REUSEPORT listener. own_listener: network.Listener, handler: http.Handler, context: rawptr, config: Config, connections: []Connection, free: []usize, free_count: usize, // Connections whose requests finish after this pass's events (later). later: []usize, later_count: usize, later_done: usize, // One past the highest slot ever taken. Free slots are reused last in, // first out, so scans over connections stop here, not at the capacity. slots_used: usize, send_pool: SendPool, upload_pool: SendPool, queue: event.Queue, // False while every slot is busy: the level-triggered listener would // otherwise wake the loop continuously. listening: bool, scratch: *mem.Arena, // Set by run and later on first use, and by open_stream: the loop reaches // job and stream code only through these, so a server that never defers or // streams does not link it. on_deferred: fn(*Worker, usize) bool, on_job_done: fn(*Worker, usize), on_later: fn(*Worker), on_deliver: fn(*Worker, usize, Post, []const u8), // Where response heads are composed: 8 KiB, reused by every response this // worker writes, so none zeroes a buffer of its own. head_staging: []u8, // Every slot's input and output buffers, receive_size and send_size each. slot_input: []u8, slot_output: []u8, // Job storage, job_stride bytes per slot. A slot's job arena is made on // its first job, so idle slots leave their pages untouched. job_bytes: []u8, job_stride: usize, // Why the loop stopped, reported by join. error: fail.Status, // The worker's internal calls share io and handler calls share request. // Each is cleared after a failure is handled, so the next call starts // clean and a call that succeeds costs no status. io: fail.Status, request: fail.Status, stopping: sync.AtomicU32, // Counters are written by the worker only; read them after join. accepted: u64, requests: u64, rejected: u64, // Connections closed to make room, and connections refused with 503. evicted: u64, refused: u64, id: u32, waker: event.Waker, inbox: Inbox, // Jobs submitted and not yet finished; only the worker changes it. jobs_running: usize, // Connections in regular slots, at most connections_per_worker, and // clients parked in reserve slots. serving: usize, parked: usize, // All workers started together, and whether this one has no regular slot // free: on a shared listener, a full worker leaves accepting to the others. group: []Worker, full: sync.AtomicU32, // Current IMF-fixdate for Date headers, refreshed once per loop pass. date: [http.DateLength]u8, date_second: i64, // Workspace for respond_compressed; nil when Config.compress_level is zero. encoder: *gzip.Encoder, // The request arena; nil when Config.request_arena_size is zero. request_arena: *mem.Arena, h2: H2Pool, // HTTP/3: the UDP socket, QUIC listener, milliseconds to its next timer, // the QUIC connections' slots, and the Alt-Svc value for TCP responses. udp: isize, quic_listener: rawptr, quic_timer: i64, h3_connections: []usize, h3_count: usize, alt_svc: [48]u8, alt_svc_length: usize, }`
-- `fn start(arena: *mem.Arena, status: *fail.Status, workers: []Worker, listener: *network.Listener, config: Config, handler: http.Handler, context: rawptr) usize`: Starts one event loop per worker, all accepting from listener (made nonblocking here).
-- `fn start_shared(arena: *mem.Arena, status: *fail.Status, workers: []Worker, address: network.Ipv4Address, backlog: usize, config: Config, handler: http.Handler, context: rawptr) usize`: Like start, but every worker owns a listener on address with SO_REUSEPORT, so the kernel spreads new connections across workers instead of ...
+- `struct Worker { thread: *threading.Thread, // Handle from Config.spawner, instead of thread. native: rawptr, listener: *network.Listener, // Set by start_shared: this worker's own SO_REUSEPORT listener. own_listener: network.Listener, handler: http.Handler, context: rawptr, config: Config, connections: []Connection, free: []usize, free_count: usize, // Connections whose requests finish after this pass's events (later). later: []usize, later_count: usize, later_done: usize, // One past the highest slot ever taken. Free slots are reused last in, // first out, so scans over connections stop here, not at the capacity. slots_used: usize, send_pool: SendPool, upload_pool: SendPool, queue: event.Queue, // False while every slot is busy: the level-triggered listener would // otherwise wake the loop continuously. listening: bool, scratch: *mem.Arena, // Set by run and later on first use, and by open_stream: the loop reaches // job and stream code only through these, so a server that never defers or // streams does not link it. on_deferred: fn(*Worker, usize) bool, on_job_done: fn(*Worker, usize), on_later: fn(*Worker), on_deliver: fn(*Worker, usize, Post, []const u8), // Where response heads are composed: 8 KiB, reused by every response this // worker writes, so none zeroes a buffer of its own. head_staging: []u8, // Every slot's input and output buffers, receive_size and send_size each. slot_input: []u8, slot_output: []u8, // Job storage, job_stride bytes per slot. A slot's job arena is made on // its first job, so idle slots leave their pages untouched. job_bytes: []u8, job_stride: usize, // Why the loop stopped, reported by join. stop_failed: bool, stop_error: io.IoErr, // Set by invoke when the handler call just made failed; handled clears it. request_failed: bool, request_error: io.IoErr, stopping: sync.AtomicU32, // Counters are written by the worker only; read them after join. accepted: u64, requests: u64, rejected: u64, // Connections closed to make room, and connections refused with 503. evicted: u64, refused: u64, id: u32, waker: event.Waker, inbox: Inbox, // Jobs submitted and not yet finished; only the worker changes it. jobs_running: usize, // Connections in regular slots, at most connections_per_worker, and // clients parked in reserve slots. serving: usize, parked: usize, // All workers started together, and whether this one has no regular slot // free: on a shared listener, a full worker leaves accepting to the others. group: []Worker, full: sync.AtomicU32, // Current IMF-fixdate for Date headers, refreshed once per loop pass. date: [http.DateLength]u8, date_second: i64, // Workspace for respond_compressed; nil when Config.compress_level is zero. encoder: *gzip.Encoder, // The request arena; nil when Config.request_arena_size is zero. request_arena: *mem.Arena, h2: H2Pool, // HTTP/3: the UDP socket, QUIC listener, milliseconds to its next timer, // the QUIC connections' slots, and the Alt-Svc value for TCP responses. udp: isize, quic_listener: rawptr, quic_timer: i64, h3_connections: []usize, h3_count: usize, alt_svc: [48]u8, alt_svc_length: usize, }`
+- `fn start(arena: *mem.Arena, workers: []Worker, listener: *network.Listener, config: Config, handler: http.Handler, context: rawptr) !io.IoErr`: Starts one event loop per worker, all accepting from listener (made nonblocking here).
+- `fn start_shared(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address, backlog: usize, config: Config, handler: http.Handler, context: rawptr) !io.IoErr`: Like start, but every worker owns a listener on address with SO_REUSEPORT, so the kernel spreads new connections across workers instead of ...
 - `fn local_port(workers: []Worker) u16`: Local port of the first worker's listener, or 0.
 - `fn stop(workers: []Worker)`: Asks every worker to finish its current loop pass (at most about 100 ms).
-- `fn join(status: *fail.Status, workers: []Worker)`: Always joins every worker.
-- `fn send(status: *fail.Status, workers: []Worker, peer: Peer, payload: []const u8, binary: bool)`: Queues payload for peer from any thread: a WebSocket text frame (binary frame when binary), or a chunk of an open stream.
-- `fn publish(status: *fail.Status, workers: []Worker, topic: u64, payload: []const u8, binary: bool)`: Queues payload for every stream and WebSocket opened with topic, on every worker.
-- `fn close_peer(status: *fail.Status, workers: []Worker, peer: Peer)`: Ends a stream (final chunk) or WebSocket (close frame 1000), then closes it.
+- `fn join(workers: []Worker) !io.IoErr`: Always joins every worker.
+- `fn send(workers: []Worker, peer: Peer, payload: []const u8, binary: bool) !io.IoErr`: Queues payload for peer from any thread: a WebSocket text frame (binary frame when binary), or a chunk of an open stream.
+- `fn publish(workers: []Worker, topic: u64, payload: []const u8, binary: bool) !io.IoErr`: Queues payload for every stream and WebSocket opened with topic, on every worker.
+- `fn close_peer(workers: []Worker, peer: Peer) !io.IoErr`: Ends a stream (final chunk) or WebSocket (close frame 1000), then closes it.
 - `fn client_ip(response: *http.Response) network.Ip`: The client's IP and port for an evented response;
-- `fn respond_compressed(status: *fail.Status, response: *http.Response, request: *const http.Request, body: []const u8, options: http.ResponseOptions)`: http.respond_compressed with the worker's encoder at Config.compress_level: body is gzipped when the client accepts it and that helps.
+- `fn respond_compressed(response: *http.Response, request: *const http.Request, body: []const u8, options: http.ResponseOptions) !io.IoErr`: http.respond_compressed with the worker's encoder at Config.compress_level: body is gzipped when the client accepts it and that helps.
 - `fn arena(response: *http.Response) *mem.Arena`: Scratch for the current handler, in the worker's request arena: allocate from it and never free.
 - `fn worker_index(response: *http.Response) usize`: Which of the started workers runs this handler, from 0: an index into per-worker state, such as one database connection each, which then ...
-- `fn serve(arena: *mem.Arena, status: *fail.Status, workers: []Worker, address: network.Ipv4Address, config: Config, handler: http.Handler, context: rawptr)`: Runs the server until SIGINT or SIGTERM: watches the signals first (before any thread starts, as std/process/signal requires), starts ...
-- `fn job(T: type, response: *http.Response) *T`: Job storage for run, zeroed, in the connection's job arena: copy what the work needs into it.
-- `fn run(status: *fail.Status, response: *http.Response, data: *$J, work: fn(*$J), finish: fn(*fail.Status, *http.Response, *const http.Request, *$J))`
-- `fn later(status: *fail.Status, response: *http.Response, data: *$J, finish: fn(*fail.Status, *http.Response, *const http.Request, *$J))`: Finishes the request on this worker once every connection that is ready now has had its turn: finish(response, request, data) runs after ...
-- `fn receive_body(status: *fail.Status, response: *http.Response, data: *$J, chunk: fn(*$J, []const u8) bool, finish: fn(*fail.Status, *http.Response, *const http.Request, *$J, BodyEnd))`: In Config.large_body: reads the request body as it arrives instead of buffering it.
-- `fn open_stream(status: *fail.Status, response: *http.Response, options: http.ResponseOptions, topic: u64) Peer`
-- `fn upgrade(status: *fail.Status, response: *http.Response, request: *const http.Request, topic: u64) Peer`: Answers a WebSocket upgrade request (RFC 6455 4.2) with 101 and switches the connection to WebSocket frames;
+- `fn serve(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address, config: Config, handler: http.Handler, context: rawptr) !io.IoErr`: Runs the server until SIGINT or SIGTERM: watches the signals first (before any thread starts, as std/process/signal requires), starts ...
+- `fn job<T>(response: *http.Response) *T`: Job storage for run, zeroed, in the connection's job arena: copy what the work needs into it.
+- `fn run<J>(response: *http.Response, data: *J, work: fn(*J), finish: fn(*http.Response, *const http.Request, *J) !io.IoErr) !io.IoErr`: Hands the request to Config.pool: work(data) runs on a pool thread, then finish answers the request on the worker thread with a fresh ...
+- `fn later<J>(response: *http.Response, data: *J, finish: fn(*http.Response, *const http.Request, *J) !io.IoErr) !io.IoErr`: Finishes the request on this worker once every connection that is ready now has had its turn: finish(response, request, data) runs after ...
+- `fn receive_body<J>(response: *http.Response, data: *J, chunk: fn(*J, []const u8) bool, finish: fn(*http.Response, *const http.Request, *J, BodyEnd) !io.IoErr) !io.IoErr`: In Config.large_body: reads the request body as it arrives instead of buffering it.
+- `fn open_stream(response: *http.Response, options: http.ResponseOptions, topic: u64) Peer!io.IoErr`: Starts a chunked response that stays open after the handler returns, such as text/event-stream.
+- `fn upgrade(response: *http.Response, request: *const http.Request, topic: u64) Peer!io.IoErr`: Answers a WebSocket upgrade request (RFC 6455 4.2) with 101 and switches the connection to WebSocket frames;
 - `const Http2Streams: usize = 100`
-- `struct Http2 { storage_size: fn(Config) usize, valid: fn(Config) bool, start: fn(*mem.Arena, *Worker), serve: fn(*Worker, usize) bool, begin: fn(*Worker, usize) bool, close_all: fn(*Worker, *Connection), release: fn(*Worker, *Connection), job_done: fn(*Worker, usize), deliver: fn(*Worker, *Connection, Post, []const u8), job: fn(*Connection) *mem.Arena, run: fn(*fail.Status, *Connection, rawptr, fn(rawptr), fn(*fail.Status, *http.Response, *const http.Request, rawptr)), receive_body: fn(*fail.Status, *Connection, *http.Response, rawptr, fn(rawptr, []const u8) bool, fn(*fail.Status, *http.Response, *const http.Request, rawptr, BodyEnd)), open_stream: fn(*fail.Status, *Connection, *http.Response, http.ResponseOptions, u64) Peer, upgrade: fn(*fail.Status, *Connection, *http.Response, u64) Peer, }`: HTTP/2 for Config.http2: the calls the server makes into this file.
+- `struct Http2 { storage_size: fn(Config) usize, valid: fn(Config) bool, start: fn(*mem.Arena, *Worker), serve: fn(*Worker, usize) bool, begin: fn(*Worker, usize) bool, close_all: fn(*Worker, *Connection), release: fn(*Worker, *Connection), job_done: fn(*Worker, usize), deliver: fn(*Worker, *Connection, Post, []const u8), job: fn(*Connection) *mem.Arena, run: fn(*Connection, rawptr, fn(rawptr), fn(*http.Response, *const http.Request, rawptr) !io.IoErr) !io.IoErr, receive_body: fn(*Connection, *http.Response, rawptr, fn(rawptr, []const u8) bool, fn(*http.Response, *const http.Request, rawptr, BodyEnd) !io.IoErr) !io.IoErr, open_stream: fn(*Connection, *http.Response, http.ResponseOptions, u64) Peer!io.IoErr, upgrade: fn(*Connection, *http.Response, u64) Peer!io.IoErr, }`: HTTP/2 for Config.http2: the calls the server makes into this file.
 - `fn http2() Http2`: HTTP/2 for Config.http2: prior-knowledge cleartext clients and TLS clients whose ALPN chose "h2".
 - `enum QuicStatus { Ok, WouldBlock, End, Failed }`
 - `struct QuicIo { count: usize, status: QuicStatus }`
 - `struct QuicStream { handle: rawptr, id: u64, unidirectional: bool }`: An accepted stream;
 - `struct Quic { data: rawptr, // A listener over a bound nonblocking UDP socket, or nil. listen: fn(rawptr, isize) rawptr, // Processes network I/O and timers; milliseconds to the next timer or -1. handle_events: fn(rawptr) i64, accept_connection: fn(rawptr) rawptr, accept_stream: fn(rawptr) QuicStream, // A new server unidirectional stream on a connection, or nil. open_stream: fn(rawptr) rawptr, // End: the peer finished the stream; Failed: it was reset or broke. read: fn(rawptr, []u8) QuicIo, // Writes what fits; true concludes the stream after source. write: fn(rawptr, []const u8, bool) QuicIo, writable: fn(rawptr) usize, reset: fn(rawptr, u64), closed: fn(rawptr) bool, // Frees a stream handle. free: fn(rawptr), // Closes a connection with an application error code and frees it. close: fn(rawptr, u64), // The peer's sockaddr into the buffer; its length or 0. peer: fn(rawptr, []u8) usize, close_listener: fn(rawptr), }`: A QUIC server stack, like Transport for TLS.
-- `struct Http3 { storage_size: fn(Config) usize, valid: fn(Config) bool, start: fn(*mem.Arena, *fail.Status, *Worker), close: fn(*Worker, *Connection), poll: fn(*Worker), stop: fn(*Worker), }`: HTTP/3 for Config.http3: the calls the server makes into this file.
+- `struct Http3 { storage_size: fn(Config) usize, valid: fn(Config) bool, start: fn(*mem.Arena, *Worker) !io.IoErr, close: fn(*Worker, *Connection), poll: fn(*Worker), stop: fn(*Worker), }`: HTTP/3 for Config.http3: the calls the server makes into this file.
 - `fn http3() Http3`: HTTP/3 for Config.http3, on a UDP socket at the TCP listener's address.
 
 ## std/net/http/evented/tls
@@ -1915,8 +1967,8 @@ Layer: std
 Layer: std
 
 - `fn transport(context: provider.Context) evented.Transport`
-- `fn offer_http2(status: *fail.Status, context: provider.Context)`: Offers HTTP/2 through ALPN on context;
-- `fn quic_context(arena: *mem.Arena, status: *fail.Status, certificate: []const u8, key: []const u8) provider.Context`: A QUIC server context offering "h3" through ALPN, from PEM files.
+- `fn offer_http2(context: provider.Context) !io.IoErr`: Offers HTTP/2 through ALPN on context;
+- `fn quic_context(arena: *mem.Arena, certificate: []const u8, key: []const u8) provider.Context!io.IoErr`: A QUIC server context offering "h3" through ALPN, from PEM files.
 - `fn quic(context: provider.Context) evented.Quic`: The QUIC stack for Config.quic.
 
 ## std/net/http/hpack
@@ -1930,14 +1982,14 @@ Layer: core
 - `struct Table { storage: []u8, start: usize, end: usize, entries: []Entry, first: usize, count: usize, size: usize, max_size: usize, limit: usize, }`: Entry bytes live in storage[start..end], oldest first;
 - `struct Decoder { table: Table, // A field was decoded since decode_begin: size updates must come first. fields: bool, }`
 - `struct Field { name: []const u8, value: []const u8, consumed: usize, update: bool, // A never-indexed literal: intermediaries must not compress it. sensitive: bool, }`: One decoded representation.
-- `fn decoder(storage: []u8, entries: []Entry) Decoder`: Storage bounds the table: limit is #len(storage) bytes, and at most EntryOverhead bytes per entry (see entries_for).
+- `fn decoder(storage: []u8, entries: []Entry) Decoder`: Storage bounds the table: limit is storage.len bytes, and at most EntryOverhead bytes per entry (see entries_for).
 - `fn entries_for(storage_size: usize) usize`: Entries a decoder needs for storage bytes of table.
 - `fn decode_begin(decoder: *Decoder)`: Starts a header block: a size update is allowed again before its first field.
 - `struct Decoded { length: usize, valid: bool }`
 - `fn huffman_decode(source: []const u8, destination: []u8) Decoded`: Huffman-decodes source into destination (RFC 7541 5.2): padding must be at most 7 one bits, and EOS never appears.
 - `fn huffman_length(source: []const u8) usize`: Bytes huffman_encode writes for source.
 - `fn huffman_encode(source: []const u8, destination: []u8) usize`: Huffman-codes source into destination, which must hold huffman_length bytes.
-- `fn decode_field(status: *fail.Status, decoder: *Decoder, block: []const u8, scratch: []u8) Field`: Decodes the representation at the start of block.
+- `fn decode_field(decoder: *Decoder, block: []const u8, scratch: []u8) Field!parse.ParseErr`: Decodes the representation at the start of block.
 - `fn encode_field(destination: []u8, name: []const u8, value: []const u8) usize`: Writes one field to destination and returns its length, or 0 when it does not fit.
 
 ## std/net/http/qpack
@@ -1948,7 +2000,7 @@ Layer: core
 - `struct Field { name: []const u8, value: []const u8, consumed: usize }`: One decoded field line;
 - `struct Prefix { consumed: usize, valid: bool }`
 - `fn decode_prefix(section: []const u8) Prefix`: Reads the field section prefix (RFC 9204 4.5.1).
-- `fn decode_field(status: *fail.Status, section: []const u8, scratch: []u8) Field`: Decodes the field line at the start of section into scratch.
+- `fn decode_field(section: []const u8, scratch: []u8) Field!parse.ParseErr`: Decodes the field line at the start of section into scratch.
 - `fn encode_prefix(destination: []u8) usize`: The prefix of a section that uses no dynamic table: two zero bytes.
 - `fn encode_field(destination: []u8, name: []const u8, value: []const u8) usize`: Writes one field line and returns its length, or 0 when it does not fit.
 
@@ -1966,9 +2018,9 @@ Layer: std
 - `struct Shared { sessions: versions.Shared }`: Shared by the workers: forget marks every cache stale, and each empties itself when it notices.
 - `struct New { token: []const u8, csrf: []const u8, cookie: http.Cookie }`: A new session to store: token, csrf, and the Set-Cookie value.
 - `fn token(request: *const http.Request) []const u8`: The request's session token, or empty when it has none of the right form.
-- `fn cached(status: *fail.Status, cache: *Cache, shared: *Shared, token: []const u8, now: i64) Session`: The session for token from the cache: a store answer for it that is unexpired at now and not forgotten since.
-- `fn remember(status: *fail.Status, cache: *Cache, token: []const u8, user: i64, csrf: []const u8, data: []const u8, expires: i64) Session`: Caches what the store returned for token and returns it as a Session.
-- `fn start(arena: *mem.Arena, status: *fail.Status, seconds: i64) New`: A fresh token and CSRF secret in arena, and the cookie that carries the token for a session of seconds (HttpOnly, SameSite=Lax, Path=/) ...
+- `fn cached(cache: *Cache, shared: *Shared, token: []const u8, now: i64) Session!io.IoErr`: The session for token from the cache: a store answer for it that is unexpired at now and not forgotten since.
+- `fn remember(cache: *Cache, token: []const u8, user: i64, csrf: []const u8, data: []const u8, expires: i64) Session!io.IoErr`: Caches what the store returned for token and returns it as a Session.
+- `fn start(arena: *mem.Arena, seconds: i64) New!io.IoErr`: A fresh token and CSRF secret in arena, and the cookie that carries the token for a session of seconds (HttpOnly, SameSite=Lax, Path=/) ...
 - `fn forget(shared: *Shared) http.Cookie`: After the app deleted a session from its store: every worker's cache forgets what it holds.
 - `fn csrf_ok(session: *const Session, presented: []const u8) bool`: Whether presented (a form field or header) is the session's CSRF secret, compared in constant time.
 
@@ -1981,23 +2033,23 @@ Layer: std
 - `type Certificate = provider.Certificate`
 - `type Want = provider.Want`: What a nonblocking connection waits for before the call can go on, and a read or write: the bytes moved, or what the connection waits for.
 - `type Attempt = provider.Attempt`
-- `fn set_alpn_protocols(status: *fail.Status, connection: Connection, protocols: []const u8)`: The provider copies the protocol wire bytes during this call.
-- `fn server_alpn(status: *fail.Status, context: Context, preference: *const []const u8)`: Server ALPN: each handshake picks the first protocol of preference (wire format, such as "\x02h2\x08http/1.1") the client offers.
+- `fn set_alpn_protocols(connection: Connection, protocols: []const u8) !io.IoErr`: The provider copies the protocol wire bytes during this call.
+- `fn server_alpn(context: Context, preference: *const []const u8) !io.IoErr`: Server ALPN: each handshake picks the first protocol of preference (wire format, such as "\x02h2\x08http/1.1") the client offers.
 - `fn selected_alpn(connection: Connection) []const u8`: Borrows provider connection memory.
 - `fn peer_certificate_owned(connection: Connection) Certificate`: nil when the peer sent no certificate.
 - `fn certificate_release(certificate: *Certificate)`: Frees the certificate and clears the handle;
-- `fn certificate_subject(arena: *memory.Arena, status: *fail.Status, certificate: Certificate) []u8`: Complete provider-formatted subject copied into arena.
-- `fn handshake(status: *fail.Status, connection: Connection) Want`: Runs the handshake.
-- `fn server_handshake(status: *fail.Status, connection: Connection) Want`
-- `fn read(status: *fail.Status, connection: Connection, destination: []u8) Attempt`: Reads what is available;
-- `fn write(status: *fail.Status, connection: Connection, source: []const u8) Attempt`
-- `fn shutdown(status: *fail.Status, connection: Connection) Want`: Sends close_notify.
+- `fn certificate_subject(arena: *memory.Arena, certificate: Certificate) []u8!io.IoErr`: Complete provider-formatted subject copied into arena.
+- `fn handshake(connection: Connection) Want!io.IoErr`: Runs the handshake.
+- `fn server_handshake(connection: Connection) Want!io.IoErr`
+- `fn read(connection: Connection, destination: []u8) Attempt!io.IoErr`: Reads what is available;
+- `fn write(connection: Connection, source: []const u8) Attempt!io.IoErr`
+- `fn shutdown(connection: Connection) Want!io.IoErr`: Sends close_notify.
 - `fn error_string(arena: *memory.Arena, code: u64) []u8`: The provider's text for an error code, in arena.
-- `fn client_config_create(status: *fail.Status) Context`
-- `fn server_config_create( arena: *memory.Arena, status: *fail.Status, certificate: []const u8, key: []const u8, ) Context`
+- `fn client_config_create() Context!io.IoErr`
+- `fn server_config_create( arena: *memory.Arena, certificate: []const u8, key: []const u8, ) Context!io.IoErr`
 - `fn config_release(context: *Context)`: Frees the configuration and clears the handle;
-- `fn client_connection_create( arena: *memory.Arena, status: *fail.Status, context: Context, descriptor: i32, hostname: []const u8, ) Connection`
-- `fn server_connection_create(status: *fail.Status, context: Context, descriptor: i32) Connection`
+- `fn client_connection_create( arena: *memory.Arena, context: Context, descriptor: i32, hostname: []const u8, ) Connection!io.IoErr`
+- `fn server_connection_create(context: Context, descriptor: i32) Connection!io.IoErr`
 - `fn connection_release(connection: *Connection)`: Frees the connection state and clears the handle.
 - `fn reader(connection: *Connection) io.Reader`: Blocking I/O adapters borrow the Connection slot and its live handle.
 - `fn writer(connection: *Connection) io.Writer`
@@ -2007,9 +2059,9 @@ Layer: std
 Layer: heap
 
 - `struct URL { scheme: []const u8, authority: []const u8, path: []const u8, query: []const u8, fragment: []const u8, }`
-- `fn parse(status: *fail.Status, text: []const u8) URL`: Splits text into its parts (RFC 3986), borrowing text.
+- `fn parse(text: []const u8) URL!parse.ParseErr`: Splits text into its parts (RFC 3986), borrowing text.
 - `fn percent_encode(arena: *mem.Arena, source: []const u8) []u8`: One component percent-encoded, slashes included, in arena.
-- `fn percent_decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8`: source with %XX escapes decoded, in arena.
+- `fn percent_decode(arena: *mem.Arena, source: []const u8) []u8!parse.ParseErr`: source with %XX escapes decoded, in arena.
 
 ## std/net/websocket
 
@@ -2019,22 +2071,22 @@ Layer: std
 - `enum WebSocketEventKind { None, Ready, Ping, Pong, Close }`: None: a fragment was stored and the message goes on.
 - `struct WebSocketMessageState { used: usize, opcode: u8, fragmented: bool, closed: bool, enforce_mask: bool, masked: bool }`
 - `struct WebSocketEvent { payload: []u8, detail: WebSocketEventKind, opcode: u8, close_code: u16 }`
-- `struct WebSocketConnection { input: io.Reader, output: io.Writer, frames: []u8, // Retain unread wire bytes; compact only on the next receive. frame_used: usize, frame_consumed: usize, input_ended: bool, message: []u8, control: []u8, state: WebSocketMessageState, client: bool, active: bool, // After a failure the stream position is lost: later calls fail with // InvalidState. failed: bool, close_sent: bool, }`
+- `struct WebSocketConnection { input: io.Reader, output: io.Writer, frames: []u8, // Retain unread wire bytes; compact only on the next receive. frame_used: usize, frame_consumed: usize, input_ended: bool, message: []u8, control: []u8, state: WebSocketMessageState, client: bool, active: bool, // After a failure the stream position is lost: later calls fail with // InvalidInput. failed: bool, close_sent: bool, }`
 - `fn accept(destination: []u8, key: []const u8) []u8`: Concise public names;
-- `fn validate_upgrade_request(status: *fail.Status, request: []const u8) []const u8`: Checks the RFC 6455 upgrade fields of a request head;
+- `fn validate_upgrade_request(request: []const u8) []const u8!io.IoErr`: Checks the RFC 6455 upgrade fields of a request head;
 - `fn write_upgrade_response(arena: *mem.Arena, key: []const u8) []u8`: The 101 Switching Protocols response for key, in arena.
-- `fn validate_upgrade_response(status: *fail.Status, response: []const u8, key: []const u8)`: Checks a server's 101 response for key.
+- `fn validate_upgrade_response(response: []const u8, key: []const u8) !io.IoErr`: Checks a server's 101 response for key.
 - `fn write_frame(arena: *mem.Arena, opcode: u8, payload: []const u8, final: bool, masked: bool, mask: u32) []u8`: One encoded frame, in arena.
-- `fn parse_frame(status: *fail.Status, input: []const u8) WebSocketFrame`: One frame at the start of input;
+- `fn parse_frame(input: []const u8) WebSocketFrame!parse.ParseErr`: One frame at the start of input;
 - `fn decode_frame(arena: *mem.Arena, frame: WebSocketFrame) []u8`: The frame's payload, unmasked, in arena.
 - `fn message_state(expect_masked: bool) WebSocketMessageState`
-- `fn receive(status: *fail.Status, state: *WebSocketMessageState, message: []u8, control: []u8, frame: WebSocketFrame) WebSocketEvent`: Adds a complete frame to the message under way.
+- `fn receive(state: *WebSocketMessageState, message: []u8, control: []u8, frame: WebSocketFrame) WebSocketEvent!io.IoErr`: Adds a complete frame to the message under way.
 - `fn connection(input: io.Reader, output: io.Writer, frames: []u8, message: []u8, control: []u8, client: bool) WebSocketConnection`: Stateful stream wrapper.
-- `fn connection_send(status: *fail.Status, state: *WebSocketConnection, opcode: u8, payload: []const u8, final: bool, mask: u32)`
-- `fn connection_ping(status: *fail.Status, state: *WebSocketConnection, payload: []const u8, mask: u32)`
-- `fn connection_pong(status: *fail.Status, state: *WebSocketConnection, payload: []const u8, mask: u32)`
-- `fn connection_close(status: *fail.Status, state: *WebSocketConnection, payload: []const u8, mask: u32)`
-- `fn connection_receive(status: *fail.Status, state: *WebSocketConnection) WebSocketEvent`: The next message or control frame.
+- `fn connection_send(state: *WebSocketConnection, opcode: u8, payload: []const u8, final: bool, mask: u32) !io.IoErr`
+- `fn connection_ping(state: *WebSocketConnection, payload: []const u8, mask: u32) !io.IoErr`
+- `fn connection_pong(state: *WebSocketConnection, payload: []const u8, mask: u32) !io.IoErr`
+- `fn connection_close(state: *WebSocketConnection, payload: []const u8, mask: u32) !io.IoErr`
+- `fn connection_receive(state: *WebSocketConnection) WebSocketEvent!io.IoErr`: The next message or control frame.
 
 ## std/observe
 
@@ -2069,24 +2121,24 @@ Layer: std
 - `struct Pipe { input: isize, output: isize }`
 - `struct Waited { process: isize, wait_status: i32 }`: wait_status is the raw status;
 - `struct SpawnOptions { input: isize, output: isize, error: isize, directory: []const u8 }`
-- `fn pipe(status: *fail.Status) Pipe`
-- `fn close_descriptor(status: *fail.Status, descriptor: isize)`: Closes descriptor.
-- `fn duplicate_to(status: *fail.Status, descriptor: isize, target: isize) isize`
-- `fn send_signal(status: *fail.Status, process: isize, signal: usize)`
-- `fn fork_process(status: *fail.Status) isize`: fork: 0 in the child, the child's id in the parent.
+- `fn pipe() Pipe!io.IoErr`
+- `fn close_descriptor(descriptor: isize) !io.IoErr`: Closes descriptor.
+- `fn duplicate_to(descriptor: isize, target: isize) isize!io.IoErr`
+- `fn send_signal(process: isize, signal: usize) !io.IoErr`
+- `fn fork_process() isize!io.IoErr`: fork: 0 in the child, the child's id in the parent.
 - `fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) isize`
-- `fn spawn_environment( arena: *memory.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, environment: [][]const u8, options: SpawnOptions, ) isize`
-- `fn wait(status: *fail.Status, process: isize, nonblocking: bool) Waited`: Waits for process to end.
+- `fn spawn_environment( arena: *memory.Arena, path: []const u8, arguments: [][]const u8, environment: [][]const u8, options: SpawnOptions, ) isize!io.IoErr`
+- `fn wait(process: isize, nonblocking: bool) Waited!io.IoErr`: Waits for process to end.
 - `fn exited(status: i32) bool`
 - `fn exit_status(status: i32) u8`
 - `fn signaled(status: i32) bool`
 - `fn termination_signal(status: i32) u8`
 - `fn exit_process(status: u8)`: Ends the whole process: exit_group, so other threads end with it.
-- `fn environment_get(status: *fail.Status, name: []const u8, destination: []u8) []u8`: Reads the process's initial environment.
-- `fn current_directory(status: *fail.Status, destination: []u8) []u8`: The working directory, in destination.
-- `fn signal_ignore(status: *fail.Status, signal: usize)`
-- `fn signal_default(status: *fail.Status, signal: usize)`
-- `fn spawn(arena: *memory.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, options: SpawnOptions) isize`
+- `fn environment_get(name: []const u8, destination: []u8) []u8!io.IoErr`: Reads the process's initial environment.
+- `fn current_directory(destination: []u8) []u8!io.IoErr`: The working directory, in destination.
+- `fn signal_ignore(signal: usize) !io.IoErr`
+- `fn signal_default(signal: usize) !io.IoErr`
+- `fn spawn(arena: *memory.Arena, path: []const u8, arguments: [][]const u8, options: SpawnOptions) isize!io.IoErr`
 
 ## std/os/linux/sys
 
@@ -2165,10 +2217,10 @@ Layer: std
 
 - `struct PollDescriptor { descriptor: i32, events: i16, returned: i16 }`
 - `const has_native_threads: bool = false`
-- `fn file_open(status: *fail.Status, path: []const u8, write_access: bool, create: bool) isize`: A descriptor, or -1 after a failure.
-- `fn file_close(status: *fail.Status, handle: isize)`
+- `fn file_open(path: []const u8, write_access: bool, create: bool) isize!io.IoErr`
+- `fn file_close(handle: isize) !io.IoErr`
 - `fn thread_yield()`
-- `fn socket_open(status: *fail.Status, family: i32, kind: i32, protocol: i32) isize`: A socket, or -1 after a failure.
+- `fn socket_open(family: i32, kind: i32, protocol: i32) isize`: A socket, or the negative system error code.
 - `fn socket_close(socket: usize) bool`
 - `fn socket_connect(socket: usize, address: []const u8) bool`
 - `fn event_poll(items: []PollDescriptor, milliseconds: i32) isize`
@@ -2190,6 +2242,7 @@ Layer: std
 - `const Ioctl: u64 = 54`
 - `const Readlink: u64 = 58`
 - `const Munmap: u64 = 73`
+- `const Mprotect: u64 = 74`
 - `const Fcntl: u64 = 92`
 - `const Fsync: u64 = 95`
 - `const Socket: u64 = 97`
@@ -2209,6 +2262,7 @@ Layer: std
 - `const Getdirentries64: u64 = 344`
 - `const Kqueue: u64 = 362`
 - `const Kevent: u64 = 363`
+- `const ThreadSelfid: u64 = 372`
 
 ## std/os/wasi
 
@@ -2216,11 +2270,11 @@ Layer: std
 
 - `extern fn close "dyn_wasi_close"(fd: u32) u32`
 - `extern fn clock_time "dyn_wasi_clock"(clock: u32, precision: u64, time: *u64) u32`
-- `fn write(status: *fail.Status, fd: u32, bytes: []const u8) usize`: The count written;
-- `fn read(status: *fail.Status, fd: u32, bytes: []u8) usize`: The count read;
-- `fn open_read(status: *fail.Status, directory: u32, path: []const u8) u32`: Relative to a directory descriptor granted by the host.
+- `fn write(fd: u32, bytes: []const u8) usize!io.IoErr`: The count written.
+- `fn read(fd: u32, bytes: []u8) usize!io.IoErr`: The count read;
+- `fn open_read(directory: u32, path: []const u8) u32!io.IoErr`: Relative to a directory descriptor granted by the host.
 - `fn random(bytes: []u8) u32`
-- `fn arguments(arena: *mem.Arena, status: *fail.Status) [][]const u8`: Both strings and slice descriptors belong to the supplied arena.
+- `fn arguments(arena: *mem.Arena) [][]const u8!io.IoErr`: Both strings and slice descriptors belong to the supplied arena.
 
 ## std/os/wasi/raw
 
@@ -2239,13 +2293,13 @@ Layer: std
 - `struct Thread { handle: rawptr, id: u32 }`
 - `struct PollDescriptor { descriptor: usize, events: i16, returned: i16 }`
 - `const has_native_threads: bool = true`
-- `fn file_open(status: *fail.Status, path: []const u8, write_access: bool, create: bool) isize`: A handle, or -1 after a failure.
-- `fn file_close(status: *fail.Status, handle: isize)`
+- `fn file_open(path: []const u8, write_access: bool, create: bool) isize!io.IoErr`
+- `fn file_close(handle: isize) !io.IoErr`
 - `fn thread_spawn(thread: *Thread, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) bool`
 - `fn thread_join(thread: *Thread) bool`
 - `fn thread_error() isize`
 - `fn thread_yield()`
-- `fn socket_open(status: *fail.Status, family: i32, kind: i32, protocol: i32) isize`: A socket, or -1 after a failure.
+- `fn socket_open(family: i32, kind: i32, protocol: i32) isize`: A socket, or the negative Windows error code, as the other raw socket calls.
 - `fn socket_error() isize`
 - `fn socket_close(socket: usize) bool`
 - `fn socket_connect(socket: usize, address: []const u8) bool`
@@ -2262,8 +2316,11 @@ Layer: core
 
 Layer: core
 
-- `fn u64_decimal(status: *fail.Status, text: []const u8) u64`: Whole text as a decimal u64: one or more ASCII digits, nothing else (no sign, space or underscore).
-- `fn i64_decimal(status: *fail.Status, text: []const u8) i64`: Whole text as a decimal i64 with an optional leading '-'.
+- `fn u64_decimal(text: []const u8) u64!ParseErr`: Whole text as a decimal u64: one or more ASCII digits, nothing else.
+- `fn i64_decimal(text: []const u8) i64!ParseErr`: Whole text as a decimal i64 with an optional leading '-'.
+- `enum ParseErr { Invalid(usize), TooLarge(usize), Unsupported(usize), }`: Why input could not be parsed, with the byte offset from the start of the input where it went wrong: Invalid for malformed input, TooLarge ...
+- `fn offset(err: ParseErr) usize`: The offset where err happened.
+- `fn shifted(err: ParseErr, start: usize) ParseErr`: err moved by start bytes, for a parser that worked on a part of its input.
 
 ## std/path
 
@@ -2278,8 +2335,8 @@ Layer: heap
 - `fn component_next(state: *Components) []const u8`
 - `fn join(arena: *mem.Arena, left: []const u8, right: []const u8) []u8`: left and right joined by one slash, in arena.
 - `fn clean(arena: *mem.Arena, path: []const u8) []u8`: path with .
-- `fn safe_join(arena: *mem.Arena, status: *fail.Status, root: []const u8, child: []const u8) []u8`: root joined with a relative child that cannot climb out of root, in arena.
-- `fn relative(arena: *mem.Arena, status: *fail.Status, base: []const u8, target: []const u8) []u8`: The path from base to target, in arena.
+- `fn safe_join(arena: *mem.Arena, root: []const u8, child: []const u8) []u8!`: root joined with a relative child that cannot climb out of root, in arena.
+- `fn relative(arena: *mem.Arena, base: []const u8, target: []const u8) []u8!`: The path from base to target, in arena.
 
 ## std/process
 
@@ -2292,18 +2349,18 @@ Layer: std
 - `struct Exit { code: u32, signal: u32, finished: bool }`: How a child ended.
 - `struct Pipe { input: isize, output: isize }`
 - `struct Captured { output: []u8, errors: []u8, exit: Exit, timed_out: bool, limit_reached: bool }`
-- `fn spawn(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, configuration: Options) *Child`: Starts path with arguments (argv[0] first).
-- `fn wait(status: *fail.Status, child: *Child, nonblocking: bool) Exit`: Waits for child to end;
-- `fn terminate(status: *fail.Status, child: *Child)`: Kills child.
-- `fn pipe(status: *fail.Status) Pipe`: A pipe: write to output, read from input.
+- `fn spawn(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) *Child!io.IoErr`: Starts path with arguments (argv[0] first).
+- `fn wait(child: *Child, nonblocking: bool) Exit!io.IoErr`: Waits for child to end;
+- `fn terminate(child: *Child) !io.IoErr`: Kills child.
+- `fn pipe() Pipe!io.IoErr`: A pipe: write to output, read from input.
 - `fn close_pipe(handle: isize)`
 - `fn environment_or(arena: *mem.Arena, name: []const u8, fallback: []const u8) []const u8`: The variable's value in arena, or fallback when it is unset or unreadable.
-- `fn environment(arena: *mem.Arena, status: *fail.Status, name: []const u8) []u8`: The value of environment variable name, in arena;
+- `fn environment(arena: *mem.Arena, name: []const u8) []u8!io.IoErr`: The value of environment variable name, in arena.
 - `struct CaptureOptions { timeout_milliseconds: i64, no_wait: bool, output_limit: usize, error_limit: usize }`: Zero limits are unlimited.
-- `fn capture(arena: *mem.Arena, status: *fail.Status, path: []const u8, arguments: [][]const u8, configuration: Options, policy: CaptureOptions) Captured`: Drains both streams fairly into growing arena slices, valid until caller rewind/reset/release.
+- `fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options, policy: CaptureOptions) Captured!io.IoErr`: Drains both streams fairly into growing arena slices, valid until caller rewind/reset/release.
 - `struct Program { arena: *mem.Arena, args: [][]const u8 }`: What process.start() returns: an arena that lives for the whole program and the arguments, argv[0] first, stored in it.
 - `fn start() Program`: Call it on main's first line: `program := process.start()`.
-- `fn arguments(arena: *mem.Arena, status: *fail.Status) [][]const u8`: Includes argv[0].
+- `fn arguments(arena: *mem.Arena) [][]const u8!io.IoErr`: Includes argv[0].
 
 ## std/process/signal
 
@@ -2312,9 +2369,9 @@ Layer: std
 - `enum Kind { None, Interrupt, Terminate, Hangup }`: Process signals as events, not handlers.
 - `struct Set { interrupt: bool, terminate: bool, hangup: bool }`: Kinds to watch.
 - `struct Watch { handle: isize, set: Set, active: bool }`: An open watch.
-- `fn watch(status: *fail.Status, set: Set) Watch`
-- `fn poll(status: *fail.Status, state: *Watch) Kind`: The next pending signal without blocking;
-- `fn wait(status: *fail.Status, state: *Watch) Kind`: Blocks until a watched signal arrives.
+- `fn watch(set: Set) Watch!io.IoErr`: Fails with InvalidInput when set chooses no signal.
+- `fn poll(state: *Watch) Kind!io.IoErr`: The next pending signal without blocking;
+- `fn wait(state: *Watch) Kind!io.IoErr`: Blocks until a watched signal arrives.
 - `fn close(state: *Watch)`: Restores default signal behavior and releases the handle.
 
 ## std/profile
@@ -2371,7 +2428,7 @@ Layer: core
 Layer: heap
 
 - `struct Version { major: u32, minor: u32, patch: u32, prerelease: []const u8, build: []const u8, }`
-- `fn parse(status: *fail.Status, text: []const u8) Version`: A version such as "1.2.3-alpha.1+build".
+- `fn parse(text: []const u8) Version!parse.ParseErr`: A version such as "1.2.3-alpha.1+build".
 - `fn compare(a, b: Version) i32`
 - `struct Range { minimum: Version, maximum: Version, has_minimum: bool, has_maximum: bool, include_minimum: bool, include_maximum: bool, }`
 - `fn contains(range: *const Range, version: Version) bool`
@@ -2493,14 +2550,25 @@ Layer: core
 - `fn f64x2_mul(a, b: F64x2) F64x2`
 - `fn f64x2_div(a, b: F64x2) F64x2`
 
+## std/slice
+
+Layer: core
+
+- `fn eql<T>(a: []const T, b: []const T) bool`: Returns true when `a` and `b` have the same length and equal elements.
+- `fn find<T>(items: []const T, target: T) usize`: Returns the first index where `items[i] == target`, or `items.len` if absent.
+- `fn contains<T>(items: []const T, target: T) bool`: Returns true when `target` appears in `items`.
+- `fn copy<T>(dst: []T, src: []const T) usize`: Copies `min(dst.len, src.len)` elements from `src` into `dst` and returns the number copied.
+- `fn fill<T>(dst: []T, value: T)`: Sets every element of `dst` to `value`.
+- `fn reverse<T>(items: []T)`: Reverses `items` in place.
+
 ## std/sort
 
 Layer: heap
 
-- `fn sort(values: []$T)`: Sorts in place without allocating.
-- `fn search(values: []const $T, target: $T) usize`: Binary search in sorted values: the index of target, or len(values) when it is missing (never an insertion point), as bytes.find does.
-- `fn sort_by(values: []$T, less: fn($T, $T) bool)`: Sorts in place by less without allocating, as sort does.
-- `fn stable_by(arena: *mem.Arena, values: []$T, less: fn($T, $T) bool)`: Sorts in place by less, keeping equal elements in their original order.
+- `fn sort<T>(values: []T)`: Sorts in place without allocating.
+- `fn search<T>(values: []const T, target: T) usize`: Binary search in sorted values: the index of target, or len(values) when it is missing (never an insertion point), as bytes.find does.
+- `fn sort_by<T>(values: []T, less: fn(T, T) bool)`: Sorts in place by less without allocating, as sort does.
+- `fn stable_by<T>(arena: *mem.Arena, values: []T, less: fn(T, T) bool)`: Sorts in place by less, keeping equal elements in their original order.
 
 ## std/strings
 
@@ -2522,9 +2590,9 @@ Layer: heap
 - `fn trim_left(text: []const u8) []const u8`
 - `fn trim_right(text: []const u8) []const u8`
 - `fn scan_line(state: *Scanner) []const u8`: The next line without its \n or \r\n.
-- `fn parse(T: type, text: []const u8) T`: Parses text as T: an integer type, f32, f64 or bool ("true" or "false").
-- `fn parse_base(T: type, text: []const u8, base: u8) T`: Like parse for integer types, in base 2 through 36.
-- `fn valid(T: type, text: []const u8) bool`: Whether text parses as T, by the same rules as parse.
+- `fn parse<T>(text: []const u8) T`: Parses text as T: an integer type, f32, f64 or bool ("true" or "false").
+- `fn parse_base<T>(text: []const u8, base: u8) T`: Like parse for integer types, in base 2 through 36.
+- `fn valid<T>(text: []const u8) bool`: Whether text parses as T, by the same rules as parse.
 - `fn clone(arena: *memory.Arena, source: []const u8) []u8`: Copies source into arena.
 - `fn join(arena: *memory.Arena, parts: [][]const u8, separator: []const u8) []u8`: Joins parts with separator between them.
 - `fn split(arena: *memory.Arena, source: []const u8, separator: []const u8) [][]const u8`: Splits source on separator.
@@ -2556,6 +2624,15 @@ Layer: std
 - `fn exchange_u64(value: *AtomicU64, desired: u64) u64`
 - `fn fetch_add_u64(value: *AtomicU64, amount: u64) u64`
 - `fn compare_exchange_u64(value: *AtomicU64, expected: u64, desired: u64) bool`
+- `enum ChanErr { Closed, Full, Empty }`: Why a channel call did not move a value.
+- `nocopy struct Channel<T> { lock: Mutex, readable: Condition, writable: Condition, items: []T, head: usize, count: usize, closed: bool, }`: A bounded first-in first-out queue between threads.
+- `fn channel<T>(arena: *mem.Arena, capacity: usize) *Channel<T>`: A channel that holds up to capacity values.
+- `fn send<T>(c: *Channel<T>, value: T) !ChanErr`: Queues value, waiting while the channel is full.
+- `fn try_send<T>(c: *Channel<T>, value: T) !ChanErr`: As send, without waiting: fails with Full when there is no room.
+- `fn recv<T>(c: *Channel<T>) T!ChanErr`: The oldest queued value, waiting while the channel is empty.
+- `fn try_recv<T>(c: *Channel<T>) T!ChanErr`: As recv, without waiting: fails with Empty when nothing is queued and the channel is open.
+- `fn close<T>(c: *Channel<T>)`: Stops further sends and wakes every waiting thread.
+- `fn channel_len<T>(c: *Channel<T>) usize`: Values queued right now.
 - `struct Mutex { state: AtomicU32 }`
 - `fn mutex() Mutex`
 - `fn try_lock(value: *Mutex) bool`
@@ -2567,7 +2644,7 @@ Layer: std
 - `fn condition() Condition`
 - `fn condition_wait(value: *Condition, lock_value: *Mutex)`: Mutex must be held on entry.
 - `enum Wait { Signaled, TimedOut }`
-- `fn condition_wait_timeout(status: *fail.Status, value: *Condition, lock_value: *Mutex, timeout: i64) Wait`: Relative monotonic timeout in nanoseconds.
+- `fn condition_wait_timeout(value: *Condition, lock_value: *Mutex, timeout: i64) Wait!io.IoErr`: Relative monotonic timeout in nanoseconds.
 - `fn condition_signal(value: *Condition)`
 - `fn condition_broadcast(value: *Condition)`
 - `fn semaphore(count: u32) Semaphore`
@@ -2582,19 +2659,19 @@ Layer: std
 
 Layer: std
 
-- `fn read_state(status: *fail.Status, descriptor: isize) State`: The terminal settings of descriptor;
-- `fn restore(status: *fail.Status, descriptor: isize, saved: *const State)`
-- `fn size(status: *fail.Status, descriptor: isize) Size`
+- `fn read_state(descriptor: isize) State!io.IoErr`: The terminal settings of descriptor;
+- `fn restore(descriptor: isize, saved: *const State) !io.IoErr`
+- `fn size(descriptor: isize) Size!io.IoErr`
 - `struct State { bytes: [72]u8 }`: Saved terminal settings.
 - `struct Size { columns: usize, rows: usize }`
 - `fn is_attached(descriptor: isize) bool`: Descriptors 0, 1 and 2 are the standard streams on every platform.
-- `fn raw(status: *fail.Status, descriptor: isize) State`: Applies a small cfmakeraw equivalent: no echo, no line buffering, no signal keys, and on Windows virtual-terminal input or output.
+- `fn raw(descriptor: isize) State!io.IoErr`: Applies a small cfmakeraw equivalent: no echo, no line buffering, no signal keys, and on Windows virtual-terminal input or output.
 - `enum KeyKind { Text, Escape, Up, Down, Left, Right, Home, End, Delete, Unknown, Incomplete }`
 - `struct Key { kind: KeyKind, codepoint: u32, consumed: usize }`
 - `fn key_decode(bytes: []const u8) Key`: Recognizes UTF-8 text and common CSI cursor keys.
-- `fn read_state(status: *fail.Status, _descriptor: isize) State`: WASI Preview 1 has no terminal control.
-- `fn restore(status: *fail.Status, _descriptor: isize, saved: *const State)`
-- `fn size(status: *fail.Status, _descriptor: isize) Size`
+- `fn read_state(_descriptor: isize) State!io.IoErr`: WASI Preview 1 has no terminal control.
+- `fn restore(_descriptor: isize, saved: *const State) !io.IoErr`
+- `fn size(_descriptor: isize) Size!io.IoErr`
 
 ## std/testing
 
@@ -2602,7 +2679,7 @@ Layer: std
 
 - `struct FuzzOptions { seed: u64, cases: usize, shrink_checks: usize }`
 - `struct FuzzResult { passed: bool, seed: u64, iteration: usize, corpus_entry: usize, example: []const u8, checks: usize, shrink_exhausted: bool, }`: iteration counts corpus replays first, then generated cases.
-- `fn fuzz(options: FuzzOptions, corpus: []const []const u8, work: []u8, predicate: fn(rawptr, []const u8) bool, context: rawptr) FuzzResult`: Runs predicate over the corpus and then options.cases mutated inputs of at most #len(work) / 2 bytes.
+- `fn fuzz(options: FuzzOptions, corpus: []const []const u8, work: []u8, predicate: fn(rawptr, []const u8) bool, context: rawptr) FuzzResult`: Runs predicate over the corpus and then options.cases mutated inputs of at most work.len / 2 bytes.
 - `struct Source { data: []const u8, at: usize }`: Decodes structured values from fuzz input, front to back.
 - `fn source(data: []const u8) Source`
 - `fn remaining(state: *const Source) usize`
@@ -2617,10 +2694,10 @@ Layer: std
 - `struct PropertyResult { passed: bool, seed: u64, iteration: usize, example: []const u8, checks: usize, shrink_exhausted: bool, }`
 - `fn check_property(options: PropertyOptions, work: []u8, predicate: fn(rawptr, []const u8) bool, context: rawptr) PropertyResult`: Property must be deterministic and must not retain its input.
 - `struct Samples { count: usize, minimum, median, p90, maximum: i64 }`
-- `fn summarize(status: *fail.Status, samples: []i64) Samples`: Sorts caller-owned nanosecond samples in place;
+- `fn summarize(samples: []i64) Samples!`: Sorts caller-owned nanosecond samples in place;
 - `struct TemporaryDirectory { path: []const u8, active: bool }`
-- `fn temporary_directory(arena: *mem.Arena, status: *fail.Status, prefix: []const u8) TemporaryDirectory`: Reserves a private 0700 directory.
-- `fn remove_temporary(status: *fail.Status, directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8)`
+- `fn temporary_directory(arena: *mem.Arena, prefix: []const u8) TemporaryDirectory!io.IoErr`: Reserves a private 0700 directory.
+- `fn remove_temporary(directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8) !io.IoErr`
 - `fn temporary_path(arena: *mem.Arena, prefix: []const u8, suffix: []const u8) []u8`
 - `fn expect(condition: bool, message: []const u8)`
 - `fn expect_false(condition: bool, message: []const u8)`
@@ -2650,10 +2727,11 @@ Layer: heap
 - `struct Buffer { storage: []u8, length: usize, cursor: usize, anchor: usize, token: u64 }`: token zero means unpublished.
 - `struct Tracker { serial: u64, token: u64, owner: u64, length: usize, cursor: usize, anchor: usize, cause: Cause, bytes: [4096]u8, }`
 - `fn boundary(text: []const u8, offset: usize) bool`
-- `fn validate(status: *fail.Status, context: *const Context)`: Validates the shared bounded context.
-- `fn snapshot(status: *fail.Status, tracker: *Tracker, owner: u64, text: []const u8, cursor, anchor: usize, cause: Cause) Context`: The returned view borrows tracker until its next changed snapshot.
+- `enum EditErr { InvalidInput, Capacity, Stale }`: Validates the shared bounded context.
+- `fn validate(context: *const Context) !EditErr`
+- `fn snapshot(tracker: *Tracker, owner: u64, text: []const u8, cursor, anchor: usize, cause: Cause) Context!EditErr`: The returned view borrows tracker until its next changed snapshot.
 - `fn invalidate(tracker: *Tracker)`: Invalidates a published identity without resetting the monotonic clock.
-- `fn apply(scratch: *mem.Arena, status: *fail.Status, buffer: *Buffer, replacement: *const Replacement)`: All validation precedes writes.
+- `fn apply(scratch: *mem.Arena, buffer: *Buffer, replacement: *const Replacement) !EditErr`: All validation precedes writes.
 
 ## std/text/layout
 
@@ -2665,7 +2743,7 @@ Layer: heap
 - `struct Glyph { codepoint: u32, start: usize, end: usize, x: f64, y: f64 }`: Offsets refer to Layout.text, an owned NFC copy by default.
 - `struct Line { start: usize, end: usize, glyph_start: usize, glyph_count: usize, width: f64, y: f64 }`
 - `struct Layout { text: []const u8, glyphs: []Glyph, lines: []Line, width: f64, height: f64, line_height: i32 }`
-- `fn build(arena: *mem.Arena, status: *fail.Status, source: []const u8, font: Font, requested: Options) Layout`: Latin shaping consists of optional NFC composition, code-point advances and pair kerning.
+- `fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Options) Layout!parse.ParseErr`: Latin shaping consists of optional NFC composition, code-point advances and pair kerning.
 
 ## std/text/regex
 
@@ -2673,9 +2751,9 @@ Layer: heap
 
 - `struct Span { start: usize, end: usize }`: Where a group matched, as a half-open interval.
 - `struct Match { start: usize, end: usize, captures: []Span }`: A match: where the whole pattern matched, and where each parenthesized group did (captures[0] is the first).
-- `struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Span, error: fail.Kind, valid: bool }`: All slices belong to the compile arena, including the retained pattern bytes.
-- `fn compile(arena: *mem.Arena, status: *fail.Status, pattern: []const u8) Program`: Arena exhaustion/size overflow panics, like other arena producers.
-- `fn find(status: *fail.Status, program: Program, text: []const u8) Match`: The first match in text.
+- `struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Span, error: Problem, valid: bool }`: All slices belong to the compile arena, including the retained pattern bytes.
+- `fn compile(arena: *mem.Arena, pattern: []const u8) Program!parse.ParseErr`: Arena exhaustion/size overflow panics, like other arena producers.
+- `fn find(program: Program, text: []const u8) Match!`: The first match in text;
 - `fn matches(program: Program, text: []const u8) bool`: Whether pattern matches anywhere in text.
 - `struct Iterator { program: Program, text: []const u8, offset: usize, ended: bool }`: Iterator shares its program's workspace and capture lifetime contract.
 - `fn iterator(program: Program, text: []const u8) Iterator`
@@ -2699,19 +2777,23 @@ Layer: heap
 
 - `struct Template { source: []const u8 }`
 - `struct Field { name: []const u8, value: []const u8 }`
-- `fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) Template`: Validates before allocating;
-- `fn render(status: *fail.Status, destination: stream.Writer, template: *const Template, fields: []const Field)`
-- `fn render_with(status: *fail.Status, destination: stream.Writer, template: *const Template, fields: []const Field, render_field: fn(*fail.Status, stream.Writer, []const u8))`: Field rendering seam shared by plain-text and HTML templates.
+- `fn parse(arena: *memory.Arena, source: []const u8) Template!parse.ParseErr`: Validates before allocating;
+- `fn render(destination: stream.Writer, template: *const Template, fields: []const Field) !stream.IoErr`
+- `fn render_with(destination: stream.Writer, template: *const Template, fields: []const Field, render_field: fn(stream.Writer, []const u8) !stream.IoErr) !stream.IoErr`: Field rendering seam shared by plain-text and HTML templates.
 
 ## std/thread
 
 Layer: std
 
 - `struct Spawner { data: rawptr, spawn: fn(rawptr, *mem.Arena, usize, fn(rawptr) isize, rawptr) rawptr, join: fn(rawptr, rawptr) bool, }`: A thread creator chosen by the caller, for code that starts threads on someone else's behalf (servers, pools).
-- `fn spawn(arena: *mem.Arena, status: *fail.Status, stack: []u8, entry: fn(*$C) isize, context: *$C) *Thread`: Starts entry(context) on a new thread with stack as its stack.
-- `fn spawn_with_size(arena: *mem.Arena, status: *fail.Status, size: usize, entry: fn(*$C) isize, context: *$C) *Thread`: As spawn, with a stack of size bytes that the thread owns until join.
+- `fn spawn<C>(arena: *mem.Arena, stack: []u8, entry: fn(*C) isize, context: *C) *Thread!io.IoErr`: Starts entry(context) on a new thread with stack as its stack.
+- `fn spawn_with_size<C>(arena: *mem.Arena, size: usize, entry: fn(*C) isize, context: *C) *Thread!io.IoErr`: As spawn, with a stack of size bytes that the thread owns until join.
+- `nocopy struct Scope { arena: *mem.Arena, first: *ScopeThread, }`: Threads started through a scope are all joined by scope_join, so their contexts may live on the stack of the function that owns the scope:  ...
+- `fn scope(arena: *mem.Arena) Scope`
+- `fn scope_spawn<C>(scope: *Scope, stack_size: usize, entry: fn(*C) isize, context: *C) !io.IoErr`: Starts entry(context) on a new thread with an owned stack of stack_size bytes.
+- `fn scope_join(scope: *Scope)`: Waits for every thread the scope started, newest first.
 - `struct Thread { handle: rawptr, identifier: u32, entry: fn(rawptr) isize, context: rawptr, ready: sync.AtomicU32 }`
-- `fn join(status: *fail.Status, thread: *Thread)`: Ownership: success ends worker access and clears the native owner.
+- `fn join(thread: *Thread) !io.IoErr`: Ownership: success ends worker access and clears the native owner.
 - `fn id(thread: *const Thread) u32`: Mach thread identifier while unjoined;
 - `fn yield_now()`
 - `fn cpu_count() usize`: Logical CPUs currently available (hw.activecpu), at least 1.
@@ -2722,13 +2804,12 @@ Layer: std
 
 Layer: std
 
-- `struct Task { run: fn(rawptr), data: rawptr }`: One unit of work.
 - `struct Pool { lock: sync.Mutex, ready: sync.Condition, idle: sync.Condition, tasks: []Task, head: usize, count: usize, running: usize, stopping: bool, workers: []*thread.Thread, // Handles from spawner instead of workers, when started by start_spawned. natives: []rawptr, spawner: *const thread.Spawner, started: usize, }`: Pools live in the caller's arena and must not move.
-- `fn start(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: usize, stack_size: usize) *Pool`: Starts workers threads, each with an owned stack of stack_size bytes, and a queue of capacity tasks.
-- `fn submit(pool: *Pool, task: Task) bool`: Whether task was queued: false, queuing nothing, when the queue is full or the pool is stopping, so the caller can retry or run it ...
+- `fn start(arena: *mem.Arena, workers: usize, capacity: usize, stack_size: usize) *Pool!io.IoErr`: Starts workers threads, each with an owned stack of stack_size bytes, and a queue of capacity tasks.
+- `fn submit<C>(pool: *Pool, work: fn(*C), context: *C) bool`: Queues work(context) to run on a worker thread.
 - `fn wait(pool: *Pool)`: Blocks until every queued task has finished, including tasks submitted by running tasks.
-- `fn start_spawned(arena: *mem.Arena, status: *fail.Status, workers: usize, capacity: usize, stack_size: usize, spawner: *const thread.Spawner) *Pool`: Like start, with threads from spawner, such as std/thread/posix spawner() for tasks that call C libraries.
-- `fn stop(status: *fail.Status, pool: *Pool)`: Finishes queued tasks, then joins every worker.
+- `fn start_spawned(arena: *mem.Arena, workers: usize, capacity: usize, stack_size: usize, spawner: *const thread.Spawner) *Pool!io.IoErr`: Like start, with threads from spawner, such as std/thread/posix spawner() for tasks that call C libraries.
+- `fn stop(pool: *Pool) !io.IoErr`: Finishes queued tasks, then joins every worker.
 - `struct Group { lock: sync.Mutex, done: sync.Condition, count: usize }`: A counter that waiters block on until it returns to zero, for fan-out work that does not use a pool.
 - `fn group_add(group: *Group, amount: usize)`
 - `fn group_done(group: *Group)`: Marks one unit finished.
@@ -2739,8 +2820,8 @@ Layer: std
 Layer: std
 
 - `struct Thread { handle: usize, entry: fn(rawptr) isize, context: rawptr, joined: bool }`
-- `fn spawn(arena: *mem.Arena, status: *fail.Status, stack_size: usize, entry: fn(*$C) isize, context: *$C) *Thread`: libc owns the stack;
-- `fn join(status: *fail.Status, thread: *Thread)`: Waits for the thread.
+- `fn spawn<C>(arena: *mem.Arena, stack_size: usize, entry: fn(*C) isize, context: *C) *Thread!io.IoErr`: libc owns the stack;
+- `fn join(thread: *Thread) !io.IoErr`: Waits for the thread.
 - `fn spawner() threading.Spawner`
 
 ## std/time
@@ -2756,8 +2837,8 @@ Layer: std
 - `struct Instant { seconds: i64, nanoseconds: i64 }`
 - `struct Deadline { at: Instant }`
 - `struct DateTime { year: i32, month: u8, day: u8, hour: u8, minute: u8, second: u8, nanosecond: u32, }`
-- `fn checked_add(status: *fail.Status, a, b: i64) i64`: a + b, or Overflow in status when the sum is outside i64.
-- `fn checked_sub(status: *fail.Status, a, b: i64) i64`: a - b, or Overflow in status when the difference is outside i64.
+- `fn checked_add(a, b: i64) i64!`: a + b;
+- `fn checked_sub(a, b: i64) i64!`: a - b;
 - `fn elapsed(start, end: Instant) i64`: Nanoseconds from start to end;
 - `fn monotonic_now() Instant`: The clocks.
 - `fn realtime_now() Instant`
@@ -2766,7 +2847,7 @@ Layer: std
 - `fn deadline_expired(deadline: *const Deadline) bool`
 - `fn deadline_remaining(deadline: *const Deadline) i64`: Nanoseconds left before deadline;
 - `fn valid(value: *const DateTime) bool`
-- `fn parse_iso8601(status: *fail.Status, input: []const u8) DateTime`: Parses YYYY-MM-DDTHH:MM:SSZ.
+- `fn parse_iso8601(input: []const u8) DateTime!parse.ParseErr`: Parses YYYY-MM-DDTHH:MM:SSZ.
 - `fn format_iso8601(arena: *mem.Arena, value: *const DateTime) []u8`: value as YYYY-MM-DDTHH:MM:SSZ in arena, or "" when value is not a valid date in years 0 through 9999.
 - `enum Weekday { Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday }`
 - `fn days_from_civil(year: i32, month: u8, day: u8) i64`: Days since 1970-01-01 for a proleptic Gregorian date (Hinnant's days_from_civil).
@@ -2788,10 +2869,10 @@ Layer: std
 - `fn type_at(zone: *const Zone, seconds: i64) Type`: The type in effect at a UTC second.
 - `fn local(zone: *const Zone, instant: time.Instant) Local`: The local calendar time of an instant in zone.
 - `fn instant_of_local(zone: *const Zone, value: *const time.DateTime) time.Instant`: The instant of a local wall clock time in zone.
-- `fn parse_tzif(arena: *mem.Arena, status: *fail.Status, name: []const u8, data: []const u8) Zone`: Parses a TZif file (RFC 8536, versions 1 through 4) into arena storage.
-- `fn parse_posix(arena: *mem.Arena, status: *fail.Status, text: []const u8) Zone`: Parses a POSIX TZ rule such as "CET-1CEST,M3.5.0,M10.5.0/3" into a zone with no transition table.
-- `fn load(arena: *mem.Arena, status: *fail.Status, name: []const u8) Zone`: The zone named by an IANA name such as "Europe/Berlin", read from the system zoneinfo database.
-- `fn system(arena: *mem.Arena, status: *fail.Status) Zone`: The system's local zone.
+- `fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) Zone!parse.ParseErr`: Parses a TZif file (RFC 8536, versions 1 through 4) into arena storage.
+- `fn parse_posix(arena: *mem.Arena, text: []const u8) Zone!parse.ParseErr`: Parses a POSIX TZ rule such as "CET-1CEST,M3.5.0,M10.5.0/3" into a zone with no transition table.
+- `fn load(arena: *mem.Arena, name: []const u8) Zone!io.IoErr`: The zone named by an IANA name such as "Europe/Berlin", read from the system zoneinfo database.
+- `fn system(arena: *mem.Arena) Zone!io.IoErr`: The system's local zone.
 - `fn format(arena: *mem.Arena, pattern: []const u8, value: *const Local) []u8`: Formats a local time into arena storage.
 - `fn format_rfc3339(arena: *mem.Arena, value: *const Local) []u8`: RFC 3339 with the zone offset, such as 2026-10-26T14:05:09+01:00, or "".
 
@@ -2855,8 +2936,8 @@ Layer: heap
 - `struct Box { key: u64, flags: u32, // Layout axis for children: 0 stacks them left to right, 1 top to bottom. axis: u8, width: Size, height: Size, // Container inset in physical pixels. padding: [2]f32, text: []const u8, background: ui.Color, border: ui.Color, foreground: ui.Color, hot_color: ui.Color, active_color: ui.Color, // Corner radius in pixels for the background. radius: i32, // Pixel offset and selection span for editable text. Reset by build. text_offset: f32, selection: [2]f32, // Floating boxes take this position relative to the parent's content. floating: [2]f32, // Tree links, rebuilt every frame. parent: *Box, first: *Box, last: *Box, next: *Box, // Persistent state. hash_next: *Box, touched: u64, // Caller-owned identity associated with this cached box. Preserved across // builds, cleared when an expired box is recycled for a new key. user_data: usize, size: [2]f32, position: [2]f32, // Absolute screen rectangle of the last layout: x0, y0, x1, y1. rect: [4]f32, // Visible part after ancestor clips, for input. visible: [4]f32, hot_t: f32, active_t: f32, view: [2]f32, view_target: [2]f32, content: [2]f32, }`
 - `struct Input { x: f32, y: f32, down: bool, // Scroll in pixels this frame, positive scrolls content up and left. scroll_x: f32, scroll_y: f32, // UTF-8 text typed this frame, and editing keys pressed this frame. text: []const u8, backspace: bool, delete: bool, left: bool, right: bool, home: bool, end: bool, enter: bool, escape: bool, tab: bool, shift: bool, control: bool, select_all: bool, copy: bool, cut: bool, paste: bool, // The clipboard text offered for paste this frame. clipboard: []const u8, // The input method's in-progress composition (preedit), shown at the focused // text field's caret but not yet inserted. composition_cursor is a byte // offset into it, or -1. composition: []const u8, composition_cursor: i32, // Editing/navigation keys in this poll were consumed by the input method, // including the poll that clears preedit. Committed text still inserts. composition_handled: bool, // One complete correction as its own ordered input step. Do not combine it // with unrelated keyboard/text input. Stale or invalid corrections fail closed. correction: *const text_edits.Replacement, }`
 - `struct Signal { box: *Box, hovered: bool, pressed: bool, released: bool, clicked: bool, dragging: bool, // Pointer movement since the press while dragging. drag_x: f32, drag_y: f32, }`
-- `struct State { arena: *mem.Arena, frame: *mem.Arena, buckets: []*Box, free: *Box, frame_index: u64, root: *Box, parents: [parent_limit]*Box, depth: usize, input: Input, previous_down: bool, press_x: f32, press_y: f32, hot: u64, next_hot: u64, active: u64, dt: f32, // Text measurement in pixels, and the line height used for Text sizes. measure: fn(rawptr, []const u8) f32, measure_data: rawptr, line_height: f32, // Seconds for animations to close half their remaining distance. half_life: f32, // Keyboard focus, and text that a copy or cut this frame produced. focused: u64, focus_claimed: bool, // Snap animations instead of easing them, for users who ask for reduced // motion. reduced_motion: bool, // Display scale applied to pixel sizes and text padding. Pass a font // rasterized at the same scale. scale: f32, copied: []const u8, // Owned previous preedit for change-driven redraw; native snapshots cap256. composition_text: [256]u8, composition_length: usize, composition_cursor: i32, // Set during building when a focused text field wants text input: pass // text_input and text_input_rect (x, y, width, height in window pixels) to // the window so the input method places its candidates at the caret. text_input: bool, text_input_rect: [4]f32, text_input_anchor: *Box, // Publish this bounded context to a native input method before enabling the // focused field. Tracker lifetime must match one window, not one widget. text_context: text_edits.Context, text_context_error: fail.Kind, text_tracker: text_edits.Tracker, }`
-- `fn push_state(arena: *mem.Arena, measure: fn(*$C, []const u8) f32, measure_data: *$C, line_height: f32) *State`: A state in arena.
+- `struct State { arena: *mem.Arena, frame: *mem.Arena, buckets: []*Box, free: *Box, frame_index: u64, root: *Box, parents: [parent_limit]*Box, depth: usize, input: Input, previous_down: bool, press_x: f32, press_y: f32, hot: u64, next_hot: u64, active: u64, dt: f32, // Text measurement in pixels, and the line height used for Text sizes. measure: fn(rawptr, []const u8) f32, measure_data: rawptr, line_height: f32, // Seconds for animations to close half their remaining distance. half_life: f32, // Keyboard focus, and text that a copy or cut this frame produced. focused: u64, focus_claimed: bool, // Snap animations instead of easing them, for users who ask for reduced // motion. reduced_motion: bool, // Display scale applied to pixel sizes and text padding. Pass a font // rasterized at the same scale. scale: f32, copied: []const u8, // Owned previous preedit for change-driven redraw; native snapshots cap256. composition_text: [256]u8, composition_length: usize, composition_cursor: i32, // Set during building when a focused text field wants text input: pass // text_input and text_input_rect (x, y, width, height in window pixels) to // the window so the input method places its candidates at the caret. text_input: bool, text_input_rect: [4]f32, text_input_anchor: *Box, // Publish this bounded context to a native input method before enabling the // focused field. Tracker lifetime must match one window, not one widget. text_context: text_edits.Context, // Why this frame's context could not be published, when it could not. text_context_failed: bool, text_context_error: text_edits.EditErr, text_tracker: text_edits.Tracker, }`
+- `fn push_state<C>(arena: *mem.Arena, measure: fn(*C, []const u8) f32, measure_data: *C, line_height: f32) *State`: A state in arena.
 - `fn display_text(label: []const u8) []const u8`: The visible part of a label: text before "##" is shown, the whole label is hashed.
 - `fn key(seed: u64, label: []const u8) u64`
 - `fn key_bytes(seed: u64, identity: []const u8) u64`: Hashes an explicit identity without interpreting label suffixes.
@@ -2898,7 +2979,7 @@ Layer: heap
 - `fn list_begin(state: *State, label: []const u8, width: Size, height: Size, count: usize, row_height: f32) Range`
 - `fn list_end(state: *State)`
 - `struct Edit { length: usize, cursor: usize, // Active range is anchor..cursor when selecting is true. anchor: usize, selecting: bool, // Horizontal scroll in physical pixels; managed by text_field. scroll_x: f32, }`: An editable single-line field over caller storage.
-- `struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool, correction_error: fail.Kind }`
+- `struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool, correction_failed: bool, correction_error: text_edits.EditErr }`: correction_failed: a correction was offered and rejected, for correction_error.
 - `fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) FieldSignal`
 
 ## std/ui/software
@@ -2909,7 +2990,7 @@ Layer: heap
 - `struct Glyph { pixels: []const u8, width: i32, height: i32, stride: usize, x_offset: i32, y_offset: i32, advance: i32 }`: Coverage is one alpha byte per pixel, top-to-bottom.
 - `struct Font { data: rawptr, glyph: fn(rawptr, u32) Glyph, line_height: i32 }`: A caller supplies bitmap glyphs at the desired size.
 - `fn rounded_coverage(shape: ui.Rect, radius: i32, x, y: i32) u8`: Coverage of a rounded rectangle at a pixel center, from its signed distance.
-- `fn render(status: *fail.Status, surface: *Surface, commands: *const ui.Command, font: Font)`: Render in order after ui.end.
+- `fn render(surface: *Surface, commands: *const ui.Command, font: Font) !`: Render in order after ui.end.
 
 ## std/ui/text
 
@@ -2923,10 +3004,10 @@ Layer: heap
 
 - `struct Graphemes { source: []const u8, offset: usize, failed: bool, error_offset: usize, ended: bool }`: source and returned values borrow caller storage;
 - `fn graphemes(source: []const u8) Graphemes`
-- `fn next_grapheme(status: *fail.Status, state: *Graphemes) []const u8`: Extended grapheme clusters, UAX #29 Unicode 17 default rules.
+- `fn next_grapheme(state: *Graphemes) []const u8!parse.ParseErr`: Extended grapheme clusters, UAX #29 Unicode 17 default rules.
 - `struct LineBreak { offset: usize, mandatory: bool }`
-- `fn word_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []usize`: Word boundaries as byte offsets, excluding 0 and including #len(text) when text is not empty.
-- `fn line_breaks(arena: *mem.Arena, status: *fail.Status, text: []const u8) []LineBreak`: Line break opportunities as byte offsets where a line may start, excluding 0.
+- `fn word_breaks(arena: *mem.Arena, text: []const u8) []usize!parse.ParseErr`: Word boundaries as byte offsets, excluding 0 and including text.len when text is not empty.
+- `fn line_breaks(arena: *mem.Arena, text: []const u8) []LineBreak!parse.ParseErr`: Line break opportunities as byte offsets where a line may start, excluding 0.
 - `const UnicodeVersion: []const u8 = "17.0.0"`
 - `enum Form { NFD, NFC, NFKD, NFKC }`
 - `enum Category { Cn, Lu, Ll, Lt, Lm, Lo, Mn, Mc, Me, Nd, Nl, No, Pc, Pd, Ps, Pe, Pi, Pf, Po, Sm, Sc, Sk, So, Zs, Zl, Zp, Cc, Cf, Cs, Co }`
@@ -2935,8 +3016,8 @@ Layer: heap
 - `fn identifier_start(codepoint: u32) bool`
 - `fn identifier_continue(codepoint: u32) bool`
 - `fn whitespace(codepoint: u32) bool`
-- `fn case_fold(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8`: Locale-independent full default case folding, without normalization, into arena.
-- `fn normalize(arena: *mem.Arena, status: *fail.Status, source: []const u8, form: Form) []u8`: source in normalization form, into arena.
+- `fn case_fold(arena: *mem.Arena, source: []const u8) []u8!parse.ParseErr`: Locale-independent full default case folding, without normalization, into arena.
+- `fn normalize(arena: *mem.Arena, source: []const u8, form: Form) []u8!parse.ParseErr`: source in normalization form, into arena.
 
 ## std/unicode/utf16
 

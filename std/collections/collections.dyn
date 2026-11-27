@@ -1,0 +1,362 @@
+// Unified arena-backed collections with single-line value constructors:
+//
+//   use col "std/collections"
+//
+//   tasks := col.array<Task>(arena)
+//   col.push(&tasks, Task{ title: "ship" })
+//
+//   counts := col.map<str, u32>(arena)
+//   col.map_upsert(&counts, "dyn", 0).* += 1
+//
+//   q := col.ring<u32>(arena, 16)
+//   _ = col.ring_push(&q, 42)
+//
+// All storage lives in the caller's arena; growth leaves prior buffers in the
+// arena with no hidden frees or global allocator.
+
+use hash "std/container/hash"
+use mem "std/mem"
+
+// Growing array on an arena. `items` is the live prefix of `storage`.
+pub struct Array<T> {
+  items: []T,
+  storage: []T,
+  arena: *mem.Arena,
+}
+
+// Creates an empty arena-backed array. Nothing is allocated until the first push.
+pub fn array<T>(arena: *mem.Arena) Array<T> {
+  return Array<T>{ arena: arena }
+}
+
+// Appends `value` to the end of `a`.
+pub fn push<T>(a: *Array<T>, value: T) {
+  _ = push_ref(a, value)
+}
+
+// Appends `value` to `a` and returns a pointer to the stored slot (valid until
+// the next growth).
+pub fn push_ref<T>(a: *Array<T>, value: T) *T {
+  count := a.items.len
+  if count == a.storage.len {
+    array_grow(a, count + 1)
+  }
+  a.storage[count] = value
+  a.items = a.storage[..count + 1]
+  return &a.storage[count]
+}
+
+fn array_grow<T>(a: *Array<T>, need: usize) {
+  if a.arena == nil {
+    #panic("create an array with col.array before calling col.push")
+  }
+  capacity := a.storage.len * 2
+  if capacity < 8 {
+    capacity = 8
+  }
+  if capacity < need {
+    capacity = need
+  }
+  fresh := mem.push_array<T>(a.arena, capacity)
+  _ = mem.copy(fresh, a.items)
+  a.storage = fresh
+  a.items = fresh[..a.items.len]
+}
+
+// Appends every element of `values` to `a`.
+pub fn push_all<T>(a: *Array<T>, values: []const T) {
+  count := a.items.len
+  if count + values.len > a.storage.len {
+    array_grow(a, count + values.len)
+  }
+  for i in 0..values.len {
+    a.storage[count + i] = values[i]
+  }
+  a.items = a.storage[..count + values.len]
+}
+
+// Returns a pointer to element `index`, or `nil` when out of bounds.
+pub fn get<T>(a: *const Array<T>, index: usize) *T {
+  if index >= a.items.len { return nil }
+  return &a.items[index]
+}
+
+// Removes and returns the last element, or the zero value if empty.
+pub fn pop<T>(a: *Array<T>) T {
+  result: T
+  count := a.items.len
+  if count == 0 { return result }
+  result = a.items[count - 1]
+  a.items = a.items[..count - 1]
+  return result
+}
+
+// Clears all elements while keeping the backing slice in the arena.
+pub fn clear<T>(a: *Array<T>) {
+  a.items = a.items[..0]
+}
+
+// Hash map entry.
+pub struct Entry<K, V> {
+  key: K,
+  value: V,
+}
+
+// Open-addressed hash map on an arena with 1-byte tag probes.
+pub struct Map<K, V> {
+  tags: []u8,
+  entries: []Entry<K, V>,
+  count: usize,
+  arena: *mem.Arena,
+  seed: u64,
+  hash_key: fn(u64, K) u64,
+  equal_key: fn(K, K) bool,
+}
+
+// Map iterator.
+pub struct Walk<K, V> {
+  map: *const Map<K, V>,
+  at: usize,
+  entry: Entry<K, V>,
+}
+
+// Creates an empty arena-backed map using the default hash/equality for `K`.
+pub fn map<K, V>(arena: *mem.Arena) Map<K, V> {
+  return map_seeded_with<K, V>(arena, 0x243f6a8885a308d3, default_hash, default_equal)
+}
+
+// Creates an empty arena-backed map with a caller-chosen hash seed.
+pub fn map_seeded<K, V>(arena: *mem.Arena, seed: u64) Map<K, V> {
+  return map_seeded_with<K, V>(arena, seed, default_hash, default_equal)
+}
+
+// Creates an empty arena-backed map with custom hash and equality functions.
+pub fn map_with<K, V>(arena: *mem.Arena, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) Map<K, V> {
+  return map_seeded_with<K, V>(arena, 0x243f6a8885a308d3, hash_key, equal_key)
+}
+
+// Creates an empty arena-backed map with a custom seed, hash, and equality.
+pub fn map_seeded_with<K, V>(arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) Map<K, V> {
+  return Map<K, V>{
+    arena: arena,
+    seed: seed,
+    hash_key: hash_key,
+    equal_key: equal_key,
+  }
+}
+
+fn default_hash<K>(seed: u64, key: K) u64 {
+  case K {
+    str, []u8 => { return hash.hash_bytes(seed, key) }
+    bool => {
+      if key { return mix_u64(seed, 1) }
+      return mix_u64(seed, 0)
+    }
+    u8, u16, u32, u64, usize => { return mix_u64(seed, #cast(u64, key)) }
+    i8 => { return mix_u64(seed, #cast(u64, #bitcast(u8, key))) }
+    i16 => { return mix_u64(seed, #cast(u64, #bitcast(u16, key))) }
+    i32 => { return mix_u64(seed, #cast(u64, #bitcast(u32, key))) }
+    i64 => { return mix_u64(seed, #bitcast(u64, key)) }
+    isize => { return mix_u64(seed, #cast(u64, #bitcast(usize, key))) }
+    _ => {
+      #assert(#typeof(K).kind == TypeKind.Enum || #typeof(K).kind == TypeKind.Pointer,
+        "col.map: keys must be integers, enums, bools, pointers or text; use col.map_with for custom keys")
+      if #sizeof(K) == 8 { return mix_u64(seed, #cast(*const u64, &key).*) }
+      if #sizeof(K) == 4 { return mix_u64(seed, #cast(u64, #cast(*const u32, &key).*)) }
+      if #sizeof(K) == 2 { return mix_u64(seed, #cast(u64, #cast(*const u16, &key).*)) }
+      return mix_u64(seed, #cast(u64, #cast(*const u8, &key).*))
+    }
+  }
+}
+
+fn default_equal<K>(left: K, right: K) bool {
+  case K {
+    str, []u8 => {
+      if left.len != right.len { return false }
+      for i in 0..left.len {
+        if left[i] != right[i] { return false }
+      }
+      return true
+    }
+    bool, u8, u16, u32, u64, usize, i8, i16, i32, i64, isize => { return left == right }
+    _ => {
+      if #sizeof(K) == 8 { return #cast(*const u64, &left).* == #cast(*const u64, &right).* }
+      if #sizeof(K) == 4 { return #cast(*const u32, &left).* == #cast(*const u32, &right).* }
+      if #sizeof(K) == 2 { return #cast(*const u16, &left).* == #cast(*const u16, &right).* }
+      return #cast(*const u8, &left).* == #cast(*const u8, &right).*
+    }
+  }
+}
+
+fn mix_u64(seed: u64, key: u64) u64 {
+  mixed := key ^ seed
+  mixed = mixed ^ (mixed >> 33)
+  mixed = #wrapping(mixed * 0xff51afd7ed558ccd)
+  mixed = mixed ^ (mixed >> 33)
+  mixed = #wrapping(mixed * 0xc4ceb9fe1a85ec53)
+  return mixed ^ (mixed >> 33)
+}
+
+fn map_locate<K, V>(m: *const Map<K, V>, key: K, code: u64) usize {
+  tags := m.tags
+  entries := m.entries
+  equal_key := m.equal_key
+  mask := tags.len - 1
+  want := #cast(u8, (code >> 57) | 0x80)
+  at := #cast(usize, code) & mask
+  for true {
+    tag := tags[at]
+    if tag == 0 { return at }
+    if tag == want {
+      if equal_key(entries[at].key, key) { return at }
+    }
+    at = (at + 1) & mask
+  }
+  return 0
+}
+
+fn map_grow<K, V>(m: *Map<K, V>) {
+  if m.arena == nil {
+    #panic("create a map with col.map before inserting")
+  }
+  capacity := m.tags.len * 2
+  if capacity == 0 {
+    capacity = 8
+  }
+  old_tags := m.tags
+  old_entries := m.entries
+  tags := mem.push_array<u8>(m.arena, capacity)
+  entries := mem.push_array<Entry<K, V>>(m.arena, capacity)
+  m.tags = tags
+  m.entries = entries
+  mask := capacity - 1
+  for i in 0..old_tags.len {
+    if old_tags[i] == 0 { continue }
+    entry := old_entries[i]
+    code := m.hash_key(m.seed, entry.key)
+    at := #cast(usize, code) & mask
+    for tags[at] != 0 {
+      at = (at + 1) & mask
+    }
+    tags[at] = #cast(u8, (code >> 57) | 0x80)
+    entries[at] = entry
+  }
+}
+
+// Inserts or overwrites `key` with `value`.
+pub fn map_insert<K, V>(m: *Map<K, V>, key: K, value: V) {
+  if (m.count + 1) * 10 >= m.tags.len * 7 {
+    map_grow(m)
+  }
+  code := m.hash_key(m.seed, key)
+  at := map_locate(m, key, code)
+  if m.tags[at] == 0 {
+    m.tags[at] = #cast(u8, (code >> 57) | 0x80)
+    m.entries[at].key = key
+    m.count += 1
+  }
+  m.entries[at].value = value
+}
+
+// Returns a pointer to the value for `key`, or `nil` when absent.
+pub fn map_get<K, V>(m: *const Map<K, V>, key: K) *V {
+  if m.count == 0 { return nil }
+  code := m.hash_key(m.seed, key)
+  at := map_locate(m, key, code)
+  if m.tags[at] == 0 { return nil }
+  return &m.entries[at].value
+}
+
+// Inserts `initial` if `key` is absent and returns a pointer to its value slot.
+pub fn map_upsert<K, V>(m: *Map<K, V>, key: K, initial: V) *V {
+  if (m.count + 1) * 10 >= m.tags.len * 7 {
+    map_grow(m)
+  }
+  code := m.hash_key(m.seed, key)
+  at := map_locate(m, key, code)
+  if m.tags[at] == 0 {
+    m.tags[at] = #cast(u8, (code >> 57) | 0x80)
+    m.entries[at] = Entry<K, V>{ key: key, value: initial }
+    m.count += 1
+  }
+  return &m.entries[at].value
+}
+
+// Returns true when `key` is in `m`.
+pub fn map_contains<K, V>(m: *const Map<K, V>, key: K) bool {
+  return map_get(m, key) != nil
+}
+
+// Removes `key` from `m`. Returns true if it was present.
+pub fn map_remove<K, V>(m: *Map<K, V>, key: K) bool {
+  if m.count == 0 { return false }
+  code := m.hash_key(m.seed, key)
+  at := map_locate(m, key, code)
+  if m.tags[at] == 0 { return false }
+  mask := m.tags.len - 1
+  hole := at
+  cur := (hole + 1) & mask
+  for m.tags[cur] != 0 {
+    home := #cast(usize, m.hash_key(m.seed, m.entries[cur].key)) & mask
+    if ((cur - home) & mask) >= ((cur - hole) & mask) {
+      m.tags[hole] = m.tags[cur]
+      m.entries[hole] = m.entries[cur]
+      hole = cur
+    }
+    cur = (cur + 1) & mask
+  }
+  m.tags[hole] = 0
+  empty_entry: Entry<K, V>
+  m.entries[hole] = empty_entry
+  m.count -= 1
+  return true
+}
+
+// Starts an iteration over `m`.
+pub fn map_walk<K, V>(m: *const Map<K, V>) Walk<K, V> {
+  return Walk<K, V>{ map: m }
+}
+
+// Advances `it` to the next live entry.
+pub fn map_next<K, V>(it: *Walk<K, V>) bool {
+  for it.at < it.map.tags.len {
+    i := it.at
+    it.at += 1
+    if it.map.tags[i] != 0 {
+      it.entry = it.map.entries[i]
+      return true
+    }
+  }
+  return false
+}
+
+// Fixed-capacity generic ring buffer backed by an arena slice.
+pub struct Ring<T> {
+  data: []T,
+  read: usize,
+  count: usize,
+}
+
+// Creates a ring buffer with `capacity` slots in `arena`.
+pub fn ring<T>(arena: *mem.Arena, capacity: usize) Ring<T> {
+  if capacity == 0 { return Ring<T>{} }
+  return Ring<T>{ data: mem.push_array<T>(arena, capacity) }
+}
+
+// Pushes `value` into `r`. Returns false when full.
+pub fn ring_push<T>(r: *Ring<T>, value: T) bool {
+  if r.count == r.data.len || r.data.len == 0 { return false }
+  r.data[(r.read + r.count) % r.data.len] = value
+  r.count += 1
+  return true
+}
+
+// Pops the oldest element from `r`, or the zero value when empty.
+pub fn ring_pop<T>(r: *Ring<T>) T {
+  result: T
+  if r.count == 0 { return result }
+  result = r.data[r.read]
+  r.read = (r.read + 1) % r.data.len
+  r.count -= 1
+  return result
+}

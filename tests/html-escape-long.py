@@ -27,9 +27,9 @@ def literal(text):
     return '"' + ''.join('\\x%02x' % b for b in text.encode()) + '"'
 
 
-source = ['use "std/html"', 'use "std/io"', 'use "std/fail"', '', 'fn show(text: []const u8) {', '  storage: [8192]u8',
-          '  status: fail.Status', '  out := html.writer(&status, storage[..])', '  html.text(&out, text)', '  written := html.output(&out).bytes',
-          '  untouched := true', '  for i in #len(written)..#len(storage) {', '    untouched = untouched && storage[i] == 0',
+source = ['use "std/html"', 'use "std/io"', '', 'fn show(text: []const u8) {', '  storage: [8192]u8',
+          '  out := html.writer(storage[..])', '  html.text(&out, text)', '  finished := html.finish(&out) catch { #panic("html overflow") }', '  written := finished.bytes',
+          '  untouched := true', '  for i in written.len..storage.len {', '    untouched = untouched && storage[i] == 0',
           '  }', '  io.println("{} {}", untouched, written)', '}', '', 'fn main() {']
 source += [f'  show({literal(case)})' for case in cases]
 source += ['}', '']

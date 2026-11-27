@@ -24,7 +24,7 @@ def array(values):
     return ','.join(map(str, values))
 
 
-source = ['''use "std/rand" rand
+source = ['''use rand "std/rand"
 fn main() {
   zero: rand.State
   explicit := rand.seeded(0)

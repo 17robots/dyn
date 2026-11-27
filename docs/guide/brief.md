@@ -18,7 +18,6 @@ those. A `suggestion:` line is a guess to check by hand.
 ## A whole program
 
 ```dyn
-use "std/fail"
 use "std/fs"
 use "std/io"
 use "std/mem"
@@ -33,7 +32,7 @@ struct Tally {
 fn count(arena: *mem.Arena, text: []const u8) Tally {
   tally := Tally{}
   for line in strings.split(arena, text, "\n") {
-    if #len(line) == 0 { continue }
+    if line.len == 0 { continue }
     tally.lines += 1
     in_word := false
     for byte in line {
@@ -50,12 +49,10 @@ fn main() i32 {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   text: []const u8 = "one two\nthree\n"
-  if #len(program.args) > 1 {
-    status: fail.Status
-    text = fs.read_all(arena, &status, program.args[1], mem.MiB)
-    if status.failed {
-      storage: [256]u8
-      io.eprintln("count: {}", fail.describe(storage[..], status.failure))
+  if program.args.len > 1 {
+    path := program.args[1]
+    text = fs.read_all(arena, path, mem.MiB) catch err {
+      io.eprintln("count: {}: {}", path, err)
       return 1
     }
   }
@@ -69,48 +66,53 @@ fn main() i32 {
 
 - A directory is a module. Its `.dyn` files share one namespace; `main.dyn`
   holds `fn main()` or `fn main() i32`. Imports are `use "std/io"` and
-  every imported name is qualified: `io.println`, `fail.Status`.
+  every imported name is qualified: `io.println`, `io.IoErr`.
 - One statement per line, no semicolons. `x := value` declares, `x: T`
   declares a zero (or field-default) value. No shadowing: pick a new name.
-- Types are written in full: `Shape.Circle(1.5)`, `Tally{ lines: 1 }`,
-  never `.Circle` or `.{ }`. An enum variant may hold a value:
-  `enum Shape { Dot, Circle: f64 }`. Conversions that can lose information need
-  `#cast(T, value)`.
-- `[]const u8` is a string: bytes and a length. `[N]T` is an array,
-  `[]T` a slice, `*T` a pointer (`p.*` reads it; fields auto-deref).
+- Struct literals name their type: `Tally{ lines: 1 }`. An enum variant may
+  hold a value: `enum Shape { Dot, Circle(f64) }`. Write `Shape.Circle(1.5)`,
+  or `.Circle(1.5)` where the enum type is already known. Conversions that
+  can lose information need `#cast(T, value)`.
+- `str` is `[]const u8`: bytes and a length. `[N]T` is an array, `[]T` a
+  slice (`xs.len`), `*T` a pointer (`p.*` reads it; fields auto-deref).
+  Raw strings use backticks.
 - `for` is the only loop: `for cond`, `for {}`, `for i in 0..n`,
   `for value in values`, `for *value in values`, `for value, i in values`.
-  No labels; `break` and `continue` act on the innermost loop.
+  A label names a loop for `break` and `continue`: `outer: for { break outer }`.
 - `case` arms are `pattern => { ... }`. Enum cases list every variant or
   have `_`; integer and text cases always have `_`. A payload is read only
-  in an arm: `Shape.Circle radius => { ... }`.
-- Generics: `fn max(a: $T, b: $T) T` infers `T` from arguments;
-  `fn make(T: type, ...)` takes it first, as in `mem.push(Node, arena)`.
+  in an arm: `Shape.Circle(radius) => { ... }`, or `Shape.Circle(*radius)`
+  for a pointer to it.
+- Generics use `<T>`: `fn max<T>(a: T, b: T) T` infers `T` from arguments;
+  `mem.push<Node>(arena)` names it. Inside a generic, `case T { ... }` picks
+  code per type at compile time.
 - `defer` runs at block exit. A panic ends the program; it is for bugs.
   `panic.assert(condition, "message")` (`std/panic`) checks one at run time,
   in every build; `#assert` checks constants at compile time.
 
-## Failure: one shape everywhere
+## Failure: `T!E`, `try` and `catch`
 
-1. A call that can fail takes `&status` (a `fail.Status`) and returns its value.
-2. A lookup always returns a usable value: zero or empty when it is not
-   there, with `NotFound` on the status, or `InvalidInput` when it is there
-   but wrong (a string where a number goes):
-   `port := json.get(i64, &status, root, "port")`. Read an optional value
-   with a status of its own, so a missing one stops nothing else, or pass
-   `nil` when you do not care why: `json.get(bool, nil, root, "debug")` is
-   false when missing, and nothing is recorded.
-   Iterators return their value too, and set `ended` on their state at the
-   end: `line := bufio.read_line(&status, &reader)`, then
-   `if reader.ended { break }`.
-3. Check `status.failed` before you act on what you got. After the first
-   failure every call given that status does nothing and returns zero, so
-   one check at the end of a unit of work is enough.
+1. A function that can fail returns `T!E`: a `T`, or an error `E`, an enum
+   (or a union of enums, `FsErr | ParseErr`). `!E` returns nothing on
+   success. `fail .NotFound` fails; `return value` succeeds.
+2. `try f()` passes a failure up to the caller (running `defer` and
+   `errdefer`); the caller's error type must include it. `f() catch err { ... }`
+   handles it: the block must leave with `return`, `fail`, `break`,
+   `continue` or `#panic`. `f() catch fallback` gives a value instead, and a
+   void call can `catch {}`.
+3. `case err { .NotFound => { ... } _ => { ... } }` reacts to one kind.
+   `io.IoErr` is the error of `std/io`, `std/fs` and `std/process`;
+   `io.println("{}", err)` prints its meaning, such as "not found". Name the
+   path in your message: the error does not carry it.
 
-`fail.describe(storage, status.failure)` gives "open app.json: no such file
-or directory". Cleanup takes no status (`fs.close(&file)`,
-`mem.arena_release(arena)`), so it works after a failure; other cleanup that
-can fail gets a fresh status.
+Iterators return their value and set `ended` on their state at the end:
+`entry := try fs.directory_next(&directory)`, then
+`if directory.ended { break }`. Cleanup cannot fail (`fs.close(&file)`,
+`mem.arena_release(arena)`).
+
+Decoders fail with `parse.ParseErr` and the byte offset where the input went
+wrong. A builder into fixed storage, such as `fmt.Buffer`, keeps its first
+overflow: check `fmt.overflowed(&buffer)` once, or let `finish` fail.
 
 ## Memory: arenas only
 
@@ -122,7 +124,7 @@ can fail gets a fresh status.
   `defer mem.arena_rewind(arena, mark)`. Per loop or request:
   `mem.arena_reset(arena)`.
 - Running out panics. Functions that allocate take the arena first:
-  `fs.read_all(arena, &status, path, maximum)`.
+  `fs.read_all(arena, path, maximum)`.
 - Growing lists: `std/container/array`; bytes: `std/bytes/builder`.
 
 ## Where things are
@@ -132,16 +134,16 @@ Qualify with the module's last path element: `use "std/encoding/json"` gives
 
 | Module | Use it for |
 | --- | --- |
-| `std/io` | `println`, `eprintln`, `stdin()`, `stdout()`, `read`, `write`, `copy` |
+| `std/io` | `println`, `eprintln`, `stdin()`, `stdout()`, `read`, `write`, `copy`, `IoErr` |
 | `std/bufio` | `reader(io.stdin(), storage)`, `read_line`, buffered `writer` |
 | `std/fs` | `open`, `create`, `read`, `write`, `close`, `read_all`, `write_all`, `list`, `remove`, `rename`, `metadata`, `make_directory`, `atomic_begin`/`atomic_commit` |
 | `std/process` | `start().args`, `environment`, `spawn`, `wait` |
-| `std/encoding/json` | `parse`, `get(T, &status, value, key)`, `is_string`, `is_number`, `writer` |
+| `std/encoding/json` | `parse`, `get<T>(value, key)`, `is_string`, `is_number`, `writer` |
 | `std/strings` | `format`, `split`, `join`, `trim`, `clone`, `parse` |
 | `std/bytes` | `equal`, `find`, `contains`, `starts_with`, `ends_with`, `count_occurrences` |
 | `std/path` | `join`, `basename`, `extension` |
-| `std/container/array`, `std/container/map` | growing arrays, hash maps |
-| `std/fail` | `Status`, `describe`, `invalid`, `Kind` |
+| `std/collections` | `array<T>(arena)`, `map<K, V>(arena)`, `ring<T>(arena, n)` |
+| `std/thread`, `std/sync` | `scope`/`scope_spawn`/`scope_join`, `channel<T>`, mutexes |
 
 ## Not X, write Y
 
@@ -158,12 +160,11 @@ From Go, Rust, Zig and C:
 | `if x { }` on a number or pointer | `if x != 0 { }`, `if p != nil { }` |
 | `a + b` on strings | `strings.format(arena, "{}{}", a, b)` |
 | `values` where a slice goes | `values[..]` |
-| `.Variant`, `.{ .x = 1 }` | `Enum.Variant`, `Point{ x: 1 }` |
+| `.{ .x = 1 }` | `Point{ x: 1 }` |
 | `x as u32`, `@intCast(x)`, `(u32)x` | `#cast(u32, x)` |
 | `file.close()`, methods | `fs.close(&file)` |
-| `try f()`, `f()?`, `err != nil` | `f(&status)`, then `if status.failed` |
+| `f()?`, `err != nil` | `try f()`, `f() catch err { ... }` |
 | `malloc`, `Box::new`, `allocator.create` | `mem.push(T, arena)` |
-| `Vec<T>`, `ArrayList(T)`, `append` | `std/container/array` |
+| `Vec<T>`, `ArrayList(T)`, `append` | `col.array<T>(arena)`, `col.push` (`std/collections`) |
 | `fmt.Printf("%d", n)`, `println!("{}", n)` | `io.println("{}", n)` |
-| `break outer` | a flag, or move the inner loop into a function |
 | `import "fmt"`, `@import("std")` | `use "std/fmt"` |

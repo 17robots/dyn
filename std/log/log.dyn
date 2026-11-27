@@ -1,5 +1,4 @@
-use "std/fail"
-use "std/io" stream
+use stream "std/io"
 
 pub enum Level { Debug, Info, Warning, Error }
 pub struct Field { name: []const u8, value: []const u8 }
@@ -21,12 +20,8 @@ fn name(level: Level) []const u8 {
 }
 // Writes one line, "level: message name=value ...", when level is at least
 // the logger's minimum.
-pub fn write(status: *fail.Status, target: *Logger, level: Level, message: []const u8, fields: []const Field) {
-  if status == nil {
-    write(&fail.Status{}, target, level, message, fields)
-    return
-  }
-  if status.failed || !enabled(level, target.minimum) { return }
+pub fn write(target: *Logger, level: Level, message: []const u8, fields: []const Field) !stream.IoErr {
+  if !enabled(level, target.minimum) { return }
   // A line that fits goes out in one write, so lines from several threads
   // do not interleave; a longer one is written in pieces.
   line: [1024]u8
@@ -40,27 +35,27 @@ pub fn write(status: *fail.Status, target: *Logger, level: Level, message: []con
     length = put(line[..], length, field.value)
   }
   length = put(line[..], length, "\n")
-  if length <= #len(line) {
-    stream.write(status, target.output, line[..length])
+  if length <= line.len {
+    try stream.write(target.output, line[..length])
     return
   }
-  stream.write(status, target.output, name(level))
-  stream.write(status, target.output, ": ")
-  stream.write(status, target.output, message)
+  try stream.write(target.output, name(level))
+  try stream.write(target.output, ": ")
+  try stream.write(target.output, message)
   for field in fields {
-    stream.write(status, target.output, " ")
-    stream.write(status, target.output, field.name)
-    stream.write(status, target.output, "=")
-    stream.write(status, target.output, field.value)
+    try stream.write(target.output, " ")
+    try stream.write(target.output, field.name)
+    try stream.write(target.output, "=")
+    try stream.write(target.output, field.value)
   }
-  stream.write(status, target.output, "\n")
+  try stream.write(target.output, "\n")
 }
 
-// Appends text at length, or returns more than #len(line) once it no longer fits.
+// Appends text at length, or returns more than line.len once it no longer fits.
 fn put(line: []u8, length: usize, text: []const u8) usize {
-  if length > #len(line) || #len(text) > #len(line) - length { return #len(line) + 1 }
-  for i in 0..#len(text) {
+  if length > line.len || text.len > line.len - length { return line.len + 1 }
+  for i in 0..text.len {
     line[length + i] = text[i]
   }
-  return length + #len(text)
+  return length + text.len
 }

@@ -37,7 +37,7 @@ def bits(x, width=32):
 
 
 def generate():
-    lines = ['use "std/math" m', 'use "std/io"',
+    lines = ['use m "std/math"', 'use "std/io"',
              'extern fn opaque(x:u64) u64', 'extern fn cpacr() u32',
              'pub fn math_selected_sqrt(x:f64) f64 { return m.sqrt(x) }',
              'fn main() {', 'if (cpacr() & 0x00f00000) != 0 { #panic("FPU enabled at entry") }']

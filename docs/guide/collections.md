@@ -3,7 +3,7 @@
 | Need | Use | Moves items | Allocates on add |
 | --- | --- | --- | --- |
 | Bytes or text | `std/bytes/builder` | Yes, when it grows | Only `append_grow` |
-| Everyday growing list | `array.Array(T)` (`std/container/array`) | Yes, when it grows | Yes |
+| Everyday growing list | `array.Array<T>` (`std/container/array`) | Yes, when it grows | Yes |
 | Long list with stable items | Chunk list | Never | One chunk at a time |
 | Links through your own nodes | Intrusive list or tree | Never | No |
 | Lookup by key | `std/container/map` | Yes, when it grows | Yes |
@@ -41,17 +41,17 @@ fn main() {
 - Do not independently mutate copies of a builder sharing storage. No internal locking.
 
 Most collections are slices and plain structs that you declare, and std supplies
-generic functions that work on them. `array.Array(T)`, `chunk.List(T)` and
-`map.Map(K, V)` are the generic types. Each job has one
+generic functions that work on them. `array.Array<T>`, `chunk.List<T>` and
+`map.Map<K, V>` are the generic types. Each job has one
 shape:
 
 | Job | Shape |
 | --- | --- |
 | Fixed list | a slice from `mem.push_array(T, &arena, n)` |
-| Growing list | `array.Array(T)` with `array.init` (`std/container/array`) |
+| Growing list | `array.Array<T>` with `array.init` (`std/container/array`) |
 | Growing list on a shared arena | a chunk list (`std/container/chunk`) |
 | Trees, free lists, an item in several lists | intrusive links (`std/container/list`) |
-| Lookup by key | `map.Map(K, V)` with `map.init` (`std/container/map`) |
+| Lookup by key | `map.Map<K, V>` with `map.init` (`std/container/map`) |
 | Lookup through your own nodes | hash slots chained through `hash_next` (`std/container/hash`) |
 | References that survive deletion | generation handles (`std/container/slot_map`) |
 
@@ -77,7 +77,7 @@ struct Enemy {
 
 fn main() {
   arena := mem.arena_alloc(0)
-  enemies: array.Array(Enemy)
+  enemies: array.Array<Enemy>
   array.init(&enemies, arena)
   array.push(&enemies, Enemy{ hp: 10 })
   boss := array.push_ref(&enemies, Enemy{ hp: 300 })
@@ -108,7 +108,7 @@ different chunk size, declare your own structs with the same field names:
 ```dyn
 use "std/container/chunk"
 
-fn spawn(arena: *mem.Arena, enemies: *chunk.List(Enemy)) {
+fn spawn(arena: *mem.Arena, enemies: *chunk.List<Enemy>) {
   enemy := chunk.push(arena, enemies, Enemy{hp: 10})
   enemy.hp += 1
   it := enemies.first
@@ -148,7 +148,7 @@ const nil_node: Node = Node{}
 fn reuse(first_free: **Node, root: *Node, arena: *mem.Arena) *Node {
   node := list.free_pop(first_free, &nil_node)
   if node == &nil_node {
-    node = mem.push(Node, arena)
+    node = mem.push<Node>(arena)
   } else {
     mem.clear(node)
   }
@@ -175,14 +175,14 @@ use "std/mem"
 
 fn main() {
   arena := mem.arena_alloc(0)
-  ages: map.Map([]const u8, i32)
+  ages: map.Map<[]const u8, i32>
   map.init(&ages, arena)
   map.insert(&ages, "ada", 36)
   age := map.get(&ages, "ada")
   if age != nil {
     age.* += 1
   }
-  visits: map.Map([]const u8, u64)
+  visits: map.Map<[]const u8, u64>
   map.init(&visits, arena)
   map.upsert(&visits, "ada", 0).* += 1
   it := map.walk(&visits)
@@ -244,7 +244,7 @@ resolving once the slot is freed, even after it is reused. The slot struct
 carries `generation: u32`; an odd generation means live:
 
 ```dyn
-use "std/container/slot_map" slots
+use slots "std/container/slot_map"
 
 struct Enemy { generation: u32, free_next: *Enemy, hp: i32 }
 const nil_enemy: Enemy = Enemy{}

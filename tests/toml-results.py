@@ -11,40 +11,27 @@ import tempfile
 import tomllib
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-CLI='''use "std/encoding/toml" toml
-use "std/io" io
-use "std/mem" mem
-use "std/fail"
-use "std/fs" fs
-use "std/process" process
+CLI='''use toml "std/encoding/toml"
+use io "std/io"
+use mem "std/mem"
+use parse "std/parse"
+use fs "std/fs"
+use process "std/process"
 fn main() {
  arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
- args_status: fail.Status
- args := process.arguments(arena, &args_status)
- if args_status.failed || #len(args) != 3 { #panic("arguments") }
- source_file: fail.Status
- source := fs.read_all(arena, &source_file, args[1], 16777216)
- if source_file.failed { #panic("read") }
+ args := process.arguments(arena) catch { #panic("cannot read arguments") }
+ if args.len != 3 { #panic("arguments") }
+ source := fs.read_all(arena, args[1], 16777216) catch { #panic("cannot read a fixture") }
  mark := mem.arena_mark(arena)
- parsing: fail.Status
- root := toml.parse(arena,&parsing,source)
- if parsing.failed {
+ root := toml.parse(arena,source) catch err {
   if mem.arena_mark(arena) != mark { #panic("rollback") }
-  io.println("ERR {}",parsing.failure.offset)
+  io.println("ERR {}",parse.offset(err))
   return
  }
- encoding := fail.Status{ on_failure: fail.panic_on_failure }
- encoded := toml.encode(arena,&encoding,root)
- if !fs_write_file(args[2],encoded) { #panic("write") }
+ encoded := toml.encode(arena,root) catch { #panic("encode") }
+ fs.write_all(args[2], encoded) catch { #panic("cannot write a file") }
  io.println("OK")
-}
-
-// Writes data to path; whether it worked.
-fn fs_write_file(path: []const u8, data: []const u8) bool {
-  status: fail.Status
-  fs.write_all(&status, path, data)
-  return !status.failed
 }
 '''
 VALID=[b'',b'x=1\n',b'''title = "TOML Example"
@@ -117,7 +104,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-toml-') as directory:
   for failure in failures:print(failure)
   raise SystemExit(f'{len(failures)} of {len(cases)} TOML cases failed')
  portable=work/'portable';portable.mkdir()
- probe='use "std/fail"\nuse "std/encoding/toml" toml\nuse "std/mem" mem\nfn main() {\n status := fail.Status{ on_failure: fail.panic_on_failure }\n arena := mem.arena_alloc(0)\n defer { mem.arena_release(arena) }\n source: ['+str(len(VALID[2]))+']u8 = ['+','.join(map(str,VALID[2]))+']\n root := toml.parse(arena,&status,source[..])\n encoded := toml.encode(arena,&status,root)\n _ = toml.parse(arena,&status,encoded)\n cycle := toml.Value{kind:toml.Kind.Table}\n child := toml.Value{kind:toml.Kind.String,key:"x"}\n child.next = &child\n cycle.first = &child\n cycling: fail.Status\n _ = toml.encode(arena,&cycling,&cycle)\n if !cycling.failed { #panic("cycle") }\n}\n'
+ probe='use toml "std/encoding/toml"\nuse mem "std/mem"\nfn encode_fails(arena: *mem.Arena, root: *const toml.Value) bool {\n _ = toml.encode(arena,root) catch { return true }\n return false\n}\nfn main() {\n arena := mem.arena_alloc(0)\n defer { mem.arena_release(arena) }\n source: ['+str(len(VALID[2]))+']u8 = ['+','.join(map(str,VALID[2]))+']\n root := toml.parse(arena,source[..]) catch { #panic("parse") }\n encoded := toml.encode(arena,root) catch { #panic("encode") }\n _ = toml.parse(arena,encoded) catch { #panic("reparse") }\n cycle := toml.Value{kind:toml.Kind.Table}\n child := toml.Value{kind:toml.Kind.String,key:"x"}\n child.next = &child\n cycle.first = &child\n if !encode_fails(arena,&cycle) { #panic("cycle") }\n}\n'
  (portable/'main.dyn').write_text(probe)
  for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
   output=work/target

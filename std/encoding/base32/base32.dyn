@@ -1,6 +1,6 @@
-use "std/mem" mem
-use "std/fail"
-use "std/bytes" bytes
+use mem "std/mem"
+use parse "std/parse"
+use bytes "std/bytes"
 // A pass over the input: the bytes written, the exact size needed, or failed.
 struct Result { data: []u8, required: usize, failed: bool }
 
@@ -25,16 +25,16 @@ fn encoded_size(length: usize) usize {
 }
 
 fn encode_into(destination: []u8, source: []const u8) Result {
-  required := encoded_size(#len(source))
-  if #len(source) != 0 && required == 0 { return Result{ failed: true } }
-  if #len(destination) < required { return Result{ failed: true, required: required } }
+  required := encoded_size(source.len)
+  if source.len != 0 && required == 0 { return Result{ failed: true } }
+  if destination.len < required { return Result{ failed: true, required: required } }
   if bytes.overlaps(destination[..required], source) {
     return Result{ failed: true, required: required }
   }
   input_at: usize = 0
   output_at: usize = 0
-  for input_at < #len(source) {
-    remaining := #len(source) - input_at
+  for input_at < source.len {
+    remaining := source.len - input_at
     take := remaining
     if take > 5 {
       take = 5
@@ -59,26 +59,26 @@ fn encode_into(destination: []u8, source: []const u8) Result {
 }
 
 fn decoded_extent(source: []const u8) usize {
-  if #len(source) == 0 { return 0 }
+  if source.len == 0 { return 0 }
   padding: usize = 0
-  at := #len(source)
+  at := source.len
   for at > 0 && source[at - 1] == '=' {
     padding += 1
     at -= 1
   }
-  if #len(source) % 8 != 0 || padding > 6 { return 0 }
-  return (#len(source) / 8) * 5 - (padding * 5 + 7) / 8
+  if source.len % 8 != 0 || padding > 6 { return 0 }
+  return (source.len / 8) * 5 - (padding * 5 + 7) / 8
 }
 
 fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usize) Result {
-  offset.* = #len(source)
-  if #len(source) == 0 { return Result{ data: destination[..0] } }
-  if #len(source) % 8 != 0 { return Result{ data: destination[..0], failed: true } }
+  offset.* = source.len
+  if source.len == 0 { return Result{ data: destination[..0] } }
+  if source.len % 8 != 0 { return Result{ data: destination[..0], failed: true } }
   required := decoded_extent(source)
-  if write && #len(destination) < required { return Result{ data: destination[..0], failed: true } }
+  if write && destination.len < required { return Result{ data: destination[..0], failed: true } }
   output_at: usize = 0
   input_at: usize = 0
-  for input_at < #len(source) {
+  for input_at < source.len {
     block: u64 = 0
     symbols: usize = 0
     digit: usize = 0
@@ -104,7 +104,7 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usiz
       offset.* = input_at + symbols
       return Result{ data: destination[..0], failed: true }
     }
-    if symbols != 8 && input_at + 8 != #len(source) {
+    if symbols != 8 && input_at + 8 != source.len {
       offset.* = input_at + symbols
       return Result{ failed: true }
     }
@@ -129,7 +129,7 @@ fn decode_into(destination: []u8, source: []const u8) Result {
   offset: usize = 0
   measured := decode_pass(destination[..0], source, false, &offset)
   if measured.failed { return measured }
-  if measured.required > #len(destination) {
+  if measured.required > destination.len {
     return Result{ failed: true, required: measured.required }
   }
   if bytes.overlaps(destination[..measured.required], source) {
@@ -153,8 +153,8 @@ fn decoded_size(source: []const u8) Size {
 
 // Encodes source into arena. Size overflow or overlapping input/output panics.
 pub fn encode(arena: *mem.Arena, source: []const u8) []u8 {
-  required := encoded_size(#len(source))
-  if #len(source) != 0 && required == 0 {
+  required := encoded_size(source.len)
+  if source.len != 0 && required == 0 {
     #panic("base32.encode: size overflows")
   }
   output := mem.push_bytes(arena, required)
@@ -166,21 +166,14 @@ pub fn encode(arena: *mem.Arena, source: []const u8) []u8 {
 }
 
 // Decodes validated input into arena. Failures preserve the arena and source:
-// malformed input fails with InvalidInput at an offending byte, or at the
+// malformed input fails with Invalid at an offending byte, or at the
 // end of a truncated group. Arena exhaustion panics.
-pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) []u8 {
-  if status == nil { return decode(arena, &fail.Status{}, source) }
-  empty: []u8
-  if status.failed { return empty }
+pub fn decode(arena: *mem.Arena, source: []const u8) []u8!parse.ParseErr {
   size := decoded_size(source)
-  if !size.ok {
-    fail.at(status, fail.Kind.InvalidInput, "decode base32", "invalid base32", size.offset)
-    return empty
-  }
+  if !size.ok { fail parse.ParseErr.Invalid(size.offset) }
   // Check borrowed backing before allocation or rewind can modify aliased input.
   if mem.arena_overlaps_unallocated(arena, source) {
-    fail.invalid(status, "decode base32", "", "the input lies in the arena's free space")
-    return empty
+    #panic("base32.decode: input overlaps arena output")
   }
   output := mem.push_bytes(arena, size.value)
   _ = decode_into(output, source)

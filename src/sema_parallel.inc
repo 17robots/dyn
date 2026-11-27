@@ -135,6 +135,7 @@ static void sema_range_add(SemaRanges *r, unsigned kind, uint32_t id) {
   if (id + 1 > r->high[kind]) r->high[kind] = id + 1;
   ++r->count[kind];
 }
+static void sema_range_block(SemaRanges *, const DynAstProgram *, uint32_t, uint32_t, unsigned);
 static void sema_range_expr(SemaRanges *r, const DynAstProgram *a, DynExprId id, unsigned depth) {
   if (id == DYN_NO_EXPR || r->failed) return;
   if (id >= a->expression_count || depth > 4096) { r->failed = true; return; }
@@ -143,7 +144,9 @@ static void sema_range_expr(SemaRanges *r, const DynAstProgram *a, DynExprId id,
   sema_range_expr(r, a, e->left, depth + 1);
   sema_range_expr(r, a, e->right, depth + 1);
   if (e->kind == DYN_EXPR_SLICE) sema_range_expr(r, a, (DynExprId)e->integer, depth + 1);
-  if (e->kind != DYN_EXPR_OFFSET && e->item_count) {
+  if (e->kind == DYN_EXPR_CATCH && e->boolean) {
+    sema_range_block(r, a, e->item_start, e->item_count, depth + 1);
+  } else if (e->kind != DYN_EXPR_OFFSET && e->item_count) {
     if ((uint64_t)e->item_start + e->item_count > a->item_count) { r->failed = true; return; }
     for (uint32_t i = 0; i < e->item_count; ++i) {
       sema_range_add(r, SEMA_ITEMS, e->item_start + i);
@@ -282,7 +285,10 @@ static unsigned sema_fields(DynAstProgram *a, unsigned array, uint32_t index, Se
     unsigned n = 0;
     out[n++] = (SemaField){&e->left, SEMA_EXPR_ID, false};
     out[n++] = (SemaField){&e->right, SEMA_EXPR_ID, false};
-    out[n++] = (SemaField){e->kind != DYN_EXPR_OFFSET ? &e->item_start : NULL, SEMA_ITEM_ID, false};
+    if (e->kind == DYN_EXPR_CATCH && e->boolean)
+      out[n++] = (SemaField){&e->catch_local, SEMA_LOCAL_ID, false};
+    else
+      out[n++] = (SemaField){e->kind != DYN_EXPR_OFFSET ? &e->item_start : NULL, SEMA_ITEM_ID, false};
     unsigned holds = sema_integer_holds(e);
     /* integer is 64 bits wide; the ids and types it holds fit 32. */
     out[n++] = (SemaField){holds != UINT32_MAX ? &e->integer : NULL, holds, true};

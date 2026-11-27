@@ -8,16 +8,11 @@ pub fn surface_destroy_owned(surface: Surface) {
   }
 }
 // Upload copies surface data; surface may be destroyed after this call.
-pub fn texture_from_surface_owned(status: *fail.Status, renderer: Renderer, surface: Surface) Texture {
-  if status == nil { return texture_from_surface_owned(&fail.Status{}, renderer, surface) }
-  if status.failed { return nil }
-  if renderer == nil || surface == nil {
-    fail.invalid(status, "create texture", "", "no renderer or surface")
-    return nil
-  }
+pub fn texture_from_surface_owned(renderer: Renderer, surface: Surface) Texture!io.IoErr {
+  if renderer == nil || surface == nil { fail .InvalidInput }
   value := native_texture_create(renderer, surface)
   if value == nil {
-    record_error(status, "create texture")
+    try record_error("create texture")
   }
   return value
 }
@@ -27,17 +22,9 @@ pub fn texture_destroy_owned(texture: Texture) {
   }
 }
 // Draw entire texture to entire rendering target. Present separately.
-pub fn texture_draw(status: *fail.Status, renderer: Renderer, texture: Texture) {
-  if status == nil {
-    texture_draw(&fail.Status{}, renderer, texture)
-    return
-  }
-  if status.failed { return }
-  if renderer == nil || texture == nil {
-    fail.invalid(status, "draw texture", "", "no renderer or texture")
-    return
-  }
-  checked(status, "draw texture", native_texture_draw(renderer, texture, nil, nil))
+pub fn texture_draw(renderer: Renderer, texture: Texture) !io.IoErr {
+  if renderer == nil || texture == nil { fail .InvalidInput }
+  try checked("draw texture", native_texture_draw(renderer, texture, nil, nil))
 }
 extern fn native_surface_destroy "SDL_DestroySurface"(surface: Surface)
 extern fn native_texture_create "SDL_CreateTextureFromSurface"(renderer: Renderer, surface: Surface) Texture

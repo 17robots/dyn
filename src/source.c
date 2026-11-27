@@ -177,6 +177,9 @@ static int sources_load(const DynContext *context, const char *dir,
     if (n < 5 || strcmp(entry->d_name + n - 4, ".dyn") != 0)
       continue;
     if (single && strcmp(entry->d_name, single_file)) continue;
+    if (!single && !(context && context->include_tests) &&
+        n >= 9 && strcmp(entry->d_name + n - 9, "_test.dyn") == 0)
+      continue;
     if (out->count == DYN_MAX_MODULE_SOURCES) {
       closedir(d);
       EARLIER(0);
@@ -414,6 +417,10 @@ bool dyn_module_target_gap(const DynContext *context, const char *directory, cha
   return n > 0 && (size_t)n < capacity;
 }
 #include "prelude.inc"
+static const char instrumentation_prelude[] =
+    "extern fn dyn_race_read \"dyn_race_read\"(address: u64, size: u64)\n"
+    "extern fn dyn_race_write \"dyn_race_write\"(address: u64, size: u64)\n"
+    "extern fn dyn_set_lifetime_checks \"dyn_set_lifetime_checks\"(enabled: u64)\n";
 static size_t compiler_prelude_length(void) {
   size_t total = 0;
   for (size_t i = 0; i < sizeof(compiler_prelude) / sizeof(*compiler_prelude); ++i)
@@ -427,6 +434,10 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
     out->context = sources->items[0].context;
   size_t total = 0;
   bool reflection = false;
+  bool instrumentation = out->context.optimization &&
+                         (out->context.optimization->check_lifetimes ||
+                          out->context.optimization->race) &&
+                         !out->context.runtime_support;
   for (size_t i = 0; i < sources->count; ++i) {
     int enabled = dyn_source_target_enabled(&sources->items[i]);
     if (enabled < 0) {
@@ -446,7 +457,8 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
       return 1;
     }
   }
-  size_t prelude = reflection ? compiler_prelude_length() : 0;
+  size_t prelude = (reflection ? compiler_prelude_length() : 0) +
+                   (instrumentation ? sizeof(instrumentation_prelude) - 1 : 0);
   if (SIZE_MAX - total < prelude)
     return 2;
   total += prelude;
@@ -465,6 +477,11 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
         memcpy(out->text + at, compiler_prelude[i], n);
         at += n;
       }
+    }
+    if (instrumentation) {
+      size_t n = sizeof(instrumentation_prelude) - 1;
+      memcpy(out->text + at, instrumentation_prelude, n);
+      at += n;
     }
   }
   for (size_t i = 0; i < sources->count; ++i) {

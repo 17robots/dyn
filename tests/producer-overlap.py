@@ -6,12 +6,19 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "std/archive/zip" zip
-use "std/unicode/text" text
-use "std/fail"
-use "std/mem" mem
-use "std/hash" hashing
-use "std/bytes" bytes
+SOURCE=r'''use zip "std/archive/zip"
+use text "std/unicode/text"
+use mem "std/mem"
+use hashing "std/hash"
+use bytes "std/bytes"
+fn extract_fails(arena: *mem.Arena, entry: zip.Entry) bool {
+  _=zip.extract(arena,entry) catch { return true }
+  return false
+}
+fn normalize_fails(arena: *mem.Arena, source: []const u8) bool {
+  _=text.normalize(arena,source,text.Form.NFC) catch { return true }
+  return false
+}
 fn main() {
   buffer:[4+mem.ArenaBufferOverhead]u8
   pad:=(16-(#cast(usize,&buffer[0])&15))&15
@@ -21,20 +28,14 @@ fn main() {
   _=mem.copy(payload,"abc")
   mark:=mem.arena_mark(arena)
   entry:=zip.Entry{payload:payload[..3],compressed_size:3,uncompressed_size:3,checksum:hashing.crc32(payload[..3])}
-  extracting:fail.Status
-  result:=zip.extract(arena,&extracting,entry)
-  if extracting.failure.kind != fail.Kind.InvalidInput || #len(result)!=0 || mem.arena_mark(arena)!=mark || !bytes.equal(payload[..3],"abc") { #panic("ZIP overlap preflight") }
+  if !extract_fails(arena,entry) || mem.arena_mark(arena)!=mark || !bytes.equal(payload[..3],"abc") { #panic("ZIP overlap preflight") }
   backing:[1024+mem.ArenaBufferOverhead]u8
   unicodearena:=mem.arena_from_buffer(backing[..])
   text_payload:=unicodearena.data[mem.ArenaHeader..]
   text_payload[0]='a'
-  work:fail.Status
-  _=text.normalize(unicodearena,&work,text_payload[..1],text.Form.NFC)
-  if !work.failed || mem.arena_mark(unicodearena)!=mem.ArenaHeader || text_payload[0]!='a' { #panic("normalization work overlap") }
+  if !normalize_fails(unicodearena,text_payload[..1]) || mem.arena_mark(unicodearena)!=mem.ArenaHeader || text_payload[0]!='a' { #panic("normalization work overlap") }
   text_payload[144]='A'
-  output:fail.Status
-  _=text.normalize(unicodearena,&output,text_payload[144..145],text.Form.NFC)
-  if !output.failed || mem.arena_mark(unicodearena)!=mem.ArenaHeader || text_payload[144]!='A' { #panic("normalization output overlap") }
+  if !normalize_fails(unicodearena,text_payload[144..145]) || mem.arena_mark(unicodearena)!=mem.ArenaHeader || text_payload[144]!='A' { #panic("normalization output overlap") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-producer-overlap-') as directory:

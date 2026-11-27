@@ -7,8 +7,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = '''use "std/mem" mem
-use "std/strings" strings
+SOURCE = '''use mem "std/mem"
+use strings "std/strings"
 use "std/bytes"
 
 fn main() {
@@ -29,7 +29,7 @@ fn main() {
   if !bytes.equal(strings.list_join(arena, &empty, ","), "") { #panic("empty join") }
 
   parts := strings.split(arena, "x,,y,", ",")
-  if #len(parts) != 4 || !bytes.equal(parts[2], "y") || #len(parts[3]) != 0 { #panic("split") }
+  if parts.len != 4 || !bytes.equal(parts[2], "y") || parts[3].len != 0 { #panic("split") }
   if !bytes.equal(strings.join(arena, parts, "-"), "x--y-") { #panic("join parts") }
   copied := strings.clone(arena, "copy")
   if !bytes.equal(copied, "copy") { #panic("clone") }
@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-arena-strings-') as temporary:
     # dyn vet reports a literal template that does not match its arguments.
     mismatch = project / 'template'
     mismatch.mkdir()
-    (mismatch / 'main.dyn').write_text('use "std/mem" mem\nuse "std/strings" strings\nuse "std/bytes"\n\nfn main() {\n'
+    (mismatch / 'main.dyn').write_text('use mem "std/mem"\nuse strings "std/strings"\nuse "std/bytes"\n\nfn main() {\n'
                                        '  arena := mem.arena_alloc(0)\n  _ = strings.format(arena, "{} {}", 1)\n}\n')
     checked = subprocess.run([DYN, 'vet', str(mismatch)], cwd=ROOT, capture_output=True, text=True, timeout=60)
     assert checked.returncode != 0 and 'format template has 2 {} but the call passes 1 value' in checked.stderr, checked.stderr
@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-arena-strings-') as temporary:
                        ('exhausted', 'strings.format(arena, "{}", "too long for eight")')):
         panic = project / name
         panic.mkdir()
-        (panic / 'main.dyn').write_text('use "std/mem" mem\nuse "std/strings" strings\nuse "std/bytes"\n\nfn main() {\n'
+        (panic / 'main.dyn').write_text('use mem "std/mem"\nuse strings "std/strings"\nuse "std/bytes"\n\nfn main() {\n'
                                         '  storage: [8 + mem.ArenaBufferOverhead]u8\n  arena := mem.arena_from_buffer(storage[..])\n'
                                         f'  _ = {body}\n}}\n')
         subprocess.run([DYN, 'build', str(panic), '--no-cache', '--quiet', '--output', str(panic / 'out')],

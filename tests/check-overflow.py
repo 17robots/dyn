@@ -27,13 +27,13 @@ fn bump(x: i32) i32 {
 fn main() {
   program := process.start()
   arena := mem.arena_alloc(0)
-  m: map.Map(u64, u64)
+  m: map.Map<u64, u64>
   map.init(&m, arena)
   map.insert(&m, 18446744073709551615, 7)
   io.println("std {}", map.get(&m, 18446744073709551615).*)
   high: u32 = 0x80000000
   io.println("wrapping {} {}", math.wrapping_mul(high, 2), #wrapping(high * 2 + 1))
-  mode := #len(program.args)
+  mode := program.args.len
   if mode == 2 {
     small: u8 = 200
     small += 100

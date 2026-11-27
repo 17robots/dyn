@@ -19,8 +19,8 @@ fn trace_write(data: *const u8, size: u64) {
   handle := get_handle(4294967284)
   bytes := #slice(data, #cast(usize, size))
   offset: usize = 0
-  for offset < #len(bytes) {
-    chunk := #len(bytes) - offset
+  for offset < bytes.len {
+    chunk := bytes.len - offset
     if chunk > 2147483647 {
       chunk = 2147483647
     }

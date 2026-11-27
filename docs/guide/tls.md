@@ -4,10 +4,9 @@
 The binding uses `SSL_get1_peer_certificate`; OpenSSL 1.1.1 is not supported.
 
 - `client_config_create` loads provider-default trust roots and enables peer verification.
-- `server_config_create` accepts an arena for temporary PEM path strings;
-  `server_config_create_into` accepts caller buffers instead.
-- `client_connection_create` accepts arena scratch for hostname verification and SNI;
-  `client_connection_create_into` accepts caller storage. Neither retains scratch.
+- `server_config_create` accepts an arena for temporary PEM path strings.
+- `client_connection_create` accepts arena scratch for hostname verification and SNI,
+  and does not retain it.
 - `server_connection_create` attaches an existing descriptor to a server configuration.
 - Successful configurations require `config_release(&context)`; connections
   require `connection_release(&connection)`. Both clear the handle, so a second
@@ -17,9 +16,13 @@ The binding uses `SSL_get1_peer_certificate`; OpenSSL 1.1.1 is not supported.
 - `peer_certificate_owned` returns a provider reference requiring `certificate_release(&certificate)`.
 - ALPN input is validated length-prefixed wire format. Selected ALPN bytes borrow the
   connection until renegotiation or destruction. Servers choose with
-  `server_alpn(&status, context, &preference)`: the first protocol of `preference` the
+  `server_alpn(context, &preference)`: the first protocol of `preference` the
   client offers wins; `preference` must outlive the context. Certificate subject/error text uses caller buffers.
 - Arena constructors rewind scratch on every return. Output slices and adapters never own it.
+
+Calls that can fail return `T!io.IoErr`: a bad argument fails with
+`InvalidInput`, a failed certificate check with `PermissionDenied`, and any
+other provider failure with `System` and the provider's code.
 
 `handshake`, `server_handshake`, `read`, and `write` return a `Want` (`Read` or
 `Write`) for nonblocking operations; waiting is not a failure. Retry after the corresponding readiness event, preserving operation

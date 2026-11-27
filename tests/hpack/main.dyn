@@ -9,7 +9,6 @@ use "std/io"
 use "std/mem"
 use "std/net/http/hpack"
 use "std/net/http/qpack"
-use "std/fail"
 
 const Vectors: []const u8 = #load("vectors.txt")
 
@@ -19,10 +18,8 @@ fn decode_all(decoder: *hpack.Decoder, block: []const u8, output: []u8) []const 
   used: usize = 0
   at: usize = 0
   hpack.decode_begin(decoder)
-  status: fail.Status
-  for at < #len(block) {
-    field := hpack.decode_field(&status, decoder, block[at..], scratch[..])
-    if status.failed { return "error" }
+  for at < block.len {
+    field := hpack.decode_field(decoder, block[at..], scratch[..]) catch { return "error" }
     at += field.consumed
     if field.update { continue }
     if used > 0 {
@@ -44,10 +41,8 @@ fn qpack_all(section: []const u8, output: []u8) []const u8 {
   scratch: [1024]u8
   used: usize = 0
   at := prefix.consumed
-  status: fail.Status
-  for at < #len(section) {
-    field := qpack.decode_field(&status, section[at..], scratch[..])
-    if status.failed { return "error" }
+  for at < section.len {
+    field := qpack.decode_field(section[at..], scratch[..]) catch { return "error" }
     at += field.consumed
     if used > 0 {
       output[used] = '|'
@@ -73,11 +68,10 @@ fn main() {
   for {
     piece := bytes.split_next(&lines)
     if lines.ended { break }
-    if #len(piece) == 0 { continue }
+    if piece.len == 0 { continue }
     tab := bytes.find_byte(piece, '\t')
-    vectors := fail.Status{ on_failure: fail.panic_on_failure }
-    block := hex.decode(arena, &vectors, piece[..tab])
-    want := hex.decode(arena, &vectors, piece[tab + 1..])
+    block := hex.decode(arena, piece[..tab]) catch { #panic("hex vector") }
+    want := hex.decode(arena, piece[tab + 1..]) catch { #panic("hex vector") }
     output: [4096]u8
     got := decode_all(&decoder, block, output[..])
     if !bytes.equal(got, want) {

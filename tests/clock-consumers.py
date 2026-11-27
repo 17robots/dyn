@@ -8,17 +8,20 @@ import subprocess
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
-SOURCE = '''use "std/time" time
-use "std/fail"
-use "std/profile" profile
-use "std/testing" testing
-use "std/net" net
-use "std/net/dns" dns
-use "std/process" process
-use "std/mem" mem
+SOURCE = '''use time "std/time"
+use profile "std/profile"
+use testing "std/testing"
+use net "std/net"
+use dns "std/net/dns"
+use process "std/process"
+use mem "std/mem"
 struct Filter { code: u16, jt: u8, jf: u8, k: u32 }
 struct Program { length: u16, filter: *Filter }
 fn require(ok: bool) { if !ok { #panic("clock consumer contract") } }
+fn resolve_fails(arena: *mem.Arena, server: *const net.Ipv4Address) bool {
+  _ = dns.resolve_ipv4(arena, "example.test", server, 10) catch { return true }
+  return false
+}
 fn main() {
   span := profile.begin("clock")
   benchmark := testing.benchmark_start(1)
@@ -35,22 +38,21 @@ fn main() {
   require(trace.count == 1 && trace.dropped == 1)
   _ = testing.benchmark_elapsed(&benchmark)
   require(testing.benchmark_nanoseconds_each(&empty_benchmark) == 0)
-  status: fail.Status
   descriptors: [0]net.PollDescriptor
-  require(net.poll(&status, descriptors[..], 10) == 0)
-  queue := net.event_queue(&status)
+  polled := net.poll(descriptors[..], 10) catch { #panic("net.poll") }
+  require(polled == 0)
+  queue := net.event_queue() catch { #panic("net.event_queue") }
   defer net.close(queue)
   notifications: [1]net.Event
-  require(net.event_wait(&status, queue, notifications[..], 10) == 0 && !status.failed)
+  waited := net.event_wait(queue, notifications[..], 10) catch { #panic("net.event_wait") }
+  require(waited == 0)
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   server := net.ipv4(127,0,0,1,53)
-  resolving: fail.Status
-  resolved := dns.resolve_ipv4(arena, &resolving, "example.test", &server, 10)
-  require(resolving.failed && #len(resolved) == 0 && mem.arena_mark(arena) == mem.ArenaHeader)
+  require(resolve_fails(arena, &server) && mem.arena_mark(arena) == mem.ArenaHeader)
   arguments: [3][]const u8 = ["sh", "-c", "exit 0"]
-  captured := process.capture(arena, &status, "/bin/sh", arguments[..], process.Options{}, process.CaptureOptions{timeout_milliseconds:1000})
-  require(!status.failed && captured.exit.finished && captured.exit.code == 0)
+  captured := process.capture(arena, "/bin/sh", arguments[..], process.Options{}, process.CaptureOptions{timeout_milliseconds:1000}) catch { #panic("capture") }
+  require(captured.exit.finished && captured.exit.code == 0)
   wait_status: i32 = 0
   require(#syscall(61,-1,&wait_status,1,0) == -10)
 }

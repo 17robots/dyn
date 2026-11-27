@@ -232,7 +232,7 @@ typedef struct SsaPool {
 } SsaPool;
 typedef struct { SsaChunk *chunk; size_t used; } SsaMark;
 enum { SSA_CHUNK_BYTES = 64 * 1024 };
-#define SSA_POOL_LIMIT ((size_t)32 << 20)
+#define SSA_POOL_LIMIT ((size_t)4 << 20)
 static SsaChunk *ssa_chunk(Ssa *s, size_t need) {
   SsaPool *pool = s->pool;
   for (SsaChunk **at = pool ? &pool->chunks : NULL; at && *at; at = &(*at)->next) {
@@ -1170,8 +1170,9 @@ static int32_t ssa_binary(Ssa *s, const DynIrExpr *e, int32_t left, int32_t righ
   if (comparison) {
     static const Cond signed_conditions[] = {CC_E, CC_NE, CC_L, CC_LE, CC_G, CC_GE};
     static const Cond unsigned_conditions[] = {CC_E, CC_NE, CC_B, CC_BE, CC_A, CC_AE};
-    bool sign = signed_scalar(storage_type(ir, operand));
-    return ssa_compare(s, left, right, (sign ? signed_conditions : unsigned_conditions)[e->op - DYN_OP_EQ]);
+    unsigned index = (unsigned)(e->op - DYN_OP_EQ);
+    Cond condition = signed_scalar(storage_type(ir, operand)) ? signed_conditions[index] : unsigned_conditions[index];
+    return ssa_compare(s, left, right, condition);
   }
   if (!integer_type(operand)) { SSA_GIVE_UP(s); return 0; }
   DynType type = e->type;
@@ -1490,6 +1491,134 @@ static bool ssa_call_plan(Ssa *s, const DynIrExpr *e, SsaCallPlan *p) {
   }
   return true;
 }
+/* Interprocedural return-length summary: if every return path of a slice-
+   returning callee produces a slice of length equal to an unmodified usize
+   parameter `p` (via #slice(ptr, param_p) or an empty zero local under
+   `param_p == 0`), return `p` so direct callers can reuse the length argument
+   directly instead of losing its identity across the call boundary. */
+typedef struct {
+  const DynIrProgram *ir;
+  const DynIrFunction *f;
+  uint32_t param_mask;    /* candidate param bitmask (usize params) */
+  uint32_t ok_mask;       /* intersection of params matching all returns */
+  uint32_t mutated_mask;  /* params assigned or address-taken */
+  uint32_t zero_locals[16];
+  uint32_t zero_count;
+  uint32_t budget;
+  bool seen_return;
+  bool failed;
+} SsaSliceLenScan;
+static int32_t ssa_scan_param_index(const SsaSliceLenScan *sc, uint64_t local_id) {
+  for (uint32_t i = 0; i < sc->f->param_count && i < 16; ++i)
+    if (sc->ir->params[sc->f->param_start + i].local_id == local_id) return (int32_t)i;
+  return -1;
+}
+static void ssa_scan_invalidate_local(SsaSliceLenScan *sc, uint64_t local_id) {
+  int32_t pi = ssa_scan_param_index(sc, local_id);
+  if (pi >= 0) sc->mutated_mask |= 1u << (unsigned)pi;
+  for (uint32_t i = 0; i < sc->zero_count; ++i)
+    if (sc->zero_locals[i] == local_id) { sc->zero_locals[i] = UINT32_MAX; }
+}
+static void ssa_scan_expr_mut(SsaSliceLenScan *sc, DynExprId id, unsigned depth) {
+  if (sc->failed || depth > 16 || id >= sc->ir->expression_count || !sc->budget) { if (!sc->budget) sc->failed = true; return; }
+  --sc->budget;
+  const DynIrExpr *e = &sc->ir->expressions[id];
+  if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_ADDRESS && e->left < sc->ir->expression_count &&
+      sc->ir->expressions[e->left].kind == DYN_EXPR_NAME)
+    ssa_scan_invalidate_local(sc, sc->ir->expressions[e->left].integer);
+  if (e->left < sc->ir->expression_count) ssa_scan_expr_mut(sc, e->left, depth + 1);
+  if (e->right < sc->ir->expression_count) ssa_scan_expr_mut(sc, e->right, depth + 1);
+  if (e->kind == DYN_EXPR_SLICE && e->integer < sc->ir->expression_count)
+    ssa_scan_expr_mut(sc, (DynExprId)e->integer, depth + 1);
+  if (e->item_count && (uint64_t)e->item_start + e->item_count <= sc->ir->item_count)
+    for (uint32_t i = 0; i < e->item_count; ++i)
+      ssa_scan_expr_mut(sc, sc->ir->items[e->item_start + i].expression, depth + 1);
+}
+static uint32_t ssa_scan_zero_cond(const SsaSliceLenScan *sc, DynExprId id) {
+  if (id >= sc->ir->expression_count) return 0;
+  const DynIrExpr *e = &sc->ir->expressions[id];
+  if (e->kind != DYN_EXPR_BINARY || e->op != DYN_OP_EQ ||
+      e->left >= sc->ir->expression_count || e->right >= sc->ir->expression_count) return 0;
+  const DynIrExpr *l = &sc->ir->expressions[e->left], *r = &sc->ir->expressions[e->right];
+  int32_t pi = -1;
+  if (l->kind == DYN_EXPR_NAME && r->kind == DYN_EXPR_INT && r->integer == 0) pi = ssa_scan_param_index(sc, l->integer);
+  else if (r->kind == DYN_EXPR_NAME && l->kind == DYN_EXPR_INT && l->integer == 0) pi = ssa_scan_param_index(sc, r->integer);
+  return pi >= 0 ? (1u << (unsigned)pi) : 0;
+}
+static void ssa_scan_stmts(SsaSliceLenScan *sc, uint32_t start, uint32_t count, uint32_t zero_mask, unsigned depth) {
+  if (sc->failed || depth > 16 || (uint64_t)start + count > sc->ir->child_count) { sc->failed = true; return; }
+  for (uint32_t i = 0; i < count && !sc->failed; ++i) {
+    if (!sc->budget) { sc->failed = true; return; }
+    --sc->budget;
+    uint32_t sid = sc->ir->children[start + i];
+    if (sid >= sc->ir->statement_count) { sc->failed = true; return; }
+    const DynIrStmt *st = &sc->ir->statements[sid];
+    if (st->expression < sc->ir->expression_count) ssa_scan_expr_mut(sc, st->expression, 0);
+    if (st->target < sc->ir->expression_count) ssa_scan_expr_mut(sc, st->target, 0);
+    if (st->kind == DYN_STMT_LOCAL) {
+      if (st->expression == DYN_NO_EXPR && sc->zero_count < 16 &&
+          st->local_id >= sc->f->local_start && st->local_id - sc->f->local_start < sc->f->local_count &&
+          dyn_type_is_slice(sc->ir->locals[st->local_id].type))
+        sc->zero_locals[sc->zero_count++] = st->local_id;
+    } else if (st->kind == DYN_STMT_ASSIGN) {
+      if (st->target == DYN_NO_EXPR) ssa_scan_invalidate_local(sc, st->local_id);
+      else if (st->target < sc->ir->expression_count && sc->ir->expressions[st->target].kind == DYN_EXPR_NAME)
+        ssa_scan_invalidate_local(sc, sc->ir->expressions[st->target].integer);
+    } else if (st->kind == DYN_STMT_RETURN) {
+      sc->seen_return = true;
+      DynExprId eid = st->expression;
+      while (eid < sc->ir->expression_count && sc->ir->expressions[eid].kind == DYN_EXPR_CONVERT &&
+             dyn_type_is_slice(sc->ir->expressions[eid].type))
+        eid = sc->ir->expressions[eid].left;
+      if (eid >= sc->ir->expression_count) { sc->ok_mask = 0; sc->failed = true; return; }
+      const DynIrExpr *re = &sc->ir->expressions[eid];
+      uint32_t ret_mask = 0;
+      if (re->kind == DYN_EXPR_SLICE && re->right == DYN_NO_EXPR &&
+          (DynExprId)re->integer < sc->ir->expression_count) {
+        const DynIrExpr *le = &sc->ir->expressions[(DynExprId)re->integer];
+        if (le->kind == DYN_EXPR_NAME) {
+          int32_t pi = ssa_scan_param_index(sc, le->integer);
+          if (pi >= 0) ret_mask = 1u << (unsigned)pi;
+        }
+      } else if (re->kind == DYN_EXPR_NAME) {
+        for (uint32_t z = 0; z < sc->zero_count; ++z)
+          if (sc->zero_locals[z] == re->integer) { ret_mask = zero_mask; break; }
+      }
+      sc->ok_mask &= ret_mask;
+      if (!sc->ok_mask) { sc->failed = true; return; }
+    } else if (st->kind == DYN_STMT_IF) {
+      uint32_t then_zero = zero_mask | ssa_scan_zero_cond(sc, st->expression);
+      ssa_scan_stmts(sc, st->body_start, st->body_count, then_zero, depth + 1);
+      ssa_scan_stmts(sc, st->else_start, st->else_count, zero_mask, depth + 1);
+    } else {
+      if (st->kind == DYN_STMT_FOR) {
+        ssa_scan_invalidate_local(sc, st->local_id);
+        if (st->for_index) ssa_scan_invalidate_local(sc, st->local_id + 1);
+      }
+      ssa_scan_stmts(sc, st->body_start, st->body_count, zero_mask, depth + 1);
+      ssa_scan_stmts(sc, st->else_start, st->else_count, zero_mask, depth + 1);
+      if ((uint64_t)st->case_arm_start + st->case_arm_count <= sc->ir->case_arm_count)
+        for (uint32_t j = 0; j < st->case_arm_count; ++j)
+          ssa_scan_stmts(sc, sc->ir->case_arms[st->case_arm_start + j].body_start,
+                         sc->ir->case_arms[st->case_arm_start + j].body_count, zero_mask, depth + 1);
+    }
+  }
+}
+static int32_t ssa_callee_slice_len_param(const DynIrProgram *ir, const DynIrFunction *f) {
+  if (!f || f->foreign || f->generic || f->variadic || !dyn_type_is_slice(f->return_type) ||
+      !f->param_count || f->param_count > 16 || !f->body_count ||
+      (uint64_t)f->param_start + f->param_count > ir->param_count) return -1;
+  uint32_t mask = 0;
+  for (uint32_t i = 0; i < f->param_count; ++i)
+    if (storage_type(ir, ir->params[f->param_start + i].type) == DYN_TYPE_USIZE) mask |= 1u << i;
+  if (!mask) return -1;
+  SsaSliceLenScan sc = {.ir = ir, .f = f, .param_mask = mask, .ok_mask = mask, .budget = 256};
+  ssa_scan_stmts(&sc, f->body_start, f->body_count, 0, 0);
+  uint32_t final = sc.failed || !sc.seen_return ? 0 : (sc.ok_mask & ~sc.mutated_mask);
+  for (uint32_t i = 0; i < f->param_count; ++i)
+    if (final & (1u << i)) return (int32_t)i;
+  return -1;
+}
 static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned depth, int32_t destination) {
   const DynIrProgram *ir = s->ir;
   BackendContext *ctx = s->ctx;
@@ -1576,6 +1705,10 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
   bool c_variadic = !ilp32 && ((callee && callee->variadic && callee->foreign) ||
                                (indirect && ir->fn_types[e->integer].variadic));
   uint32_t argument_groups = ilp32 ? plan.groups : c_variadic ? e->item_count : fixed + (packed ? 1u : 0u);
+  int32_t ret_len_param = (!indirect && callee && !s->ctx->debug_mode && !sret && descriptor(result) &&
+                           dyn_type_is_slice(result) && !ilp32)
+                              ? ssa_callee_slice_len_param(ir, callee) : -1;
+  int32_t ret_len_arg = -1;
   for (uint32_t i = 0; i < argument_groups && !s->unsupported && !s->failed; ++i) {
     if ((ctx->rv32 || ctx->t32) && group_count >= 512) { SSA_GIVE_UP(s); break; }
     DynType type = ilp32 ? ssa_call_type(s,e,&plan,i) : i < fixed ? (indirect ? ir->fn_type_params[ir->fn_types[e->integer].param_start + i]
@@ -1601,6 +1734,7 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
     if (i < fixed || !packed) {
       DynExprId argument = ir->items[e->item_start + i].expression;
       value = ssa_expr(s, argument, &length, depth + 1);
+      if ((int32_t)i == ret_len_param) ret_len_arg = value;
     } else {
       /* The packed variadic slice: elements in a frame array; with `any`,
          each value boxed beside it. */
@@ -1681,7 +1815,9 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
   if (sret) return result_address;
   if (descriptor(result)) {
     int32_t data = ssa_emit(s, SO_RESULT, SC_INT, call, -1, -1, 0, (ctx->rv32 || ctx->t32) ? result : 0);
-    int32_t length = ssa_emit(s, SO_RESULT, SC_INT, call, -1, -1, 1, (ctx->rv32 || ctx->t32) ? result : 0);
+    int32_t length = (ret_len_param >= 0 && ret_len_arg >= 0)
+                         ? ret_len_arg
+                         : ssa_emit(s, SO_RESULT, SC_INT, call, -1, -1, 1, (ctx->rv32 || ctx->t32) ? result : 0);
     if (ctx->rv32 || ctx->t32) {
       if (result != DYN_TYPE_ANY) data = ssa_normalize(s, data, DYN_TYPE_USIZE);
       length = ssa_normalize(s, length, DYN_TYPE_USIZE);
@@ -2066,6 +2202,72 @@ static bool ssa_vector_array(Ssa *s, DynExprId id, uint32_t index, uint32_t *loc
   if (a->element != DYN_TYPE_U32 && a->element != DYN_TYPE_I32 && a->element != DYN_TYPE_U64 && a->element != DYN_TYPE_I64) return false;
   *local = (uint32_t)(base->integer - s->f->local_start); *type = a->element; *length = a->length;
   return s->memory_local[*local] && s->alias[*local] < 0;
+}
+/* Dynamic zero-fill of 1 or 2 slices over 0..stop when stop is proven equal to
+   each slice's length (same SSA value), lowering scalar zero loops to hardware
+   REP STOSB without changing panic or aliasing semantics. */
+static bool ssa_slice_zero_fill(Ssa *s, const DynIrStmt *st) {
+  const DynIrProgram *ir = s->ir;
+  if (s->ctx->debug_mode || !s->ctx->byte_fill || s->ctx->a64 || s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32 ||
+      !st->for_range || st->for_reverse || st->for_inclusive || st->for_pointer ||
+      (st->body_count != 1 && st->body_count != 2) ||
+      (uint64_t)st->body_start + st->body_count > ir->child_count ||
+      st->target >= ir->expression_count || st->expression >= ir->expression_count) return false;
+  const DynIrExpr *start = &ir->expressions[st->target], *stop_e = &ir->expressions[st->expression];
+  if (start->kind != DYN_EXPR_INT || start->integer) return false;
+  /* Stop expression must be a side-effect-free local or slice .len read. */
+  if (stop_e->kind == DYN_EXPR_NAME) {
+    uint32_t sl;
+    if (!ssa_local_index(s, stop_e->integer, &sl) || ssa_in_memory(s, sl)) return false;
+  } else if (stop_e->kind == DYN_EXPR_LEN && stop_e->left < ir->expression_count &&
+             ir->expressions[stop_e->left].kind == DYN_EXPR_NAME) {
+    uint32_t sl;
+    if (!ssa_local_index(s, ir->expressions[stop_e->left].integer, &sl) || ssa_in_memory(s, sl)) return false;
+  } else return false;
+  DynExprId base_exprs[2];
+  unsigned elem_shifts[2];
+  for (uint32_t j = 0; j < st->body_count; ++j) {
+    uint32_t sid = ir->children[st->body_start + j];
+    if (sid >= ir->statement_count) return false;
+    const DynIrStmt *assign = &ir->statements[sid];
+    if (assign->kind != DYN_STMT_ASSIGN || assign->assignment_op != DYN_OP_NONE ||
+        assign->target >= ir->expression_count || assign->expression >= ir->expression_count) return false;
+    const DynIrExpr *target = &ir->expressions[assign->target], *value = &ir->expressions[assign->expression];
+    if (target->kind != DYN_EXPR_INDEX || target->left >= ir->expression_count || target->right >= ir->expression_count) return false;
+    if (value->kind == DYN_EXPR_INT) { if (value->integer != 0) return false; }
+    else if (value->kind == DYN_EXPR_FLOAT) {
+      uint64_t bits; memcpy(&bits, &value->floating, sizeof(bits));
+      if (bits != 0) return false;
+    } else return false;
+    const DynIrExpr *base = &ir->expressions[target->left], *index = &ir->expressions[target->right];
+    if (base->kind != DYN_EXPR_NAME || index->kind != DYN_EXPR_NAME || index->integer != st->local_id ||
+        !dyn_type_is_slice(base->type) || base->type - DYN_TYPE_SLICE_BASE >= ir->slice_count) return false;
+    uint32_t bl;
+    if (!ssa_local_index(s, base->integer, &bl) || ssa_in_memory(s, bl)) return false;
+    DynType elem = ir->slices[base->type - DYN_TYPE_SLICE_BASE].element;
+    if (!scalar(ir, elem)) return false;
+    uint32_t sz = 0, al = 0;
+    if (!layout(ir, elem, &sz, &al, 0)) return false;
+    unsigned sh = sz == 1 ? 0 : sz == 2 ? 1 : sz == 4 ? 2 : sz == 8 ? 3 : 99;
+    if (sh > 3) return false;
+    base_exprs[j] = target->left;
+    elem_shifts[j] = sh;
+  }
+  /* Reading non-memory locals emits no instructions, so declining is free. */
+  int32_t stop_val = ssa_resolve(s, ssa_expr(s, st->expression, NULL, 0));
+  int32_t ptrs[2], lens[2];
+  for (uint32_t j = 0; j < st->body_count; ++j) {
+    lens[j] = -1;
+    ptrs[j] = ssa_expr(s, base_exprs[j], &lens[j], 0);
+    if (s->failed || s->unsupported || lens[j] < 0 || ssa_resolve(s, lens[j]) != stop_val) return false;
+  }
+  for (uint32_t j = 0; j < st->body_count; ++j) {
+    int32_t bytes = elem_shifts[j] ? ssa_emit(s, SO_SHL, SC_INT, stop_val, ssa_const(s, elem_shifts[j], SC_INT), -1, 0, 0) : stop_val;
+    ssa_emit(s, SO_FILLMEM, SC_NONE, ptrs[j], bytes, -1, 0, 0);
+  }
+  if (s->ctx->optimization_remarks)
+    fprintf(stderr, "remark: %s: bulk zero fill %u slice(s)\n", s->f->name, st->body_count);
+  return true;
 }
 /* A constant forward fill of a defined global byte array has no intermediate
    observable effects or failing accesses. Keep frame arrays out: their region
@@ -2454,6 +2656,84 @@ static bool ssa_sum(Ssa *s, const DynIrStmt *st, unsigned depth) {
 /* `for i in 0..n { d[i] = s[i] }` over scalar elements, as mem.copy has it:
    one SO_COPYN when n fits both slices; otherwise the ordinary loop, whose
    checks then fail at the same index. */
+/* ---- Short counted loops ----
+
+   `for j in 0..n` where n is one of a few small constants, such as the
+   continuation count of a UTF-8 decoder (0 to 3, chosen by branches), runs
+   as up to SSA_SHORT_TRIPS guarded copies of its body: test `k < n`, run the
+   body with j = k, and go on to k + 1. A loop that may run SSA_SHORT_TRIPS
+   times has no backedge, counter or exit test after its last copy. The body
+   must be small and leave only by falling off its end. */
+enum { SSA_SHORT_TRIPS = 4, SSA_SHORT_STATEMENTS = 8 };
+/* The largest value v can hold: a constant, or a phi of such values. */
+static bool ssa_largest_constant(Ssa *s, int32_t v, uint64_t *largest, unsigned depth) {
+  v = ssa_resolve(s, v);
+  if (v < 0 || depth > 4) return false;
+  const SsaValue *x = &s->values[v];
+  if (x->op == SO_CONST && x->cls == SC_INT) { *largest = (uint64_t)x->aux; return true; }
+  if (x->op != SO_PHI || !x->count) return false;
+  uint64_t best = 0;
+  for (uint32_t i = 0; i < x->count; ++i) {
+    int32_t op = ssa_resolve(s, (int32_t)s->lists[x->list + i]);
+    uint64_t m;
+    if (op == v) continue;
+    if (!ssa_largest_constant(s, op, &m, depth + 1)) return false;
+    if (m > best) best = m;
+  }
+  *largest = best;
+  return true;
+}
+/* Whether statements only compute and branch: no loop, transfer or defer,
+   counting them into *budget. */
+static bool ssa_short_body(const DynIrProgram *ir, uint32_t start, uint32_t count, unsigned *budget, unsigned depth) {
+  if (depth > 8 || (uint64_t)start + count > ir->child_count) return false;
+  for (uint32_t i = 0; i < count; ++i) {
+    uint32_t id = ir->children[start + i];
+    if (id >= ir->statement_count || !*budget) return false;
+    --*budget;
+    const DynIrStmt *st = &ir->statements[id];
+    if (st->kind != DYN_STMT_LOCAL && st->kind != DYN_STMT_ASSIGN && st->kind != DYN_STMT_EXPR && st->kind != DYN_STMT_IF)
+      return false;
+    if (st->kind == DYN_STMT_IF && (!ssa_short_body(ir, st->body_start, st->body_count, budget, depth + 1) ||
+                                    !ssa_short_body(ir, st->else_start, st->else_count, budget, depth + 1))) return false;
+  }
+  return true;
+}
+static bool ssa_pass_on(const char *name);
+static bool ssa_short_loop(Ssa *s, const DynIrStmt *st, unsigned depth) {
+  const DynIrProgram *ir = s->ir;
+  unsigned budget = SSA_SHORT_STATEMENTS;
+  if (s->ctx->debug_mode || !ssa_pass_on("short_loops") || !st->for_range || st->for_reverse || st->for_inclusive || st->for_pointer ||
+      st->target >= ir->expression_count || st->expression >= ir->expression_count) return false;
+  const DynIrExpr *start = &ir->expressions[st->target], *end = &ir->expressions[st->expression];
+  if (start->kind != DYN_EXPR_INT || start->integer || end->kind != DYN_EXPR_NAME ||
+      signed_scalar(storage_type(ir, start->type)) || !ssa_short_body(ir, st->body_start, st->body_count, &budget, 0))
+    return false;
+  uint32_t binding;
+  if (!ssa_local_index(s, st->local_id, &binding)) return false;
+  /* Reading a local emits nothing, so declining here costs nothing. */
+  int32_t stop = ssa_expr(s, st->expression, NULL, 0);
+  uint64_t largest;
+  if (s->failed || !ssa_largest_constant(s, stop, &largest, 0) || largest > SSA_SHORT_TRIPS) return false;
+  uint32_t exit = ssa_block(s);
+  if (s->failed) return true;
+  for (uint64_t k = 0; k < largest && s->current != UINT32_MAX; ++k) {
+    uint32_t body = ssa_block(s);
+    if (s->failed) return true;
+    int32_t value = ssa_const(s, k, SC_INT);
+    ssa_branch(s, ssa_compare(s, value, stop, CC_AE), exit, body);
+    ssa_seal(s, body);
+    s->current = body;
+    ssa_set_local(s, binding, value, -1);
+    ssa_statements(s, st->body_start, st->body_count, depth + 1);
+  }
+  ssa_jump(s, exit);
+  ssa_seal(s, exit);
+  s->current = s->blocks[exit].preds.count ? exit : UINT32_MAX;
+  if (s->ctx->optimization_remarks)
+    fprintf(stderr, "remark: %s: ran a loop of at most %llu trips as straight-line code\n", s->f->name, (unsigned long long)largest);
+  return true;
+}
 static bool ssa_copy_loop(Ssa *s, const DynIrStmt *st, unsigned depth) {
   const DynIrProgram *ir = s->ir;
   BackendContext *ctx = s->ctx;
@@ -2556,7 +2836,7 @@ static void ssa_case_body(Ssa *s, const DynIrCaseArm *arm, int32_t pointer, uint
     const DynIrPattern *pattern = &ir->patterns[arm->pattern_start];
     if (!pattern->is_type && !pattern->is_enum) { SSA_GIVE_UP(s); return; }
     DynType bound = ir->locals[arm->local_id].type;
-    if (arm->pointer_binding) s->alias[binding] = pointer;
+    if (arm->pointer_binding) ssa_set_local(s, binding, pointer, -1);
     else if (value_type(ir, bound)) {
       int32_t second = -1, value = ssa_load_value(s, pointer, bound, &second);
       ssa_set_local(s, binding, value, second);
@@ -2566,7 +2846,6 @@ static void ssa_case_body(Ssa *s, const DynIrCaseArm *arm, int32_t pointer, uint
     }
   }
   ssa_statements(s, arm->body_start, arm->body_count, depth + 1);
-  if (arm->local_id != UINT32_MAX && arm->pointer_binding) s->alias[arm->local_id - s->f->local_start] = -1;
   ssa_jump(s, done);
 }
 /* Dense single-value cases dispatch through a jump table: at least four
@@ -2583,6 +2862,7 @@ static bool ssa_case_table(Ssa *s, const DynIrStmt *st, DynType type, bool any, 
                            uint32_t done, unsigned depth) {
   /* ILP32 uses the ordered pair-comparison chain, including dense cases. */
   if (s->ctx->rv32 || s->ctx->t32) return false;
+  if (any && s->ctx->case_arm_live) return false;
   const DynIrProgram *ir = s->ir;
   uint32_t values = 0, wildcard = UINT32_MAX;
   int64_t minimum = INT64_MAX, maximum = INT64_MIN;
@@ -2684,6 +2964,7 @@ static void ssa_case(Ssa *s, const DynIrStmt *st, unsigned depth) {
   if (s->failed) return;
   if (ssa_case_table(s, st, type, any, subject, payload ? ssa_add_offset(s, data, payload_offset) : data, done, depth)) return;
   for (uint32_t i = 0; i < st->case_arm_count && !s->unsupported && s->current != UINT32_MAX; ++i) {
+    if (any && s->ctx->case_arm_live && !s->ctx->case_arm_live[st->case_arm_start + i]) continue;
     const DynIrCaseArm *arm = &ir->case_arms[st->case_arm_start + i];
     if ((uint64_t)arm->pattern_start + arm->pattern_count > ir->pattern_count) { SSA_GIVE_UP(s); return; }
     uint32_t body = ssa_block(s), next = ssa_block(s);
@@ -2906,11 +3187,13 @@ static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
   }
   case DYN_STMT_FOR: {
     if (ssa_byte_fill(s, st)) return;
+    if (ssa_slice_zero_fill(s, st)) return;
     if (ssa_byte_count(s, st)) return;
     if (ssa_vector(s, st)) return;
     if (ssa_sum(s, st, depth)) return;
     if (ssa_axpy(s, st, depth)) return;
     if (ssa_copy_loop(s, st, depth)) return;
+    if (ssa_short_loop(s, st, depth)) return;
     uint32_t counter = s->variable_count + s->hidden_variables++;
     ++s->loop_depth;
     uint32_t header = ssa_block(s), body = ssa_block(s), latch = ssa_block(s), exit = ssa_block(s);
@@ -2974,6 +3257,7 @@ static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
       if (!layout(ir, element, &size, &alignment, 0) || !ssa_local_index(s, st->local_id, &binding)) return;
       if (st->for_index && !ssa_local_index(s, st->local_id + 1, &index_binding)) return;
       int32_t data, length = -1;
+      bool aliased = false;
       if (array) {
         const DynExprKind kind = ir->expressions[st->target].kind;
         bool lvalue = kind == DYN_EXPR_NAME || kind == DYN_EXPR_GLOBAL || kind == DYN_EXPR_FIELD ||
@@ -3006,11 +3290,19 @@ static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
       else if (descriptor(element)) {
         int32_t second = -1, first = ssa_load_value(s, address, element, &second);
         ssa_set_local(s, binding, first, second);
+      } else if (!s->ctx->debug_mode && !s->address_exposed[binding] && s->alias[binding] < 0 &&
+                 !ssa_writes_memory(s, st->body_start, st->body_count, 0)) {
+        /* The body writes no memory, so the element cannot change while it
+           runs, and nothing takes the binding's address: read the element in
+           place instead of copying it into the binding. */
+        aliased = true;
+        s->alias[binding] = address;
       } else {
         if (!s->memory_local[binding]) { SSA_GIVE_UP(s); return; }
         ssa_store_value(s, ssa_frame(s, s->local_offset[binding]), element, address, -1);
       }
       ssa_loop_body(s, st, latch, exit, depth);
+      if (aliased) s->alias[binding] = -1;
       ssa_seal(s, latch);
       s->current = s->blocks[latch].preds.count ? latch : UINT32_MAX;
       if (s->current != UINT32_MAX) {
@@ -3925,6 +4217,444 @@ static void ssa_thread_edge(Ssa *s, uint32_t from, uint32_t via, uint32_t to) {
     phi->list = list; phi->count++;
   }
 }
+static void ssa_drop_pred_edge(Ssa *s, uint32_t block_id, uint32_t pred_index) {
+  SsaBlock *block = &s->blocks[block_id];
+  if (pred_index >= block->preds.count) return;
+  for (uint32_t p = pred_index; p + 1 < block->preds.count; ++p)
+    block->preds.items[p] = block->preds.items[p + 1];
+  --block->preds.count;
+  for (uint32_t k = 0; k < block->values.count; ++k) {
+    SsaValue *phi = &s->values[block->values.items[k]];
+    if (phi->op != SO_PHI) break;
+    if (pred_index < phi->count) {
+      for (uint32_t p = pred_index; p + 1 < phi->count; ++p)
+        s->lists[phi->list + p] = s->lists[phi->list + p + 1];
+      --phi->count;
+    }
+  }
+}
+static void ssa_collapse_single_phis(Ssa *s, uint32_t block_id) {
+  SsaBlock *block = &s->blocks[block_id];
+  if (block->preds.count != 1) return;
+  for (uint32_t k = 0; k < block->values.count; ++k) {
+    uint32_t id = block->values.items[k];
+    if (s->values[id].op != SO_PHI) break;
+    if (s->values[id].count == 1)
+      ssa_replace(s, id, (int32_t)s->lists[s->values[id].list]);
+  }
+}
+static bool ssa_condition_holds(Cond cond, uint64_t a, uint64_t b);
+static bool ssa_cloneable_op(uint8_t op) {
+  switch (op) {
+  case SO_CONST: case SO_COPY: case SO_ADD: case SO_SUB: case SO_MUL:
+  case SO_AND: case SO_OR: case SO_XOR: case SO_SHL: case SO_SHR: case SO_SAR:
+  case SO_NEG: case SO_NOT: case SO_EXT: case SO_CMP: case SO_FCMP:
+  case SO_FADD: case SO_FSUB: case SO_FMUL: case SO_FDIV: case SO_FNEG:
+  case SO_LEA: case SO_LOAD: case SO_STORE: case SO_CHECK: case SO_SELECT:
+  case SO_ADDO: case SO_SUBO: case SO_MULO: case SO_DIV: case SO_REM:
+    return true;
+  default:
+    return false;
+  }
+}
+/* Whether redirecting an edge from `from -> b` directly to `to` (with `to`'s
+   own phis updated via `map`) leaves no direct use of any value defined in `b`
+   reachable from `to` without first re-entering `b`. */
+static bool ssa_can_bypass_block(Ssa *s, uint32_t b, uint32_t to) {
+  SsaMark mark = ssa_mark(s);
+  uint8_t *seen = ssa_temp_zero(s, s->block_count + 1);
+  uint32_t *work = ssa_temp(s, (s->block_count + 1) * sizeof(uint32_t));
+  if (!seen || !work) { ssa_rewind(s, mark); return false; }
+  uint32_t top = 0;
+  seen[to] = 1;
+  work[top++] = to;
+  bool ok = true;
+  while (top && ok) {
+    uint32_t x = work[--top];
+    if (x == b) continue;
+    SsaBlock *xb = &s->blocks[x];
+    int32_t controls[4] = {xb->control, xb->control2, xb->control3, xb->control4};
+    for (unsigned c = 0; c < 4 && ok; ++c) {
+      int32_t op = ssa_resolve(s, controls[c]);
+      if (op >= 0 && !s->values[op].dead && s->values[op].block == b) ok = false;
+    }
+    for (uint32_t k = 0; k < xb->values.count && ok; ++k) {
+      uint32_t uid = xb->values.items[k];
+      SsaValue *u = &s->values[uid];
+      if (u->dead) continue;
+      if (u->op == SO_PHI) {
+        for (uint32_t p = 0; p < u->count && p < xb->preds.count && ok; ++p) {
+          if (x == to && xb->preds.items[p] == b) continue;
+          int32_t op = ssa_resolve(s, (int32_t)s->lists[u->list + p]);
+          if (op >= 0 && !s->values[op].dead && s->values[op].block == b) ok = false;
+        }
+      } else {
+        uint32_t c = ssa_operands(s, uid, ssa_slots, SSA_MAX_OPERANDS);
+        for (uint32_t q = 0; q < c && ok; ++q) {
+          int32_t op = ssa_resolve(s, *ssa_slots[q]);
+          if (op >= 0 && !s->values[op].dead && s->values[op].block == b) ok = false;
+        }
+      }
+    }
+    uint32_t sc = ssa_successors(s, xb);
+    for (uint32_t si = 0; si < sc && ok; ++si) {
+      uint32_t next = ssa_successor(s, xb, si);
+      if (next < s->block_count && next != b && !seen[next]) {
+        seen[next] = 1;
+        work[top++] = next;
+      }
+    }
+  }
+  ssa_rewind(s, mark);
+  return ok;
+}
+/* Thread and specialize branches on constant-set phis (e.g. state machines and
+   unrolled short loops whose count comes from a multi-way if/else chain). */
+static bool ssa_thread_const_phis(Ssa *s) {
+  if (s->ctx->debug_mode || !ssa_pass_on("thread_const_phis") || s->block_count > 2048) return false;
+  bool any_changed = false;
+  uint32_t total_cloned = 0;
+  for (unsigned iter = 0; iter < 24 && !s->failed; ++iter) {
+    uint32_t n = 0;
+    uint32_t *order = ssa_order(s, &n);
+    if (!order || s->failed) break;
+    /* Keep value->block accurate for all reachable blocks. */
+    for (uint32_t i = 0; i < n; ++i) {
+      SsaBlock *block = &s->blocks[order[i]];
+      for (uint32_t k = 0; k < block->values.count; ++k)
+        s->values[block->values.items[k]].block = order[i];
+    }
+    bool changed = false;
+    /* Collapse trivial single-predecessor plain edges a -> b so cascaded
+       constant-phi branches expose the next test in the same block. */
+    if (iter > 0) {
+      for (uint32_t i = 0; i < n && !s->failed; ++i) {
+        uint32_t a = order[i];
+        SsaBlock *ab = &s->blocks[a];
+        if (!ab->reachable || ab->kind != SB_PLAIN) continue;
+        uint32_t b = ab->succ[0];
+        if (b == a || b >= s->block_count) continue;
+        SsaBlock *bb = &s->blocks[b];
+        if (bb->preds.count != 1 || bb->preds.items[0] != a || bb->kind == SB_SWITCH) continue;
+        if (bb->kind == SB_IF && bb->succ[0] == bb->succ[1]) continue;
+        ssa_collapse_single_phis(s, b);
+        for (uint32_t k = 0; k < bb->values.count && !s->failed; ++k) {
+          uint32_t vid = bb->values.items[k];
+          if (s->values[vid].dead || s->values[vid].op == SO_PHI) continue;
+          s->values[vid].block = a;
+          ssa_push(s, &s->blocks[a].values, vid);
+        }
+        if (s->failed) break;
+        ab = &s->blocks[a]; bb = &s->blocks[b];
+        ab->kind = bb->kind;
+        ab->succ[0] = bb->succ[0]; ab->succ[1] = bb->succ[1];
+        ab->control = bb->control; ab->control2 = bb->control2;
+        ab->control3 = bb->control3; ab->control4 = bb->control4;
+        ab->table = bb->table;
+        uint32_t sc = ssa_successors(s, ab);
+        for (uint32_t si = 0; si < sc; ++si) {
+          uint32_t succ = ssa_successor(s, ab, si);
+          if (succ >= s->block_count) continue;
+          SsaBlock *sb = &s->blocks[succ];
+          for (uint32_t p = 0; p < sb->preds.count; ++p)
+            if (sb->preds.items[p] == b) sb->preds.items[p] = a;
+        }
+        bb->values.count = 0; bb->preds.count = 0;
+        bb->kind = SB_EXIT; bb->control = -1; bb->reachable = false;
+        changed = true;
+      }
+      if (changed) {
+        ssa_resolve_all(s);
+        any_changed = true;
+        continue;
+      }
+    }
+    uint32_t *uses = ssa_temp_zero(s, ((size_t)s->value_count + 1) * sizeof(uint32_t));
+    if (!uses) { ssa_out_of_memory(s); break; }
+    for (uint32_t i = 0; i < n; ++i) {
+      SsaBlock *block = &s->blocks[order[i]];
+      int32_t controls[4] = {block->control, block->control2, block->control3, block->control4};
+      for (unsigned c = 0; c < 4; ++c) {
+        int32_t r = ssa_resolve(s, controls[c]);
+        if (r >= 0) ++uses[r];
+      }
+      for (uint32_t k = 0; k < block->values.count; ++k) {
+        uint32_t vid = block->values.items[k];
+        if (s->values[vid].dead) continue;
+        uint32_t c = ssa_operands(s, vid, ssa_slots, SSA_MAX_OPERANDS);
+        for (uint32_t j = 0; j < c; ++j) {
+          int32_t r = ssa_resolve(s, *ssa_slots[j]);
+          if (r >= 0) ++uses[r];
+        }
+      }
+    }
+    /* Flatten phi-only plain join blocks m -> b (from nested if/else-if chains)
+       directly into b so all constant incoming arms meet at b's branch. */
+    for (uint32_t i = 0; i < n && !s->failed; ++i) {
+      uint32_t m = order[i];
+      SsaBlock *mb = &s->blocks[m];
+      if (!mb->reachable || mb->kind != SB_PLAIN || mb->preds.count < 2) continue;
+      uint32_t b = mb->succ[0];
+      if (b == m || b >= s->block_count) continue;
+      SsaBlock *bb = &s->blocks[b];
+      if (!bb->reachable || bb->preds.count < 2) continue;
+      if (bb->preds.count - 1 + mb->preds.count > 255) continue;
+      /* Check m holds only phis and has a single edge to b. */
+      bool phis_only = true;
+      for (uint32_t k = 0; k < mb->values.count; ++k) {
+        SsaValue *v = &s->values[mb->values.items[k]];
+        if (!v->dead && v->op != SO_PHI) { phis_only = false; break; }
+      }
+      if (!phis_only) continue;
+      uint32_t via_idx = UINT32_MAX, via_hits = 0;
+      for (uint32_t p = 0; p < bb->preds.count; ++p)
+        if (bb->preds.items[p] == m) { via_idx = p; ++via_hits; }
+      if (via_hits != 1) continue;
+      /* Ensure no pred of m is m, b, SB_SWITCH, or already a pred of b. */
+      bool preds_ok = true;
+      for (uint32_t p = 0; p < mb->preds.count && preds_ok; ++p) {
+        uint32_t mp = mb->preds.items[p];
+        if (mp == m || mp == b || s->blocks[mp].kind == SB_SWITCH) { preds_ok = false; break; }
+        for (uint32_t q = 0; q < bb->preds.count; ++q)
+          if (bb->preds.items[q] == mp) { preds_ok = false; break; }
+      }
+      if (!preds_ok) continue;
+      /* Every phi in m must only be used by b's phis at via_idx. */
+      bool phi_uses_ok = true;
+      for (uint32_t k = 0; k < mb->values.count && phi_uses_ok; ++k) {
+        uint32_t qid = mb->values.items[k];
+        SsaValue *qv = &s->values[qid];
+        if (qv->dead) continue;
+        if (qv->count != mb->preds.count) { phi_uses_ok = false; break; }
+        uint32_t b_uses = 0;
+        for (uint32_t bk = 0; bk < bb->values.count; ++bk) {
+          SsaValue *bp = &s->values[bb->values.items[bk]];
+          if (bp->op != SO_PHI) break;
+          if (!bp->dead && via_idx < bp->count && ssa_resolve(s, (int32_t)s->lists[bp->list + via_idx]) == (int32_t)qid)
+            ++b_uses;
+        }
+        if (b_uses != uses[qid]) phi_uses_ok = false;
+      }
+      if (!phi_uses_ok) continue;
+      /* Redirect m's predecessors to b and splice m's phis into b's phis. */
+      uint32_t m_preds = mb->preds.count;
+      for (uint32_t p = 0; p < m_preds; ++p) {
+        SsaBlock *pb = &s->blocks[mb->preds.items[p]];
+        if (pb->kind == SB_PLAIN && pb->succ[0] == m) pb->succ[0] = b;
+        else if (pb->kind == SB_IF) {
+          if (pb->succ[0] == m) pb->succ[0] = b;
+          if (pb->succ[1] == m) pb->succ[1] = b;
+        }
+      }
+      bb->preds.items[via_idx] = mb->preds.items[0];
+      for (uint32_t p = 1; p < m_preds && !s->failed; ++p)
+        ssa_push(s, &s->blocks[b].preds, mb->preds.items[p]);
+      if (s->failed) break;
+      bb = &s->blocks[b]; mb = &s->blocks[m];
+      for (uint32_t bk = 0; bk < bb->values.count && !s->failed; ++bk) {
+        SsaValue *bp = &s->values[bb->values.items[bk]];
+        if (bp->op != SO_PHI) break;
+        int32_t items[256];
+        uint32_t old_count = bp->count;
+        for (uint32_t p = 0; p < old_count; ++p) items[p] = (int32_t)s->lists[bp->list + p];
+        int32_t orig = ssa_resolve(s, items[via_idx]);
+        bool from_m = orig >= 0 && !s->values[orig].dead && s->values[orig].op == SO_PHI && s->values[orig].block == m;
+        items[via_idx] = from_m ? ssa_resolve(s, (int32_t)s->lists[s->values[orig].list]) : orig;
+        for (uint32_t p = 1; p < m_preds; ++p)
+          items[old_count + p - 1] = from_m ? ssa_resolve(s, (int32_t)s->lists[s->values[orig].list + p]) : orig;
+        uint32_t list = ssa_list(s, items, old_count + m_preds - 1);
+        if (s->failed) break;
+        bp = &s->values[bb->values.items[bk]];
+        bp->list = list; bp->count = old_count + m_preds - 1;
+      }
+      mb = &s->blocks[m];
+      for (uint32_t k = 0; k < mb->values.count; ++k) s->values[mb->values.items[k]].dead = true;
+      mb->values.count = 0; mb->preds.count = 0;
+      mb->kind = SB_EXIT; mb->control = -1; mb->reachable = false;
+      changed = true;
+    }
+    if (changed) {
+      ssa_resolve_all(s);
+      any_changed = true;
+      continue;
+    }
+    for (uint32_t i = 0; i < n && !s->failed; ++i) {
+      uint32_t b = order[i];
+      SsaBlock *block = &s->blocks[b];
+      if (!block->reachable || block->kind != SB_IF || block->control < 0) continue;
+      uint32_t yes = block->succ[0], no = block->succ[1];
+      if (yes == no || yes == b || no == b) continue;
+      int32_t ctrl = ssa_resolve(s, block->control);
+      if (ctrl < 0 || s->values[ctrl].dead) continue;
+      /* Fold branches whose condition became constant after collapsing phis. */
+      uint64_t cv0, cv1;
+      bool folded = false, fold_res = false;
+      if (ssa_is_const(s, ctrl, &cv0)) {
+        folded = true; fold_res = cv0 != 0;
+      } else if (s->values[ctrl].op == SO_CMP &&
+                 ssa_is_const(s, ssa_resolve(s, s->values[ctrl].a), &cv0) &&
+                 ssa_is_const(s, ssa_resolve(s, s->values[ctrl].b), &cv1)) {
+        folded = true; fold_res = ssa_condition_holds(s->values[ctrl].cond, cv0, cv1);
+      }
+      if (folded) {
+        uint32_t keep = fold_res ? yes : no, drop = fold_res ? no : yes;
+        block->kind = SB_PLAIN; block->succ[0] = keep; block->succ[1] = UINT32_MAX; block->control = -1;
+        SsaBlock *db = &s->blocks[drop];
+        for (uint32_t p = db->preds.count; p-- > 0;)
+          if (db->preds.items[p] == b) { ssa_drop_pred_edge(s, drop, p); break; }
+        if (db->preds.count == 1) ssa_collapse_single_phis(s, drop);
+        changed = true;
+        continue;
+      }
+      if (block->preds.count < 2 || s->values[ctrl].block != b) continue;
+      int32_t phi_id = -1, cmp_id = -1;
+      bool phi_is_a = true;
+      uint64_t cmp_const = 0;
+      uint8_t cmp_cond = 0;
+      if (s->values[ctrl].op == SO_PHI) {
+        phi_id = ctrl;
+      } else if (s->values[ctrl].op == SO_CMP && uses[ctrl] == 1) {
+        SsaValue *cv = &s->values[ctrl];
+        int32_t ca = ssa_resolve(s, cv->a), cb = ssa_resolve(s, cv->b);
+        if (ca >= 0 && !s->values[ca].dead && s->values[ca].op == SO_PHI && s->values[ca].block == b &&
+            ssa_is_const(s, cb, &cmp_const)) {
+          phi_id = ca; cmp_id = ctrl; phi_is_a = true; cmp_cond = cv->cond;
+        } else if (cb >= 0 && !s->values[cb].dead && s->values[cb].op == SO_PHI && s->values[cb].block == b &&
+                   ssa_is_const(s, ca, &cmp_const)) {
+          phi_id = cb; cmp_id = ctrl; phi_is_a = false; cmp_cond = cv->cond;
+        } else continue;
+      } else continue;
+      if (s->values[phi_id].count != block->preds.count) continue;
+      /* Check A: if every incoming constant evaluates to the same branch target,
+         fold the branch directly. */
+      bool all_same = true, first_res = false;
+      for (uint32_t p = 0; p < block->preds.count; ++p) {
+        int32_t inc = ssa_resolve(s, (int32_t)s->lists[s->values[phi_id].list + p]);
+        uint64_t cval;
+        if (!ssa_is_const(s, inc, &cval)) { all_same = false; break; }
+        bool res = cmp_id < 0 ? (cval != 0)
+                              : ssa_condition_holds(cmp_cond, phi_is_a ? cval : cmp_const, phi_is_a ? cmp_const : cval);
+        if (p == 0) first_res = res;
+        else if (res != first_res) { all_same = false; break; }
+      }
+      if (all_same) {
+        uint32_t keep = first_res ? yes : no, drop = first_res ? no : yes;
+        block->kind = SB_PLAIN; block->succ[0] = keep; block->succ[1] = UINT32_MAX; block->control = -1;
+        SsaBlock *db = &s->blocks[drop];
+        for (uint32_t p = db->preds.count; p-- > 0;)
+          if (db->preds.items[p] == b) { ssa_drop_pred_edge(s, drop, p); break; }
+        if (db->preds.count == 1) ssa_collapse_single_phis(s, drop);
+        changed = true;
+        continue;
+      }
+      /* Check B: thread/specialize constant incoming edges whose target does not
+         directly use values defined in `b`. */
+      uint32_t body_ops = 0;
+      bool body_ok = true;
+      for (uint32_t k = 0; k < block->values.count; ++k) {
+        uint32_t vid = block->values.items[k];
+        SsaValue *v = &s->values[vid];
+        if (v->dead || v->op == SO_PHI || (int32_t)vid == cmp_id) continue;
+        if (!ssa_cloneable_op(v->op)) { body_ok = false; break; }
+        ++body_ops;
+      }
+      if (!body_ok || body_ops > 24) continue;
+      bool can_yes = false, can_no = false, checked_yes = false, checked_no = false;
+      for (uint32_t j = block->preds.count; j-- > 0 && !s->failed;) {
+        block = &s->blocks[b];
+        if (block->preds.count <= 1 || total_cloned + body_ops > 96) break;
+        uint32_t from = block->preds.items[j];
+        SsaBlock *pred = &s->blocks[from];
+        if (from == b || pred->kind != SB_PLAIN || pred->succ[0] != b) continue;
+        int32_t inc = ssa_resolve(s, (int32_t)s->lists[s->values[phi_id].list + j]);
+        uint64_t cval;
+        if (!ssa_is_const(s, inc, &cval)) continue;
+        bool res = cmp_id < 0 ? (cval != 0)
+                              : ssa_condition_holds(cmp_cond, phi_is_a ? cval : cmp_const, phi_is_a ? cmp_const : cval);
+        uint32_t to = res ? yes : no;
+        if (to == b || to == from) continue;
+        bool bypass;
+        if (res) { if (!checked_yes) { can_yes = ssa_can_bypass_block(s, b, yes); checked_yes = true; } bypass = can_yes; }
+        else { if (!checked_no) { can_no = ssa_can_bypass_block(s, b, no); checked_no = true; } bypass = can_no; }
+        if (!bypass) continue;
+        /* Check `to` has room in its phis. */
+        SsaBlock *tb = &s->blocks[to];
+        uint32_t via_idx = UINT32_MAX;
+        for (uint32_t p = 0; p < tb->preds.count; ++p)
+          if (tb->preds.items[p] == b) { via_idx = p; break; }
+        if (via_idx == UINT32_MAX) continue;
+        bool phi_room = true;
+        for (uint32_t k = 0; k < tb->values.count; ++k) {
+          SsaValue *tp = &s->values[tb->values.items[k]];
+          if (tp->op != SO_PHI) break;
+          if (tp->count >= 255) { phi_room = false; break; }
+        }
+        if (!phi_room) continue;
+        /* Map every value in `b`: phis -> incoming from `from`, body ops -> cloned into `from`. */
+        uint32_t bcount = block->values.count;
+        int32_t map_orig[64], map_new[64];
+        uint32_t map_n = 0;
+        if (bcount > 64) continue;
+        for (uint32_t k = 0; k < bcount && !s->failed; ++k) {
+          uint32_t vid = s->blocks[b].values.items[k];
+          SsaValue *v = &s->values[vid];
+          if (v->dead || (int32_t)vid == cmp_id) continue;
+          if (v->op == SO_PHI) {
+            map_orig[map_n] = (int32_t)vid;
+            map_new[map_n] = ssa_resolve(s, (int32_t)s->lists[v->list + j]);
+            ++map_n;
+          } else {
+            int32_t copy = ssa_value(s, from, SO_CONST, SC_INT, -1, -1, -1, 0, 0);
+            if (s->failed) break;
+            s->values[copy] = s->values[vid];
+            s->values[copy].block = from;
+            uint32_t oc = ssa_operands(s, (uint32_t)copy, ssa_slots, SSA_MAX_OPERANDS);
+            for (uint32_t q = 0; q < oc; ++q) {
+              int32_t op = ssa_resolve(s, *ssa_slots[q]);
+              for (uint32_t m = 0; m < map_n; ++m)
+                if (map_orig[m] == op) { op = map_new[m]; break; }
+              *ssa_slots[q] = op;
+            }
+            ssa_push(s, &s->blocks[from].values, (uint32_t)copy);
+            map_orig[map_n] = (int32_t)vid;
+            map_new[map_n] = copy;
+            ++map_n;
+            ++total_cloned;
+          }
+        }
+        if (s->failed) break;
+        s->blocks[from].succ[0] = to;
+        /* Append `from` to `to->preds` and mapped incoming values to `to`'s phis. */
+        ssa_push(s, &s->blocks[to].preds, from);
+        if (s->failed) break;
+        for (uint32_t k = 0; k < s->blocks[to].values.count && !s->failed; ++k) {
+          SsaValue *tp = &s->values[s->blocks[to].values.items[k]];
+          if (tp->op != SO_PHI) break;
+          int32_t items[256];
+          for (uint32_t p = 0; p < tp->count; ++p) items[p] = (int32_t)s->lists[tp->list + p];
+          int32_t val = ssa_resolve(s, items[via_idx]);
+          for (uint32_t m = 0; m < map_n; ++m)
+            if (map_orig[m] == val) { val = map_new[m]; break; }
+          items[tp->count] = val;
+          uint32_t list = ssa_list(s, items, tp->count + 1);
+          if (s->failed) break;
+          tp = &s->values[s->blocks[to].values.items[k]];
+          tp->list = list; tp->count++;
+        }
+        ssa_drop_pred_edge(s, b, j);
+        changed = true;
+      }
+      if (s->blocks[b].preds.count == 1) {
+        ssa_collapse_single_phis(s, b);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+    ssa_resolve_all(s);
+    any_changed = true;
+  }
+  return any_changed;
+}
 static bool ssa_thread_conditions(Ssa *s, const uint32_t *order, uint32_t n) {
   uint32_t *uses = ssa_temp_zero(s, (size_t)((size_t)s->value_count + 1) * (sizeof(uint32_t)));
   if (!uses) { ssa_out_of_memory(s); return false; }
@@ -3982,7 +4712,9 @@ static bool ssa_thread_conditions(Ssa *s, const uint32_t *order, uint32_t n) {
     if (block->preds.count == 1 && s->values[phi_id].op == SO_PHI)
       ssa_replace(s, (uint32_t)phi_id, (int32_t)s->lists[s->values[phi_id].list]);
   }
-  if (changed && s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: branches threaded past boolean phis\n", s->f->name);
+  if (changed) ssa_resolve_all(s);
+  if (!s->failed && ssa_thread_const_phis(s)) changed = true;
+  if (changed && s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: branches threaded past phis\n", s->f->name);
   return changed;
 }
 /* If-conversion, as GCC and LLVM do at -O2: a branch around one or two cheap
@@ -4190,6 +4922,29 @@ static bool ssa_fold(Ssa *s, const uint32_t *order, uint32_t n) {
         if (ca && cb) { r = x + y; constant = true; break; }
         if (cb && !y) { replacement = v->a; break; }
         if (ca && !x) { replacement = v->b; break; }
+        /* (base + c1) + c2 -> base + (c1 + c2), shortening serial increment
+           chains and letting x86 addressing fold base + idx + disp. */
+        if (cb && v->cls == SC_INT && !v->aux2 && v->a >= 0) {
+          SsaValue *inner = &s->values[v->a];
+          uint64_t c1;
+          if (inner->op == SO_ADD && inner->cls == SC_INT && !inner->aux2 && inner->a >= 0 &&
+              ssa_is_const(s, inner->b, &c1)) {
+            uint64_t combined = c1 + y;
+            if (!combined) { replacement = inner->a; break; }
+            int32_t base_v = inner->a;
+            int32_t sum_c = ssa_value(s, order[i], SO_CONST, SC_INT, -1, -1, -1, (int64_t)combined, 0);
+            if (s->failed) return false;
+            v = &s->values[id];
+            v->a = base_v; v->b = sum_c;
+            ssa_push(s, &block->values, 0);
+            if (s->failed) return false;
+            memmove(block->values.items + k + 1, block->values.items + k, (block->values.count - k - 1) * sizeof(uint32_t));
+            block->values.items[k] = (uint32_t)sum_c;
+            ++k;
+            changed = true;
+            break;
+          }
+        }
         break;
       }
       case SO_SUB: {
@@ -4256,6 +5011,20 @@ static bool ssa_fold(Ssa *s, const uint32_t *order, uint32_t n) {
           uint64_t bits = (uint64_t)operand->aux ^ (v->cls == SC_F64 ? UINT64_C(0x8000000000000000) : UINT64_C(0x80000000));
           v->op = SO_CONST; v->aux = (int64_t)bits; v->a = v->b = v->c = -1; v->effect = false;
           changed = true;
+        }
+        break;
+      }
+      case SO_FMUL: {
+        /* IEEE-754 exact for all values (including +-0, subnormals, inf, NaN):
+           2.0 * x == x + x, saving a multiplier latency cycle and constant reg. */
+        if ((v->cls == SC_F64 || v->cls == SC_F32) && v->a >= 0 && v->b >= 0) {
+          uint64_t two = v->cls == SC_F64 ? UINT64_C(0x4000000000000000) : UINT64_C(0x40000000);
+          SsaValue *va = &s->values[v->a], *vb = &s->values[v->b];
+          if (vb->op == SO_CONST && vb->cls == v->cls && (uint64_t)vb->aux == two) {
+            v->op = SO_FADD; v->b = v->a; changed = true;
+          } else if (va->op == SO_CONST && va->cls == v->cls && (uint64_t)va->aux == two) {
+            v->op = SO_FADD; v->a = v->b; changed = true;
+          }
         }
         break;
       }
@@ -5442,6 +6211,33 @@ static bool ssa_checks_below(Ssa *s, uint32_t block, uint32_t before, int32_t x)
   }
   return false;
 }
+/* Whether x != 0 is already established by an earlier check or dominating
+   branch (matching any constant-zero operand by value, not just value ID). */
+static bool ssa_established_nonzero(Ssa *s, uint32_t block, uint32_t before, int32_t x) {
+  uint32_t at = block, limit = before;
+  for (unsigned depth = 0; depth < 32 && at < s->block_count; ++depth) {
+    SsaBlock *here = &s->blocks[at];
+    for (uint32_t k = 0; k < limit && k < here->values.count; ++k) {
+      SsaValue *v = &s->values[here->values.items[k]];
+      uint64_t z;
+      if (v->op == SO_CHECK && ((v->a == x && (v->cond == CC_NE || v->cond == CC_A) && ssa_is_const(s, v->b, &z) && z == 0) ||
+                                (v->b == x && (v->cond == CC_NE || v->cond == CC_B) && ssa_is_const(s, v->a, &z) && z == 0)))
+        return true;
+    }
+    int32_t compare; bool holds; uint32_t next;
+    if (ssa_fact(s, at, &compare, &holds, &next)) {
+      SsaValue *c = &s->values[compare];
+      Cond fact = holds ? (Cond)c->cond : ssa_negate((Cond)c->cond);
+      uint64_t z;
+      if ((c->a == x && (fact == CC_NE || fact == CC_A) && ssa_is_const(s, c->b, &z) && z == 0) ||
+          (c->b == x && (fact == CC_NE || fact == CC_B) && ssa_is_const(s, c->a, &z) && z == 0))
+        return true;
+    }
+    if (next == UINT32_MAX || next == at || next >= s->block_count) return false;
+    at = next; limit = UINT32_MAX;
+  }
+  return false;
+}
 /* Whether a check that passed before position `before` of block, or a
    branch fact on the way there, establishes a <cond> b. */
 static bool ssa_established(Ssa *s, uint32_t block, uint32_t before, int32_t a, int32_t b, Cond cond) {
@@ -5543,6 +6339,279 @@ static bool ssa_address_comparison(Ssa *s, const SsaValue *cmp, bool *holds) {
   *holds = cmp->cond == CC_E;
   return true;
 }
+/* Whether an earlier check in `block` established (x + step) <u bound (or <=u
+   bound) for some step >= 1 whose addition cannot wrap. Then x <u x + step
+   <=u bound, proving x <u bound without a second check. */
+static bool ssa_established_step_above(Ssa *s, uint32_t block, uint32_t before, int32_t x, int32_t bound, uint64_t x_hi) {
+  SsaBlock *here = &s->blocks[block];
+  for (uint32_t k = 0; k < before && k < here->values.count; ++k) {
+    SsaValue *c = &s->values[here->values.items[k]];
+    if (c->op != SO_CHECK || c->b != bound || (c->cond != CC_B && c->cond != CC_BE) || c->a < 0) continue;
+    SsaValue *sum = &s->values[c->a];
+    if (sum->op != SO_ADD && !(sum->op == SO_ADDO && !sum->aux2)) continue;
+    uint64_t step = 0;
+    if (sum->a == x && ssa_is_const(s, sum->b, &step)) {}
+    else if (sum->b == x && ssa_is_const(s, sum->a, &step)) {}
+    else continue;
+    if (!step) continue;
+    if (sum->op == SO_ADDO || x_hi <= UINT64_MAX - step ||
+        (step == 1 && ssa_below_some(s, block, k, x)) ||
+        ssa_established(s, block, k, c->a, x, CC_AE))
+      return true;
+  }
+  return false;
+}
+/* Proves `val <u bound` at the end of `pred` for an inductive phi check:
+   base arms use established checks, bound facts, or disjoint ranges;
+   never relies on a SO_CHECK of another phi to avoid circular proofs. */
+static bool ssa_phi_arm_below(Ssa *s, uint32_t pred, int32_t val, int32_t bound, int32_t target_phi, uint32_t target_block, unsigned depth) {
+  if (val < 0 || bound < 0 || pred >= s->block_count) return false;
+  if (val == target_phi) return true;
+  SsaValue *v = &s->values[val];
+  if (v->op == SO_COPY) return depth < 4 && ssa_phi_arm_below(s, pred, v->a, bound, target_phi, target_block, depth + 1);
+  if (v->op == SO_PHI) {
+    if (depth >= 6 || v->block == target_block || v->block >= s->block_count) return false;
+    if (!s->dom_enter || s->dom_enter[target_block] > s->dom_enter[v->block] ||
+        s->dom_leave[v->block] > s->dom_leave[target_block]) return false;
+    SsaBlock *vb = &s->blocks[v->block];
+    if (v->count != vb->preds.count || !v->count) return false;
+    for (uint32_t p = 0; p < v->count; ++p) {
+      uint32_t pp = vb->preds.items[p];
+      if (pp >= s->block_count) return false;
+      /* Reject inner loop phis (predecessors dominated by vb). */
+      if (s->dom_enter[v->block] <= s->dom_enter[pp] && s->dom_leave[pp] <= s->dom_leave[v->block]) return false;
+    }
+    for (uint32_t p = 0; p < v->count; ++p) {
+      int32_t arm = (int32_t)s->lists[v->list + p];
+      if (!ssa_phi_arm_below(s, vb->preds.items[p], arm, bound, target_phi, target_block, depth + 1)) return false;
+    }
+    return true;
+  }
+  if (v->op == SO_SELECT) {
+    if (depth >= 2) return false;
+    return ssa_phi_arm_below(s, pred, v->b, bound, target_phi, target_block, depth + 1) &&
+           ssa_phi_arm_below(s, pred, v->c, bound, target_phi, target_block, depth + 1);
+  }
+  uint64_t vlo, vhi, blo, bhi;
+  ssa_range(s, val, pred, &vlo, &vhi, 0);
+  ssa_range(s, bound, pred, &blo, &bhi, 0);
+  if (vhi < blo) return true;
+  if (ssa_unsigned_bound_fact(s, pred, val, bound)) return true;
+  if (ssa_established(s, pred, UINT32_MAX, val, bound, CC_B)) return true;
+  return false;
+}
+static bool ssa_phi_bounded(Ssa *s, int32_t id, int32_t bound) {
+  if (id < 0 || bound < 0 || !s->dom_enter) return false;
+  SsaValue *v = &s->values[id];
+  if (v->op != SO_PHI || !v->count) return false;
+  uint32_t h = v->block, bb = s->values[bound].block;
+  if (bb == h || bb >= s->block_count || h >= s->block_count) return false;
+  if (s->dom_enter[bb] > s->dom_enter[h] || s->dom_leave[h] > s->dom_leave[bb]) return false;
+  SsaBlock *hb = &s->blocks[h];
+  if (v->count != hb->preds.count) return false;
+  bool any_base = false;
+  for (uint32_t p = 0; p < v->count; ++p) {
+    int32_t arm = (int32_t)s->lists[v->list + p];
+    if (arm != id) any_base = true;
+    if (!ssa_phi_arm_below(s, hb->preds.items[p], arm, bound, id, h, 0)) return false;
+  }
+  return any_base;
+}
+/* Checks whether a check `y <u bound` holds along `block`'s dominator chain,
+   where `y` equals `base + want` (mod 2^64). Since `y <u bound <= UINT64_MAX`,
+   `y + 1` cannot wrap and `y + 1 <=u bound` holds unconditionally. */
+static bool ssa_established_add_below(Ssa *s, uint32_t block, int32_t base, uint64_t want, int32_t bound) {
+  if (!want) return ssa_established(s, block, UINT32_MAX, base, bound, CC_B);
+  uint32_t at = block;
+  for (unsigned depth = 0; depth < 32 && at < s->block_count; ++depth) {
+    SsaBlock *here = &s->blocks[at];
+    for (uint32_t k = 0; k < here->values.count; ++k) {
+      SsaValue *c = &s->values[here->values.items[k]];
+      if (c->op != SO_CHECK || c->b != bound || c->cond != CC_B || c->a < 0) continue;
+      SsaValue *y = &s->values[c->a];
+      uint64_t yc;
+      if (y->op == SO_ADD && y->cls == SC_INT &&
+          ((y->a == base && ssa_is_const(s, y->b, &yc) && yc == want) ||
+           (y->b == base && ssa_is_const(s, y->a, &yc) && yc == want)))
+        return true;
+    }
+    uint32_t next = here->idom;
+    if (next == UINT32_MAX || next == at || next >= s->block_count) return false;
+    at = next;
+  }
+  return false;
+}
+static bool ssa_phi_arm_le(Ssa *s, uint32_t pred, int32_t val, int32_t bound, int32_t target_phi, uint32_t target_block, unsigned depth) {
+  if (val < 0 || bound < 0 || pred >= s->block_count) return false;
+  if (val == target_phi) return true;
+  SsaValue *v = &s->values[val];
+  if (v->op == SO_COPY) return depth < 4 && ssa_phi_arm_le(s, pred, v->a, bound, target_phi, target_block, depth + 1);
+  if (v->op == SO_PHI) {
+    if (depth >= 6 || v->block == target_block || v->block >= s->block_count) return false;
+    if (!s->dom_enter || s->dom_enter[target_block] > s->dom_enter[v->block] ||
+        s->dom_leave[v->block] > s->dom_leave[target_block]) return false;
+    SsaBlock *vb = &s->blocks[v->block];
+    if (v->count != vb->preds.count || !v->count) return false;
+    for (uint32_t p = 0; p < v->count; ++p) {
+      uint32_t pp = vb->preds.items[p];
+      if (pp >= s->block_count) return false;
+      if (s->dom_enter[v->block] <= s->dom_enter[pp] && s->dom_leave[pp] <= s->dom_leave[v->block]) return false;
+    }
+    for (uint32_t p = 0; p < v->count; ++p) {
+      int32_t arm = (int32_t)s->lists[v->list + p];
+      if (!ssa_phi_arm_le(s, vb->preds.items[p], arm, bound, target_phi, target_block, depth + 1)) return false;
+    }
+    return true;
+  }
+  if (v->op == SO_SELECT) {
+    if (depth >= 2) return false;
+    return ssa_phi_arm_le(s, pred, v->b, bound, target_phi, target_block, depth + 1) &&
+           ssa_phi_arm_le(s, pred, v->c, bound, target_phi, target_block, depth + 1);
+  }
+  uint64_t vlo, vhi, blo, bhi;
+  ssa_range(s, val, pred, &vlo, &vhi, 0);
+  ssa_range(s, bound, pred, &blo, &bhi, 0);
+  if (vhi <= blo) return true;
+  if (ssa_established(s, pred, UINT32_MAX, val, bound, CC_BE) || ssa_established(s, pred, UINT32_MAX, val, bound, CC_B)) return true;
+  if (v->op == SO_ADD && v->cls == SC_INT) {
+    uint64_t step;
+    int32_t base = -1;
+    if (v->a >= 0 && ssa_is_const(s, v->b, &step)) base = v->a;
+    else if (v->b >= 0 && ssa_is_const(s, v->a, &step)) base = v->b;
+    if (base >= 0 && step >= 1 && ssa_established_add_below(s, pred, base, step - 1, bound)) return true;
+  }
+  return false;
+}
+static bool ssa_phi_bounded_le(Ssa *s, int32_t id, int32_t bound) {
+  if (id < 0 || bound < 0 || !s->dom_enter) return false;
+  SsaValue *v = &s->values[id];
+  if (v->op != SO_PHI || !v->count) return false;
+  uint32_t h = v->block, bb = s->values[bound].block;
+  if (bb == h || bb >= s->block_count || h >= s->block_count) return false;
+  if (s->dom_enter[bb] > s->dom_enter[h] || s->dom_leave[h] > s->dom_leave[bb]) return false;
+  SsaBlock *hb = &s->blocks[h];
+  if (v->count != hb->preds.count) return false;
+  bool any_base = false;
+  for (uint32_t p = 0; p < v->count; ++p) {
+    int32_t arm = (int32_t)s->lists[v->list + p];
+    if (arm != id) any_base = true;
+    if (!ssa_phi_arm_le(s, hb->preds.items[p], arm, bound, id, h, 0)) return false;
+  }
+  return any_base;
+}
+static bool ssa_below_via_phi_le(Ssa *s, uint32_t block, int32_t x, int32_t bound) {
+  uint32_t fblocks[64];
+  uint32_t fc = ssa_fact_blocks(s, x, block, fblocks);
+  for (uint32_t i = 0; i < fc; ++i) {
+    int32_t cmp_id; bool holds; uint32_t next;
+    if (!ssa_fact(s, fblocks[i], &cmp_id, &holds, &next)) continue;
+    SsaValue *c = &s->values[cmp_id];
+    Cond cond = holds ? (Cond)c->cond : ssa_negate((Cond)c->cond);
+    int32_t upper = -1;
+    if (c->a == x && cond == CC_B) upper = c->b;
+    else if (c->b == x && cond == CC_A) upper = c->a;
+    if (upper >= 0 && upper != bound && ssa_phi_bounded_le(s, upper, bound)) return true;
+  }
+  return false;
+}
+/* Whether `id` is `x & (cap - 1)` (directly, or a phi whose every arm is). */
+static bool ssa_masked_by_cap_m1(Ssa *s, int32_t id, int32_t cap, unsigned depth) {
+  if (id < 0 || cap < 0 || depth > 2) return false;
+  SsaValue *v = &s->values[id];
+  if (v->op == SO_COPY) return ssa_masked_by_cap_m1(s, v->a, cap, depth + 1);
+  if (v->op == SO_AND) {
+    for (unsigned side = 0; side < 2; ++side) {
+      int32_t m = side ? v->b : v->a;
+      if (m < 0) continue;
+      SsaValue *mv = &s->values[m];
+      uint64_t mc;
+      if (mv->op == SO_SUB && mv->a == cap && ssa_is_const(s, mv->b, &mc) && mc == 1) return true;
+      if (mv->op == SO_ADD && ((mv->a == cap && ssa_is_const(s, mv->b, &mc) && mc == UINT64_MAX) ||
+                               (mv->b == cap && ssa_is_const(s, mv->a, &mc) && mc == UINT64_MAX))) return true;
+    }
+    return false;
+  }
+  if (v->op == SO_PHI && v->count && depth == 0) {
+    for (uint32_t p = 0; p < v->count; ++p) {
+      int32_t arm = (int32_t)s->lists[v->list + p];
+      if (arm == id) continue;
+      if (!ssa_masked_by_cap_m1(s, arm, cap, depth + 1)) return false;
+    }
+    return true;
+  }
+  return false;
+}
+static bool ssa_phi_step_le_sibling(Ssa *s, uint32_t block, uint32_t before, int32_t x, int32_t bound) {
+  if (x < 0 || bound < 0 || !s->dom_enter) return false;
+  int32_t p1 = x;
+  uint64_t off = 0;
+  SsaValue *xv = &s->values[x];
+  if (xv->op == SO_ADD && xv->cls == SC_INT) {
+    uint64_t c;
+    if (xv->a >= 0 && ssa_is_const(s, xv->b, &c)) { p1 = xv->a; off = c; }
+    else if (xv->b >= 0 && ssa_is_const(s, xv->a, &c)) { p1 = xv->b; off = c; }
+  }
+  SsaValue *v1 = &s->values[p1];
+  if (v1->op != SO_PHI || v1->cls != SC_INT || v1->count != 2) return false;
+  uint32_t h = v1->block;
+  if (h >= s->block_count || s->dom_enter[h] > s->dom_enter[block] || s->dom_leave[block] > s->dom_leave[h]) return false;
+  SsaBlock *hb = &s->blocks[h];
+  if (hb->preds.count != 2) return false;
+  unsigned back = s->blocks[hb->preds.items[0]].order >= hb->order ? 0 : 1;
+  uint32_t entry_pred = hb->preds.items[1 - back], back_pred = hb->preds.items[back];
+  if (s->blocks[entry_pred].order >= hb->order || s->blocks[back_pred].order < hb->order) return false;
+  int32_t init1 = (int32_t)s->lists[v1->list + 1 - back];
+  int32_t next1 = (int32_t)s->lists[v1->list + back];
+  uint64_t c1;
+  if (!ssa_is_const(s, init1, &c1) || next1 < 0) return false;
+  /* p1 advances by at most +1 on the backedge (directly, unchanged, or via select). */
+  SsaValue *n1 = &s->values[next1];
+  bool step1_ok = next1 == p1;
+  if (!step1_ok && n1->op == SO_ADD && n1->cls == SC_INT) {
+    uint64_t st;
+    if ((n1->a == p1 && ssa_is_const(s, n1->b, &st) && st <= 1) ||
+        (n1->b == p1 && ssa_is_const(s, n1->a, &st) && st <= 1))
+      step1_ok = true;
+  } else if (!step1_ok && n1->op == SO_SELECT && n1->b >= 0 && n1->c >= 0) {
+    int32_t arms[2] = {n1->b, n1->c};
+    step1_ok = true;
+    for (unsigned a = 0; a < 2 && step1_ok; ++a) {
+      if (arms[a] == p1) continue;
+      SsaValue *av = &s->values[arms[a]];
+      uint64_t st;
+      if (!(av->op == SO_ADD && av->cls == SC_INT &&
+            ((av->a == p1 && ssa_is_const(s, av->b, &st) && st <= 1) ||
+             (av->b == p1 && ssa_is_const(s, av->a, &st) && st <= 1))))
+        step1_ok = false;
+    }
+  }
+  if (!step1_ok) return false;
+  /* Find a sibling phi p2 in the same header stepping by +1 with c1 + off <= c2
+     and p2 <u bound both at block and at the backedge predecessor (no wrap). */
+  for (uint32_t k = 0; k < hb->values.count; ++k) {
+    int32_t p2 = (int32_t)hb->values.items[k];
+    SsaValue *v2 = &s->values[p2];
+    if (v2->op != SO_PHI) break;
+    if (p2 == p1 || v2->dead || v2->cls != SC_INT || v2->count != 2) continue;
+    int32_t init2 = (int32_t)s->lists[v2->list + 1 - back];
+    int32_t next2 = (int32_t)s->lists[v2->list + back];
+    uint64_t c2, st2;
+    if (!ssa_is_const(s, init2, &c2) || next2 < 0) continue;
+    if (c1 > c2 || off > c2 - c1) continue;
+    SsaValue *n2 = &s->values[next2];
+    if (!(n2->op == SO_ADD && n2->cls == SC_INT &&
+          ((n2->a == p2 && ssa_is_const(s, n2->b, &st2) && st2 == 1) ||
+           (n2->b == p2 && ssa_is_const(s, n2->a, &st2) && st2 == 1))))
+      continue;
+    bool p2_at_block = ssa_established(s, block, before, p2, bound, CC_B) ||
+                       ssa_unsigned_bound_fact(s, block, p2, bound);
+    if (!p2_at_block) continue;
+    bool p2_at_back = ssa_established(s, back_pred, UINT32_MAX, p2, bound, CC_B) ||
+                      ssa_unsigned_bound_fact(s, back_pred, p2, bound);
+    if (p2_at_back) return true;
+  }
+  return false;
+}
 static bool ssa_prove(Ssa *s, const uint32_t *order, uint32_t n) {
   bool changed = false;
   /* Proving replaces branch controls with constants but never adds a
@@ -5571,7 +6640,33 @@ static bool ssa_prove(Ssa *s, const uint32_t *order, uint32_t n) {
         switch (v->cond) {
         case CC_B:
           proven = ahi < blo || ssa_unsigned_bound_fact(s, b, v->a, v->b) ||
-                   ssa_established(s, b, kept, v->a, v->b, CC_B) || ssa_shrinks(s, b, v->a, v->b, 0);
+                   ssa_established(s, b, kept, v->a, v->b, CC_B) || ssa_shrinks(s, b, v->a, v->b, 0) ||
+                   ssa_established_step_above(s, b, kept, v->a, v->b, ahi) ||
+                   ssa_phi_bounded(s, v->a, v->b) ||
+                   ssa_below_via_phi_le(s, b, v->a, v->b) ||
+                   ssa_phi_step_le_sibling(s, b, kept, v->a, v->b);
+          /* Exact equivalence for all uint64 x, cap: (x & (cap - 1)) <u cap
+             iff cap != 0. Rewriting makes the check loop-invariant so CSE and
+             guarded hoisting collapse every probe/ring-buffer check into one. */
+          if (!proven && v->a >= 0 && v->b >= 0 && ssa_masked_by_cap_m1(s, v->a, v->b, 0)) {
+            int32_t cap = v->b;
+            if (ssa_established_nonzero(s, b, kept, cap)) { proven = true; }
+            else {
+              int32_t zero = ssa_value(s, b, SO_CONST, SC_INT, -1, -1, -1, 0, 0);
+              if (!s->failed) {
+                v = &s->values[id];
+                v->a = cap; v->b = zero; v->cond = CC_NE;
+                ssa_push(s, &block->values, 0);
+                if (!s->failed) {
+                  memmove(block->values.items + kept + 1, block->values.items + kept,
+                          (block->values.count - kept - 1) * sizeof(uint32_t));
+                  block->values.items[kept++] = (uint32_t)zero;
+                  ++k;
+                }
+                changed = true;
+              }
+            }
+          }
           break;
         case CC_BE: {
           /* x < n, already checked, gives x <= n and x + 1 <= n: the bounds
@@ -5586,7 +6681,11 @@ static bool ssa_prove(Ssa *s, const uint32_t *order, uint32_t n) {
           break;
         }
         case CC_AE: proven = alo >= bhi || ssa_increment_fits(s, b, kept, v->a, v->b); break;
-        case CC_NE: proven = (blo == 0 && bhi == 0 && alo > 0) || (alo == 0 && ahi == 0 && blo > 0) || ahi < blo || bhi < alo; break;
+        case CC_NE: proven = (blo == 0 && bhi == 0 && alo > 0) || (alo == 0 && ahi == 0 && blo > 0) || ahi < blo || bhi < alo ||
+                             ssa_established(s, b, kept, v->a, v->b, CC_NE) ||
+                             (blo == 0 && bhi == 0 && ssa_established_nonzero(s, b, kept, v->a)) ||
+                             (alo == 0 && ahi == 0 && ssa_established_nonzero(s, b, kept, v->b));
+          break;
         case CC_E: {
           /* Narrowing checks: EXT(t) == t holds when t fits the width. */
           SsaValue *x = &s->values[v->a];
@@ -5684,6 +6783,110 @@ static int32_t ssa_insert(Ssa *s, uint32_t b, uint32_t *k, SsaOp op, int32_t a, 
   memmove(list->items + *k + 1, list->items + *k, (list->count - *k - 1) * sizeof(uint32_t));
   list->items[(*k)++] = (uint32_t)v;
   return v;
+}
+static int32_t ssa_index_root_offset(Ssa *s, int32_t id, uint64_t *offset) {
+  *offset = 0;
+  for (unsigned depth = 0; id >= 0 && depth < 8; ++depth) {
+    SsaValue *v = &s->values[id];
+    uint64_t c;
+    if (v->op == SO_COPY && v->a >= 0) id = v->a;
+    else if ((v->op == SO_ADD || (v->op == SO_ADDO && !v->aux2)) && v->a >= 0 && ssa_is_const(s, v->b, &c) && c <= UINT64_MAX - *offset) {
+      *offset += c; id = v->a;
+    } else if ((v->op == SO_ADD || (v->op == SO_ADDO && !v->aux2)) && v->b >= 0 && ssa_is_const(s, v->a, &c) && c <= UINT64_MAX - *offset) {
+      *offset += c; id = v->b;
+    } else break;
+  }
+  return id;
+}
+/* Coalesce consecutive pure-read index checks on the same (root, len, origin)
+   in one basic block: e.g. v[i+1], v[i+2], v[i+3] after v[i] becomes one
+   overflow-free check `max_off <u (len - root)` once `root <= len` is known. */
+static bool ssa_coalesce_checks(Ssa *s, const uint32_t *order, uint32_t n) {
+  if (s->ctx->debug_mode || !ssa_pass_on("coalesce_checks")) return false;
+  ssa_fact_index(s, order, n);
+  bool changed = false;
+  for (uint32_t i = 0; i < n && !s->failed; ++i) {
+    uint32_t b = order[i];
+    SsaBlock *block = &s->blocks[b];
+    if (block->values.count < 2) continue;
+    for (uint32_t k = 0; k < block->values.count && !s->failed; ++k) {
+      uint32_t first_id = block->values.items[k];
+      SsaValue *first = &s->values[first_id];
+      if (first->dead || first->op != SO_CHECK || first->cond != CC_B || first->aux != GUARD_INDEX) continue;
+      if (first->a < 0 || first->b < 0) continue;
+      uint64_t off0 = 0;
+      int32_t root = ssa_index_root_offset(s, first->a, &off0);
+      int32_t len = first->b;
+      uint32_t origin = first->check_origin;
+      if (root < 0) continue;
+      uint64_t const_root = 0;
+      bool root_const = ssa_is_const(s, root, &const_root);
+      if (root_const && const_root > UINT64_MAX - off0) continue;
+      uint64_t max_off = off0;
+      uint32_t run_end = k;
+      uint32_t matched = 1;
+      for (uint32_t q = k + 1; q < block->values.count; ++q) {
+        SsaValue *u = &s->values[block->values.items[q]];
+        if (u->dead) continue;
+        if (u->op == SO_STORE || u->op == SO_CALL || u->op == SO_PANIC || u->op == SO_TRAP || u->op == SO_VLOOP) break;
+        if (u->op == SO_CHECK) {
+          if (u->cond != CC_B || u->aux != GUARD_INDEX || u->b != len || u->check_origin != origin || u->a < 0) break;
+          uint64_t offq = 0;
+          int32_t rq = ssa_index_root_offset(s, u->a, &offq);
+          if (rq != root) break;
+          if (root_const && const_root > UINT64_MAX - offq) break;
+          if (offq > max_off) max_off = offq;
+          run_end = q;
+          ++matched;
+        }
+      }
+      if (matched < 2) continue;
+      if (root_const) {
+        uint64_t total = const_root + max_off;
+        int32_t k_val = ssa_insert(s, b, &k, SO_CONST, -1, -1, (int64_t)total, 0);
+        if (s->failed) break;
+        ++run_end;
+        first = &s->values[first_id];
+        first->a = k_val;
+      } else {
+        /* Need root <= len proven before `first` so (len - root) cannot underflow. */
+        bool le_proven = ssa_established(s, b, k, root, len, CC_B) || ssa_established(s, b, k, root, len, CC_BE) ||
+                         ssa_below_via_phi_le(s, b, root, len);
+        if (!le_proven) {
+          uint64_t step_off = 0;
+          int32_t prev = ssa_index_root_offset(s, root, &step_off);
+          if (step_off == 1 && prev >= 0 &&
+              (ssa_established(s, b, k, prev, len, CC_B) || ssa_below_via_phi_le(s, b, prev, len))) le_proven = true;
+        }
+        if (!le_proven) continue;
+        uint32_t ins = k;
+        int32_t rem = ssa_insert(s, b, &ins, SO_SUB, len, root, 0, 0);
+        int32_t max_c = ssa_insert(s, b, &ins, SO_CONST, -1, -1, (int64_t)max_off, 0);
+        if (s->failed) break;
+        k = ins;
+        run_end += 2;
+        first = &s->values[first_id];
+        first->a = max_c;
+        first->b = rem;
+      }
+      /* Remove all subsequent checks in this pure-read run from block->values
+         (ssa_dce keeps SO_CHECK alive by effect=true, so compacting is required). */
+      block = &s->blocks[b];
+      uint32_t write = k + 1;
+      for (uint32_t q = k + 1; q < block->values.count; ++q) {
+        uint32_t qid = block->values.items[q];
+        if (q <= run_end && !s->values[qid].dead && s->values[qid].op == SO_CHECK) {
+          s->values[qid].dead = true;
+          continue;
+        }
+        block->values.items[write++] = qid;
+      }
+      block->values.count = write;
+      changed = true;
+    }
+  }
+  s->fact_start = s->fact_blocks = s->dom_enter = s->dom_leave = NULL; s->fact_value_count = 0;
+  return changed;
 }
 /* Reuse a dominating runtime quotient for remainder. The direct-mapped cache
    is initialized only for functions with runtime division; collisions merely
@@ -7272,11 +8475,162 @@ static bool ssa_pairs(Ssa *s, const uint32_t *order, uint32_t n) {
     fprintf(stderr, "remark: %s: paired %u f32 stores and %u dot products into two-lane vectors\n", s->f->name, stores, sums);
   return stores || sums;
 }
+static bool ssa_is_frame_addr(Ssa *s, int32_t id, unsigned depth) {
+  if (id < 0 || depth > 4) return false;
+  SsaValue *v = &s->values[id];
+  if (v->op == SO_FRAME) return true;
+  if (v->op == SO_COPY || v->op == SO_LEA) return ssa_is_frame_addr(s, v->a, depth + 1);
+  return false;
+}
+/* Replaces a bounds-check-free counted loop `for i in 0..N` whose body only
+   stores zero to 1 or 2 slices (`base[i] = 0`, element size 1/2/4/8) with
+   hardware REP STOSB (`SO_FILLMEM`). Runs after `ssa_prove` when all bounds
+   checks are already proven away and phis are sealed. */
+static bool ssa_zero_loops(Ssa *s, const uint32_t *order, uint32_t n) {
+  if (s->ctx->debug_mode || !s->ctx->byte_fill || s->ctx->a64 || s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32)
+    return false;
+  bool changed = false;
+  for (uint32_t i = 0; i < n && !s->failed; ++i) {
+    uint32_t h_id = order[i];
+    SsaBlock *h = &s->blocks[h_id];
+    if (h->kind != SB_IF || h->control < 0 || h->preds.count != 2) continue;
+    SsaValue *cmp = &s->values[h->control];
+    if (cmp->dead || cmp->op != SO_CMP || cmp->block != h_id) continue;
+    /* Match a straight-line body `body_id` (optionally followed by a single
+       latch block `latch_id`) jumping back directly to `h_id`. */
+    uint32_t body_id = UINT32_MAX, latch_id = UINT32_MAX, exit_id = UINT32_MAX;
+    uint32_t entry_slot = UINT32_MAX, latch_slot = UINT32_MAX;
+    for (unsigned s_idx = 0; s_idx < 2; ++s_idx) {
+      uint32_t cand = h->succ[s_idx];
+      if (cand == h_id || cand >= s->block_count) continue;
+      SsaBlock *cb = &s->blocks[cand];
+      if (cb->kind != SB_PLAIN || cb->preds.count != 1 || cb->preds.items[0] != h_id) continue;
+      if (cb->succ[0] == h_id) {
+        body_id = cand; latch_id = cand; exit_id = h->succ[1 - s_idx]; break;
+      }
+      uint32_t lcand = cb->succ[0];
+      if (lcand != h_id && lcand != cand && lcand < s->block_count) {
+        SsaBlock *lb = &s->blocks[lcand];
+        if (lb->kind == SB_PLAIN && lb->succ[0] == h_id && lb->preds.count == 1 && lb->preds.items[0] == cand) {
+          body_id = cand; latch_id = lcand; exit_id = h->succ[1 - s_idx]; break;
+        }
+      }
+    }
+    if (body_id == UINT32_MAX || exit_id == h_id || exit_id >= s->block_count) continue;
+    if (h->preds.items[0] == latch_id) { latch_slot = 0; entry_slot = 1; }
+    else if (h->preds.items[1] == latch_id) { latch_slot = 1; entry_slot = 0; }
+    else continue;
+    uint32_t entry_id = h->preds.items[entry_slot];
+    if (entry_id >= s->block_count || s->blocks[entry_id].kind != SB_PLAIN) continue;
+    /* Header must contain only one counter phi (0 -> i + 1) and the exit cmp. */
+    int32_t iv_id = -1;
+    bool h_ok = true;
+    for (uint32_t hk = 0; hk < h->values.count && h_ok; ++hk) {
+      uint32_t vid = h->values.items[hk];
+      SsaValue *v = &s->values[vid];
+      if (v->dead) continue;
+      if (v->op == SO_PHI) {
+        if (iv_id >= 0) { h_ok = false; break; }
+        iv_id = (int32_t)vid;
+      } else if ((int32_t)vid != h->control && !(v->op == SO_CONST && v->cls == SC_INT)) h_ok = false;
+    }
+    if (!h_ok || iv_id < 0) continue;
+    SsaValue *iv = &s->values[iv_id];
+    uint64_t init_c = 0;
+    if (iv->count != 2 || !ssa_is_const(s, (int32_t)s->lists[iv->list + entry_slot], &init_c) || init_c != 0) continue;
+    int32_t step_id = (int32_t)s->lists[iv->list + latch_slot];
+    if (step_id < 0 || s->values[step_id].op != SO_ADD ||
+        (s->values[step_id].block != body_id && s->values[step_id].block != latch_id)) continue;
+    SsaValue *step = &s->values[step_id];
+    uint64_t sc = 0;
+    if (!((step->a == iv_id && ssa_is_const(s, step->b, &sc) && sc == 1) ||
+          (step->b == iv_id && ssa_is_const(s, step->a, &sc) && sc == 1))) continue;
+    /* Exit when iv >=u N (body runs while iv <u N). */
+    bool body_on_yes = h->succ[0] == body_id;
+    Cond body_cond = body_on_yes ? (Cond)cmp->cond : ssa_negate((Cond)cmp->cond);
+    int32_t limit_id = -1;
+    if (cmp->a == iv_id && body_cond == CC_B) limit_id = cmp->b;
+    else if (cmp->b == iv_id && body_cond == CC_A) limit_id = cmp->a;
+    if (limit_id < 0 || s->values[limit_id].block == h_id || s->values[limit_id].block == body_id ||
+        s->values[limit_id].block == latch_id) continue;
+    /* Body (+ optional latch) must contain only 1 or 2 zero stores to base[iv],
+       the step, and pure address/const helpers. */
+    int32_t bases[2] = {-1, -1};
+    unsigned shifts[2] = {0, 0};
+    unsigned store_count = 0;
+    bool body_ok = true;
+    uint32_t scan_blocks[2] = {body_id, latch_id};
+    unsigned scan_n = body_id == latch_id ? 1 : 2;
+    for (unsigned bi = 0; bi < scan_n && body_ok; ++bi) {
+      SsaBlock *cur = &s->blocks[scan_blocks[bi]];
+      for (uint32_t bk = 0; bk < cur->values.count && body_ok; ++bk) {
+        uint32_t vid = cur->values.items[bk];
+        SsaValue *v = &s->values[vid];
+        if (v->dead || (int32_t)vid == step_id || v->op == SO_CONST || v->op == SO_LEA || v->op == SO_COPY) continue;
+        if (v->op == SO_STORE && store_count < 2 && v->c >= 0) {
+          SsaValue *zv = &s->values[v->c];
+          bool is_zero = (zv->op == SO_CONST && zv->aux == 0);
+          unsigned bits = (unsigned)(v->aux2 & 0xff);
+          unsigned sh = bits == 8 ? 0 : bits == 16 ? 1 : bits == 32 ? 2 : bits == 64 ? 3 : 99;
+          int32_t base = -1, idx = -1;
+          uint8_t scale = 0;
+          int64_t disp = v->aux;
+          if (v->b >= 0) { base = v->a; idx = v->b; scale = v->scale; }
+          else if (v->a >= 0 && s->values[v->a].op == SO_LEA) {
+            SsaValue *lea = &s->values[v->a];
+            base = lea->a; idx = lea->b; scale = lea->scale; disp += lea->aux;
+          }
+          if (is_zero && sh <= 3 && disp == 0 && idx == iv_id && scale == (1u << sh) &&
+              base >= 0 && s->values[base].block != h_id && s->values[base].block != body_id &&
+              s->values[base].block != latch_id) {
+            bases[store_count] = base;
+            shifts[store_count++] = sh;
+            continue;
+          }
+        }
+        body_ok = false;
+      }
+    }
+    if (!body_ok || !store_count || !ssa_can_bypass_block(s, h_id, exit_id)) continue;
+    /* Check exit_id has no phis referencing h_id's iv (can_bypass already guarantees no direct uses). */
+    SsaBlock *eb = &s->blocks[exit_id];
+    bool exit_ok = true;
+    for (uint32_t ek = 0; ek < eb->values.count && exit_ok; ++ek) {
+      SsaValue *ep = &s->values[eb->values.items[ek]];
+      if (ep->op != SO_PHI) break;
+      exit_ok = false;
+    }
+    if (!exit_ok) continue;
+    /* Replace the loop in `entry_id` with dynamic SO_FILLMEM and jump to `exit_id`. */
+    for (unsigned si = 0; si < store_count && !s->failed; ++si) {
+      int32_t bytes = limit_id;
+      if (shifts[si]) {
+        int32_t sc_val = ssa_value(s, entry_id, SO_CONST, SC_INT, -1, -1, -1, shifts[si], 0);
+        if (s->failed) return changed;
+        ssa_push(s, &s->blocks[entry_id].values, (uint32_t)sc_val);
+        bytes = ssa_value(s, entry_id, SO_SHL, SC_INT, limit_id, sc_val, -1, 0, 0);
+        if (s->failed) return changed;
+        ssa_push(s, &s->blocks[entry_id].values, (uint32_t)bytes);
+      }
+      int32_t fill = ssa_value(s, entry_id, SO_FILLMEM, SC_NONE, bases[si], bytes, -1, 0, 0);
+      if (s->failed) return changed;
+      ssa_push(s, &s->blocks[entry_id].values, (uint32_t)fill);
+    }
+    if (s->failed) return changed;
+    s->blocks[entry_id].succ[0] = exit_id;
+    eb = &s->blocks[exit_id];
+    for (uint32_t ep = 0; ep < eb->preds.count; ++ep)
+      if (eb->preds.items[ep] == h_id) eb->preds.items[ep] = entry_id;
+    changed = true;
+  }
+  return changed;
+}
 static bool ssa_hoist(Ssa *s, const uint32_t *order, uint32_t n) {
-  uint32_t *stamp = ssa_temp_zero(s, (size_t)(s->block_count) * (sizeof(uint32_t))), *work = ssa_temp(s, (s->block_count + 1) * sizeof(uint32_t));
+  uint32_t stamp_cap = s->block_count + 32;
+  uint32_t *stamp = ssa_temp_zero(s, (size_t)stamp_cap * sizeof(uint32_t)), *work = ssa_temp(s, ((size_t)stamp_cap + 1) * sizeof(uint32_t));
   if (!stamp || !work) { ssa_out_of_memory(s); return false; }
   bool changed = false;
-  uint32_t mark = 0;
+  uint32_t mark = 0, guards_added = 0;
   for (uint32_t i = n; i-- > 0;) {
     uint32_t header = order[i];
     SsaBlock *h = &s->blocks[header];
@@ -7315,20 +8669,244 @@ static bool ssa_hoist(Ssa *s, const uint32_t *order, uint32_t n) {
         uint32_t id = block->values.items[k];
         SsaValue *v = &s->values[id];
         bool invariant = ssa_pure(v) && !(v->op == SO_CONST && v->cls == SC_INT && !v->retain_constant) && v->op != SO_FRAME;
+        uint32_t count = 0, constants = 0;
         if (invariant) {
-          uint32_t count = ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
+          count = ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
           for (uint32_t o = 0; o < count && invariant; ++o) {
             int32_t op = *ssa_slots[o];
-            if (op >= 0 && stamp[s->values[op].block] == mark) invariant = false;
+            if (op < 0 || stamp[s->values[op].block] != mark) continue;
+            /* A small integer constant stays in the loop to be an
+               immediate; the hoisted value takes a copy of it. */
+            if (s->values[op].op == SO_CONST && s->values[op].cls == SC_INT) ++constants;
+            else invariant = false;
           }
         }
         if (!invariant) { block->values.items[kept++] = id; continue; }
+        for (uint32_t o = 0; o < count && constants; ++o) {
+          ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
+          int32_t op = *ssa_slots[o];
+          if (op < 0 || stamp[s->values[op].block] != mark) continue;
+          SsaValue original = s->values[op];
+          int32_t copy = ssa_value(s, entry, SO_CONST, original.cls, -1, -1, -1, original.aux, original.aux2);
+          if (s->failed) return changed;
+          s->values[copy].retain_constant = original.retain_constant;
+          ssa_push(s, &s->blocks[entry].values, (uint32_t)copy);
+          ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
+          *ssa_slots[o] = copy;
+          --constants;
+        }
+        v = &s->values[id];
+        pre = &s->blocks[entry]; block = &s->blocks[b];
         v->block = entry;
         ssa_push(s, &pre->values, id);
         pre = &s->blocks[entry]; block = &s->blocks[b];
         changed = true;
       }
       block->values.count = kept;
+    }
+    /* Hoist loop-invariant SO_CHECKs from `header` itself unconditionally into
+       `entry`: a loop header always executes on entry from `entry`, so moving
+       invariant checks before any side effect needs no trip guard. */
+    h = &s->blocks[header];
+    if (!s->ctx->debug_mode && ssa_pass_on("hoist_checks")) {
+      uint32_t hkept = 0;
+      bool hstop = false;
+      for (uint32_t hk = 0; hk < h->values.count; ++hk) {
+        uint32_t hid = h->values.items[hk];
+        SsaValue *hv = &s->values[hid];
+        if (!hstop && !hv->dead) {
+          if (hv->op == SO_CALL || hv->op == SO_PANIC || hv->op == SO_TRAP || hv->op == SO_VLOOP) hstop = true;
+          else if (hv->op == SO_STORE && !ssa_is_frame_addr(s, hv->a, 0)) hstop = true;
+          else if (hv->op == SO_CHECK) {
+            bool inv = true;
+            uint32_t oc = ssa_operands(s, hid, ssa_slots, SSA_MAX_OPERANDS);
+            for (uint32_t o = 0; o < oc && inv; ++o) {
+              int32_t op = *ssa_slots[o];
+              if (op >= 0 && stamp[s->values[op].block] == mark &&
+                  !(s->values[op].op == SO_CONST && s->values[op].cls == SC_INT)) inv = false;
+            }
+            if (inv) {
+              for (uint32_t o = 0; o < oc; ++o) {
+                ssa_operands(s, hid, ssa_slots, SSA_MAX_OPERANDS);
+                int32_t op = *ssa_slots[o];
+                if (op >= 0 && stamp[s->values[op].block] == mark) {
+                  SsaValue orig = s->values[op];
+                  int32_t copy = ssa_value(s, entry, SO_CONST, orig.cls, -1, -1, -1, orig.aux, orig.aux2);
+                  if (s->failed) return changed;
+                  ssa_push(s, &s->blocks[entry].values, (uint32_t)copy);
+                  ssa_operands(s, hid, ssa_slots, SSA_MAX_OPERANDS);
+                  *ssa_slots[o] = copy;
+                }
+              }
+              s->values[hid].block = entry;
+              ssa_push(s, &s->blocks[entry].values, hid);
+              h = &s->blocks[header];
+              changed = true;
+              continue;
+            }
+            hstop = true;
+          }
+        }
+        h->values.items[hkept++] = hid;
+      }
+      h->values.count = hkept;
+    }
+    /* Hoist loop-invariant SO_CHECKs (e.g. non-zero divisor) from a counted
+       loop's first body block into a guarded preheader so 0-trip loops never
+       panic and >=1-trip loops check once before iteration 0. Runs after pure
+       hoisting so invariant operand expressions are already in `entry`. */
+    h = &s->blocks[header];
+    if (!s->ctx->debug_mode && ssa_pass_on("hoist_checks") && guards_added < 32 && h->kind == SB_IF && h->control >= 0 &&
+        h->preds.count == 2) {
+      int32_t hcmp_id = h->control;
+      SsaValue *hcmp = &s->values[hcmp_id];
+      bool h_simple = !hcmp->dead && hcmp->op == SO_CMP && hcmp->block == header;
+      for (uint32_t hk = 0; hk < h->values.count && h_simple; ++hk) {
+        uint32_t hid = h->values.items[hk];
+        SsaValue *hv = &s->values[hid];
+        if (!hv->dead && hv->op != SO_PHI && (int32_t)hid != hcmp_id &&
+            !(hv->op == SO_CONST && hv->cls == SC_INT)) h_simple = false;
+      }
+      if (h_simple) {
+        uint32_t entry_slot = h->preds.items[0] == entry ? 0 : h->preds.items[1] == entry ? 1 : UINT32_MAX;
+        uint32_t body_id = UINT32_MAX, exit_id = UINT32_MAX;
+        bool body_on_yes = true;
+        if (stamp[h->succ[0]] == mark && stamp[h->succ[1]] != mark) { body_id = h->succ[0]; exit_id = h->succ[1]; body_on_yes = true; }
+        else if (stamp[h->succ[1]] == mark && stamp[h->succ[0]] != mark) { body_id = h->succ[1]; exit_id = h->succ[0]; body_on_yes = false; }
+        if (entry_slot != UINT32_MAX && body_id != UINT32_MAX && body_id != header && exit_id != header &&
+            exit_id < s->block_count && s->blocks[body_id].preds.count == 1 &&
+            s->blocks[body_id].preds.items[0] == header && ssa_can_bypass_block(s, header, exit_id)) {
+          /* Find loop-invariant checks across the straight-line prefix of
+             `body` (following single-predecessor SB_PLAIN blocks created by
+             inlining) before any externally observable side effect. */
+          uint32_t hoist_checks[8], hoist_blocks[8], hoist_count = 0;
+          uint32_t cur_id = body_id;
+          bool stop_scan = false;
+          for (unsigned hops = 0; hops < 8 && !stop_scan && hoist_count < 8; ++hops) {
+            SsaBlock *cur = &s->blocks[cur_id];
+            for (uint32_t bk = 0; bk < cur->values.count && hoist_count < 8; ++bk) {
+              uint32_t bid = cur->values.items[bk];
+              SsaValue *bv = &s->values[bid];
+              if (bv->dead) continue;
+              if (bv->op == SO_CALL || bv->op == SO_PANIC || bv->op == SO_TRAP || bv->op == SO_VLOOP) { stop_scan = true; break; }
+              if (bv->op == SO_STORE && !ssa_is_frame_addr(s, bv->a, 0)) { stop_scan = true; break; }
+              if (bv->op == SO_CHECK) {
+                bool inv = true;
+                uint32_t oc = ssa_operands(s, bid, ssa_slots, SSA_MAX_OPERANDS);
+                for (uint32_t o = 0; o < oc && inv; ++o) {
+                  int32_t op = *ssa_slots[o];
+                  if (op >= 0 && stamp[s->values[op].block] == mark &&
+                      !(s->values[op].op == SO_CONST && s->values[op].cls == SC_INT)) inv = false;
+                }
+                if (inv) { hoist_checks[hoist_count] = bid; hoist_blocks[hoist_count++] = cur_id; }
+                else { stop_scan = true; break; } /* preserve panic order vs loop-varying checks */
+              }
+            }
+            if (stop_scan || cur->kind != SB_PLAIN) break;
+            uint32_t next_id = cur->succ[0];
+            if (next_id == header || next_id >= s->block_count || stamp[next_id] != mark ||
+                s->blocks[next_id].preds.count != 1 || s->blocks[next_id].preds.items[0] != cur_id) break;
+            cur_id = next_id;
+          }
+          /* Ensure exit's phis have room for the new edge from `entry`. */
+          SsaBlock *eb = &s->blocks[exit_id];
+          uint32_t exit_via = UINT32_MAX;
+          for (uint32_t ep = 0; ep < eb->preds.count; ++ep)
+            if (eb->preds.items[ep] == header) { exit_via = ep; break; }
+          bool exit_ok = hoist_count > 0 && exit_via != UINT32_MAX;
+          for (uint32_t ek = 0; ek < eb->values.count && exit_ok; ++ek) {
+            SsaValue *ep = &s->values[eb->values.items[ek]];
+            if (ep->op != SO_PHI) break;
+            if (ep->count >= 255) exit_ok = false;
+          }
+          /* Both operands of header's compare must be available at `entry`. */
+          int32_t init_a = hcmp->a, init_b = hcmp->b;
+          if (init_a >= 0 && s->values[init_a].op == SO_PHI && s->values[init_a].block == header)
+            init_a = (int32_t)s->lists[s->values[init_a].list + entry_slot];
+          else if (init_a >= 0 && stamp[s->values[init_a].block] == mark &&
+                   !(s->values[init_a].op == SO_CONST && s->values[init_a].cls == SC_INT)) exit_ok = false;
+          if (init_b >= 0 && s->values[init_b].op == SO_PHI && s->values[init_b].block == header)
+            init_b = (int32_t)s->lists[s->values[init_b].list + entry_slot];
+          else if (init_b >= 0 && stamp[s->values[init_b].block] == mark &&
+                   !(s->values[init_b].op == SO_CONST && s->values[init_b].cls == SC_INT)) exit_ok = false;
+          if (exit_ok) {
+            uint32_t guard = ssa_block(s);
+            if (s->failed) return changed;
+            if (init_a >= 0 && stamp[s->values[init_a].block] == mark) {
+              SsaValue orig = s->values[init_a];
+              init_a = ssa_value(s, entry, SO_CONST, orig.cls, -1, -1, -1, orig.aux, orig.aux2);
+              if (s->failed) return changed;
+              ssa_push(s, &s->blocks[entry].values, (uint32_t)init_a);
+            }
+            if (init_b >= 0 && stamp[s->values[init_b].block] == mark) {
+              SsaValue orig = s->values[init_b];
+              init_b = ssa_value(s, entry, SO_CONST, orig.cls, -1, -1, -1, orig.aux, orig.aux2);
+              if (s->failed) return changed;
+              ssa_push(s, &s->blocks[entry].values, (uint32_t)init_b);
+            }
+            int32_t init_cmp = ssa_value(s, entry, SO_CMP, SC_INT, init_a, init_b, -1, 0, 0);
+            if (s->failed) return changed;
+            s->values[init_cmp].cond = s->values[hcmp_id].cond;
+            ssa_push(s, &s->blocks[entry].values, (uint32_t)init_cmp);
+            /* Move invariant checks from `body` into `guard`, copying any
+               loop-local integer constant operands into `guard`. */
+            for (uint32_t ci = 0; ci < hoist_count && !s->failed; ++ci) {
+              uint32_t cid = hoist_checks[ci];
+              uint32_t oc = ssa_operands(s, cid, ssa_slots, SSA_MAX_OPERANDS);
+              for (uint32_t o = 0; o < oc; ++o) {
+                ssa_operands(s, cid, ssa_slots, SSA_MAX_OPERANDS);
+                int32_t op = *ssa_slots[o];
+                if (op >= 0 && stamp[s->values[op].block] == mark) {
+                  SsaValue orig = s->values[op];
+                  int32_t copy = ssa_value(s, guard, SO_CONST, orig.cls, -1, -1, -1, orig.aux, orig.aux2);
+                  if (s->failed) return changed;
+                  ssa_push(s, &s->blocks[guard].values, (uint32_t)copy);
+                  ssa_operands(s, cid, ssa_slots, SSA_MAX_OPERANDS);
+                  *ssa_slots[o] = copy;
+                }
+              }
+              s->values[cid].block = guard;
+              ssa_push(s, &s->blocks[guard].values, cid);
+            }
+            if (s->failed) return changed;
+            /* Compact hoisted checks out of their original blocks. */
+            for (uint32_t ci = 0; ci < hoist_count; ++ci) {
+              SsaBlock *src = &s->blocks[hoist_blocks[ci]];
+              uint32_t bk_kept = 0;
+              for (uint32_t bk = 0; bk < src->values.count; ++bk)
+                if (src->values.items[bk] != hoist_checks[ci]) src->values.items[bk_kept++] = src->values.items[bk];
+              src->values.count = bk_kept;
+            }
+            /* Wire entry -> (guard, exit), guard -> header, and update exit's phis. */
+            s->blocks[guard].kind = SB_PLAIN;
+            s->blocks[guard].succ[0] = header;
+            ssa_push(s, &s->blocks[guard].preds, entry);
+            s->blocks[entry].kind = SB_IF;
+            s->blocks[entry].control = init_cmp;
+            s->blocks[entry].succ[0] = body_on_yes ? guard : exit_id;
+            s->blocks[entry].succ[1] = body_on_yes ? exit_id : guard;
+            h = &s->blocks[header];
+            h->preds.items[entry_slot] = guard;
+            ssa_push(s, &s->blocks[exit_id].preds, entry);
+            for (uint32_t ek = 0; ek < s->blocks[exit_id].values.count && !s->failed; ++ek) {
+              SsaValue *ep = &s->values[s->blocks[exit_id].values.items[ek]];
+              if (ep->op != SO_PHI) break;
+              int32_t items[256];
+              for (uint32_t p = 0; p < ep->count; ++p) items[p] = (int32_t)s->lists[ep->list + p];
+              int32_t val = items[exit_via];
+              if (val >= 0 && s->values[val].op == SO_PHI && s->values[val].block == header)
+                val = (int32_t)s->lists[s->values[val].list + entry_slot];
+              items[ep->count] = val;
+              uint32_t list = ssa_list(s, items, ep->count + 1);
+              if (s->failed) return changed;
+              ep = &s->values[s->blocks[exit_id].values.items[ek]];
+              ep->list = list; ep->count++;
+            }
+            ++guards_added;
+            changed = true;
+          }
+        }
+      }
     }
   }
   return changed;
@@ -7379,6 +8957,33 @@ static void ssa_dce(Ssa *s, const uint32_t *order, uint32_t n) {
 }
 /* Folds address arithmetic into loads and stores. */
 static void ssa_addressing(Ssa *s, const uint32_t *order, uint32_t n) {
+  /* Count non-address uses of each value so x86 index displacement folding
+     only rewrites [base + (idx +/- c)*scale] when (idx +/- c) has no other
+     live uses (e.g. a phi backedge or bounds check) that would extend idx's
+     live range and cause interference copies. */
+  bool x86_fold = !s->ctx->a64 && !s->ctx->rv64 && !s->ctx->rv32 && !s->ctx->t32;
+  uint8_t *non_addr = x86_fold ? ssa_temp_zero(s, s->value_count + 1) : NULL;
+  if (non_addr) {
+    for (uint32_t i = 0; i < n; ++i) {
+      SsaBlock *block = &s->blocks[order[i]];
+      int32_t ctrls[4] = {block->control, block->control2, block->control3, block->control4};
+      for (unsigned c = 0; c < 4; ++c)
+        if (ctrls[c] >= 0 && (uint32_t)ctrls[c] < s->value_count) non_addr[ctrls[c]] = 1;
+      for (uint32_t k = 0; k < block->values.count; ++k) {
+        uint32_t vid = block->values.items[k];
+        SsaValue *v = &s->values[vid];
+        if (v->dead) continue;
+        bool is_addr = v->op == SO_LOAD || v->op == SO_STORE || v->op == SO_LEA;
+        uint32_t oc = ssa_operands(s, vid, ssa_slots, SSA_MAX_OPERANDS);
+        for (uint32_t o = 0; o < oc; ++o) {
+          int32_t op = *ssa_slots[o];
+          if (op < 0 || (uint32_t)op >= s->value_count) continue;
+          if (is_addr && ssa_slots[o] == &v->b && v->scale) continue;
+          non_addr[op] = 1;
+        }
+      }
+    }
+  }
   for (uint32_t i = 0; i < n; ++i) {
     SsaBlock *block = &s->blocks[order[i]];
     for (uint32_t k = 0; k < block->values.count; ++k) {
@@ -7392,6 +8997,25 @@ static void ssa_addressing(Ssa *s, const uint32_t *order, uint32_t n) {
         if (base->b >= 0 && v->b >= 0) break;
         if (base->b >= 0) { v->b = base->b; v->scale = base->scale; }
         v->a = base->a; v->aux = disp;
+      }
+      /* x86-64: fold [base + (idx +/- c) * scale + disp] into
+         [base + idx * scale + (disp +/- c * scale)] when (idx +/- c) has no
+         non-address uses (so folding eliminates it without extending idx). */
+      if (non_addr && v->b >= 0 && v->scale && (uint32_t)v->b < s->value_count && !non_addr[v->b]) {
+        SsaValue *idx = &s->values[v->b];
+        uint64_t c = 0;
+        int64_t sc = 0;
+        int32_t base_idx = -1;
+        if (idx->op == SO_ADD && idx->cls == SC_INT) {
+          if (idx->a >= 0 && ssa_is_const(s, idx->b, &c)) { base_idx = idx->a; sc = (int64_t)c; }
+          else if (idx->b >= 0 && ssa_is_const(s, idx->a, &c)) { base_idx = idx->b; sc = (int64_t)c; }
+        } else if (idx->op == SO_SUB && idx->cls == SC_INT && idx->a >= 0 && ssa_is_const(s, idx->b, &c)) {
+          base_idx = idx->a; sc = -(int64_t)c;
+        }
+        if (base_idx >= 0 && sc >= -1024 && sc <= 1024) {
+          int64_t disp = v->aux + sc * (int64_t)v->scale;
+          if (disp == (int32_t)disp) { v->b = base_idx; v->aux = disp; }
+        }
       }
       /* LEA with no index and no displacement is its base. */
     }
@@ -7977,6 +9601,17 @@ static bool ssa_dead_over(SsaAlloc *a, uint32_t w, uint32_t from, uint32_t to) {
   }
   return true;
 }
+typedef struct {
+  uint32_t lo, hi, index;
+  uint8_t kind; /* 0 = spilled value, 1 = call-save entry */
+} SsaSpillItem;
+static int ssa_spill_item_order(const void *x, const void *y) {
+  const SsaSpillItem *a = x, *b = y;
+  if (a->lo != b->lo) return a->lo < b->lo ? -1 : 1;
+  if (a->hi != b->hi) return a->hi < b->hi ? -1 : 1;
+  if (a->kind != b->kind) return a->kind < b->kind ? -1 : 1;
+  return a->index < b->index ? -1 : a->index > b->index;
+}
 static bool ssa_allocate(SsaAlloc *a) {
   Ssa *s = a->s;
   uint32_t *list = ssa_temp(s, (s->value_count + 1) * sizeof(uint32_t)), count = 0;
@@ -8073,6 +9708,39 @@ static bool ssa_allocate(SsaAlloc *a) {
         if (owner[r] == UINT32_MAX && !ssa_clobbered(a, r, v->start, v->end, id)) chosen = (int)r;
       }
     }
+    if (chosen < 0 && v->op != SO_PHI && a->block_start && a->block_end && a->n <= 512 && ssa_pass_on("hole_share")) {
+      /* Generalized dead-hole sharing: reuse any register whose active owner
+         is dead across [v->start, v->end] before paying call saves or spills. */
+      const unsigned char *regs = floating
+        ? (s->ctx->a64 ? a64_fp_order : s->ctx->rv64 ? rv_fp_order : NULL)
+        : (s->ctx->a64 ? a64_gp_order : s->ctx->rv64 ? rv_gp_order : s->ctx->win64 ? win64_gp_order : ssa_gp_order);
+      unsigned rcount = floating
+        ? (s->ctx->a64 ? sizeof(a64_fp_order) : s->ctx->rv64 ? sizeof(rv_fp_order) : s->ctx->win64 ? 3u : 13u)
+        : (s->ctx->a64 ? (s->ctx->winarm64 ? 14u : sizeof(a64_gp_order)) : s->ctx->rv64 ? sizeof(rv_gp_order)
+           : s->ctx->win64 ? sizeof(win64_gp_order) : sizeof(ssa_gp_order));
+      for (unsigned j = 0; j < rcount && chosen < 0; ++j) {
+        unsigned r = floating ? (X_XMM0 + (regs ? regs[j] : j)) : regs[j];
+        uint32_t own = owner[r];
+        if (own == UINT32_MAX || own == id || saved[own] || shares[own]) continue;
+        if (s->values[own].reg != (int)r || ssa_clobbered(a, r, v->start, v->end, id)) continue;
+        if (s->values[own].op == SO_PHI) {
+          SsaBlock *pb = &s->blocks[s->values[own].block];
+          bool hits_edge = false;
+          for (uint32_t p = 0; p < pb->preds.count; ++p) {
+            uint32_t pe = a->block_end[pb->preds.items[p]];
+            if (pe >= v->start && pe <= v->end) { hits_edge = true; break; }
+          }
+          if (hits_edge) continue;
+        }
+        SsaMark hole_mark = ssa_mark(s);
+        bool dead = ssa_dead_over(a, own, v->start, v->end);
+        ssa_rewind(s, hole_mark);
+        if (dead) {
+          chosen = (int)r;
+          shares[id] = own + 1;
+        }
+      }
+    }
     if (chosen < 0) {
       /* A caller-saved register saved around the calls it crosses, when
          that costs less than reloading the value at every use. */
@@ -8115,28 +9783,103 @@ static bool ssa_allocate(SsaAlloc *a) {
     }
   }
   /* Spill slots and callee-saved registers. */
+  bool reuse_slots = ssa_pass_on("spill_reuse");
+  uint32_t spilled_count = 0;
   for (uint32_t i = 0; i < count; ++i) {
     SsaValue *v = &s->values[list[i]];
     if (v->reg < 0 && v->op == SO_CONST && v->retain_constant) v->retain_constant = false;
-    else if (v->reg < 0) v->slot = (int32_t)a->spill_slots++;
-    else if (s->ctx->a64 ? (A64_CALLEE_SAVED >> v->reg & 1) : s->ctx->rv64 ? (RV_CALLEE_SAVED >> v->reg & 1)
+    else if (v->reg < 0) {
+      if (reuse_slots) { v->slot = -2; ++spilled_count; }
+      else v->slot = (int32_t)a->spill_slots++;
+    } else if (s->ctx->a64 ? (A64_CALLEE_SAVED >> v->reg & 1) : s->ctx->rv64 ? (RV_CALLEE_SAVED >> v->reg & 1)
                          : s->ctx->win64 ? (v->reg == X_RSI || v->reg == X_RDI || v->reg == X_RBX || v->reg == X_R12)
                          : (v->reg == X_RBX || (v->reg >= X_R12 && v->reg <= X_R15)))
       a->used_callee |= UINT64_C(1) << v->reg;
   }
-  /* Each saved value gets a slot and an entry at every call it crosses. */
+  /* Each saved value gets an entry at every call it crosses. */
   uint32_t save_capacity = 0;
   for (uint32_t i = 0; i < count && !s->failed; ++i) {
     uint32_t id = list[i];
     SsaValue *v = &s->values[id];
     if (!saved[id] || v->reg < 0) continue;
-    int32_t slot = (int32_t)a->spill_slots++;
+    int32_t slot = reuse_slots ? -1 : (int32_t)a->spill_slots++;
     for (uint32_t c = ssa_first_clobber(a, v->start); c < a->clobber_count && a->clobbers[c].position < v->end; ++c) {
       if (!ssa_clobber_hits(a, c, (unsigned)v->reg, id)) continue;
       a->saves = ssa_grow(s, a->saves, &save_capacity, a->save_count + 1, sizeof(SsaSave));
       if (s->failed) break;
       a->saves[a->save_count++] = (SsaSave){a->clobbers[c].value, id, slot};
     }
+  }
+  /* Left-edge interval coloring for spill slots: non-overlapping spilled values
+     and per-call save entries reuse the same stack slots, shrinking frames. */
+  if (reuse_slots && !s->failed && (spilled_count || a->save_count)) {
+    uint32_t total = spilled_count + a->save_count;
+    SsaMark spill_mark = ssa_mark(s);
+    SsaSpillItem *items = ssa_temp(s, (size_t)total * sizeof(SsaSpillItem));
+    uint32_t *slot_end = ssa_temp(s, (size_t)total * sizeof(uint32_t));
+    if (!items || !slot_end) { ssa_out_of_memory(s); return false; }
+    uint32_t item_count = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+      uint32_t id = list[i];
+      SsaValue *v = &s->values[id];
+      if (v->slot != -2) continue;
+      uint32_t lo = v->start, hi = v->end;
+      if (v->op == SO_PHI && v->block < s->block_count && a->block_start && a->block_end) {
+        SsaBlock *pb = &s->blocks[v->block];
+        bool has_back = false;
+        for (uint32_t p = 0; p < pb->preds.count; ++p) {
+          uint32_t pe = a->block_end[pb->preds.items[p]];
+          if (pe < lo) lo = pe;
+          if (pe > hi) hi = pe;
+          if (pe >= v->start) has_back = true;
+        }
+        /* A carried loop-header phi (ssa_cache_loops) stores back to its slot
+           at the start of every loop exit block. */
+        if (has_back) {
+          uint32_t loop_hi = hi;
+          for (uint32_t bi = 0; bi < a->n; ++bi) {
+            uint32_t b = a->order[bi];
+            if (a->block_start[b] < v->start || a->block_end[b] > loop_hi) continue;
+            SsaBlock *bb = &s->blocks[b];
+            uint32_t sc = ssa_successors(s, bb);
+            for (uint32_t si = 0; si < sc; ++si) {
+              uint32_t succ = ssa_successor(s, bb, si);
+              if (succ < s->block_count && a->block_start[succ] > hi) hi = a->block_start[succ];
+            }
+          }
+        }
+      }
+      items[item_count++] = (SsaSpillItem){lo, hi, id, 0};
+    }
+    for (uint32_t k = 0; k < a->save_count; ++k) {
+      uint32_t call_id = a->saves[k].call;
+      uint32_t lo = s->values[call_id].start, hi = lo;
+      SsaBlock *cb = &s->blocks[s->values[call_id].block];
+      /* ssa_call_emit stores all trailing SO_RESULTs before reloading saves. */
+      for (uint32_t j = 0; j < cb->values.count; ++j) {
+        if (cb->values.items[j] != call_id) continue;
+        while (j + 1 < cb->values.count) {
+          SsaValue *r = &s->values[cb->values.items[j + 1]];
+          if (r->op != SO_RESULT || r->a != (int32_t)call_id) break;
+          if (r->start > hi) hi = r->start;
+          ++j;
+        }
+        break;
+      }
+      items[item_count++] = (SsaSpillItem){lo, hi, k, 1};
+    }
+    if (item_count > 1) qsort(items, item_count, sizeof(SsaSpillItem), ssa_spill_item_order);
+    for (uint32_t i = 0; i < item_count; ++i) {
+      uint32_t chosen_slot = UINT32_MAX;
+      for (uint32_t sl = 0; sl < a->spill_slots; ++sl) {
+        if (slot_end[sl] < items[i].lo) { chosen_slot = sl; break; }
+      }
+      if (chosen_slot == UINT32_MAX) chosen_slot = a->spill_slots++;
+      slot_end[chosen_slot] = items[i].hi;
+      if (items[i].kind == 0) s->values[items[i].index].slot = (int32_t)chosen_slot;
+      else a->saves[items[i].index].slot = (int32_t)chosen_slot;
+    }
+    ssa_rewind(s, spill_mark);
   }
   if (a->save_count > 1) qsort(a->saves, a->save_count, sizeof(SsaSave), ssa_save_order);
   return !s->failed;
@@ -8572,6 +10315,9 @@ typedef struct {
   struct { size_t at, anchor; uint32_t block; } *tables; uint32_t table_count, table_capacity;
   size_t anchor;
   size_t call_end; /* text offset just after the last call instruction */
+  int32_t flags_cmp; /* fused SO_CMP whose flags are currently live, or -1 */
+  Cond flags_cond;
+  bool omit_fp; /* pure zero-frame leaf without calls/checks/stack params */
 } SsaEmit;
 
 /* x86-64 floating scratch: XMM13-XMM15, or XMM3-XMM5 on Windows,
@@ -8880,6 +10626,31 @@ static void ssa_fail_when(SsaEmit *e, int failure, unsigned kind) {
 static Cond ssa_compare_values(SsaEmit *e, int32_t a, int32_t b, Cond cond) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
   int32_t imm;
+  if (s->values[b].op == SO_LOAD && s->values[b].fused) { int32_t t = a; a = b; b = t; cond = ssa_swap(cond); }
+  if (s->values[a].op == SO_LOAD && s->values[a].fused) {
+    SsaValue *la = &s->values[a], *vb = &s->values[b];
+    bool wide = (la->aux2 & 0xff) == 64;
+    SsaMemory m = ssa_address_of(e, la->a, la->b, la->scale, la->aux, X_R10, X_R11);
+    uint64_t uimm;
+    if (wide && ssa_imm32(s, b, &imm)) {
+      if (imm >= -128 && imm <= 127) { x86_mem_op(ctx, -1, true, OP1(0x83), 7, m, false); byte(ctx, (uint8_t)imm); }
+      else { x86_mem_op(ctx, -1, true, OP1(0x81), 7, m, false); word(ctx, (uint32_t)imm); }
+      return cond;
+    }
+    if (!wide && ssa_is_const(s, b, &uimm) && uimm <= UINT32_MAX) {
+      if (uimm <= 127) { x86_mem_op(ctx, -1, false, OP1(0x83), 7, m, false); byte(ctx, (uint8_t)uimm); }
+      else { x86_mem_op(ctx, -1, false, OP1(0x81), 7, m, false); word(ctx, (uint32_t)uimm); }
+      return cond;
+    }
+    if (vb->reg >= 0) {
+      x86_mem_op(ctx, -1, wide, OP1(0x39), (unsigned)vb->reg, m, false);
+      return cond;
+    }
+    x86_mem_op(ctx, -1, wide, OP1(0x8b), X_R10, m, false);
+    unsigned rb = ssa_get(e, b, X_R11);
+    x86_reg_op(ctx, -1, wide, OP1(0x39), rb, X_R10, false);
+    return cond;
+  }
   if (ssa_imm32(s, a, &imm) && !ssa_imm32(s, b, &imm)) { int32_t t = a; a = b; b = t; cond = ssa_swap(cond); }
   /* Fold a spilled left operand against an existing register. Immediate
      comparisons keep the register TEST/CMP forms used by branch fusion. */
@@ -9046,7 +10817,7 @@ static void ssa_zero_memory(SsaEmit *e, SsaValue *v) {
   }
   if (size <= 4096) {
     /* A loop of two 16-byte stores, then the tail: rep stosb costs a fixed
-       30 or so cycles to start, which dominated a 296-byte fail.Status
+       30 or so cycles to start, which dominated a 296-byte status struct
        zeroed per loop iteration, and unrolled stores would cost about ten
        bytes of code per 16 bytes. R11 walks the bytes; R10 counts. */
     SsaMemory m = ssa_address_of(e, v->a, -1, 1, 0, X_R10, X_R11);
@@ -9082,12 +10853,22 @@ static void ssa_zero_memory(SsaEmit *e, SsaValue *v) {
 }
 static void ssa_fill_memory(SsaEmit *e, SsaValue *v) {
   BackendContext *ctx = e->ctx;
-  SsaMove move = ssa_source(e, v->a);
   if (ctx->win64) CODE(0x57); /* RDI is callee-saved on Windows. */
-  ssa_transfer(e, L_REG, X_RDI, move.src_kind, move.src, SC_INT, X_R10);
-  CODE(0xb8); word(ctx, (uint32_t)v->aux2);
-  CODE(0xb9); word(ctx, (uint32_t)v->aux);
-  CODE(0xfc, 0xf3, 0xaa); /* cld; rep stosb */
+  if (v->b >= 0) {
+    SsaMove moves[2] = {ssa_source(e, v->a), ssa_source(e, v->b)};
+    moves[0].dst_kind = L_REG; moves[0].dst = X_RDI; moves[0].cls = SC_INT;
+    moves[1].dst_kind = L_REG; moves[1].dst = X_RCX; moves[1].cls = SC_INT;
+    ssa_parallel(e, moves, 2);
+    if (!v->aux2) { CODE(0x31, 0xc0); } /* xor eax, eax */
+    else { CODE(0xb8); word(ctx, (uint32_t)v->aux2); }
+    CODE(0xfc, 0xf3, 0xaa); /* cld; rep stosb */
+  } else {
+    SsaMove move = ssa_source(e, v->a);
+    ssa_transfer(e, L_REG, X_RDI, move.src_kind, move.src, SC_INT, X_R10);
+    CODE(0xb8); word(ctx, (uint32_t)v->aux2);
+    CODE(0xb9); word(ctx, (uint32_t)v->aux);
+    CODE(0xfc, 0xf3, 0xaa); /* cld; rep stosb */
+  }
   if (ctx->win64) CODE(0x5f);
 }
 /* SSE2 only. No vector load crosses the logical end; the byte tail also
@@ -9899,6 +11680,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     if (rb != X_R11) x86_mov(ctx, X_R11, rb);
     x86_mov(ctx, X_RAX, ssa_get(e, v->a, X_RAX));
     if (v->aux2) CODE(0x48, 0x99, 0x49, 0xf7, 0xfb); /* cqo; idiv r11 */
+    else if (v->w32) CODE(0x31, 0xd2, 0x41, 0xf7, 0xf3); /* xor edx, edx; div r11d */
     else CODE(0x31, 0xd2, 0x49, 0xf7, 0xf3); /* xor edx, edx; div r11 */
     ssa_put(e, v, v->op == SO_DIV ? X_RAX : X_RDX);
     return;
@@ -9917,12 +11699,25 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     /* A comparison fused into the select (ssa_fuse) is emitted here: d gets
        its base value first, since immediate loads may write flags, so d must
        not hold a compare operand. */
-    if (c->fused && c->op == SO_CMP && other_ok && v->reg >= 0 &&
-        !(s->values[c->a].reg >= 0 && (unsigned)s->values[c->a].reg == d) &&
-        !(s->values[c->b].reg >= 0 && (unsigned)s->values[c->b].reg == d)) {
       SsaValue *vb = &s->values[base];
-      if (!(vb->reg >= 0 && (unsigned)vb->reg == d)) x86_mov(ctx, d, ssa_get(e, base, d));
-      Cond cond = ssa_compare_values(e, c->a, c->b, (Cond)c->cond);
+      bool base_in_d = vb->reg >= 0 && (unsigned)vb->reg == d;
+      bool cmp_uses_d = (s->values[c->a].reg >= 0 && (unsigned)s->values[c->a].reg == d) ||
+                        (s->values[c->b].reg >= 0 && (unsigned)s->values[c->b].reg == d);
+      /* When d already holds base, no move precedes CMP; safe if c is only used
+         once or if live flags already hold c (cmov preserves RFLAGS). */
+      if (c->fused && c->op == SO_CMP && other_ok && v->reg >= 0 &&
+          (!cmp_uses_d || (base_in_d && (c->uses == 1 || e->flags_cmp == v->a)))) {
+      bool base_keeps_flags = (vb->reg >= 0) || (vb->op != SO_CONST && vb->op != SO_FRAME && vb->slot >= 0);
+      Cond cond;
+      if (e->flags_cmp == v->a && base_keeps_flags) {
+        if (!base_in_d) x86_mov(ctx, d, ssa_get(e, base, d));
+        cond = e->flags_cond;
+      } else {
+        if (!base_in_d) x86_mov(ctx, d, ssa_get(e, base, d));
+        cond = ssa_compare_values(e, c->a, c->b, (Cond)c->cond);
+        e->flags_cmp = v->a;
+        e->flags_cond = cond;
+      }
       unsigned char op = (unsigned char)(x86_setcc[cond] - 0x50);
       if (invert) op ^= 1;
       if (vo->reg >= 0) x86_reg_op(ctx, -1, true, OP2(0x0f, op), d, (unsigned)vo->reg, false);
@@ -9930,6 +11725,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
       ssa_put(e, v, d);
       return;
     }
+    e->flags_cmp = -1;
     /* Otherwise the condition as a value in a register, then TEST and CMOV.
        d may be a scratch register itself (a spilled select). */
     unsigned rc;
@@ -10149,6 +11945,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     return;
   }
   case SO_LOAD: {
+    if (v->fused) return;
     d = ssa_target(e, v);
     SsaMemory m = ssa_address_of(e, v->a, v->b, v->scale, v->aux, X_R10, X_R11);
     unsigned bits = v->aux2 & 0xff;
@@ -10365,9 +12162,19 @@ static void ssa_narrow32(Ssa *s, const uint32_t *order, uint32_t n) {
       changed = true;
     }
   }
-  if (!changed) return;
-  ssa_resolve_all(s);
-  ssa_dce(s, order, n);
+  if (changed) {
+    ssa_resolve_all(s);
+    ssa_dce(s, order, n);
+  }
+  bool has_udiv = false;
+  for (uint32_t i = 0; i < n && !has_udiv; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      SsaValue *v = &s->values[block->values.items[k]];
+      if (!v->dead && (v->op == SO_DIV || v->op == SO_REM) && !v->aux2 && !v->w32) { has_udiv = true; break; }
+    }
+  }
+  if (!changed && !has_udiv) return;
   ++s->range_stamp;
   bool *fits = ssa_fits32_all(s, order, n);
   if (!fits) return;
@@ -10375,7 +12182,12 @@ static void ssa_narrow32(Ssa *s, const uint32_t *order, uint32_t n) {
     SsaBlock *block = &s->blocks[order[i]];
     for (uint32_t k = 0; k < block->values.count; ++k) {
       SsaValue *v = &s->values[block->values.items[k]];
-      if (v->dead || v->op != SO_OR || v->cls != SC_INT || v->a < 0 || v->b < 0) continue;
+      if (v->dead || v->cls != SC_INT || v->a < 0 || v->b < 0) continue;
+      if ((v->op == SO_DIV || v->op == SO_REM) && !v->aux2 && !v->w32 && fits[v->a] && fits[v->b]) {
+        v->w32 = true;
+        continue;
+      }
+      if (!changed || v->op != SO_OR) continue;
       int32_t right = v->a, left = v->b;
       if (s->values[right].op != SO_SHR) { int32_t t = right; right = left; left = t; }
       SsaValue *r = &s->values[right], *l = &s->values[left];
@@ -10390,7 +12202,7 @@ static void ssa_narrow32(Ssa *s, const uint32_t *order, uint32_t n) {
       v->w32 = v->rotate = true;
     }
   }
-  ssa_dce(s, order, n);
+  if (changed) ssa_dce(s, order, n);
 }
 /* x86-64 and AArch64: x >> c | x << (64 - c) on 64-bit values becomes one
    ROR, as BLAKE2b, SHA-512 and Argon2 write their rotations. */
@@ -10697,15 +12509,24 @@ static void ssa_late_lea(Ssa *s, const uint32_t *order, uint32_t n) {
   if (changed) ssa_dce(s, order, n);
 }
 static void ssa_fuse(Ssa *s, const uint32_t *order, uint32_t n) {
-  /* A comparison used only by a select in its block sits right before it
-     and is emitted by it: CMP then CMOVcc, or CSEL with its condition. */
+  /* A comparison used only by selects in its block sits right before the first
+     select and is emitted by it: CMP then CMOVcc (reusing flags across
+     consecutive selects), or CSEL on AArch64. */
   for (uint32_t i = 0; i < n && !s->ctx->rv64; ++i) {
     SsaBlock *block = &s->blocks[order[i]];
     for (uint32_t k = 1; k < block->values.count; ++k) {
       SsaValue *v = &s->values[block->values.items[k]];
       if (v->op != SO_SELECT || v->dead || v->a < 0) continue;
       SsaValue *c = &s->values[v->a];
-      if (c->op != SO_CMP || c->uses != 1 || c->block != order[i] || c->fused) continue;
+      if (c->op != SO_CMP || c->uses == 0 || c->block != order[i] || c->fused) continue;
+      if (c->uses > 1) {
+        uint32_t select_uses = 0;
+        for (uint32_t q = 0; q < block->values.count; ++q) {
+          SsaValue *u = &s->values[block->values.items[q]];
+          if (!u->dead && u->op == SO_SELECT && u->a == v->a) ++select_uses;
+        }
+        if (select_uses != c->uses) continue;
+      }
       uint32_t at = UINT32_MAX;
       for (uint32_t q = 0; q < k; ++q) if (block->values.items[q] == (uint32_t)v->a) at = q;
       if (at == UINT32_MAX) continue;
@@ -10748,6 +12569,51 @@ static void ssa_fuse(Ssa *s, const uint32_t *order, uint32_t n) {
       memmove(&block->values.items[k], &block->values.items[k + 1], (block->values.count - k - 1) * sizeof(uint32_t));
       block->values.items[block->values.count - 1] = (uint32_t)block->control;
       break;
+    }
+  }
+  /* x86-64: fold a single-use 64-bit or u32 load directly into a branch-fused
+     SO_CMP when no memory effect intervenes, emitting one `cmp reg/imm, mem`. */
+  if (!s->ctx->a64 && !s->ctx->rv64 && !s->ctx->rv32 && !s->ctx->t32) {
+    bool *fits = NULL;
+    for (uint32_t i = 0; i < n; ++i) {
+      SsaBlock *block = &s->blocks[order[i]];
+      if (block->kind != SB_IF || block->control < 0 || block->values.count < 2) continue;
+      SsaValue *c = &s->values[block->control];
+      if (c->op != SO_CMP || !c->fused || c->dead || c->a < 0 || c->b < 0) continue;
+      if (block->values.items[block->values.count - 1] != (uint32_t)block->control) continue;
+      for (unsigned side = 0; side < 2; ++side) {
+        int32_t lid = side ? c->b : c->a, oid = side ? c->a : c->b;
+        SsaValue *ld = &s->values[lid];
+        if (ld->op != SO_LOAD || ld->dead || ld->fused || ld->cls != SC_INT || ld->uses != 1 || ld->block != order[i])
+          continue;
+        bool is64 = (ld->aux2 & 0xff) == 64;
+        bool is_u32 = ld->aux2 == SSA_MEM(32, 0, 0) &&
+                      (c->cond == CC_E || c->cond == CC_NE || c->cond == CC_B || c->cond == CC_BE ||
+                       c->cond == CC_A || c->cond == CC_AE);
+        if (!is64 && !is_u32) continue;
+        if (is_u32) {
+          if (!fits) { ++s->range_stamp; fits = ssa_fits32_all(s, order, n); }
+          if (!fits || !fits[oid]) continue;
+        }
+        uint32_t at = UINT32_MAX;
+        for (uint32_t q = 0; q + 1 < block->values.count; ++q)
+          if (block->values.items[q] == (uint32_t)lid) { at = q; break; }
+        if (at == UINT32_MAX) continue;
+        bool hazard = false;
+        for (uint32_t q = at + 1; q + 1 < block->values.count; ++q) {
+          SsaValue *u = &s->values[block->values.items[q]];
+          if (!u->dead && u->effect && u->op != SO_LOAD) { hazard = true; break; }
+        }
+        if (hazard) continue;
+        /* Place ld right before c so ssa_intervals keeps its address operands live. */
+        uint32_t dst = block->values.count - 2;
+        if (at < dst) {
+          memmove(&block->values.items[at], &block->values.items[at + 1], (dst - at) * sizeof(uint32_t));
+          block->values.items[dst] = (uint32_t)lid;
+        }
+        ld->fused = true;
+        break;
+      }
     }
   }
 }
@@ -10803,6 +12669,7 @@ static void ssa_epilogue(SsaEmit *e) {
       if (e->alloc->used_callee >> r & 1)
         a64s_slot_access(ctx, false, r, (SsaMemory){A64_FP, -1, 1, (int32_t)(e->save_base - 8 * k++)});
     ssa_debug_epilogue(e);
+    if (e->omit_fp) { a64_word(ctx, 0xd65f03c0u); return; } /* ret */
     a64_word(ctx, 0x910003bfu); /* mov sp, x29 */
     a64_word(ctx, 0xa8c17bfdu); /* ldp x29, x30, [sp], #16 */
     a64_word(ctx, 0xd65f03c0u); /* ret */
@@ -10817,6 +12684,7 @@ static void ssa_epilogue(SsaEmit *e) {
     x86_mem_op(ctx, -1, true, OP1(0x8b), r, (SsaMemory){X_RBP, -1, 1, (int32_t)(e->save_base - 8 * k++)}, false);
   }
   ssa_debug_epilogue(e);
+  if (e->omit_fp) { CODE(0xc3); return; } /* ret */
   CODE(0xc9, 0xc3); /* leave; ret */
 }
 /* Shrink-wrapping by duplication: when a path from the entry reaches a
@@ -11122,6 +12990,20 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
   total = (total + 15) / 16 * 16;
   if (total > MAX_AGGREGATE + (1u << 20)) return false;
   e->frame_bytes = (uint32_t)total;
+  bool leaf_plain = !ctx->rv64 && !ctx->win64 && !ctx->winarm64 && !ctx->debug_mode &&
+                    !ctx->dwarf && !ctx->trace_table && !s->calls && total == 0 && saves == 0 &&
+                    s->return_slot == UINT32_MAX && !s->x87_offset && ssa_pass_on("omit_fp");
+  for (uint32_t i = 0; i < n && leaf_plain; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t vk = 0; vk < block->values.count && leaf_plain; ++vk) {
+      SsaValue *v = &s->values[block->values.items[vk]];
+      if (v->dead) continue;
+      if (v->op == SO_CHECK || v->op == SO_PANIC || v->op == SO_TRAP || v->op == SO_CALL ||
+          v->op == SO_FRAME || v->op == SO_VLOOP || (v->op == SO_PARAM && v->aux >= SSA_STACK))
+        leaf_plain = false;
+    }
+  }
+  e->omit_fp = leaf_plain;
   bare_stack_check(ctx,e->frame_bytes + 16);
   unsigned k = 0;
   e->row_count = e->epilogue_count = 0;
@@ -11143,12 +13025,14 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
     ctx->allocator_used = 0;
     isa_enter(ctx);
   } else if (ctx->a64) {
-    a64_word(ctx, 0xa9bf7bfdu); /* stp x29, x30, [sp, #-16]! */
-    a64_word(ctx, 0x910003fdu); /* mov x29, sp */
-    if (total) a64_sp_adjust(ctx, -(int64_t)total);
-    for (unsigned r = 0; r < 32; ++r)
-      if (a->used_callee >> r & 1)
-        a64s_slot_access(ctx, true, r, (SsaMemory){A64_FP, -1, 1, (int32_t)(e->save_base - 8 * k++)});
+    if (!e->omit_fp) {
+      a64_word(ctx, 0xa9bf7bfdu); /* stp x29, x30, [sp, #-16]! */
+      a64_word(ctx, 0x910003fdu); /* mov x29, sp */
+      if (total) a64_sp_adjust(ctx, -(int64_t)total);
+      for (unsigned r = 0; r < 32; ++r)
+        if (a->used_callee >> r & 1)
+          a64s_slot_access(ctx, true, r, (SsaMemory){A64_FP, -1, 1, (int32_t)(e->save_base - 8 * k++)});
+    }
   } else if (ctx->win64) {
     /* Callee-saved registers go to the caller's home area, in a fixed order
        the unwind codes describe (coff_unwind_info). */
@@ -11169,7 +13053,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
       CODE(0x48, 0x29, 0xc4);
     } else { CODE(0x48, 0x81, 0xec); word(ctx, (uint32_t)total); }
     frame[0] = (uint32_t)start; frame[1] = (uint32_t)(ctx->text.n - start); frame[2] = (uint32_t)total; frame[3] = mask;
-  } else {
+  } else if (!e->omit_fp) {
     CODE(0x55, 0x48, 0x89, 0xe5); /* push rbp; mov rbp, rsp */
     x86_stack_adjust(ctx, -(int64_t)total);
     for (unsigned r = 0; r < 16; ++r) {
@@ -11246,7 +13130,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
       ssa_transfer(e, L_REG, a->caches[c].reg, L_SLOT, (int32_t)(e->spill_base - 8 * (uint32_t)a->caches[c].evicted_slot), w->cls, X_R11);
     }
     /* Control may arrive from anywhere: the first statement stores again. */
-    e->last_pos = 0; e->last_line = 0;
+    e->last_pos = 0; e->last_line = 0; e->flags_cmp = -1;
     /* Splits end before anything past their last use is emitted. */
     for (uint32_t q = 0; q < split_actives;) {
       SsaSplit *split = &a->splits[split_active[q]];
@@ -11267,12 +13151,14 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
         SsaSplit *split = &a->splits[split_next++];
         SsaValue *v = &s->values[split->value];
         if (split->first != position || s->values[emitted].op == SO_PHI || split_actives == 64) continue;
-        if (!split->defined) ssa_split_transfer(e, true, split->reg, v);
+        if (!split->defined) { ssa_split_transfer(e, true, split->reg, v); e->flags_cmp = -1; }
         v->reg = split->reg;
         split->stored = false;
         split_active[split_actives++] = (uint32_t)(split - a->splits);
       }
-      ssa_debug_position(e, s->values[block->values.items[k]].pos);
+      SsaValue *ev = &s->values[block->values.items[k]];
+      if (ev->op != SO_SELECT && !ev->dead && !(ev->op == SO_CMP && ev->fused)) e->flags_cmp = -1;
+      ssa_debug_position(e, ev->pos);
       if (ctx->a64) a64s_emit_value(e, block, &k);
       else if (ctx->rv64) rvs_emit_value(e, block, &k);
       else ssa_emit_value(e, block, &k);
@@ -11285,6 +13171,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
         SsaValue *defined = &s->values[split->value];
         if (split->defined && !split->stored && defined->start <= position && defined->reg == split->reg) {
           ssa_split_transfer(e, false, split->reg, defined);
+          e->flags_cmp = -1;
           split->stored = true;
         }
       }
@@ -11354,13 +13241,17 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
         }
         for (uint32_t c = 0; repeat && c < a->cache_count; ++c)
           repeat = a->cache_member[(size_t)c * s->block_count + b] == a->cache_member[(size_t)c * s->block_count + head];
-        if (repeat)
+        if (repeat) {
+          e->flags_cmp = -1;
           for (uint32_t k = 0; k < target->values.count; ++k) {
-            if (s->values[target->values.items[k]].op == SO_PHI) continue;
+            SsaValue *rv = &s->values[target->values.items[k]];
+            if (rv->op == SO_PHI) continue;
+            if (rv->op != SO_SELECT && !rv->dead && !(rv->op == SO_CMP && rv->fused)) e->flags_cmp = -1;
             if (ctx->a64) a64s_emit_value(e, target, &k);
             else if (ctx->rv64) rvs_emit_value(e, target, &k);
             else ssa_emit_value(e, target, &k);
           }
+        }
       }
       if (rotate || repeat) {
         SsaValue *c = &s->values[target->control];
@@ -11612,6 +13503,58 @@ typedef struct SsaPrepared {
 static bool ssa_pass_on(const char *name) {
   return dyn_optimization_pass_on(name);
 }
+/* Coalesce single-predecessor SB_PLAIN chains (such as diamonds flattened by
+   ssa_selects) into one block so check coalescing and CMP/SELECT fusion see
+   the whole straight-line sequence together. */
+static bool ssa_merge_plain(Ssa *s, const uint32_t *order, uint32_t n) {
+  bool changed = false;
+  for (uint32_t i = 0; i < n && !s->failed; ++i) {
+    uint32_t a = order[i];
+    for (;;) {
+      SsaBlock *ab = &s->blocks[a];
+      if (ab->kind != SB_PLAIN || ab->succ[0] >= s->block_count || ab->succ[0] == a) break;
+      uint32_t b = ab->succ[0];
+      SsaBlock *bb = &s->blocks[b];
+      if (bb->preds.count != 1 || bb->preds.items[0] != a) break;
+      bool has_phi = false;
+      for (uint32_t k = 0; k < bb->values.count; ++k) {
+        SsaValue *v = &s->values[bb->values.items[k]];
+        if (v->op == SO_PHI) { has_phi = true; break; }
+      }
+      if (has_phi) break;
+      for (uint32_t k = 0; k < bb->values.count && !s->failed; ++k) {
+        uint32_t id = bb->values.items[k];
+        s->values[id].block = a;
+        ssa_push(s, &ab->values, id);
+      }
+      if (s->failed) return false;
+      ab = &s->blocks[a];
+      bb = &s->blocks[b];
+      ab->kind = bb->kind;
+      ab->control = bb->control;
+      ab->control2 = bb->control2;
+      ab->control3 = bb->control3;
+      ab->control4 = bb->control4;
+      ab->succ[0] = bb->succ[0];
+      ab->succ[1] = bb->succ[1];
+      ab->table = bb->table;
+      uint32_t sc = ssa_successors(s, ab);
+      for (uint32_t si = 0; si < sc; ++si) {
+        uint32_t succ = ssa_successor(s, ab, si);
+        if (succ >= s->block_count) continue;
+        SsaBlock *sb = &s->blocks[succ];
+        for (uint32_t p = 0; p < sb->preds.count; ++p)
+          if (sb->preds.items[p] == b) sb->preds.items[p] = a;
+      }
+      bb->values.count = 0;
+      bb->preds.count = 0;
+      bb->kind = SB_EXIT;
+      bb->succ[0] = bb->succ[1] = UINT32_MAX;
+      changed = true;
+    }
+  }
+  return changed;
+}
 static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *source, const DynIrProgram *ir,
                         const DynIrFunction *f, bool defer_literals, SsaPool *pool) {
   p->s = (Ssa){.ctx = ctx, .ir = ir, .f = f, .current = UINT32_MAX, .defer_literals = defer_literals, .pool = pool};
@@ -11700,10 +13643,17 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
   ssa_divisions(s, order, n);
   ssa_resolve_all(s);
   if (ssa_pass_on("hoist") && ssa_hoist(s, order, n)) {
+    order = ssa_order(s, &n);
+    if (!order || s->failed) goto done;
     /* Hoisted copies of one computation meet in the same preheader. */
     ssa_dominators(s, order, n);
     ssa_cse(s, order, n);
     ssa_resolve_all(s);
+  }
+  if (ssa_zero_loops(s, order, n)) {
+    order = ssa_order(s, &n);
+    if (!order || s->failed) goto done;
+    ssa_dominators(s, order, n);
   }
   if (ssa_pass_on("unswitch") && ssa_unswitch(s, order, n)) {
     order = ssa_order(s, &n);
@@ -11727,8 +13677,34 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     }
   }
   if (ssa_pass_on("strength") && ssa_strength(s, order, n)) ssa_resolve_all(s);
-  if (ssa_pass_on("thread_conditions") && ssa_thread_conditions(s, order, n)) ssa_resolve_all(s);
-  if (ssa_pass_on("selects") && ssa_selects(s, order, n)) ssa_resolve_all(s);
+  if (ssa_pass_on("thread_conditions") && ssa_thread_conditions(s, order, n)) {
+    ssa_resolve_all(s);
+    order = ssa_order(s, &n);
+    if (!order || s->failed) goto done;
+    ssa_dominators(s, order, n);
+    if (ssa_pass_on("fold") && ssa_fold(s, order, n)) ssa_resolve_all(s);
+  }
+  if (ssa_pass_on("selects") && ssa_selects(s, order, n)) {
+    ssa_resolve_all(s);
+    if (ssa_pass_on("merge_plain") && ssa_merge_plain(s, order, n)) {
+      order = ssa_order(s, &n);
+      if (!order || s->failed) goto done;
+      bool collapsed = false;
+      for (uint32_t i = 0; i < n; ++i) {
+        SsaBlock *block = &s->blocks[order[i]];
+        if (block->preds.count != 1) continue;
+        for (uint32_t k = 0; k < block->values.count; ++k) {
+          uint32_t id = block->values.items[k];
+          if (s->values[id].op != SO_PHI || s->values[id].count != 1) continue;
+          ssa_replace(s, id, (int32_t)s->lists[s->values[id].list]);
+          collapsed = true;
+        }
+      }
+      if (collapsed) ssa_resolve_all(s);
+      ssa_dominators(s, order, n);
+    }
+  }
+  if (ssa_coalesce_checks(s, order, n)) ssa_resolve_all(s);
   if (s->failed) goto done;
   ssa_split_edges(s);
   order = ssa_order(s, &n);
@@ -12294,7 +14270,7 @@ static void ssa_pipeline_start(BackendContext *ctx, const DynSource *source, con
   ctx->ssa_prepared_count = ir->function_count;
   *pipeline = (SsaPipeline){.ctx = ctx, .source = source, .ir = ir, .pointer_bits = backend_pointer_bits,
                             .layout_program = layout_program, .layout_structs = layout_structs,
-                            .layout_offsets = layout_offsets, .window = 16 * (size_t)workers};
+                            .layout_offsets = layout_offsets, .window = 4 * (size_t)workers};
   pipeline->functions = malloc(ir->function_count * sizeof(size_t));
   pipeline->position = malloc(ir->function_count * sizeof(size_t));
   pipeline->ready = calloc(ir->function_count, sizeof(bool));

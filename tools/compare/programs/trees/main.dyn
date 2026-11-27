@@ -9,7 +9,7 @@ struct Node {
 }
 
 fn build_tree(arena: *mem.Arena, depth: i64) *Node {
-  node := mem.push(Node, arena)
+  node := mem.push<Node>(arena)
   if depth > 0 {
     node.left = build_tree(arena, depth - 1)
     node.right = build_tree(arena, depth - 1)

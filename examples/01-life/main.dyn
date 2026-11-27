@@ -37,7 +37,7 @@ struct Board {
 fn load(board: *Board, rows: []const []const u8) {
   for text, y in rows {
     // A broken invariant is a bug, not an error to recover from: panic.
-    if #len(text) != Width {
+    if text.len != Width {
       #panic("every pattern row must be Width bytes")
     }
     // for value, index: the index is always a usize.

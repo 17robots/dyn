@@ -18,41 +18,41 @@ struct LineChange {
 
 enum Edit {
   None,
-  Insert: LineText,
-  Delete: LineText,
-  Change: LineChange,
+  Insert(LineText),
+  Delete(LineText),
+  Change(LineChange),
 }
 
 // The edit that undoes this one.
 fn inverse(e: Edit) Edit {
   case e {
     Edit.None => { return Edit.None }
-    Edit.Insert line => { return Edit.Delete(line) }
-    Edit.Delete line => { return Edit.Insert(line) }
-    Edit.Change c => {
+    Edit.Insert(line) => { return Edit.Delete(line) }
+    Edit.Delete(line) => { return Edit.Insert(line) }
+    Edit.Change(c) => {
       return Edit.Change(LineChange{ index: c.index, before: c.after, after: c.before })
     }
   }
 }
 
-fn apply(lines: *array.Array([]const u8), e: Edit) {
+fn apply(lines: *array.Array<[]const u8>, e: Edit) {
   case e {
     Edit.None => {}
-    Edit.Insert line => {
+    Edit.Insert(line) => {
       array.push(lines, "")
       // Shift the tail down one, from the end, to open a gap at index.
-      for i in #reverse(line.index + 1..#len(lines.items)) {
+      for i in #reverse(line.index + 1..lines.items.len) {
         lines.items[i] = lines.items[i - 1]
       }
       lines.items[line.index] = line.text
     }
-    Edit.Delete line => {
-      for i in line.index + 1..#len(lines.items) {
+    Edit.Delete(line) => {
+      for i in line.index + 1..lines.items.len {
         lines.items[i - 1] = lines.items[i]
       }
       _ = array.pop(lines)
     }
-    Edit.Change c => {
+    Edit.Change(c) => {
       lines.items[c.index] = c.after
     }
   }

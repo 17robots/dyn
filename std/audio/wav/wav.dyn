@@ -1,6 +1,7 @@
-use "std/fail"
-use "std/mem" mem
-use "std/math" math
+use parse "std/parse"
+use io "std/io"
+use mem "std/mem"
+use math "std/math"
 pub enum Encoding { Pcm8, Pcm16, Pcm24, Pcm32, Float32 }
 // Interleaved normalized samples; floating WAV samples are preserved, including
 // out-of-range values. channel_mask is zero when speaker assignment is unknown.
@@ -35,26 +36,16 @@ fn mask_valid(mask: u32, channels: u16) bool {
 // RIFF WAVE: PCM 8/16/24/32 and IEEE float 32/64, including extensible
 // subformats. Unknown chunks are skipped with RIFF padding. Compressed formats
 // and RF64/RIFX return Unsupported. No native audio provider is used.
-pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Audio {
-  if status == nil { return decode(arena, &fail.Status{}, source) }
-  if status.failed { return Audio{} }
-  if #len(source) < 12 {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "decode WAV", "", "malformed WAV"))
-    return Audio{}
-  }
+pub fn decode(arena: *mem.Arena, source: []const u8) Audio!parse.ParseErr {
+  if source.len < 12 { fail parse.ParseErr.Invalid(0) }
   if tag(source, 0, 82, 73, 70, 88) || tag(source, 0, 82, 70, 54, 52) {
-    fail.set(status, fail.make(fail.Kind.Unsupported, "decode WAV", "", "unsupported WAV feature"))
-    return Audio{}
+    fail parse.ParseErr.Unsupported(0)
   }
   if !tag(source, 0, 82, 73, 70, 70) || !tag(source, 8, 87, 65, 86, 69) {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "decode WAV", "", "malformed WAV"))
-    return Audio{}
+    fail parse.ParseErr.Invalid(0)
   }
   size := #cast(usize, u32le(source, 4))
-  if size < 4 || size > #len(source) - 8 {
-    fail.at(status, fail.Kind.InvalidInput, "decode WAV", "malformed WAV", 4)
-    return Audio{}
-  }
+  if size < 4 || size > source.len - 8 { fail parse.ParseErr.Invalid(4) }
   end := size + 8
   at: usize = 12
   format: []const u8
@@ -62,37 +53,24 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Audio
   data_offset: usize = 0
   have_data := false
   for at < end {
-    if end - at < 8 {
-      fail.at(status, fail.Kind.InvalidInput, "decode WAV", "malformed WAV", at)
-      return Audio{}
-    }
+    if end - at < 8 { fail parse.ParseErr.Invalid(at) }
     length := #cast(usize, u32le(source, at + 4))
     payload := at + 8
     if length > end - payload || (length & 1) > end - payload - length {
-      fail.at(status, fail.Kind.InvalidInput, "decode WAV", "malformed WAV", at + 4)
-      return Audio{}
+      fail parse.ParseErr.Invalid(at + 4)
     }
     if tag(source, at, 102, 109, 116, 32) {
-      if #len(format) != 0 || length < 16 {
-        fail.at(status, fail.Kind.InvalidInput, "decode WAV", "malformed WAV", at)
-        return Audio{}
-      }
+      if format.len != 0 || length < 16 { fail parse.ParseErr.Invalid(at) }
       format = source[payload..payload + length]
     } else if tag(source, at, 100, 97, 116, 97) {
-      if have_data {
-        fail.at(status, fail.Kind.Unsupported, "decode WAV", "unsupported WAV feature", at)
-        return Audio{}
-      }
+      if have_data { fail parse.ParseErr.Unsupported(at) }
       data = source[payload..payload + length]
       data_offset = payload
       have_data = true
     }
     at = payload + length + (length & 1)
   }
-  if #len(format) < 16 || !have_data {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "decode WAV", "", "malformed WAV"))
-    return Audio{}
-  }
+  if format.len < 16 || !have_data { fail parse.ParseErr.Invalid(0) }
   code := u16le(format, 0)
   channels := u16le(format, 2)
   rate := u32le(format, 4)
@@ -101,48 +79,32 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Audio
   mask: u32 = 0
   precision := bits
   if code == 65534 {
-    if #len(format) < 40 || u16le(format, 16) < 22 || #cast(usize, u16le(format, 16)) > #len(format) - 18 {
-      fail.set(status, fail.make(fail.Kind.InvalidInput, "decode WAV", "", "malformed WAV"))
-      return Audio{}
+    if format.len < 40 || u16le(format, 16) < 22 || #cast(usize, u16le(format, 16)) > format.len - 18 {
+      fail parse.ParseErr.Invalid(0)
     }
     valid_bits := u16le(format, 18)
     precision = valid_bits
-    if valid_bits == 0 || valid_bits > bits {
-      fail.set(status, fail.make(fail.Kind.InvalidInput, "decode WAV", "", "malformed WAV"))
-      return Audio{}
-    }
+    if valid_bits == 0 || valid_bits > bits { fail parse.ParseErr.Invalid(0) }
     mask = u32le(format, 20)
     // Subformat GUID is {PCM/IEEE,0000,0010,8000,00aa00389b71}.
     if u16le(format, 26) != 0 || u32le(format, 28) != 0x00100000 || u32le(format, 32) != 0xaa000080 || u32le(format, 36) != 0x719b3800 {
-      fail.set(status, fail.make(fail.Kind.Unsupported, "decode WAV", "", "unsupported WAV feature"))
-      return Audio{}
+      fail parse.ParseErr.Unsupported(0)
     }
     code = u16le(format, 24)
-    if code == 3 && valid_bits != bits {
-      fail.set(status, fail.make(fail.Kind.InvalidInput, "decode WAV", "", "malformed WAV"))
-      return Audio{}
-    }
+    if code == 3 && valid_bits != bits { fail parse.ParseErr.Invalid(0) }
   }
-  if code != 1 && code != 3 {
-    fail.set(status, fail.make(fail.Kind.Unsupported, "decode WAV", "", "unsupported WAV feature"))
-    return Audio{}
-  }
+  if code != 1 && code != 3 { fail parse.ParseErr.Unsupported(0) }
   if (code == 1 && bits != 8 && bits != 16 && bits != 24 && bits != 32) || (code == 3 && bits != 32 && bits != 64) {
-    fail.set(status, fail.make(fail.Kind.Unsupported, "decode WAV", "", "unsupported WAV feature"))
-    return Audio{}
+    fail parse.ParseErr.Unsupported(0)
   }
   stride := #cast(usize, bits / 8)
-  if channels == 0 || rate == 0 || channels * stride != align || #cast(u64, rate) * #cast(u64, align) != #cast(u64, u32le(format, 8)) || !mask_valid(mask, channels) || #len(data) % #cast(usize, align) != 0 {
-    fail.at(status, fail.Kind.InvalidInput, "decode WAV", "malformed WAV", data_offset)
-    return Audio{}
+  if channels == 0 || rate == 0 || channels * stride != align || #cast(u64, rate) * #cast(u64, align) != #cast(u64, u32le(format, 8)) || !mask_valid(mask, channels) || data.len % #cast(usize, align) != 0 {
+    fail parse.ParseErr.Invalid(data_offset)
   }
-  sample_count := #len(data) / stride
-  if sample_count > #max(usize) / #sizeof(f32) {
-    fail.at(status, fail.Kind.Overflow, "decode WAV", "the WAV is too large", data_offset)
-    return Audio{}
-  }
-  samples := mem.push_array(f32, arena, sample_count)
-  for i in 0..#len(samples) {
+  sample_count := data.len / stride
+  if sample_count > #max(usize) / #sizeof(f32) { fail parse.ParseErr.TooLarge(data_offset) }
+  samples := mem.push_array<f32>(arena, sample_count)
+  for i in 0..samples.len {
     pos := i * stride
     value: f64 = 0.0
     if code == 3 {
@@ -184,10 +146,8 @@ pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Audio
 }
 // Integer encoding clamps to [-1,1] and rounds ties toward positive infinity.
 // Float encoding preserves f32 bits. Invalid input allocates nothing.
-pub fn encode(arena: *mem.Arena, status: *fail.Status, audio: *const Audio, encoding: Encoding) []u8 {
-  if status == nil { return encode(arena, &fail.Status{}, audio, encoding) }
+pub fn encode(arena: *mem.Arena, audio: *const Audio, encoding: Encoding) []u8!io.IoErr {
   empty: []u8
-  if status.failed { return empty }
   bits: u16 = 0
   if encoding == Encoding.Pcm8 {
     bits = 8
@@ -201,15 +161,11 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, audio: *const Audio, enco
   if encoding == Encoding.Pcm32 || encoding == Encoding.Float32 {
     bits = 32
   }
-  if bits == 0 || audio.channels == 0 || audio.rate == 0 || #len(audio.samples) % #cast(usize, audio.channels) != 0 || !mask_valid(audio.channel_mask, audio.channels) {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "encode WAV", "", "invalid audio"))
-    return empty
+  if bits == 0 || audio.channels == 0 || audio.rate == 0 || audio.samples.len % #cast(usize, audio.channels) != 0 || !mask_valid(audio.channel_mask, audio.channels) {
+    fail .InvalidInput
   }
   align := #cast(u32, audio.channels) * #cast(u32, bits / 8)
-  if align > 65535 || #cast(u64, audio.rate) * #cast(u64, align) > 0xffffffff {
-    fail.set(status, fail.make(fail.Kind.Overflow, "encode WAV", "", "the WAV is too large"))
-    return empty
-  }
+  if align > 65535 || #cast(u64, audio.rate) * #cast(u64, align) > 0xffffffff { fail .Capacity }
   stride := #cast(usize, bits / 8)
   extended := audio.channel_mask != 0 || audio.channels > 2
   floating := encoding == Encoding.Float32
@@ -226,25 +182,23 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, audio: *const Audio, enco
       header = 80
     }
   }
-  if #len(audio.samples) > (4294967295 - (header - 8) - 1) / stride || #len(audio.samples) > (#max(usize) - header - 1) / stride {
-    fail.set(status, fail.make(fail.Kind.Overflow, "encode WAV", "", "the WAV is too large"))
-    return empty
+  if audio.samples.len > (4294967295 - (header - 8) - 1) / stride || audio.samples.len > (#max(usize) - header - 1) / stride {
+    fail .Capacity
   }
-  length := #len(audio.samples) * stride
+  length := audio.samples.len * stride
   if !floating {
     for value in audio.samples {
       if value != value || value > 3.4028234663852886e38 || value < -3.4028234663852886e38 {
-        fail.set(status, fail.make(fail.Kind.InvalidInput, "encode WAV", "", "invalid audio"))
-        return empty
+        fail .InvalidInput
       }
     }
   }
-  output := mem.push_array(u8, arena, header + length + (length & 1))
+  output := mem.push_array<u8>(arena, header + length + (length & 1))
   output[0] = 82
   output[1] = 73
   output[2] = 70
   output[3] = 70
-  put32(output, 4, #cast(u32, #len(output) - 8))
+  put32(output, 4, #cast(u32, output.len - 8))
   output[8] = 87
   output[9] = 65
   output[10] = 86
@@ -283,7 +237,7 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, audio: *const Audio, enco
     output[fact + 2] = 99
     output[fact + 3] = 116
     put32(output, fact + 4, 4)
-    put32(output, fact + 8, #cast(u32, #len(audio.samples) / #cast(usize, audio.channels)))
+    put32(output, fact + 8, #cast(u32, audio.samples.len / #cast(usize, audio.channels)))
   }
   data := header - 8
   output[data] = 100
@@ -291,7 +245,7 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, audio: *const Audio, enco
   output[data + 2] = 116
   output[data + 3] = 97
   put32(output, data + 4, #cast(u32, length))
-  for i in 0..#len(audio.samples) {
+  for i in 0..audio.samples.len {
     at := header + i * stride
     value := #cast(f64, audio.samples[i])
     if floating {

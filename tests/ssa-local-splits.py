@@ -56,11 +56,11 @@ fn looped(values: []u64, limit: u64) u64 {
   f := note(6)
   sum: u64 = 0
   i: usize = 0
-  for i < #len(values) && values[i] < limit {
+  for i < values.len && values[i] < limit {
     sum += values[i] * a + b
     i += 1
   }
-  for j in 0..#len(values) {
+  for j in 0..values.len {
     sum ^= values[j] + c + d + e + f
     if sum > 1000000 {
       sum = sum - note(sum) + a

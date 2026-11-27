@@ -15,7 +15,7 @@ struct Pair { x: i32, y: i32 }
 pub fn rem64(a: f64,b: f64) f64 { return a % b }
 pub fn rem32(a: f32,b: f32) f32 { return a % b }
 pub fn high() u32 { return 4294967295 }
-pub fn goodenum(x: i64) i8 { return #cast(i8, enums.from_int(Sign, #cast(u64, x))) }
+pub fn goodenum(x: i64) i8 { return #cast(i8, enums.from_int<Sign>(#cast(u64, x))) }
 pub fn divsmall(x: i8, y: i8) i8 { return x / y }
 pub fn remsmall(x: i8, y: i8) i8 { return x % y }
 pub fn deref(p: *i32) i32 { return p.* }
@@ -77,10 +77,10 @@ fn increment(x: i64) i64 { return x + 1 }
 fn twice(f: fn(i64) i64, x: i64) i64 { return f(x) + f(x) }
 callback: fn(i64) i64 = increment
 fn unused() i64 { values: [32]i64
-for i in 0..#len(values) { values[i] = #cast(i64, i) }
+for i in 0..values.len { values[i] = #cast(i64, i) }
 return values[31] }
 fn main() {
-  for i in 0..#len(points) {
+  for i in 0..points.len {
     points[i] = Point{x: #cast(i64, i), y: #cast(i64, i * 7)}
   }
   delta := Point{x: 5, y: 11}

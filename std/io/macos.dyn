@@ -1,5 +1,4 @@
 #target(kernel: darwin)
-use "std/fail"
 use "std/os/macos/sys"
 
 // Darwin syscall shim returns negative errno, including EINTR (-4).
@@ -14,39 +13,39 @@ pub fn stderr() Writer {
   return Writer{ data: nil, write: stderr_stream }
 }
 
-fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
-  if status.failed || #len(destination) == 0 { return 0 }
-  value := #syscall(sys.Read, 0, &destination[0], #len(destination))
+fn stdin_stream(_data: rawptr, destination: []u8) usize!IoErr {
+  if destination.len == 0 { return 0 }
+  value := #syscall(sys.Read, 0, &destination[0], destination.len)
   for value == -4 {
-    value = #syscall(sys.Read, 0, &destination[0], #len(destination))
+    value = #syscall(sys.Read, 0, &destination[0], destination.len)
   }
-  if value < 0 {
-    fail.set(status, from_darwin("read", "standard input", value))
-    return 0
-  }
+  if value < 0 { fail darwin_err(value) }
   return #cast(usize, value)
 }
 
-fn write_descriptor(status: *fail.Status, descriptor: isize, path: []const u8, source: []const u8) usize {
-  if status.failed { return 0 }
+// Partial progress before an error is lost: the call fails.
+fn write_descriptor(descriptor: isize, source: []const u8) usize!IoErr {
   written: usize = 0
-  for written < #len(source) {
-    value := #syscall(sys.Write, descriptor, &source[written], #len(source) - written)
+  for written < source.len {
+    value := #syscall(sys.Write, descriptor, &source[written], source.len - written)
     if value == -4 { } else if value <= 0 {
       if value == 0 {
         value = -5
       }
-      fail.set(status, from_darwin("write", path, value))
-      return written
+      fail darwin_err(value)
     } else {
       written += #cast(usize, value)
     }
   }
   return written
 }
-fn stdout_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return write_descriptor(status, 1, "standard output", source)
+fn stdout_stream(_data: rawptr, source: []const u8) usize!IoErr {
+  return try write_descriptor(1, source)
 }
-fn stderr_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return write_descriptor(status, 2, "standard error", source)
+fn stderr_stream(_data: rawptr, source: []const u8) usize!IoErr {
+  return try write_descriptor(2, source)
+}
+
+fn system_text(code: isize) []const u8 {
+  return darwin_text(code)
 }

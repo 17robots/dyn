@@ -10,7 +10,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 randomizer = random.Random(0x52414e4745)
-source = ['use "std/math" m', 'const unsigned_midpoint:u64=9223372036854775807']
+source = ['use m "std/math"', 'const unsigned_midpoint:u64=9223372036854775807']
 checks = 0
 for suffix, scalar in [('u64', 'u64'), ('i64', 'i64'), ('f32', 'f32')]:
     typename = 'Rng1' + suffix
@@ -66,9 +66,9 @@ c2:=m.rng2f32_center(r2)
 if c2.x!=tiny || c2.y!= -twice { #panic("rectangle subnormal center") }
 zero:m.Rng1i64
 if !m.rng1i64_empty(zero) || m.rng1i64_contains(zero,0) { #panic("zero") }
-wide:=m.Rng1i64{min:m.min_value(i64),max:m.max_value(i64)}
+wide:=m.Rng1i64{min:m.min_value<i64>(),max:m.max_value<i64>()}
 if m.rng1i64_center(wide)!=-1 { #panic("wide midpoint") }
-unsigned:=m.Rng1u64{min:0,max:m.max_value(u64)}
+unsigned:=m.Rng1u64{min:0,max:m.max_value<u64>()}
 if m.rng1u64_center(unsigned)!=unsigned_midpoint { #panic("unsigned midpoint") }
 ''']
 for suffix, vector in [('f32', 'Vec2'), ('i32', 'Vec2i')]:
@@ -115,7 +115,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-math-range-') as temporary:
         build('\n'.join(source))
         subprocess.run([str(work/'test')],check=True,timeout=20)
         for expression in negative:
-            build('use "std/math" m\nfn main() { _='+expression+' }')
+            build('use m "std/math"\nfn main() { _='+expression+' }')
             result = subprocess.run([str(work/'test')],capture_output=True,timeout=10)
             assert result.returncode != 0, (expression, result)
         print(f'PASS math ranges {"release" if release else "debug"}: {checks} interval checks, rectangles, wide centers, {len(negative)} rejection cases')

@@ -1,5 +1,4 @@
-use "std/mem" memory
-use "std/fail"
+use memory "std/mem"
 
 // Byte and UTF-8 string construction share this byte-oriented builder. No UTF-8
 // validation is implied. A builder borrows storage; arena growth is explicit.
@@ -24,12 +23,12 @@ pub fn clear(state: *Builder) {
 // otherwise the bytes move and the old buffer stays allocated until the
 // caller rewinds or resets the arena.
 pub fn reserve(arena: *memory.Arena, state: *Builder, capacity: usize) {
-  if state.length > #len(state.storage) {
+  if state.length > state.storage.len {
     #panic("builder length is past its storage")
   }
-  if capacity <= #len(state.storage) { return }
-  if at_cursor(arena, state.storage, capacity - #len(state.storage)) {
-    _ = memory.push_bytes(arena, capacity - #len(state.storage))
+  if capacity <= state.storage.len { return }
+  if at_cursor(arena, state.storage, capacity - state.storage.len) {
+    _ = memory.push_bytes(arena, capacity - state.storage.len)
     state.storage = #slice(&state.storage[0], capacity)
     return
   }
@@ -41,46 +40,37 @@ pub fn reserve(arena: *memory.Arena, state: *Builder, capacity: usize) {
 // Whether bytes end at the arena's cursor with extra more bytes free in the
 // same block, so push_bytes(arena, extra) continues them.
 fn at_cursor(arena: *const memory.Arena, bytes: []const u8, extra: usize) bool {
-  if #len(bytes) == 0 { return false }
+  if bytes.len == 0 { return false }
   block := arena.current
   cursor := #cast(usize, &block.data[0]) + block.offset
-  return #cast(usize, &bytes[0]) + #len(bytes) == cursor && #len(block.data) - block.offset >= extra
+  return #cast(usize, &bytes[0]) + bytes.len == cursor && block.data.len - block.offset >= extra
 }
 
-// Bounded append supports overlap/self-append. Fails with Capacity, writing
-// nothing, when source does not fit the storage left.
+// Bounded append supports overlap/self-append. Fails, writing nothing, when
+// source does not fit the storage left. A length past the storage panics.
 // Allocation: none; capacity is fixed until an explicit reserve or append_grow.
-pub fn append(status: *fail.Status, state: *Builder, source: []const u8) {
-  if status == nil {
-    append(&fail.Status{}, state, source)
-    return
+pub fn append(state: *Builder, source: []const u8) ! {
+  if state.length > state.storage.len {
+    #panic("builder length is past its storage")
   }
-  if status.failed { return }
-  if state.length > #len(state.storage) {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "append", "", "builder length is past its storage"))
-    return
-  }
-  if #len(source) > #len(state.storage) - state.length {
-    fail.set(status, fail.make(fail.Kind.Capacity, "append", "", "builder storage is full"))
-    return
-  }
+  if source.len > state.storage.len - state.length { fail }
   _ = memory.move(state.storage[state.length..], source)
-  state.length += #len(source)
+  state.length += source.len
 }
 
 // Geometric growth. Panics when the arena cannot hold the selected capacity.
 // Existing views must be reacquired after mutation. Source may borrow this builder.
 pub fn append_grow(arena: *memory.Arena, state: *Builder, source: []const u8) {
-  if state.length > #len(state.storage) {
+  if state.length > state.storage.len {
     #panic("builder length is past its storage")
   }
   maximum := #cast(usize, -1)
-  if #len(source) > maximum - state.length {
+  if source.len > maximum - state.length {
     #panic("builder size overflow")
   }
-  required := state.length + #len(source)
-  if required > #len(state.storage) {
-    capacity := #len(state.storage)
+  required := state.length + source.len
+  if required > state.storage.len {
+    capacity := state.storage.len
     if capacity < 64 {
       capacity = 64
     }
@@ -94,5 +84,5 @@ pub fn append_grow(arena: *memory.Arena, state: *Builder, source: []const u8) {
     reserve(arena, state, capacity)
   }
   _ = memory.move(state.storage[state.length..], source)
-  state.length += #len(source)
+  state.length += source.len
 }

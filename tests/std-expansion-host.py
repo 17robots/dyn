@@ -52,50 +52,47 @@ jpeg = (b'\xff\xd8' + segment(219, b'\0' + bytes([1]) * 64)
         + segment(218, bytes([1, 1, 0, 0, 63, 0])) + b'\x3f\xff\xd9')
 gif = (b'GIF89a\x01\0\x01\0\x80\0\0\xff\0\0\0\0\0'
        b',\0\0\0\0\x01\0\x01\0\0\x02\x02\x44\x01\0;')
-FORMATS = r'''use "std/image/bmp" bmp
-use "std/image/tga" tga
-use "std/image/gif" gif
-use "std/image/jpeg" jpeg
-use "std/encoding/toml" toml
-use "std/fail"
-use "std/mem" mem
-use "std/bytes" bytes
+FORMATS = r'''use bmp "std/image/bmp"
+use tga "std/image/tga"
+use gif "std/image/gif"
+use jpeg "std/image/jpeg"
+use toml "std/encoding/toml"
+use mem "std/mem"
+use bytes "std/bytes"
 fn check(ok: bool) { if !ok { #panic("host formats") } }
 fn rejected(arena: *mem.Arena, kind: u8, source: []const u8) bool {
- status: fail.Status
- if kind == 0 { _ = bmp.decode(arena, &status, source) }
- if kind == 1 { _ = tga.decode(arena, &status, source) }
- if kind == 2 { _ = gif.decode(arena, &status, source) }
- if kind == 3 { _ = jpeg.decode(arena, &status, source) }
- if kind == 4 { _ = toml.parse(arena, &status, source) }
- return status.failed
+ if kind == 0 { _ = bmp.decode(arena, source) catch { return true } }
+ if kind == 1 { _ = tga.decode(arena, source) catch { return true } }
+ if kind == 2 { _ = gif.decode(arena, source) catch { return true } }
+ if kind == 3 { _ = jpeg.decode(arena, source) catch { return true } }
+ if kind == 4 { _ = toml.parse(arena, source) catch { return true } }
+ return false
 }
 fn main() {
  arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
- status := fail.Status{ on_failure: fail.panic_on_failure }
  pixels: [8]u8 = [255,0,0,255,0,128,255,64]
- bitmap := bmp.encode(arena,&status,pixels[..],2,1,4)
- decoded := bmp.decode(arena,&status,bitmap)
+ bitmap := bmp.encode(arena,pixels[..],2,1,4) catch { #panic("unexpected failure") }
+ decoded := bmp.decode(arena,bitmap) catch { #panic("unexpected failure") }
  check(bytes.equal(decoded.pixels,pixels[..]))
- targa := tga.encode(arena,&status,pixels[..],2,1,4)
- uncompressed := tga.decode(arena,&status,targa)
+ targa := tga.encode(arena,pixels[..],2,1,4) catch { #panic("unexpected failure") }
+ uncompressed := tga.decode(arena,targa) catch { #panic("unexpected failure") }
  check(bytes.equal(uncompressed.pixels,pixels[..]))
- animation := gif.decode(arena,&status,GIF_BYTES)
+ animation := gif.decode(arena,GIF_BYTES) catch { #panic("unexpected failure") }
  check(bytes.equal(animation.image.pixels,"\xff\0\0\xff"))
- photo := jpeg.decode(arena,&status,JPEG_BYTES)
+ photo := jpeg.decode(arena,JPEG_BYTES) catch { #panic("unexpected failure") }
  check(bytes.equal(photo.pixels,"\x80\x80\x80\xff"))
  mark := mem.arena_mark(arena)
  check(rejected(arena,0,"BM") && mem.arena_mark(arena)==mark)
  check(rejected(arena,1,"bad") && mem.arena_mark(arena)==mark)
  check(rejected(arena,2,"GIF89a") && mem.arena_mark(arena)==mark)
  check(rejected(arena,3,"\xff\xd8") && mem.arena_mark(arena)==mark)
- root := toml.parse(arena,&status,"[owner]\nname='Dyn'\nports=[8000,8001]\n[[products]]\nx=1979-05-27T07:32:00Z\n")
+ root := toml.parse(arena,"[owner]\nname='Dyn'\nports=[8000,8001]\n[[products]]\nx=1979-05-27T07:32:00Z\n") catch { #panic("toml") }
  owner := toml.member(root,"owner")
  check(bytes.equal(toml.member(owner,"name").text,"Dyn"))
  check(bytes.equal(toml.index(toml.member(owner,"ports"),1).text,"8001"))
- encoded := toml.encode(arena,&status,root)
- _ = toml.parse(arena,&status,encoded)
+ encoded := toml.encode(arena,root) catch { #panic("toml encode") }
+ _ = toml.parse(arena,encoded) catch { #panic("toml reparse") }
  before := mem.arena_mark(arena)
  check(rejected(arena,4,"a=1\na=2") && mem.arena_mark(arena)==before)
 }'''.replace('GIF_BYTES', dyn_bytes(gif)).replace('JPEG_BYTES', dyn_bytes(jpeg))

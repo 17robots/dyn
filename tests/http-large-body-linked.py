@@ -10,24 +10,23 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/fail"
-use "std/mem"
+SOURCE = r'''use "std/mem"
 use "std/net"
+use "std/io"
 use "std/net/http"
 use "std/net/http/evented"
 
-fn hello(status: *fail.Status, response: *http.Response, request: *const http.Request) {
-  http.text(status, response, 200, "hello\n")
+fn hello(response: *http.Response, request: *const http.Request) !io.IoErr {
+  try http.text(response, 200, "hello\n")
 }
 
 fn main() {
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   workers: [1]evented.Worker
   config := evented.default_config()
   LARGE
-  arena := mem.arena_alloc(evented.storage_size(config, #len(workers)) + mem.MiB)
+  arena := mem.arena_alloc(evented.storage_size(config, workers.len) + mem.MiB)
   defer mem.arena_release(arena)
-  evented.serve(arena, &status, workers[..], net.ipv4(127, 0, 0, 1, 18099), config, hello, nil)
+  evented.serve(arena, workers[..], net.ipv4(127, 0, 0, 1, 18099), config, hello, nil) catch { #panic("serve") }
 }
 '''
 STREAMING = ('body_begin', 'body_feed', 'body_end', 'settle_body', 'head_request')

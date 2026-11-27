@@ -6,11 +6,13 @@
 #define MAX_DEPTH 1024
 /* Multi-byte punctuation uses its spelling rather than a public token enum. */
 typedef enum { END, NAME, NUMBER, STRING, CHARACTER, PUNCT, BAD } TokenKind;
-typedef struct { uint32_t start, end; TokenKind kind; } Token;
+typedef struct { uint32_t start, end; TokenKind kind; bool newline; } Token;
 typedef struct {
   const char *text;
   uint32_t length, offset, depth;
-  uint32_t block_brace;
+  uint32_t bracket_depth;
+  bool no_struct_literal;
+  bool in_case_pattern;
   uint64_t scan_next;
   uint64_t *work_remaining;
   const ExpOptions *options;
@@ -102,26 +104,32 @@ static bool escape(Parser *p, uint32_t *i) {
 }
 static void lex(Parser *p) {
   if (!charge(p, 1, p->offset)) {
-    p->token = (Token){p->offset, p->offset, END};
+    p->token = (Token){p->offset, p->offset, END, false};
     return;
   }
   uint32_t i = p->offset;
-  bool external_space = true;
+  bool saw_newline = false;
+  if (i == 0 && p->length >= 2 && p->text[0] == '#' && p->text[1] == '!') {
+    i = 2;
+    while (i < p->length && p->text[i] != '\n') { if (!scan_byte(p, i)) return; ++i; }
+  }
   for (;;) {
     while (i < p->length && space(p->text[i])) {
       if (!scan_byte(p, i)) return;
-      if (p->text[i] == '\v') external_space = false;
+      if (p->text[i] == '\n') saw_newline = true;
       ++i;
     }
     if (at(p, i, "//")) {
       i += 2; while (i < p->length && p->text[i] != '\n') { if (!scan_byte(p, i)) return; ++i; }
-      external_space = true;
     } else if (at(p, i, "/*")) {
       uint32_t start = i; i += 2;
-      while (i < p->length && !at(p, i, "*/")) { if (!scan_byte(p, i)) return; ++i; }
+      while (i < p->length && !at(p, i, "*/")) {
+        if (!scan_byte(p, i)) return;
+        if (p->text[i] == '\n') saw_newline = true;
+        ++i;
+      }
       if (i == p->length) { fail(p, start, "unterminated comment"); break; }
       i += 2;
-      external_space = true;
     } else break;
   }
   uint32_t start = i;
@@ -141,23 +149,37 @@ static void lex(Parser *p) {
       bool leading_dot = p->text[i] == '.';
       if (leading_dot) ++i;
       while (i < p->length && (digit(p->text[i]) || p->text[i] == '_')) { if (!scan_byte(p, i)) return; ++i; }
-      bool trailing_dot = false;
       if (!leading_dot && i < p->length && p->text[i] == '.' && !at(p, i, "..")) {
-        ++i; uint32_t first = i;
-        /* The grammar requires a digit immediately after a decimal point. */
-        if (i < p->length && digit(p->text[i])) {
-          ++i; while (i < p->length && (digit(p->text[i]) || p->text[i] == '_')) { if (!scan_byte(p, i)) return; ++i; }
+        if (i + 1 < p->length && digit(p->text[i + 1])) {
+          i += 2;
+          while (i < p->length && (digit(p->text[i]) || p->text[i] == '_')) { if (!scan_byte(p, i)) return; ++i; }
+        } else {
+          fail(p, i, "float literal requires digits after decimal point (write 2.0, not 2.)");
+          ++i;
         }
-        trailing_dot = first == i;
-        if (trailing_dot && !external_space) fail(p, start, "unsupported trailing float whitespace");
       }
-      if (!trailing_dot && i < p->length && (p->text[i] == 'e' || p->text[i] == 'E')) {
+      if (i < p->length && (p->text[i] == 'e' || p->text[i] == 'E')) {
         uint32_t exponent = i++;
         if (i < p->length && (p->text[i] == '+' || p->text[i] == '-')) ++i;
         if (i == p->length || !digit(p->text[i])) i = exponent;
         else { ++i; while (i < p->length && (digit(p->text[i]) || p->text[i] == '_')) { if (!scan_byte(p, i)) return; ++i; } }
       }
     }
+  } else if (p->text[i] == '`') {
+    ++i; kind = STRING;
+    while (i < p->length && p->text[i] != '`') {
+      if (!scan_byte(p, i)) return;
+      unsigned char c = p->text[i++];
+      unsigned n = c < 0x80 ? 0 : c >= 0xc2 && c <= 0xdf ? 1 : c >= 0xe0 && c <= 0xef ? 2 : c >= 0xf0 && c <= 0xf4 ? 3 : 4;
+      if (n == 4 || n > p->length - i) { fail(p, i - 1, "invalid UTF-8"); break; }
+      if (n && ((c == 0xe0 && (unsigned char)p->text[i] < 0xa0) ||
+                (c == 0xed && (unsigned char)p->text[i] >= 0xa0) ||
+                (c == 0xf0 && (unsigned char)p->text[i] < 0x90) ||
+                (c == 0xf4 && (unsigned char)p->text[i] >= 0x90))) fail(p, i - 1, "invalid UTF-8");
+      while (n--) { if (((unsigned char)p->text[i] & 0xc0) != 0x80) fail(p, i, "invalid UTF-8"); ++i; }
+    }
+    if (i == p->length || p->text[i] != '`') fail(p, start, "unterminated raw string literal");
+    else ++i;
   } else if (p->text[i] == '"' || p->text[i] == '\'') {
     char quote = p->text[i++]; kind = quote == '"' ? STRING : CHARACTER;
     unsigned characters = 0;
@@ -204,11 +226,30 @@ static void lex(Parser *p) {
       }
     }
   }
-  p->token = (Token){start, i, kind}; p->offset = i;
+  p->token = (Token){start, i, kind, saw_newline}; p->offset = i;
 }
 static bool take(Parser *p, const char *s) {
   if (!is(p, s)) return false;
   lex(p); return true;
+}
+/* Splits a leading '>' from '>>', '>=' or '>>=' so nested generics like
+   Array<Array<i32>> close without requiring a space between '>'. */
+static bool take_gt(Parser *p) {
+  if (is(p, ">")) { lex(p); return true; }
+  if (p->token.kind == PUNCT && p->token.start < p->length &&
+      p->text[p->token.start] == '>' && p->token.end - p->token.start > 1) {
+    ++p->token.start;
+    p->token.newline = false;
+    return true;
+  }
+  return false;
+}
+static uint32_t expect_gt(Parser *p) {
+  uint32_t end = p->token.start + 1;
+  if (take_gt(p) || p->tree->error) return end;
+  fail(p, p->token.start, "unexpected token");
+  p->tree->error_expected = ">";
+  return p->token.end;
 }
 static void expect(Parser *p, const char *s) {
   if (take(p, s) || p->tree->error) return;
@@ -266,10 +307,12 @@ static int precedence(Parser *p) {
 }
 static uint32_t expression(Parser *p, int minimum);
 static uint32_t type(Parser *p);
+static uint32_t return_type(Parser *p, bool stop_at_brace);
+static uint32_t src_block(Parser *p);
 static uint32_t aggregate(Parser *p);
 static uint32_t expression_tail(Parser *p, uint32_t left, bool primary, int minimum);
 static bool primitive(Parser *p) {
-  static const char *const names[] = {"i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "isize", "usize", "bool", "rawptr", "any"};
+  static const char *const names[] = {"i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "isize", "usize", "bool", "str", "rawptr", "any"};
   for (size_t i = 0; i < sizeof(names) / sizeof(*names); ++i)
     if (is(p, names[i])) return true;
   return false;
@@ -277,25 +320,21 @@ static bool primitive(Parser *p) {
 static bool src_distinct(Parser *p);
 static bool src_next_is(Parser *p, const char *word);
 static bool src_packed(Parser *p);
-/* `fn(` with no space starts a function type; `fn name(` starts a declaration. */
+/* `fn(` (with or without space) starts a function type; `fn name(` starts a declaration. */
 static bool fn_type_start(Parser *p) {
-  return is(p, "fn") && p->token.end < p->length && p->text[p->token.end] == '(';
-}
-/* An optional return type starts on the same line as the closing ')', so a
-   body-less declaration never takes the next line's name as its result. */
-static bool same_line(Parser *p) {
-  uint32_t i = p->token.start;
-  while (i > 0 && (p->text[i - 1] == ' ' || p->text[i - 1] == '\t' || p->text[i - 1] == '\r')) --i;
-  return !(i > 0 && p->text[i - 1] == '\n');
+  return is(p, "fn") && src_next_is(p, "(");
 }
 static bool optional_type_start(Parser *p) {
-  if (!same_line(p)) return false;
+  if (p->token.newline) return false;
   if (fn_type_start(p)) return true;
   static const char *const declarations[] = {"fn", "pub", "use", "const", "type", "struct", "enum", "extern"};
   for (size_t i = 0; i < sizeof(declarations) / sizeof(*declarations); ++i)
     if (is(p, declarations[i])) return false;
   if (src_distinct(p) || src_packed(p)) return false;
   return p->token.kind == NAME || is(p, "*") || is(p, "[") || at(p, p->token.start, "$");
+}
+static bool optional_return_type_start(Parser *p) {
+  return !p->token.newline && (is(p, "!") || optional_type_start(p));
 }
 static void append(Parser *p, uint32_t *first, uint32_t *last, uint32_t child) {
   if (child == NONE || p->tree->error) return;
@@ -322,15 +361,17 @@ static uint32_t type_body(Parser *p) {
     uint32_t fn_start = p->token.start;
     lex(p);
     expect(p, "(");
+    ++p->bracket_depth;
     while (!is(p, ")") && !p->tree->error) {
       /* Parameter names are documentation only. */
       if (p->token.kind == NAME && src_next_is(p, ":")) { lex(p); lex(p); }
       append(p, &first, &last, type(p));
       if (!take(p, ",")) break;
     }
+    --p->bracket_depth;
     end = p->token.end; expect(p, ")");
-    if (optional_type_start(p)) {
-      append(p, &first, &last, type(p));
+    if (optional_return_type_start(p)) {
+      append(p, &first, &last, return_type(p, false));
       if (last != NONE) p->tree->nodes[last].field = EXP_ROLE_RETURN;
       if (last != NONE) end = p->tree->nodes[last].end;
     }
@@ -338,103 +379,155 @@ static uint32_t type_body(Parser *p) {
   } else if (take(p, "*")) {
     kind = EXP_POINTER_TYPE;
     if (take(p, "const")) flags |= EXP_CONST;
-    first = type(p);
+    uint32_t inner = type_body(p);
+    first = inner == NONE ? NONE : node(p, EXP_TYPE, p->tree->nodes[inner].start, p->tree->nodes[inner].end, inner, (Token){0});
     if (first != NONE) end = p->tree->nodes[first].end;
   } else if (take(p, "[")) {
     kind = EXP_ARRAY_TYPE;
+    ++p->bracket_depth;
+    bool prev_no_struct = p->no_struct_literal; p->no_struct_literal = false;
     if (!is(p, "]")) append(p, &first, &last, expression(p, 0));
+    p->no_struct_literal = prev_no_struct;
+    --p->bracket_depth;
     expect(p, "]"); if (take(p, "const")) flags |= EXP_CONST;
-    append(p, &first, &last, type(p));
+    uint32_t inner = type_body(p);
+    uint32_t elem = inner == NONE ? NONE : node(p, EXP_TYPE, p->tree->nodes[inner].start, p->tree->nodes[inner].end, inner, (Token){0});
+    append(p, &first, &last, elem);
     if (last != NONE) end = p->tree->nodes[last].end;
   } else if (primitive(p)) {
     kind = EXP_PRIMITIVE; lex(p);
   } else if (at(p, token.start, "$")) {
-    kind = EXP_TYPE_PARAMETER; lex(p);
+    fail(p, token.start, "$T generics were removed: declare type parameters with <T>, as in fn f<T>(x: T)");
+    return NONE;
   } else if (token.kind == NAME) {
     kind = EXP_FIELD_TYPE;
     append(p, &first, &last, name(p));
     while (take(p, ".") && !p->tree->error) append(p, &first, &last, name(p));
     if (last != NONE) end = p->tree->nodes[last].end;
-    /* An adjacent parenthesis takes type arguments: List(Enemy). */
-    if (end < p->length && p->text[end] == '(' && is(p, "(")) {
+    if (take(p, "<")) {
       uint32_t path = node(p, EXP_FIELD_TYPE, token.start, end, first, (Token){0});
       first = last = NONE;
       append(p, &first, &last, path);
-      lex(p);
-      while (!is(p, ")") && !p->tree->error) {
+      ++p->bracket_depth;
+      while (!is(p, ">") && !(p->token.kind == PUNCT && p->token.start < p->length && p->text[p->token.start] == '>') && !p->tree->error) {
         append(p, &first, &last, type(p));
         if (!take(p, ",")) break;
       }
-      end = p->token.end; expect(p, ")");
+      --p->bracket_depth;
+      end = expect_gt(p);
       kind = EXP_GENERIC_TYPE;
     }
+  } else if (take(p, "(")) {
+    ++p->bracket_depth;
+    first = type(p);
+    --p->bracket_depth;
+    end = p->token.end; expect(p, ")");
+    return first;
+  } else if (is(p, "!")) {
+    fail(p, token.start, "error union 'T!E' is only allowed as a function return type");
+    return NONE;
   } else { fail(p, token.start, "expected type"); return NONE; }
   return mark(p, node(p, kind, token.start, end, first, (Token){0}), flags);
 }
-static uint32_t type(Parser *p) {
+static uint32_t type_no_bang(Parser *p) {
   if (p->tree->error) return NONE;
   if (++p->depth > depth_limit(p)) { fail(p, p->token.start, "expression nesting limit exceeded"); --p->depth; return NONE; }
   uint32_t start = p->token.start, child = type_body(p);
+  if (child != NONE && !p->tree->error && is(p, "|")) {
+    uint32_t first = child, last = child;
+    while (take(p, "|") && !p->tree->error) {
+      uint32_t member = type_body(p);
+      if (member == NONE) break;
+      append(p, &first, &last, member);
+    }
+    if (!p->tree->error)
+      child = node(p, EXP_UNION_TYPE, start, p->tree->nodes[last].end, first, (Token){0});
+  }
   --p->depth;
   return child == NONE ? NONE : node(p, EXP_TYPE, start, p->tree->nodes[child].end, child, (Token){0});
 }
-/* Ambiguous array literals and names are resolved at the enclosing delimiter.
-   Speculation retains allocated capacity but never hides allocation failure. */
+static uint32_t type(Parser *p) {
+  uint32_t t = type_no_bang(p);
+  if (t != NONE && !p->tree->error && is(p, "!")) {
+    fail(p, p->token.start, "error union 'T!E' is only allowed as a function return type");
+    return NONE;
+  }
+  return t;
+}
+/* Parses a function return type: T, T!E, !E, T!, or !. */
+static uint32_t return_type(Parser *p, bool stop_at_brace) {
+  if (p->tree->error) return NONE;
+  uint32_t start = p->token.start;
+  if (take(p, "!")) {
+    uint32_t bang_end = start + 1;
+    uint32_t err = NONE;
+    if (!(stop_at_brace && is(p, "{")) && (optional_type_start(p) || is(p, "("))) {
+      err = type(p);
+    }
+    uint32_t end = err != NONE ? p->tree->nodes[err].end : bang_end;
+    uint32_t fallible = mark(p, node(p, EXP_FALLIBLE_TYPE, start, end, err, (Token){0}), EXP_FALLIBLE_VOID);
+    return node(p, EXP_TYPE, start, end, fallible, (Token){0});
+  }
+  uint32_t ok = type_no_bang(p);
+  if (ok == NONE || p->tree->error) return ok;
+  if (!p->token.newline && take(p, "!")) {
+    uint32_t bang_end = p->tree->nodes[ok].end + 1;
+    uint32_t err = NONE;
+    if (!(stop_at_brace && is(p, "{")) && (optional_type_start(p) || is(p, "("))) {
+      err = type(p);
+      if (err != NONE) p->tree->nodes[ok].next = err;
+    }
+    uint32_t end = err != NONE ? p->tree->nodes[err].end : bang_end;
+    uint32_t fallible = node(p, EXP_FALLIBLE_TYPE, start, end, ok, (Token){0});
+    return node(p, EXP_TYPE, start, end, fallible, (Token){0});
+  }
+  return ok;
+}
+/* #sizeof / #alignof / #typeof / #max / #min accept either a type or a value. */
 static bool resource_error(Parser *p) {
   return p->tree->error_kind >= EXP_ALLOCATION_ERROR;
 }
-static uint32_t array_type_suffix(Parser *p, uint32_t array, bool named) {
-  uint32_t first = p->tree->nodes[array].first;
-  if (first != NONE) {
-    if (p->tree->nodes[first].next != NONE) { fail(p, p->token.start, "array type requires one length"); return NONE; }
-    Parser closing = *p; closing.offset = p->tree->nodes[first].end; closing.scan_next = 0; lex(&closing);
-    if (!is(&closing, "]")) { fail(p, closing.token.start, "array type length cannot have a comma"); return NONE; }
-  }
-  bool is_const = take(p, "const"); uint32_t element = type(p);
-  if (element == NONE) return NONE;
-  if (first != NONE) p->tree->nodes[first].next = element;
-  else first = element;
-  uint32_t start = p->tree->nodes[array].start, end = p->tree->nodes[element].end;
-  uint32_t child = mark(p, node(p, EXP_ARRAY_TYPE, start, end, first, (Token){0}), is_const ? EXP_CONST : 0);
-  return node(p, named ? EXP_TYPE : EXP_TYPE_ARGUMENT, start, end, child, (Token){0});
-}
-static uint32_t argument(Parser *p, bool allow_named_type) {
+static uint32_t type_or_expr(Parser *p) {
   if (p->tree->error) return NONE;
   if (is(p, "true") || is(p, "false") || is(p, "nil")) return expression(p, 0);
   if (is(p, "[")) {
-    /* Parse the shared bracket contents once. Replaying them during type
-       speculation makes nested array arguments take exponential work. */
     uint32_t array = aggregate(p);
     if (array == NONE) return NONE;
     Parser saved = *p;
     uint32_t count = p->tree->count, first = p->tree->nodes[array].first;
     uint32_t sibling = first == NONE ? NONE : p->tree->nodes[first].next;
-    if (allow_named_type) {
-      uint32_t candidate = array_type_suffix(p, array, true);
-      if (!p->tree->error && (is(p, ")") || is(p, ","))) return candidate;
+    /* Try `[N]T` or `[]T` array/slice type first. */
+    bool ok = true;
+    if (first != NONE) {
+      if (p->tree->nodes[first].next != NONE) ok = false;
+      else {
+        Parser closing = *p; closing.offset = p->tree->nodes[first].end; closing.scan_next = 0; lex(&closing);
+        if (!is(&closing, "]")) ok = false;
+      }
+    }
+    if (ok) {
+      bool is_const = take(p, "const");
+      uint32_t element = type(p);
+      if (!p->tree->error && element != NONE && (is(p, ")") || is(p, ","))) {
+        if (first != NONE) p->tree->nodes[first].next = element;
+        else first = element;
+        uint32_t start = p->tree->nodes[array].start, end = p->tree->nodes[element].end;
+        uint32_t child = mark(p, node(p, EXP_ARRAY_TYPE, start, end, first, (Token){0}), is_const ? EXP_CONST : 0);
+        return node(p, EXP_TYPE, start, end, child, (Token){0});
+      }
       if (resource_error(p)) return NONE;
       *p = saved; p->tree->count = count; p->tree->error = NULL; p->tree->error_kind = EXP_OK; p->tree->error_offset = 0;
       if (first != NONE) p->tree->nodes[first].next = sibling;
     }
-    uint32_t value = expression_tail(p, array, false, 0);
-    if (!p->tree->error && (is(p, ")") || is(p, ","))) return value;
-    if (resource_error(p)) return NONE;
-    if (allow_named_type) { fail(p, p->token.start, "expected argument delimiter"); return NONE; }
-    *p = saved; p->tree->count = count; p->tree->error = NULL; p->tree->error_kind = EXP_OK; p->tree->error_offset = 0;
-    p->tree->nodes[array].next = NONE;
-    return array_type_suffix(p, array, false);
+    return expression_tail(p, array, false, 0);
   }
-  if (allow_named_type || primitive(p) || is(p, "*") || at(p, p->token.start, "$")) {
-    bool committed = primitive(p) || fn_type_start(p) || is(p, "*") || at(p, p->token.start, "$");
-    Parser saved = *p;
-    uint32_t count = p->tree->count;
-    uint32_t child = allow_named_type ? type(p) : type_body(p);
-    if (!p->tree->error && (committed || is(p, ")") || is(p, ","))) {
-      return allow_named_type ? child : node(p, EXP_TYPE_ARGUMENT, p->tree->nodes[child].start, p->tree->nodes[child].end, child, (Token){0});
-    }
-    if (resource_error(p)) return NONE;
-    *p = saved; p->tree->count = count; p->tree->error = NULL; p->tree->error_kind = EXP_OK; p->tree->error_offset = 0;
-  }
+  bool committed = primitive(p) || fn_type_start(p) || is(p, "*");
+  Parser saved = *p;
+  uint32_t count = p->tree->count;
+  uint32_t child = type(p);
+  if (!p->tree->error && (committed || is(p, ")") || is(p, ","))) return child;
+  if (resource_error(p)) return NONE;
+  *p = saved; p->tree->count = count; p->tree->error = NULL; p->tree->error_kind = EXP_OK; p->tree->error_offset = 0;
   return expression(p, 0);
 }
 static uint32_t aggregate(Parser *p) {
@@ -448,14 +541,11 @@ static uint32_t aggregate(Parser *p) {
       /* The lookahead charges the shared budget: keep its cancellation. */
       if (resource_error(&probe)) { propagate_error(p, &scratch); free(scratch.nodes); return NONE; }
       free(scratch.nodes);
-      if (is(&probe, "(")) append(p, &first, &last, type_body(p));
+      if (is(&probe, "<")) append(p, &first, &last, type_body(p));
       else {
         append(p, &first, &last, name(p));
         while (take(p, ".") && !p->tree->error) append(p, &first, &last, name(p));
       }
-    } else if (p->token.kind == NAME) {
-      fail(p, p->token.start - 1, "an enum variant needs its type: write Enum.Variant, not .Variant");
-      return NONE;
     } else {
       fail(p, p->token.start - 1, "a struct literal needs its type: write Type{...}, not .{...}");
       return NONE;
@@ -463,6 +553,8 @@ static uint32_t aggregate(Parser *p) {
     expect(p, "{");
   }
   const char *close = array ? "]" : "}";
+  bool prev_no_struct = p->no_struct_literal; p->no_struct_literal = false;
+  if (array) ++p->bracket_depth;
   while (!is(p, close) && !p->tree->error) {
     uint32_t child;
     if (array) child = expression(p, 0);
@@ -476,12 +568,15 @@ static uint32_t aggregate(Parser *p) {
     append(p, &first, &last, child);
     if (!take(p, ",")) break;
   }
+  if (array) --p->bracket_depth;
+  p->no_struct_literal = prev_no_struct;
   uint32_t end = p->token.end; expect(p, close);
   return node(p, array ? EXP_ARRAY : EXP_STRUCT, start, end, first, (Token){0});
 }
 static bool struct_start(Parser *p) {
   if (p->tree->error) return false;
-  if (is(p, ".")) return true;
+  if (is(p, ".")) return src_next_is(p, "{");
+  if (p->no_struct_literal) return false;
   if (is(p, "true") || is(p, "false") || is(p, "nil")) return false;
   if (p->token.kind != NAME) return false;
   Parser probe = *p;
@@ -491,17 +586,17 @@ static bool struct_start(Parser *p) {
     if (probe.token.kind != NAME) return false;
     lex(&probe);
   }
-  /* Box(i32){...}: adjacent arguments that parse as types, then the brace. */
-  if (is(&probe, "(") && probe.token.start > 0 && p->text[probe.token.start - 1] != ' ') {
+  /* Box<i32>{...}: type arguments in angle brackets, then the brace. */
+  if (is(&probe, "<")) {
     Parser typed = *p; ExpTree types = {0}; typed.tree = &types;
     type_body(&typed);
-    bool ok = !types.error && is(&typed, "{") && typed.token.start != p->block_brace;
+    bool ok = !types.error && is(&typed, "{");
     free(types.nodes); free(types.errors);
     if (resource_error(&typed)) propagate_error(p, &types);
     return ok;
   }
   propagate_error(p, &scratch);
-  return !scratch.error && is(&probe, "{") && probe.token.start != p->block_brace;
+  return !scratch.error && is(&probe, "{");
 }
 static uint32_t parse(Parser *p, int minimum) {
   Token token = p->token;
@@ -517,38 +612,53 @@ static uint32_t parse(Parser *p, int minimum) {
   }
   if (is(p, "[") || struct_start(p)) {
     left = aggregate(p);
+  } else if (take(p, ".")) {
+    uint32_t field = name(p);
+    if (field != NONE) {
+      left = node(p, EXP_DOT_NAME, token.start, p->tree->nodes[field].end, field, (Token){0});
+      primary = true;
+    }
   } else if (take(p, "(")) {
-    uint32_t child = expression(p, 0); uint32_t end = p->token.end;
+    bool prev_no_struct = p->no_struct_literal; p->no_struct_literal = false;
+    ++p->bracket_depth;
+    uint32_t child = expression(p, 0);
+    --p->bracket_depth;
+    p->no_struct_literal = prev_no_struct;
+    uint32_t end = p->token.end;
     expect(p, ")"); left = node(p, EXP_GROUP, token.start, end, child, (Token){0}); primary = true;
   } else if (is(p, "#wrapping")) {
     /* #wrapping(expr): its integer arithmetic wraps, even under --check-overflow. */
-    lex(p); expect(p, "("); uint32_t child = expression(p, 0); uint32_t end = p->token.end;
+    lex(p); expect(p, "(");
+    bool prev_no_struct = p->no_struct_literal; p->no_struct_literal = false;
+    ++p->bracket_depth;
+    uint32_t child = expression(p, 0);
+    --p->bracket_depth;
+    p->no_struct_literal = prev_no_struct;
+    uint32_t end = p->token.end;
     expect(p, ")");
     if (child != NONE && !p->tree->error) {
       left = mark(p, node(p, EXP_GROUP, token.start, end, child, (Token){0}), EXP_WRAPPING);
       primary = true;
     }
+  } else if (is(p, "try")) {
+    lex(p);
+    uint32_t child = expression(p, 12);
+    if (child != NONE) left = node(p, EXP_TRY, token.start, p->tree->nodes[child].end, child, token);
   } else if (is(p, "-") || is(p, "&") || is(p, "!") || is(p, "~")) {
     lex(p); uint32_t child = expression(p, 12);
     if (child != NONE) left = node(p, EXP_PREFIX, token.start, p->tree->nodes[child].end, child, token);
   } else if (is(p, "#instance")) {
-    /* #instance(f, T, ...) names a generic instance as a function value. */
-    lex(p); expect(p, "(");
-    uint32_t callee = expression(p, 0), last = callee;
-    if (!is(p, ",")) fail(p, p->token.start, "#instance takes a generic function and its types, as in #instance(f, T)");
-    while (callee != NONE && take(p, ",") && !p->tree->error) {
-      uint32_t arg = argument(p, false); if (arg == NONE) break;
-      p->tree->nodes[last].next = arg; last = arg;
-    }
-    uint32_t end = p->token.end; expect(p, ")");
-    if (callee != NONE && !p->tree->error) {
-      left = mark(p, node(p, EXP_CALL, token.start, end, callee, (Token){0}), EXP_PRIMARY | EXP_INSTANCE);
-      primary = true;
-    }
+    fail(p, token.start, "#instance was removed: write f<T> instead");
+    return NONE;
   } else if (is(p, "#cast") || is(p, "#bitcast")) {
-    lex(p); expect(p, "("); uint32_t target = type(p);
+    lex(p); expect(p, "(");
+    bool prev_no_struct = p->no_struct_literal; p->no_struct_literal = false;
+    ++p->bracket_depth;
+    uint32_t target = type(p);
     if (is(p, ")")) fail(p, p->token.start, "use #cast(type, value) or #bitcast(type, value); prefix cast syntax is no longer supported");
     expect(p, ","); uint32_t value = expression(p, 0);
+    --p->bracket_depth;
+    p->no_struct_literal = prev_no_struct;
     uint32_t end = p->token.end; expect(p, ")");
     if (!p->tree->error) {
       p->tree->nodes[target].next = value;
@@ -561,17 +671,23 @@ static uint32_t parse(Parser *p, int minimum) {
     /* #max and #min share #sizeof's node; compaction tells them apart by name. */
     ExpKind kind = is(p, "#sizeof") || is(p, "#max") || is(p, "#min") ? EXP_SIZE : is(p, "#alignof") ? EXP_ALIGN : is(p, "#typeof") ? EXP_TYPEOF : EXP_OFFSET;
     lex(p); expect(p, "(");
-    uint32_t child = kind == EXP_OFFSET ? type(p) : argument(p, true);
+    bool prev_no_struct = p->no_struct_literal; p->no_struct_literal = false;
+    ++p->bracket_depth;
+    uint32_t child = kind == EXP_OFFSET ? type(p) : type_or_expr(p);
     if (kind == EXP_OFFSET) {
       expect(p, ","); uint32_t field = name(p);
       if (!p->tree->error) p->tree->nodes[child].next = field;
     }
+    --p->bracket_depth;
+    p->no_struct_literal = prev_no_struct;
     uint32_t end = p->token.end; expect(p, ")");
     left = node(p, kind, token.start, end, child, (Token){0});
     /* #typeof(T).kind: reflection reads fields directly. */
     if (kind == EXP_TYPEOF) primary = true;
   } else if (is(p, "#load") || is(p, "#syscall")) {
     bool load = is(p, "#load"); lex(p); expect(p, "(");
+    bool prev_no_struct = p->no_struct_literal; p->no_struct_literal = false;
+    ++p->bracket_depth;
     uint32_t first = NONE, last = NONE;
     if (load) {
       Token literal = p->token;
@@ -581,6 +697,8 @@ static uint32_t parse(Parser *p, int minimum) {
       append(p, &first, &last, expression(p, 0));
       if (!take(p, ",")) break;
     }
+    --p->bracket_depth;
+    p->no_struct_literal = prev_no_struct;
     uint32_t end = p->token.end; expect(p, ")");
     left = node(p, load ? EXP_LOAD : EXP_SYSCALL, token.start, end, first, (Token){0});
   } else if (is(p, "#offset")) {
@@ -588,8 +706,14 @@ static uint32_t parse(Parser *p, int minimum) {
     return NONE;
   } else if (is(p, "#slice")) {
     unsigned flags = 0;
-    lex(p); expect(p, "("); uint32_t child = expression(p, 0); expect(p, ",");
-    uint32_t count = expression(p, 0); uint32_t end = p->token.end; expect(p, ")");
+    lex(p); expect(p, "(");
+    bool prev_no_struct = p->no_struct_literal; p->no_struct_literal = false;
+    ++p->bracket_depth;
+    uint32_t child = expression(p, 0); expect(p, ",");
+    uint32_t count = expression(p, 0);
+    --p->bracket_depth;
+    p->no_struct_literal = prev_no_struct;
+    uint32_t end = p->token.end; expect(p, ")");
     if (child != NONE && !p->tree->error) p->tree->nodes[child].next = count;
     left = mark(p, node(p, EXP_POINTER_OP, token.start, end, child, (Token){0}), flags);
     primary = true;
@@ -601,11 +725,29 @@ static uint32_t parse(Parser *p, int minimum) {
     if (!is(p, "(")) { fail(p, p->token.start, "expected '(' after a math builtin, as in #sqrt(x)"); return NONE; }
     left = node(p, EXP_NAME, token.start, token.end, NONE, (Token){0});
     primary = true;
-  } else if (is(p, "#len") || is(p, "#init")) {
-    /* #init(pointer) shares #len's shape; the spelling tells them apart. */
+  } else if (is(p, "#len")) {
+    fail(p, token.start, "#len was removed: use xs.len instead");
+    return NONE;
+  } else if (is(p, "#init")) {
     ExpKind kind = EXP_LEN;
-    lex(p); expect(p, "("); uint32_t child = expression(p, 0); uint32_t end = p->token.end;
+    lex(p); expect(p, "(");
+    bool prev_no_struct = p->no_struct_literal; p->no_struct_literal = false;
+    ++p->bracket_depth;
+    uint32_t child = expression(p, 0);
+    --p->bracket_depth;
+    p->no_struct_literal = prev_no_struct;
+    uint32_t end = p->token.end;
     expect(p, ")"); left = node(p, kind, token.start, end, child, (Token){0});
+  } else if (is(p, "#take")) {
+    lex(p); expect(p, "(");
+    bool prev_no_struct = p->no_struct_literal; p->no_struct_literal = false;
+    ++p->bracket_depth;
+    uint32_t child = expression(p, 0);
+    --p->bracket_depth;
+    p->no_struct_literal = prev_no_struct;
+    uint32_t end = p->token.end;
+    expect(p, ")"); left = node(p, EXP_TAKE, token.start, end, child, (Token){0});
+    primary = true;
   } else {
     ExpKind kind = EXP_NAME;
     if (is(p, "distinct") || is(p, "packed") || is(p, "union")) { fail(p, token.start, "reserved keyword cannot be a name"); return NONE; }
@@ -624,32 +766,95 @@ static uint32_t parse(Parser *p, int minimum) {
 }
 static uint32_t expression_tail(Parser *p, uint32_t left, bool primary, int minimum) {
   while (left != NONE && !p->tree->error) {
+    if (p->token.newline && !p->bracket_depth) break;
     Token token = p->token;
     uint32_t start = p->tree->nodes[left].start;
     if (take(p, ".*")) {
       left = mark(p, node(p, EXP_DEREF, start, token.end, left, token), EXP_PRIMARY); primary = true;
-    } else if (primary && take(p, ".")) {
+    } else if ((primary || p->tree->nodes[left].kind == EXP_STRING || p->tree->nodes[left].kind == EXP_ARRAY) && take(p, ".")) {
       if (p->token.kind != NAME) { fail(p, p->token.start, "expected field name"); break; }
       Token field = p->token; lex(p);
       uint32_t name = node(p, EXP_NAME, field.start, field.end, NONE, (Token){0});
       if (name == NONE) break;
       p->tree->nodes[left].next = name;
       left = mark(p, node(p, EXP_FIELD, start, field.end, left, (Token){0}), EXP_PRIMARY);
+      primary = true;
+    } else if (primary && is(p, "<") &&
+               (p->tree->nodes[left].kind == EXP_NAME || p->tree->nodes[left].kind == EXP_FIELD)) {
+      /* Speculatively parse `<T, U>` type arguments when followed by `(`, `.`,
+         or an expression terminator (so `a < b` and `f(a < b, c > d)` stay comparisons). */
+      Parser saved = *p;
+      uint32_t count = p->tree->count;
+      lex(p);
+      ++p->bracket_depth;
+      uint32_t last = left;
+      bool parsed = false;
+      while (!is(p, ">") && !(p->token.kind == PUNCT && p->token.start < p->length && p->text[p->token.start] == '>') && !p->tree->error) {
+        uint32_t arg = type(p);
+        if (arg == NONE) break;
+        p->tree->nodes[last].next = arg;
+        last = arg;
+        parsed = true;
+        if (!take(p, ",")) break;
+      }
+      --p->bracket_depth;
+      uint32_t gt_end = p->token.start + 1;
+      bool closed = parsed && !p->tree->error && take_gt(p);
+      bool follow = closed && (
+        (is(p, "(") && p->token.start == gt_end) ||
+        is(p, ".") || is(p, ",") || is(p, ")") || is(p, "]") || is(p, "}") ||
+        is(p, "=>") || is(p, "==") || is(p, "!=") ||
+        p->token.newline || p->token.kind == END);
+      if (follow) {
+        left = mark(p, node(p, EXP_GENERIC_TYPE, start, gt_end, left, (Token){0}), EXP_PRIMARY);
+        primary = true;
+      } else {
+        if (resource_error(p)) break;
+        *p = saved;
+        p->tree->count = count;
+        p->tree->error = NULL;
+        p->tree->error_expected = NULL;
+        p->tree->error_kind = EXP_OK;
+        p->tree->error_offset = 0;
+        p->tree->nodes[left].next = NONE;
+        int level = precedence(p);
+        if (!level || level < minimum) break;
+        lex(p); uint32_t right = expression(p, level + 1);
+        if (right == NONE) break;
+        p->tree->nodes[left].next = right;
+        left = node(p, EXP_BINARY, start, p->tree->nodes[right].end, left, token); primary = false;
+      }
     } else if (primary && take(p, "(")) {
+      bool prev_no_struct = p->no_struct_literal; p->no_struct_literal = false;
+      ++p->bracket_depth;
       uint32_t last = left;
       while (!is(p, ")") && !p->tree->error) {
-        uint32_t arg = argument(p, false); if (arg == NONE) break;
+        uint32_t arg;
+        if (p->in_case_pattern && is(p, "*")) {
+          Token star = p->token; lex(p);
+          uint32_t bound = name(p);
+          arg = bound == NONE ? NONE : node(p, EXP_PREFIX, star.start, p->tree->nodes[bound].end, bound, star);
+        } else {
+          arg = expression(p, 0);
+        }
+        if (arg == NONE) break;
         p->tree->nodes[last].next = arg; last = arg;
         if (!take(p, ",")) break;
       }
+      --p->bracket_depth;
+      p->no_struct_literal = prev_no_struct;
       uint32_t end = p->token.end; expect(p, ")");
       left = mark(p, node(p, EXP_CALL, start, end, left, (Token){0}), EXP_PRIMARY);
     } else if (primary && take(p, "[")) {
+      bool prev_no_struct = p->no_struct_literal; p->no_struct_literal = false;
+      ++p->bracket_depth;
       uint32_t low = NONE, high = NONE;
       if (!is(p, "..")) low = expression(p, 0);
       Token range_token = p->token;
       bool slice = take(p, "..");
       if (slice && !is(p, "]")) high = expression(p, 0);
+      --p->bracket_depth;
+      p->no_struct_literal = prev_no_struct;
       uint32_t end = p->token.end; expect(p, "]");
       if (p->tree->error) break;
       /* Missing slice endpoints are represented by zero-width empty groups. */
@@ -659,6 +864,29 @@ static uint32_t expression_tail(Parser *p, uint32_t left, bool primary, int mini
       p->tree->nodes[left].next = low;
       if (slice) p->tree->nodes[low].next = high;
       left = mark(p, node(p, slice ? EXP_SLICE : EXP_INDEX, start, end, left, slice ? range_token : (Token){0}), EXP_PRIMARY);
+    } else if (minimum <= 1 && take(p, "catch")) {
+      uint32_t last = left;
+      if (is(p, "{")) {
+        uint32_t blk = src_block(p);
+        if (blk == NONE) break;
+        p->tree->nodes[last].next = blk;
+        left = node(p, EXP_CATCH, start, p->tree->nodes[blk].end, left, token);
+        primary = false;
+      } else if (p->token.kind == NAME && src_next_is(p, "{")) {
+        uint32_t err_name = name(p);
+        uint32_t blk = src_block(p);
+        if (err_name == NONE || blk == NONE) break;
+        p->tree->nodes[last].next = err_name;
+        p->tree->nodes[err_name].next = blk;
+        left = node(p, EXP_CATCH, start, p->tree->nodes[blk].end, left, token);
+        primary = false;
+      } else {
+        uint32_t fallback = expression(p, 1);
+        if (fallback == NONE) break;
+        p->tree->nodes[last].next = fallback;
+        left = node(p, EXP_CATCH, start, p->tree->nodes[fallback].end, left, token);
+        primary = false;
+      }
     } else {
       int level = precedence(p);
       if (!level || level < minimum) break;

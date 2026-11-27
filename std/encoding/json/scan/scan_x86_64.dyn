@@ -3,6 +3,6 @@
 extern fn native_text_prefix "dyn_json_text_prefix"(data: *const u8, length: usize) usize
 
 fn text_prefix_target(source: []const u8) usize {
-  if #len(source) == 0 { return 0 }
-  return native_text_prefix(&source[0], #len(source))
+  if source.len == 0 { return 0 }
+  return native_text_prefix(&source[0], source.len)
 }

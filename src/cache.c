@@ -257,6 +257,8 @@ static uint64_t optimization_key(uint64_t hash, const DynOptions *options) {
   hash = hash_bytes(hash, cpu, strlen(cpu) + 1);
   hash = hash_bytes(hash, features, strlen(features) + 1);
   hash = hash_bytes(hash, &o->check_overflow, sizeof(o->check_overflow));
+  hash = hash_bytes(hash, &o->check_lifetimes, sizeof(o->check_lifetimes));
+  hash = hash_bytes(hash, &o->race, sizeof(o->race));
   bool has_profile = o->sample_profile != NULL;
   hash = hash_bytes(hash, &has_profile, sizeof(has_profile));
   if (has_profile) hash = hash_bytes(hash, &o->profile_hash, sizeof(o->profile_hash));

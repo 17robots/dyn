@@ -10,12 +10,12 @@
 // a free list when a frame no longer builds them. Per-frame text and draw
 // commands use the frame arena passed to begin.
 
-use "std/mem" mem
-use "std/hash" hash
-use "std/math" math
-use "std/ui" ui
-use "std/text/edit" text_edits
-use "std/io" io
+use mem "std/mem"
+use hash "std/hash"
+use math "std/math"
+use ui "std/ui"
+use text_edits "std/text/edit"
+use io "std/io"
 pub const Clickable: u32 = 1
 pub const DrawBackground: u32 = 2
 pub const DrawBorder: u32 = 4
@@ -187,16 +187,18 @@ pub struct State {
   // Publish this bounded context to a native input method before enabling the
   // focused field. Tracker lifetime must match one window, not one widget.
   text_context: text_edits.Context,
-  text_context_error: fail.Kind,
+  // Why this frame's context could not be published, when it could not.
+  text_context_failed: bool,
+  text_context_error: text_edits.EditErr,
   text_tracker: text_edits.Tracker,
 }
 
 // A state in arena. measure(measure_data, text) returns the pixel width of a
 // text run; measure_data is any *C that outlives the state.
-pub fn push_state(arena: *mem.Arena, measure: fn(*$C, []const u8) f32, measure_data: *$C, line_height: f32) *State {
-  state := mem.push(State, arena)
+pub fn push_state<C>(arena: *mem.Arena, measure: fn(*C, []const u8) f32, measure_data: *C, line_height: f32) *State {
+  state := mem.push<State>(arena)
   state.arena = arena
-  state.buckets = mem.push_array(*Box, arena, bucket_count)
+  state.buckets = mem.push_array<*Box>(arena, bucket_count)
   state.measure = #cast(fn(rawptr, []const u8) f32, measure)
   state.measure_data = measure_data
   state.line_height = line_height
@@ -209,15 +211,15 @@ pub fn push_state(arena: *mem.Arena, measure: fn(*$C, []const u8) f32, measure_d
 // hashed. "###" hashes only what follows it, so the shown text may change
 // while the key stays.
 pub fn display_text(label: []const u8) []const u8 {
-  for i in 0..#len(label) {
-    if i + 1 < #len(label) && label[i] == '#' && label[i + 1] == '#' { return label[..i] }
+  for i in 0..label.len {
+    if i + 1 < label.len && label[i] == '#' && label[i + 1] == '#' { return label[..i] }
   }
   return label
 }
 
 fn key_text(label: []const u8) []const u8 {
-  for i in 0..#len(label) {
-    if i + 2 < #len(label) && label[i] == '#' && label[i + 1] == '#' && label[i + 2] == '#' {
+  for i in 0..label.len {
+    if i + 2 < label.len && label[i] == '#' && label[i + 1] == '#' && label[i + 2] == '#' {
       return label[i + 3..]
     }
   }
@@ -330,7 +332,7 @@ pub fn build_key(state: *State, flags: u32, value: u64, text: []const u8) *Box {
       state.free = box.hash_next
       box.* = Box{}
     } else {
-      box = mem.push(Box, state.arena)
+      box = mem.push<Box>(state.arena)
     }
     box.key = value
     slot := &state.buckets[#cast(usize, value % bucket_count)]
@@ -377,7 +379,7 @@ pub fn build(state: *State, flags: u32, label: []const u8) *Box {
     seed = top(state).key
   }
   shown := display_text(label)
-  copied := mem.push_bytes(state.frame, #len(shown))
+  copied := mem.push_bytes(state.frame, shown.len)
   _ = mem.copy(copied, shown)
   return build_key(state, flags, key(seed, label), copied)
 }
@@ -406,7 +408,7 @@ fn focus_order(box: *const Box, focused: u64, order: *FocusOrder) {
 }
 
 pub fn begin(state: *State, frame: *mem.Arena, input: Input, width: f32, height: f32, dt: f32) {
-  if input.tab && input.correction == nil && !input.composition_handled && #len(input.composition) == 0 {
+  if input.tab && input.correction == nil && !input.composition_handled && input.composition.len == 0 {
     order := FocusOrder{}
     focus_order(state.root, state.focused, &order)
     if input.shift {
@@ -425,11 +427,11 @@ pub fn begin(state: *State, frame: *mem.Arena, input: Input, width: f32, height:
   state.frame_index += 1
   collect(state)
   state.input = input
-  state.composition_length = #len(input.composition)
+  state.composition_length = input.composition.len
   state.composition_cursor = input.composition_cursor
-  saved_length := #len(input.composition)
-  if saved_length > #len(state.composition_text) {
-    saved_length = #len(state.composition_text)
+  saved_length := input.composition.len
+  if saved_length > state.composition_text.len {
+    saved_length = state.composition_text.len
   }
   for i in 0..saved_length {
     state.composition_text[i] = input.composition[i]
@@ -441,7 +443,7 @@ pub fn begin(state: *State, frame: *mem.Arena, input: Input, width: f32, height:
   state.text_input = false
   state.text_input_anchor = nil
   state.text_context = text_edits.Context{}
-  state.text_context_error = fail.Kind.Ok
+  state.text_context_failed = false
   if input.down && !state.previous_down {
     // A press anywhere clears focus unless a focusable box claims it.
     state.focus_claimed = false
@@ -495,7 +497,7 @@ pub fn signal(state: *State, box: *Box) Signal {
       }
     }
   }
-  if (box.flags & Focusable) != 0 && state.focused == box.key && input.enter && !input.tab && input.correction == nil && !input.composition_handled && #len(input.composition) == 0 {
+  if (box.flags & Focusable) != 0 && state.focused == box.key && input.enter && !input.tab && input.correction == nil && !input.composition_handled && input.composition.len == 0 {
     result.clicked = true
   }
   if (box.flags & (ScrollX | ScrollY)) != 0 && over {
@@ -827,7 +829,7 @@ fn draw(state: *State, context: *ui.Context, box: *const Box) {
       y: whole(box.rect[1] + (box.size[1] - state.line_height) / 2.0),
       width: whole(box.selection[1] - box.selection[0]), height: whole(state.line_height) }, box.active_color)
   }
-  if (box.flags & DrawText) != 0 && #len(box.text) != 0 {
+  if (box.flags & DrawText) != 0 && box.text.len != 0 {
     width := state.measure(state.measure_data, box.text)
     x := box.rect[0] + 4.0 - box.text_offset
     if (box.flags & CenterText) != 0 {
@@ -925,16 +927,16 @@ fn hit_box(box: *const Box, x, y: f32) u64 {
 // animating to decide when to draw.
 pub fn needs_frame(state: *const State, input: Input) bool {
   if input.correction != nil { return true }
-  if #len(input.composition) != state.composition_length { return true }
-  if #len(input.composition) != 0 && input.composition_cursor != state.composition_cursor {
+  if input.composition.len != state.composition_length { return true }
+  if input.composition.len != 0 && input.composition_cursor != state.composition_cursor {
     return true
   }
   // Larger custom snapshots conservatively redraw; window snapshots fit256.
-  if #len(input.composition) > #len(state.composition_text) { return true }
-  for i in 0..#len(input.composition) {
+  if input.composition.len > state.composition_text.len { return true }
+  for i in 0..input.composition.len {
     if input.composition[i] != state.composition_text[i] { return true }
   }
-  if input.down != state.previous_down || input.down || input.scroll_x != 0.0 || input.scroll_y != 0.0 || #len(input.text) != 0 {
+  if input.down != state.previous_down || input.down || input.scroll_x != 0.0 || input.scroll_y != 0.0 || input.text.len != 0 {
     return true
   }
   if input.backspace || input.delete || input.left || input.right || input.home || input.end || input.enter || input.escape ||

@@ -1,7 +1,7 @@
 // TLS for std/net/http/evented through std/net/tls (OpenSSL 3, Linux).
 // Importing this module links libssl and libcrypto; evented itself does not.
 //
-//   context := tls.server_config_create(arena, &status, "cert.pem", "key.pem")
+//   context := try tls.server_config_create(arena, "cert.pem", "key.pem")
 //   transport := https.transport(context)
 //   spawner := posix.spawner()
 //   config.transport = &transport
@@ -18,11 +18,11 @@
 // tls.config_release only after evented.join returns.
 #target(kernel: linux)
 
-use "std/fail"
-use "std/mem" mem
-use "std/net/http/evented" evented
-use "std/net/tls" provider
-use "vendor/openssl/tls" openssl
+use io "std/io"
+use mem "std/mem"
+use evented "std/net/http/evented"
+use provider "std/net/tls"
+use openssl "vendor/openssl/tls"
 
 pub fn transport(context: provider.Context) evented.Transport {
   return evented.Transport{
@@ -43,57 +43,54 @@ alpn_http2: []const u8 = "\x02h2\x08http/1.1"
 // Offers HTTP/2 through ALPN on context; with Config.http2 the server then
 // speaks HTTP/2 to clients that pick it. Without Config.http2 a client that
 // picks h2 gets HTTP/1.1 it cannot read, so set both or neither.
-pub fn offer_http2(status: *fail.Status, context: provider.Context) {
-  if status == nil {
-    offer_http2(&fail.Status{}, context)
-    return
-  }
-  provider.server_alpn(status, context, &alpn_http2)
+pub fn offer_http2(context: provider.Context) !io.IoErr {
+  try provider.server_alpn(context, &alpn_http2)
 }
 
 fn protocol(session: rawptr) []const u8 {
   return provider.selected_alpn(session)
 }
 
-fn transport_io(status: *fail.Status, attempt: provider.Attempt) evented.TransportIo {
-  if status.failed { return evented.TransportIo{ status: evented.TransportStatus.Failed } }
+fn transport_io(attempt: provider.Attempt) evented.TransportIo {
   if attempt.want == provider.Want.Read { return evented.TransportIo{ status: evented.TransportStatus.WouldRead } }
   if attempt.want == provider.Want.Write { return evented.TransportIo{ status: evented.TransportStatus.WouldWrite } }
   return evented.TransportIo{ count: attempt.count }
 }
 
+fn failed_io() evented.TransportIo {
+  return evented.TransportIo{ status: evented.TransportStatus.Failed }
+}
+
 fn open(data: rawptr, descriptor: isize) rawptr {
-  status: fail.Status
-  return provider.server_connection_create(&status, data, #cast(i32, descriptor))
+  connection := provider.server_connection_create(data, #cast(i32, descriptor)) catch { return nil }
+  return connection
 }
 
 fn handshake(session: rawptr) evented.TransportIo {
-  status: fail.Status
-  wanted := provider.server_handshake(&status, session)
-  return transport_io(&status, provider.Attempt{ want: wanted })
+  wanted := provider.server_handshake(session) catch { return failed_io() }
+  return transport_io(provider.Attempt{ want: wanted })
 }
 
 fn read(session: rawptr, destination: []u8) evented.TransportIo {
-  status: fail.Status
-  result := transport_io(&status, provider.read(&status, session, destination))
+  attempt := provider.read(session, destination) catch { return failed_io() }
+  result := transport_io(attempt)
   // A successful zero-byte read is the peer's close_notify.
-  if result.status == evented.TransportStatus.Ok && result.count == 0 && #len(destination) > 0 {
+  if result.status == evented.TransportStatus.Ok && result.count == 0 && destination.len > 0 {
     return evented.TransportIo{ status: evented.TransportStatus.End }
   }
   return result
 }
 
 fn write(session: rawptr, source: []const u8) evented.TransportIo {
-  status: fail.Status
-  return transport_io(&status, provider.write(&status, session, source))
+  attempt := provider.write(session, source) catch { return failed_io() }
+  return transport_io(attempt)
 }
 
 // Sends close_notify when the socket allows it without waiting, then frees
 // the session.
 fn close(session: rawptr) {
   connection := session
-  status: fail.Status
-  _ = provider.shutdown(&status, connection)
+  _ = provider.shutdown(connection) catch provider.Want.Nothing
   provider.connection_release(&connection)
 }
 
@@ -103,14 +100,11 @@ alpn_h3: []const u8 = "\x02h3"
 
 // A QUIC server context offering "h3" through ALPN, from PEM files. Release
 // it with tls.config_release after evented.join returns.
-pub fn quic_context(arena: *mem.Arena, status: *fail.Status, certificate: []const u8, key: []const u8) provider.Context {
-  if status == nil { return quic_context(arena, &fail.Status{}, certificate, key) }
-  if status.failed { return nil }
-  context := openssl.quic_server_context_create(arena, status, certificate, key)
-  openssl.set_server_alpn(status, context, &alpn_h3)
-  if status.failed {
+pub fn quic_context(arena: *mem.Arena, certificate: []const u8, key: []const u8) provider.Context!io.IoErr {
+  context := try openssl.quic_server_context_create(arena, certificate, key)
+  openssl.set_server_alpn(context, &alpn_h3) catch err {
     openssl.context_free_owned(context)
-    return nil
+    fail err
   }
   return context
 }
@@ -145,20 +139,19 @@ fn quic_accept_stream(connection: rawptr) evented.QuicStream {
   return evented.QuicStream{ handle: accepted.handle, id: accepted.id, unidirectional: accepted.unidirectional }
 }
 
-// A failure from the provider, including a peer reset, ends the stream.
-fn quic_io(status: *fail.Status, attempt: openssl.QuicAttempt) evented.QuicIo {
-  if status.failed { return evented.QuicIo{ count: attempt.count, status: evented.QuicStatus.Failed } }
+fn quic_io(attempt: openssl.QuicAttempt) evented.QuicIo {
   if attempt.blocked { return evented.QuicIo{ count: attempt.count, status: evented.QuicStatus.WouldBlock } }
   if attempt.ended { return evented.QuicIo{ status: evented.QuicStatus.End } }
   return evented.QuicIo{ count: attempt.count }
 }
 
+// A failure from the provider, including a peer reset, ends the stream.
 fn quic_read(stream: rawptr, destination: []u8) evented.QuicIo {
-  status: fail.Status
-  return quic_io(&status, openssl.quic_read(&status, stream, destination))
+  attempt := openssl.quic_read(stream, destination) catch { return evented.QuicIo{ status: evented.QuicStatus.Failed } }
+  return quic_io(attempt)
 }
 
 fn quic_write(stream: rawptr, source: []const u8, conclude: bool) evented.QuicIo {
-  status: fail.Status
-  return quic_io(&status, openssl.quic_write(&status, stream, source, conclude))
+  attempt := openssl.quic_write(stream, source, conclude) catch { return evented.QuicIo{ status: evented.QuicStatus.Failed } }
+  return quic_io(attempt)
 }

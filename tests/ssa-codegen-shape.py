@@ -32,12 +32,12 @@ fn count_down(n: i64, total: i64) i64 {
 }
 
 fn quicksort(values: []u64) {
-  if #len(values) < 2 {
+  if values.len < 2 {
     return
   }
-  pivot := values[(#len(values) - 1) / 2]
+  pivot := values[(values.len - 1) / 2]
   i: usize = 0
-  j := #len(values) - 1
+  j := values.len - 1
   for {
     for values[i] < pivot {
       i += 1

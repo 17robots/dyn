@@ -7,7 +7,6 @@
 //
 // Run: dyn run examples/02-wordcount -- examples/02-wordcount/poem.txt
 
-use "std/fail"
 use "std/fmt"
 use "std/fs"
 use "std/io"
@@ -32,7 +31,7 @@ fn is_space(byte: u8) bool {
 // Counting happens chunk by chunk, so the state lives in Counts, not in a
 // local of this function.
 fn count_chunk(counts: *Counts, chunk: []const u8) {
-  counts.bytes += #len(chunk)
+  counts.bytes += chunk.len
   for byte in chunk {
     if byte == '\n' {
       counts.lines += 1
@@ -52,24 +51,23 @@ fn count_chunk(counts: *Counts, chunk: []const u8) {
 }
 
 // io.Reader is the seam every input shares: a file, standard input, a
-// socket or bytes in memory. Each read takes the status; after a failure,
-// or at the end of the input, io.read returns 0, so the loop ends by itself
-// and nothing here needs to check.
-fn count_reader(status: *fail.Status, reader: io.Reader, counts: *Counts) {
+// socket or bytes in memory. io.read returns 0 at the end of the input, and
+// try passes a failure on to the caller.
+fn count_reader(reader: io.Reader, counts: *Counts) !io.IoErr {
   chunk: [64 * 1024]u8
   for {
-    count := io.read(status, reader, chunk[..])
+    count := try io.read(reader, chunk[..])
     if count == 0 { break }
     count_chunk(counts, chunk[..count])
   }
 }
 
 // Counts one file through the same reader code.
-fn count_file(status: *fail.Status, name: []const u8, counts: *Counts) {
-  file := fs.open(status, name)
+fn count_file(name: []const u8, counts: *Counts) !io.IoErr {
+  file := try fs.open(name)
   // defer runs when this function returns, however it returns.
   defer fs.close(&file)
-  count_reader(status, fs.reader(&file), counts)
+  try count_reader(fs.reader(&file), counts)
 }
 
 fn add(total: *Counts, part: Counts) {
@@ -80,31 +78,28 @@ fn add(total: *Counts, part: Counts) {
 }
 
 // One right-aligned row. A fmt.Buffer writes into storage you give it and
-// records into a status: after one write does not fit, the rest do nothing,
-// and the status says so once at the end.
+// keeps its overflow: after one write does not fit, the rest do nothing, and
+// fmt.overflowed says so once at the end.
 fn show(counts: Counts, name: []const u8) {
   storage: [256]u8
-  rendering: fail.Status
-  row := fmt.buffer(&rendering, storage[..])
+  row := fmt.buffer(storage[..])
   fmt.write_u64_width(&row, counts.lines, 8, ' ')
   fmt.write_u64_width(&row, counts.words, 8, ' ')
   fmt.write_u64_width(&row, counts.characters, 8, ' ')
   fmt.write_u64_width(&row, counts.bytes, 8, ' ')
-  if #len(name) > 0 {
+  if name.len > 0 {
     fmt.write(&row, " ")
     fmt.write(&row, name)
   }
-  if rendering.failed {
+  if fmt.overflowed(&row) {
     #panic("a row is longer than its buffer")
   }
   io.println("{}", fmt.bytes(&row))
 }
 
-// Prints what failed, such as "wordcount: open missing.txt: no such file or
-// directory".
-fn report(status: fail.Status) {
-  storage: [512]u8
-  io.eprintln("wordcount: {}", fail.describe(storage[..], status.failure))
+// Prints what failed, such as "wordcount: missing.txt: not found".
+fn report(name: []const u8, err: io.IoErr) {
+  io.eprintln("wordcount: {}: {}", name, err)
 }
 
 // main may return an i32: the process exit code.
@@ -114,12 +109,10 @@ fn main() i32 {
   program := process.start()
   files := program.args[1..]
 
-  if #len(files) == 0 {
-    status: fail.Status
+  if files.len == 0 {
     counts: Counts
-    count_reader(&status, io.stdin(), &counts)
-    if status.failed {
-      report(status)
+    count_reader(io.stdin(), &counts) catch err {
+      report("standard input", err)
       return 1
     }
     show(counts, "")
@@ -129,20 +122,17 @@ fn main() i32 {
   total: Counts
   exit_code: i32 = 0
   for name in files {
-    // Each file has its own status, so one that cannot be read does not
-    // stop the others.
-    status: fail.Status
+    // A file that cannot be read does not stop the others.
     counts: Counts
-    count_file(&status, name, &counts)
-    if status.failed {
-      report(status)
+    count_file(name, &counts) catch err {
+      report(name, err)
       exit_code = 1
       continue
     }
     show(counts, name)
     add(&total, counts)
   }
-  if #len(files) > 1 {
+  if files.len > 1 {
     show(total, "total")
   }
   return exit_code

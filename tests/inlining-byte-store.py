@@ -14,7 +14,7 @@ SOURCE = r'''use "std/encoding/binary"
 use "std/io"
 
 fn fill(destination: []u8, words: []const u64) {
-  for i in 0..#len(words) {
+  for i in 0..words.len {
     binary.store_u64_le(destination[i * 8..i * 8 + 8], words[i])
   }
 }

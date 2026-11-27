@@ -48,10 +48,17 @@ fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {
  return !mock_commit_fail
 }
 fn mapping_sparse(bytes: []u8) { _ = bytes }
+fn mapping_protect(bytes: []u8, from: usize, to: usize, accessible: bool) bool { _ = bytes
+ _ = from
+ _ = to
+ _ = accessible
+ return true }
+fn mapping_thread_id() u64 { return 0 }
+fn mapping_check_lifetimes() bool { return false }
 fn mapping_release(bytes: []u8) isize { mock_releases += 1
  return 0 }
 '''
-SOURCE = r'''use "./model" mem
+SOURCE = r'''use mem "./model"
 fn require(ok: bool) { if !ok { #panic("arena native contract") } }
 fn bounded() *mem.Arena {
  source := mem.pages(4096)
@@ -64,7 +71,7 @@ fn growth() {
  prefix := mem.push_bytes(arena, 16)
  for i in 0..16 { prefix[i] = #cast(u8, i + 17) }
  calls := mem.allocation_calls()
- grown := mem.push(u8, arena)
+ grown := mem.push<u8>(arena)
  require(mem.allocation_calls() == calls + 1 && grown.* == 0 && arena.current != arena)
  for i in 0..16 { require(prefix[i] == #cast(u8, i + 17)) }
  releases := mem.release_calls()
@@ -75,13 +82,13 @@ fn native_failure() {
  arena := bounded()
  _ = mem.push_bytes(arena, 16)
  mem.inject_failure(-123)
- _ = mem.push(u8, arena)
+ _ = mem.push<u8>(arena)
 }
 fn commitment_failure() {
  arena := bounded()
  _ = mem.push_bytes(arena, 16)
  mem.inject_commit_failure()
- _ = mem.push(u8, arena)
+ _ = mem.push<u8>(arena)
 }
 fn payload_commitment_failure() {
  source := mem.pages(512)

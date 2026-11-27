@@ -81,6 +81,16 @@ def declarations(source):
             continue
         name = stream[i][0]
         i = skip(i + 1)
+        if i < len(stream) and stream[i][0] == '<':
+            angle = 1
+            i += 1
+            while i < len(stream) and angle:
+                if stream[i][0] == '<':
+                    angle += 1
+                elif stream[i][0] == '>':
+                    angle -= 1
+                i += 1
+            i = skip(i)
         if i >= len(stream) or stream[i][0] != '(':
             continue
         i += 1
@@ -125,7 +135,7 @@ IMPORT_PATH = re.compile(r'"([^"]*)"')
 def imports(source):
     """Yield (path, line) for every module named by a use statement."""
     for number, line in enumerate(source.split('\n'), 1):
-        if re.match(r'\s*use\s+"', line):
+        if re.match(r'\s*use\s+(?:[A-Za-z_]\w*\s+)?"', line):
             for match in IMPORT_PATH.finditer(line.split('//', 1)[0]):
                 yield match[1], number
 

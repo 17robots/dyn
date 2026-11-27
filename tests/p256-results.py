@@ -40,29 +40,24 @@ def vector(key,message):
  public=scalar(key)
  return b'\4'+b''.join(x.to_bytes(32,'big') for x in public),r.to_bytes(32,'big')+s.to_bytes(32,'big')
 def literal(value):return '"'+''.join('\\x%02x'%b for b in value)+'"'
-s='''use "std/crypto/signature" facade
-use "std/fail"
-use "std/crypto/p256" p
-use "std/bytes" bytes
+s='''use facade "std/crypto/signature"
+use p "std/crypto/p256"
+use bytes "std/bytes"
 fn facade_p256_public_fails(output: []u8, a1: []const u8) bool {
- status: fail.Status
- _ = facade.p256_public(&status, output, a1)
- return status.failed
+ _ = facade.p256_public(output, a1) catch { return true }
+ return false
 }
 fn facade_p256_sign_fails(output: []u8, a1: []const u8, a2: []const u8) bool {
- status: fail.Status
- _ = facade.p256_sign(&status, output, a1, a2)
- return status.failed
+ _ = facade.p256_sign(output, a1, a2) catch { return true }
+ return false
 }
 fn public_fails(output: []u8, key: []const u8) bool {
- status: fail.Status
- p.public_key(&status, output, key)
- return status.failed
+ p.public_key(output, key) catch { return true }
+ return false
 }
 fn sign_fails(output: []u8, message: []const u8, key: []const u8) bool {
- status: fail.Status
- p.sign(&status, output, message, key)
- return status.failed
+ p.sign(output, message, key) catch { return true }
+ return false
 }
 fn check(ok: bool) { if !ok { #panic("P256 contract") } }
 fn vector(key: []const u8,message: []const u8,expected_public: []const u8,expected_signature: []const u8) {
@@ -113,9 +108,8 @@ s+=''' key: [32]u8
  signature: [64]u8
  public: [65]u8
  for i in 0..96 { output[i]=165 }
- rejected: fail.Status
- invalid:=facade.p256_public(&rejected,output[..],key[..])
- check(rejected.failed && rejected.failure.kind == fail.Kind.InvalidInput && #len(invalid)==0)
+ invalid:=facade.p256_public(output[..],key[..]) catch output[..0]
+ check(invalid.len==0)
  check(facade_p256_sign_fails(output[..],"",key[..]))
  for i in 0..96 { check(output[i]==165) }
  check(public_fails(output[..],key[..]) && sign_fails(output[..],"",key[..]))

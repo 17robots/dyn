@@ -31,48 +31,46 @@ mock_resets: i32 = 0
 mock_reads: i32 = 0
 fn require(ok: bool) { if !ok { #panic("windows mock") } }
 fn main() {
- probe: fail.Status
- _ = failure(&probe, "probe", "", -5)
- require(probe.failure.kind == fail.Kind.PermissionDenied)
- validation: fail.Status
- _ = validation_failure(&validation, "probe", "", -95)
- require(validation.failure.kind == fail.Kind.Unsupported)
+ require(tag(io.windows_err(-5)) == -1001)
+ require(tag(io.linux_err(-95)) == -1002)
  closed := Watcher{}
- require(next_failure(&closed).kind == fail.Kind.InvalidState)
+ require(next_failure(&closed) == -1003)
  backing: [272]u8
- status: fail.Status
- state := open(&status, backing[..])
- added := add_failure(&state, "test", Create)
- require(added.native == 0 && added.kind == fail.Kind.System)
+ state := open(backing[..]) catch { #panic("open") }
+ require(add_failure(&state, "test", Create) == 0)
  require(mock_resets == 1 && mock_reads == 0)
  mock_reset = 1
- added = add_failure(&state, "test", Create)
- require(added.native == 0 && added.kind == fail.Kind.System)
+ require(add_failure(&state, "test", Create) == 0)
  require(mock_reads == 1)
  slot := &state.native.slots[0]
  slot.id = 1
  slot.handle = #cast(rawptr, 1)
  slot.event = #cast(rawptr, 2)
- first := next_failure(&state)
- require(first.native == 0 && first.kind == fail.Kind.System)
+ require(next_failure(&state) == 0)
  reads := mock_reads
  mock_code = 5
- repeated := next_failure(&state)
- require(repeated.native == 0 && repeated.kind == fail.Kind.System && mock_reads == reads)
+ require(next_failure(&state) == 0 && mock_reads == reads)
  close(&state)
- require(next_failure(&state).native == 0)
+ require(next_failure(&state) == 0)
 }
-fn next_failure(state: *Watcher) fail.Failure {
- status: fail.Status
- _ = next(&status, state)
- require(status.failed)
- return status.failure
+// The system code for System; -1001 PermissionDenied, -1002 Unsupported,
+// -1003 InvalidInput, -1004 anything else.
+fn tag(err: io.IoErr) isize {
+ case err {
+  .System(native) => { return native }
+  .PermissionDenied => { return -1001 }
+  .Unsupported => { return -1002 }
+  .InvalidInput => { return -1003 }
+  _ => { return -1004 }
+ }
 }
-fn add_failure(state: *Watcher, path: []const u8, mask: u32) fail.Failure {
- status: fail.Status
- _ = add(&status, state, path, mask)
- require(status.failed)
- return status.failure
+fn next_failure(state: *Watcher) isize {
+ _ = next(state) catch err { return tag(err) }
+ #panic("next succeeded")
+}
+fn add_failure(state: *Watcher, path: []const u8, mask: u32) isize {
+ _ = add(state, path, mask) catch err { return tag(err) }
+ #panic("add succeeded")
 }
 '''
 run('windows',s)
@@ -96,7 +94,7 @@ return nil }
 fn require(ok: bool) { if !ok { #panic("macos mock") } }
 fn main() {
  owner := mem.arena_alloc(0)
- live := Watcher{arena: owner, state: mem.push(State, owner)}
+ live := Watcher{arena: owner, state: mem.push<State>(owner)}
  close(&live)
  require(live.arena == nil && live.state == nil)
  close(&live)
@@ -108,24 +106,35 @@ fn main() {
  close(&empty)
  close(&empty)
  backing: [272]u8
- opening: fail.Status
- _ = open(&opening, backing[..])
- require(opening.failed && opening.failure.native == -95 && opening.failure.kind == fail.Kind.Unsupported)
+ _ = open(backing[..]) catch err {
+  require(tag(err) == -1002)
+  check_add()
+  return
+ }
+ #panic("open succeeded")
+}
+fn check_add() {
  state := State{api: API{canonical: canonical_mock}}
  watcher := Watcher{state: &state}
- unsupported := add_failure(&watcher, "test", CloseWrite)
- require(unsupported.native == -95 && unsupported.kind == fail.Kind.Unsupported)
- denied := add_failure(&watcher, "test", Create)
- require(denied.native == -13 && denied.kind == fail.Kind.PermissionDenied)
+ require(add_failure(&watcher, "test", CloseWrite) == -1002)
+ require(add_failure(&watcher, "test", Create) == -1001)
  mock_errno = 63
- long := add_failure(&watcher, "test", Create)
- require(long.native == -63 && long.kind == fail.Kind.InvalidInput)
+ require(add_failure(&watcher, "test", Create) == -1003)
 }
-fn add_failure(watcher: *Watcher, path: []const u8, mask: u32) fail.Failure {
- status: fail.Status
- _ = add(&status, watcher, path, mask)
- require(status.failed)
- return status.failure
+// The system code for System; -1001 PermissionDenied, -1002 Unsupported,
+// -1003 InvalidInput, -1004 anything else.
+fn tag(err: io.IoErr) isize {
+ case err {
+  .System(native) => { return native }
+  .PermissionDenied => { return -1001 }
+  .Unsupported => { return -1002 }
+  .InvalidInput => { return -1003 }
+  _ => { return -1004 }
+ }
+}
+fn add_failure(watcher: *Watcher, path: []const u8, mask: u32) isize {
+ _ = add(watcher, path, mask) catch err { return tag(err) }
+ #panic("add succeeded")
 }
 '''
 run('macos',s)

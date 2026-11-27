@@ -1,6 +1,6 @@
-use "std/fail"
-use "std/fs" fs
-use "std/bytes" bytes
+use fs "std/fs"
+use io "std/io"
+use bytes "std/bytes"
 
 fn check(ok: bool, message: []const u8) {
   if !ok {
@@ -8,37 +8,55 @@ fn check(ok: bool, message: []const u8) {
   }
 }
 
-// Removes what main makes. Cleanup: each step has its own status, so a
-// missing entry does not stop the rest.
+// Removes what main makes. Cleanup: a missing entry does not stop the rest.
 fn clean() {
   paths: [3][]const u8 = ["listing/alpha.txt", "listing/βeta.txt", "listing/renamed.txt"]
   for path in paths {
-    status: fail.Status
-    fs.remove(&status, path)
+    fs.remove(path) catch {}
   }
-  inner: fail.Status
-  fs.remove_directory(&inner, "listing/inner")
-  outer: fail.Status
-  fs.remove_directory(&outer, "listing")
+  fs.remove_directory("listing/inner") catch {}
+  fs.remove_directory("listing") catch {}
 }
 
-fn main() {
-  clean()
-  status: fail.Status
-  fs.make_directory_exclusive(&status, "listing", 493)
-  fs.make_directory_exclusive(&status, "listing/inner", 493)
-  fs.make_directory(&status, "listing/inner")
-  fs.write_all(&status, "listing/alpha.txt", "a")
-  fs.write_all(&status, "listing/βeta.txt", "b")
-  check(!status.failed, "make and write")
+fn is_not_found(err: io.IoErr) bool {
+  case err {
+    .NotFound => { return true }
+    _ => { return false }
+  }
+}
+
+fn is_already_exists(err: io.IoErr) bool {
+  case err {
+    .AlreadyExists => { return true }
+    _ => { return false }
+  }
+}
+
+fn exists(path: []const u8) bool {
+  _ = fs.metadata(path) catch { return false }
+  return true
+}
+
+fn open_fails_not_found(path: []const u8, storage: []u8) bool {
+  directory := fs.open_directory(path, storage) catch err { return is_not_found(err) }
+  fs.close_directory(&directory)
+  return false
+}
+
+fn run() !io.IoErr {
+  try fs.make_directory_exclusive("listing", 493)
+  try fs.make_directory_exclusive("listing/inner", 493)
+  try fs.make_directory("listing/inner")
+  try fs.write_all("listing/alpha.txt", "a")
+  try fs.write_all("listing/βeta.txt", "b")
   storage: [4096]u8
-  directory := fs.open_directory(&status, "listing", storage[..])
+  directory := try fs.open_directory("listing", storage[..])
   seen_alpha := false
   seen_beta := false
   seen_inner := false
   count := 0
   for true {
-    entry := fs.directory_next(&status, &directory)
+    entry := try fs.directory_next(&directory)
     if directory.ended { break }
     count += 1
     if bytes.equal(entry.name, "alpha.txt") {
@@ -51,31 +69,28 @@ fn main() {
       seen_inner = entry.kind == 4
     }
   }
-  check(!status.failed, "listing error")
   check(count == 3 && seen_alpha && seen_beta && seen_inner, "entries")
   fs.close_directory(&directory)
-  inner := fs.open_directory(&status, "listing/inner", storage[..])
-  _ = fs.directory_next(&status, &inner)
-  check(inner.ended && !status.failed, "empty directory")
+  inner := try fs.open_directory("listing/inner", storage[..])
+  _ = try fs.directory_next(&inner)
+  check(inner.ended, "empty directory")
   fs.close_directory(&inner)
-  missing: fail.Status
-  _ = fs.open_directory(&missing, "missing-directory", storage[..])
-  check(missing.failed && missing.failure.kind == fail.Kind.NotFound, "missing")
-  info := fs.metadata(&status, "listing/alpha.txt")
-  check(!status.failed && info.size == 1 && fs.is_file(info), "file metadata")
-  folder := fs.metadata(&status, "listing/inner")
-  check(!status.failed && fs.is_directory(folder), "directory metadata")
-  fs.rename(&status, "listing/alpha.txt", "listing/renamed.txt")
-  _ = fs.metadata(&status, "listing/renamed.txt")
-  check(!status.failed, "rename")
-  gone: fail.Status
-  _ = fs.metadata(&gone, "listing/alpha.txt")
-  check(gone.failed, "renamed away")
-  existing: fail.Status
-  fs.make_directory_exclusive(&existing, "listing", 493)
-  check(existing.failed && existing.failure.kind == fail.Kind.AlreadyExists, "exclusive")
+  check(open_fails_not_found("missing-directory", storage[..]), "missing")
+  info := try fs.metadata("listing/alpha.txt")
+  check(info.size == 1 && fs.is_file(info), "file metadata")
+  folder := try fs.metadata("listing/inner")
+  check(fs.is_directory(folder), "directory metadata")
+  try fs.rename("listing/alpha.txt", "listing/renamed.txt")
+  _ = try fs.metadata("listing/renamed.txt")
+  check(!exists("listing/alpha.txt"), "renamed away")
+  existing := false
+  fs.make_directory_exclusive("listing", 493) catch err { existing = is_already_exists(err) }
+  check(existing, "exclusive")
+}
+
+fn main() {
   clean()
-  cleaned: fail.Status
-  _ = fs.metadata(&cleaned, "listing")
-  check(cleaned.failed, "cleaned up")
+  run() catch { #panic("directory operations") }
+  clean()
+  check(!exists("listing"), "cleaned up")
 }

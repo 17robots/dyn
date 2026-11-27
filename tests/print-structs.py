@@ -10,8 +10,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = '''use "std/fail"
-use "std/fmt"
+SOURCE = '''use "std/fmt"
 use "std/html"
 use "std/io"
 use "std/strings"
@@ -20,7 +19,7 @@ use "std/mem"
 struct Vec2 { x: f64, y: f64 }
 enum Op { Add, Sub }
 enum Code { None = 0, Ok = 200, Missing = 404 }
-enum Shape { Dot, Circle: f64 }
+enum Shape { Dot, Circle(f64) }
 struct Unit { name: []const u8, at: Vec2, op: Op, code: Code, hp: i32, alive: bool, size: u8 }
 
 fn spot() Unit {
@@ -35,13 +34,11 @@ fn main() {
   io.println("{} {}", spot(), Op.Sub)
   io.println("{}", Shape.Circle(1.0))
   storage: [256]u8
-  buffer_status: fail.Status
-  buffer := fmt.buffer(&buffer_status, storage[..])
+  buffer := fmt.buffer(storage[..])
   fmt.print(&buffer, "[{}]", units[1].at)
   io.println("{} {}", fmt.bytes(&buffer), strings.format(arena, "{}", Code.Ok))
   page_storage: [256]u8
-  page_status: fail.Status
-  page := html.writer(&page_status, page_storage[..])
+  page := html.writer(page_storage[..])
   html.print(&page, "<p>{}</p>", Unit{ name: "<b>&" })
   io.println("{}", html.output(&page).bytes)
 }

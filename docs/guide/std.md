@@ -19,21 +19,25 @@ search for a word finds the function that does it.
   `process.Options{}` (inherit every stream), and scanners given only their
   `source`. Arena handles are pointers to backing headers and require
   `arena_alloc` or `arena_from_buffer`; a nil arena handle does not allocate.
-- **Failure is state you pass in.** A function the world can make fail takes
-  a `*fail.Status` (std/fail): the first failure stays there with its kind,
-  native code, operation, path and reason, and every later call given that
-  status does nothing and returns zero or empty. Callers check
-  `status.failed` once, before acting on the results, and print the failure
-  with `fail.describe`. See [idiomatic Dyn](idiomatic-dyn.md#errors-and-cleanup)
-  for the rules. Every std and vendor module uses this model: decoders fail
-  with `InvalidInput` at the offending byte offset, native calls keep the
-  system's code in `native`. Scanners and readers that fail stay failed.
-  Predicates return `bool`. Missing lookups and end of input are ordinary
-  results, not errors.
+- **Failure is a return value.** A function the world can make fail returns
+  `T!E`: `io.IoErr` for the filesystem, processes and the network (one shared
+  set of kinds, with `System(code)` keeping the system's code), and
+  `parse.ParseErr` (`Invalid(offset)`, `TooLarge(offset)` or
+  `Unsupported(offset)`) for parsers and decoders.
+  Callers use `try` to pass a failure on, `catch` to handle it, and
+  `catch value` for a fallback. See [idiomatic Dyn](idiomatic-dyn.md#errors-and-cleanup)
+  for the rules. A module with failures of its own names them in an enum
+  (`flags.ArgsErr`, `text_edits.EditErr`); a core-layer primitive such as a
+  cipher fails with a bare `!`. Builders into fixed storage keep their first
+  overflow and fail once at `finish`. Scanners and readers that fail stay
+  failed.
+  Predicates return `bool`, and end of input is an ordinary result. A
+  migrated lookup fails with `NotFound` when the value is missing, so an
+  optional value reads as `http.request_header(request, "x-tag") catch ""`.
 - **One place for byte search.** `std/bytes` owns `equal`, `find`,
   `find_byte`, `find_last`, `find_last_byte`, `contains`, `starts_with` and
   `ends_with`; `std/strings` holds text work (trim, split, join, format, parse)
-  and does not repeat them. Every `find*` returns `#len(text)` on a miss,
+  and does not repeat them. Every `find*` returns `text.len` on a miss,
   always a safe slice bound: `text[..bytes.find(text, ",")]` is the text up to
   the first comma, or all of it.
 - **Names say what happens to memory.** `push_*` allocates from an arena the
@@ -57,7 +61,7 @@ search for a word finds the function that does it.
 Every std module belongs to one of three layers, listed in `std/layers.txt`:
 
 - **core**: no operating system and no memory source. Bytes, UTF-8, hashing,
-  crypto primitives, intrusive containers, `std/fail`, `std/math`.
+  crypto primitives, intrusive containers, `std/parse`, `std/math`.
 - **heap**: arenas from `std/mem`, plus everything built on them: formatting,
   strings, parsers and codecs, images, `std/io` streams.
 - **std**: needs an operating system: files, sockets, processes, threads,
@@ -75,6 +79,7 @@ between the program image and the stack (see [bare metal](bare-metal.md)).
 | Package | Purpose |
 | --- | --- |
 | `std/mem` | Arenas on OS pages, caller buffers or any block source; typed pushes, marks, reset and release |
+| `std/mem/heap` | Opt-in allocator on an arena for objects freed one at a time: size classes, no headers, not thread-safe |
 | `std/bytes` | Byte-slice operations, cursors and splitters |
 | `std/bytes/builder` | Byte and UTF-8 string builder over caller storage or an arena |
 | `std/bytes/search` | Prepared KMP search |
@@ -127,8 +132,9 @@ between the program image and the stack (see [bare metal](bare-metal.md)).
 | `std/path` | Lexical slash-separated paths |
 | `std/process` | Spawn, capture, pipes, environment and arguments |
 | `std/process/signal` | Interrupt, terminate and hangup signals as queued events, read with `poll` or `wait` |
-| `std/thread`, `std/sync` | Arena-backed thread handles; caller or owned stacks; portable synchronization |
-| `std/thread/pool` | Fixed worker pool over a bounded arena queue, and wait groups |
+| `std/thread`, `std/sync` | Arena-backed thread handles, scopes that join every thread; portable synchronization and bounded channels |
+| `std/thread/pool` | Fixed worker pool over a bounded arena queue with typed `submit`, and wait groups |
+| `std/fiber` | Linux stackful fibers: `resume`/`yield_now`, guarded stacks, isolated fibers whose panics stop only the fiber |
 | `std/cache` | Per-worker copies of shared data: writers call `changed`, each worker rebuilds when `stale` says so |
 | `std/time` | Monotonic and realtime clocks, durations, deadlines, calendar dates and UTC ISO-8601 |
 | `std/time/zone` | Time zones from TZif files, POSIX rules or the Windows zone; local time, strftime-style formatting and RFC 3339 |
@@ -262,6 +268,38 @@ Linux uses epoll, macOS uses kqueue, and Windows uses WSAPoll. Windows waits
 scan the registered sockets; this is not an IOCP operation-completion API.
 Timeouts let a caller run timers between batches; callbacks, timer scheduling,
 GUI message pumping and cross-thread wakeups remain application responsibilities.
+
+### Threads, channels and fibers
+
+`thread.scope(arena)` collects the threads that `thread.scope_spawn` starts,
+and `thread.scope_join` waits for all of them. Defer the join right after
+making the scope: it then also runs when `try` or `fail` leaves early, so
+thread contexts can live on the caller's stack.
+
+```dyn
+scope := thread.scope(arena)
+defer thread.scope_join(&scope)
+try thread.scope_spawn(&scope, 65536, work, &job)
+```
+
+`sync.channel<T>(arena, capacity)` makes a bounded queue whose storage all
+comes from the arena. `send` waits while it is full and `recv` while it is
+empty; `try_send` and `try_recv` fail with `.Full` or `.Empty` instead.
+After `close` (which may be called more than once), `send` fails with
+`.Closed` at once, and `recv` returns the values still queued before it fails
+with `.Closed`. A nil channel panics.
+
+`pool.submit(pool, work, &context)` queues `work(context)` with `work` a
+`fn(*C)`; it returns false when the queue is full or the pool is stopping.
+
+`std/fiber` runs functions on stacks of their own. `fiber.create(arena,
+size, work, &context)` makes a suspended fiber; `fiber.resume` runs it until
+it calls `fiber.yield_now`, finishes or panics, and returns its state.
+Fibers run only inside `resume`, on the resuming thread. A fiber made with
+`create_isolated` (or run by `fiber.run_isolated`) does not stop the process
+when it panics: `resume` returns `Panicked`, and `panic_message` keeps the
+text. The panic does not run the fiber's defers. Fibers are Linux only for
+now (x86-64, AArch64 and RISC-V), and one thread at a time uses them.
 
 ### Portable lanes
 

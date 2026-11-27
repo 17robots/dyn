@@ -82,6 +82,7 @@ typedef struct {
   bool *function_live;
   bool *global_live;
   unsigned char *expression_live; /* reachability's expression marks; null keeps all */
+  unsigned char *case_arm_live; /* reachability's case arm marks; null keeps all */
   double ssa_build_ms, ssa_optimize_ms, ssa_allocate_ms, ssa_emit_ms, serialization_ms;
   /* SSA preparations made ahead on worker threads, indexed by function, and
      each IR string's first index with identical contents. */
@@ -2655,6 +2656,7 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
       size_t done=UINT32_MAX;
       bool sign=signed_scalar(storage_type(ir,type));
       for (uint32_t i=0;i<s->case_arm_count;++i) {
+        if (any && ctx->case_arm_live && !ctx->case_arm_live[s->case_arm_start+i]) continue;
         const DynIrCaseArm *a=&ir->case_arms[s->case_arm_start+i];
         if ((uint64_t)a->pattern_start+a->pattern_count > ir->pattern_count) return false;
         size_t matches=UINT32_MAX, next=UINT32_MAX;
@@ -2676,7 +2678,6 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
         }
         if (!a->wildcard) pending_jump(ctx,-1,&next);
         if (!resolve_jumps(ctx,matches,ctx->text.n)) return false;
-        bool old_alias=false;
         if (a->local_id!=UINT32_MAX) {
           uint32_t offset; if (!a->pattern_count || !local_slot(ctx,f,a->local_id,&offset)) return false;
           const DynIrPattern *pattern=&ir->patterns[a->pattern_start];
@@ -2684,14 +2685,11 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
           if (!pattern->is_type && !pattern->is_enum) return false;
           isa_load(ctx, R_A, subject+8);
           if (payload) isa_add_immediate(ctx, payload_offset);
-          old_alias=ctx->local_alias[a->local_id-f->local_start];
-          ctx->local_alias[a->local_id-f->local_start]=a->pointer_binding;
           if (a->pointer_binding) isa_store(ctx, R_A, offset);
           else save_struct(ctx,offset,binding);
         }
         bool arm_falls;
         if (!block(ctx,ir,f,a->body_start,a->body_count,depth+1,&arm_falls)) return false;
-        if (a->local_id!=UINT32_MAX) ctx->local_alias[a->local_id-f->local_start]=old_alias;
         all_terminate &= !arm_falls;
         /* An arm that returns or panics has no path to the end of the case; a
            jump there would be dead and, when every arm ends that way, would
@@ -3552,25 +3550,54 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     if (!ok) backend_report(ctx, "native backend: failed to write object\n");
     goto done;
   }
+  /* Split runtime_support ELF objects into per-function .text sections so
+     linkers can garbage-collect unused helpers (race_access, fmod, trace_*). */
+  struct { size_t begin, size; unsigned sym; } split_funcs[256];
+  size_t split_count = 0;
+  bool split_text = source->context.runtime_support && !ctx->dwarf && !ctx->t32 && !ctx->rv32 && !ctx->rv64 &&
+                    !ctx->initializer_symbol && !ctx->dll_entry_symbol;
+  if (split_text) {
+    for (size_t i = 0; i < ir->function_count; ++i) {
+      if (!ctx->function_live[i] || ir->functions[i].foreign) continue;
+      unsigned sym = ctx->function_symbols[i];
+      if (!sym || symbols[sym].st_shndx != 1 || !symbols[sym].st_size) continue;
+      if (split_count >= 256) { split_text = false; break; }
+      split_funcs[split_count].begin = (size_t)symbols[sym].st_value;
+      split_funcs[split_count].size = (size_t)symbols[sym].st_size;
+      split_funcs[split_count].sym = sym;
+      ++split_count;
+    }
+    if (split_count < 2) split_text = false;
+    for (size_t r = 0; split_text && r < ctx->relocation_count; ++r) {
+      size_t off = (size_t)ctx->relocations[r].r_offset;
+      bool found = false;
+      for (size_t f = 0; f < split_count; ++f)
+        if (off >= split_funcs[f].begin && off < split_funcs[f].begin + split_funcs[f].size) { found = true; break; }
+      if (!found) split_text = false;
+    }
+  }
   /* Keep the extra terminator after .bss so later section-name offsets stay fixed. */
   size_t debug_name=sizeof("\0.text\0.rodata\0.rela.text\0.symtab\0.strtab\0.shstrtab\0.note.GNU-stack\0.bss\0\0.init_array\0.rela.init_array\0.data.rel.ro\0.rela.data.rel.ro\0")-1;
   const char section_names[] = "\0.text\0.rodata\0.rela.text\0.symtab\0.strtab\0.shstrtab\0.note.GNU-stack\0.bss\0\0.init_array\0.rela.init_array\0.data.rel.ro\0.rela.data.rel.ro\0" ".debug_info\0.rela.debug_info\0.debug_abbrev\0.rela.debug_abbrev\0.debug_line\0.rela.debug_line\0.debug_frame\0.rela.debug_frame\0";
+  uint16_t shnum = split_text ? (uint16_t)(13 + 2 * split_count) : (uint16_t)(ctx->dwarf ? 21 : 13);
   Elf64_Ehdr h = {.e_ident = {0x7f,'E','L','F',ELFCLASS64,ELFDATA2LSB,EV_CURRENT},
     .e_type = ET_REL, .e_machine = ctx->t32 ? 40 /* EM_ARM */ : ctx->rv64 || ctx->rv32 ? 243 : ctx->a64 ? EM_AARCH64 : EM_X86_64,
     .e_flags=ctx->t32 ? 0x05000400 /* EABI 5, hard float */ : ctx->rv64 || ctx->rv32?4:0, .e_version = EV_CURRENT,
-    .e_ehsize = sizeof(h), .e_shentsize = sizeof(Elf64_Shdr), .e_shnum = ctx->dwarf?21:13,
+    .e_ehsize = sizeof(h), .e_shentsize = sizeof(Elf64_Shdr), .e_shnum = shnum,
     .e_shstrndx = 6};
   if (ctx->t32 && ctx->soft_float) h.e_flags = (h.e_flags & ~0x400u) | 0x200u; /* ARM soft-float PCS; retain EABI version. */
   if (ctx->rv32 && ctx->soft_float) h.e_flags &= ~6u; /* Clear only EF_RISCV_FLOAT_ABI. */
-  Elf64_Shdr sh[21] = {0};
+  Elf64_Shdr *sh = calloc(shnum, sizeof(*sh));
+  if (!sh) goto done;
   size_t symbytes = (ctx->runtime_base + ctx->runtime_count) * sizeof(*symbols);
-  size_t relbytes = ctx->relocation_count * sizeof(*ctx->relocations);
+  size_t relbytes = split_text ? 0 : ctx->relocation_count * sizeof(*ctx->relocations);
+  size_t main_text_size = split_text ? 0 : ctx->text.n;
   sh[1] = (Elf64_Shdr){.sh_name=1, .sh_type=SHT_PROGBITS,
     /* SSA pads x86 loop headers relative to this section's start. The linker
        must preserve that alignment when placing the object after runtime code. */
-    .sh_flags=SHF_ALLOC|SHF_EXECINSTR, .sh_offset=sizeof(h), .sh_size=ctx->text.n, .sh_addralign=(ctx->a64||ctx->rv64||ctx->rv32||ctx->t32)?4:16};
+    .sh_flags=SHF_ALLOC|SHF_EXECINSTR, .sh_offset=sizeof(h), .sh_size=main_text_size, .sh_addralign=(ctx->a64||ctx->rv64||ctx->rv32||ctx->t32)?4:16};
   sh[2] = (Elf64_Shdr){.sh_name=7, .sh_type=SHT_PROGBITS, .sh_flags=SHF_ALLOC,
-    .sh_offset=align8(sizeof(h)+ctx->text.n), .sh_size=ctx->rodata.n, .sh_addralign=8};
+    .sh_offset=align8(sizeof(h)+main_text_size), .sh_size=ctx->rodata.n, .sh_addralign=8};
   sh[3] = (Elf64_Shdr){.sh_name=15, .sh_type=SHT_RELA,
     .sh_offset=align8(sh[2].sh_offset+ctx->rodata.n), .sh_size=relbytes,
     .sh_link=4, .sh_info=1, .sh_addralign=8, .sh_entsize=sizeof(*ctx->relocations)};
@@ -3596,6 +3623,26 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   sh[12]=(Elf64_Shdr){.sh_name=116,.sh_type=SHT_RELA,.sh_offset=align8(sh[11].sh_offset+sh[11].sh_size),
     .sh_size=ctx->constant_relocation_count*sizeof(*ctx->constant_relocations),.sh_link=4,.sh_info=11,.sh_addralign=8,.sh_entsize=sizeof(Elf64_Rela)};
   size_t cursor=align8(sh[12].sh_offset+sh[12].sh_size);
+  if (split_text) {
+    size_t align = ctx->a64 ? 4 : 16;
+    for (size_t f = 0; f < split_count; ++f) {
+      unsigned sec = (unsigned)(13 + 2 * f);
+      cursor = (cursor + align - 1) & ~(align - 1);
+      sh[sec] = (Elf64_Shdr){.sh_name=1, .sh_type=SHT_PROGBITS, .sh_flags=SHF_ALLOC|SHF_EXECINSTR,
+        .sh_offset=cursor, .sh_size=split_funcs[f].size, .sh_addralign=align};
+      symbols[split_funcs[f].sym].st_shndx = (Elf64_Half)sec;
+      symbols[split_funcs[f].sym].st_value = 0;
+      cursor = align8(cursor + split_funcs[f].size);
+      size_t rc = 0;
+      for (size_t r = 0; r < ctx->relocation_count; ++r) {
+        size_t off = (size_t)ctx->relocations[r].r_offset;
+        if (off >= split_funcs[f].begin && off < split_funcs[f].begin + split_funcs[f].size) ++rc;
+      }
+      sh[sec + 1] = (Elf64_Shdr){.sh_name=15, .sh_type=SHT_RELA, .sh_offset=cursor,
+        .sh_size=rc * sizeof(Elf64_Rela), .sh_link=4, .sh_info=sec, .sh_addralign=8, .sh_entsize=sizeof(Elf64_Rela)};
+      cursor += sh[sec + 1].sh_size;
+    }
+  }
   for (unsigned i=0;ctx->dwarf && i<4;++i) {
     unsigned section=13+2*i; size_t count=0;
     for (size_t j=0;j<debug.relocation_count;++j) count+=debug.relocations[j].section==i;
@@ -3609,9 +3656,9 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   h.e_shoff=align8(cursor);
   size_t shbytes=h.e_shnum*sizeof(*sh),total=h.e_shoff+shbytes;
   unsigned char *data = calloc(total, 1);
-  if (!data) goto done;
+  if (!data) { free(sh); goto done; }
   memcpy(data, &h, sizeof(h));
-  if (ctx->text.n) memcpy(data+sh[1].sh_offset, ctx->text.data, ctx->text.n);
+  if (main_text_size) memcpy(data+sh[1].sh_offset, ctx->text.data, main_text_size);
   if (ctx->rodata.n) memcpy(data+sh[2].sh_offset, ctx->rodata.data, ctx->rodata.n);
   if (relbytes) memcpy(data+sh[3].sh_offset, ctx->relocations, relbytes);
   memcpy(data+sh[4].sh_offset, symbols, symbytes); memcpy(data+sh[5].sh_offset, strings, names);
@@ -3622,6 +3669,21 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   }
   if (ctx->constants_data.n) memcpy(data+sh[11].sh_offset,ctx->constants_data.data,ctx->constants_data.n);
   if (sh[12].sh_size) memcpy(data+sh[12].sh_offset,ctx->constant_relocations,sh[12].sh_size);
+  if (split_text) {
+    for (size_t f = 0; f < split_count; ++f) {
+      unsigned sec = (unsigned)(13 + 2 * f);
+      memcpy(data + sh[sec].sh_offset, ctx->text.data + split_funcs[f].begin, split_funcs[f].size);
+      size_t out = 0;
+      for (size_t r = 0; r < ctx->relocation_count; ++r) {
+        Elf64_Rela rel = ctx->relocations[r];
+        if ((size_t)rel.r_offset >= split_funcs[f].begin &&
+            (size_t)rel.r_offset < split_funcs[f].begin + split_funcs[f].size) {
+          rel.r_offset -= split_funcs[f].begin;
+          memcpy(data + sh[sec + 1].sh_offset + out++ * sizeof(rel), &rel, sizeof(rel));
+        }
+      }
+    }
+  }
   for (unsigned i=0;ctx->dwarf && i<4;++i) {
     unsigned section=13+2*i; size_t count=0;
     if (debug.sections[i].size) memcpy(data+sh[section].sh_offset,debug.sections[i].data,debug.sections[i].size);
@@ -3634,6 +3696,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     }
   }
   memcpy(data+h.e_shoff, sh, shbytes);
+  free(sh);
   /* No output is opened until every function has passed the whitelist. */
   if (ctx->rv32 || ctx->t32) {
     uint8_t *narrow=NULL; size_t narrow_size=0;
@@ -3645,6 +3708,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
 done:
   ssa_pipeline_stop(ctx);
   free(ctx->expression_live); ctx->expression_live = NULL;
+  free(ctx->case_arm_live); ctx->case_arm_live = NULL;
   if (serializing) ctx->serialization_ms += backend_timing(&source->context, &serialization);
   backend_dwarf_output_free(&debug);
   dyn_location_free(&locations);
@@ -3751,7 +3815,7 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
   free(ctx->relocations); free(ctx->constant_relocations);
   free(ctx->trace_rows); free(ctx->trace_functions); free(ctx->trace_names);
   
-  free(ctx->expression_live); symbol_arrays_free(ctx); free(ctx);
+  free(ctx->expression_live); free(ctx->case_arm_live); symbol_arrays_free(ctx); free(ctx);
   return ok;
 }
 static bool object_target(const DynSource *source, const DynIrProgram *ir,

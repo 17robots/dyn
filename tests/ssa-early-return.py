@@ -47,7 +47,7 @@ fn count(node: *Node) i64 {
 }
 
 fn walk(values: []u64, depth: u64) {
-  if #len(values) < 2 {
+  if values.len < 2 {
     return
   }
   sink += values[0] * depth

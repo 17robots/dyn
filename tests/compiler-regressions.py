@@ -94,7 +94,7 @@ pub fn count(total: usize) usize {
 
     # A numeric literal adopts the other operand's type on either side; e and E
     # are digits in hex literals, not exponents.
-    literals = project(root, 'literal-left', {'main.dyn': '''use "std/os/linux" os
+    literals = project(root, 'literal-left', {'main.dyn': '''use os "std/os/linux"
 fn check() u8 {
   step: u32 = 3
   big: u64 = 5000000000
@@ -190,8 +190,8 @@ fn main() {
 fn kind(values: ...any) {
   for value in values {
     case value {
-      f64 x => { io.println("f64") }
-      f32 x => { io.println("f32") }
+      f64(x) => { io.println("f64") }
+      f32(x) => { io.println("f32") }
       _ => { io.println("other") }
     }
   }
@@ -207,7 +207,7 @@ fn main() {
     # generic inference; an f32 context still takes it as f32.
     floats = project(root, 'float-default', {'main.dyn': '''use "std/io"
 
-fn same(a: $T, b: $T) T {
+fn same<T>(a: T, b: T) T {
   return a
 }
 
@@ -224,4 +224,22 @@ fn main() {
     for output in build_and_run(floats):
         assert output == b'ok\n', output
 
-print('PASS compiler regressions: exit flush, extern clash, global shadowing, literal operands, implicit rawptr, shared externs, variadic any floats, f64 float default')
+    # A block catch keeps its body as a range of statement children. IR
+    # validation once checked that range against call items, so a catch block
+    # longer than the program's item count failed to lower.
+    body = '\n'.join(f'    total += {i}' for i in range(60))
+    long_catch = project(root, 'long-catch', {'main.dyn': f'''use "std/io"
+use "std/parse"
+fn main() {{
+  total: u64 = 0
+  _ = parse.u64_decimal("bad") catch {{
+{body}
+    io.println("{{}}", total)
+    return
+  }}
+}}
+'''})
+    for output in build_and_run(long_catch):
+        assert output == b'1770\n', output
+
+print('PASS compiler regressions: exit flush, extern clash, global shadowing, literal operands, implicit rawptr, shared externs, variadic any floats, f64 float default, long catch blocks')

@@ -1,19 +1,19 @@
-use "std/mem" mem
-use "std/fail"
-use "std/encoding/base64" base64
+use parse "std/parse"
+use mem "std/mem"
+use base64 "std/encoding/base64"
 
 // A decoded block: data is arena-owned, label borrows the source, consumed
 // counts the source bytes through the END line.
 pub struct Block { data: []u8, label: []const u8, consumed: usize }
 fn equal_at(source: []const u8, at: usize, expected: []const u8) bool {
-  if at > #len(source) || #len(expected) > #len(source) - at { return false }
-  for i in 0..#len(expected) {
+  if at > source.len || expected.len > source.len - at { return false }
+  for i in 0..expected.len {
     if source[at + i] != expected[i] { return false }
   }
   return true
 }
 fn append(destination: []u8, at: *usize, source: []const u8) bool {
-  if #len(source) > #len(destination) - at.* { return false }
+  if source.len > destination.len - at.* { return false }
   for byte in source {
     destination[at.*] = byte
     at.* += 1
@@ -21,75 +21,69 @@ fn append(destination: []u8, at: *usize, source: []const u8) bool {
   return true
 }
 
-fn malformed(arena: *mem.Arena, status: *fail.Status, mark: usize, offset: usize) Block {
+// Restores the entry arena mark and returns the failure at offset.
+fn malformed(arena: *mem.Arena, mark: usize, offset: usize) parse.ParseErr {
   mem.arena_rewind(arena, mark)
-  fail.at(status, fail.Kind.InvalidInput, "decode PEM", "malformed PEM", offset)
-  return Block{}
+  return parse.ParseErr.Invalid(offset)
 }
-// Decodes the first PEM block. Malformed text fails with InvalidInput at the
+// Decodes the first PEM block. Malformed text fails with Invalid at the
 // offending line and restores the entry arena mark.
-pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Block {
-  if status == nil { return decode(arena, &fail.Status{}, source) }
-  if status.failed { return Block{} }
+pub fn decode(arena: *mem.Arena, source: []const u8) Block!parse.ParseErr {
   mark := mem.arena_mark(arena)
-  base64_storage := mem.push_bytes(arena, #len(source))
+  base64_storage := mem.push_bytes(arena, source.len)
   begin: []const u8 = "-----BEGIN "
   end_prefix: []const u8 = "-----END "
   start: usize = 0
-  for start + #len(begin) <= #len(source) && !equal_at(source, start, begin) {
+  for start + begin.len <= source.len && !equal_at(source, start, begin) {
     start += 1
   }
-  if start + #len(begin) > #len(source) { return malformed(arena, status, mark, #len(source)) }
-  label_start := start + #len(begin)
+  if start + begin.len > source.len { fail malformed(arena, mark, source.len) }
+  label_start := start + begin.len
   label_end := label_start
-  for label_end + 5 <= #len(source) && !equal_at(source, label_end, "-----") {
+  for label_end + 5 <= source.len && !equal_at(source, label_end, "-----") {
     label_end += 1
   }
-  if label_end == label_start || label_end + 5 > #len(source) {
-    return malformed(arena, status, mark, label_end)
+  if label_end == label_start || label_end + 5 > source.len {
+    fail malformed(arena, mark, label_end)
   }
   label := source[label_start..label_end]
   at := label_end + 5
-  if at < #len(source) && source[at] == '\r' {
+  if at < source.len && source[at] == '\r' {
     at += 1
   }
-  if at >= #len(source) || source[at] != '\n' { return malformed(arena, status, mark, at) }
+  if at >= source.len || source[at] != '\n' { fail malformed(arena, mark, at) }
   at += 1
   body_start := at
   encoded_length: usize = 0
   found_end := false
-  for at < #len(source) {
+  for at < source.len {
     line_start := at
-    for at < #len(source) && source[at] != '\r' && source[at] != '\n' {
+    for at < source.len && source[at] != '\r' && source[at] != '\n' {
       at += 1
     }
     line := source[line_start..at]
-    if #len(line) >= #len(end_prefix) && equal_at(line, 0, end_prefix) {
-      if #len(line) != #len(end_prefix) + #len(label) + 5 || !equal_at(line, #len(end_prefix), label) || !equal_at(line, #len(end_prefix) + #len(label), "-----") {
-        return malformed(arena, status, mark, line_start)
+    if line.len >= end_prefix.len && equal_at(line, 0, end_prefix) {
+      if line.len != end_prefix.len + label.len + 5 || !equal_at(line, end_prefix.len, label) || !equal_at(line, end_prefix.len + label.len, "-----") {
+        fail malformed(arena, mark, line_start)
       }
       found_end = true
-      if at < #len(source) && source[at] == '\r' {
+      if at < source.len && source[at] == '\r' {
         at += 1
       }
-      if at < #len(source) && source[at] == '\n' {
+      if at < source.len && source[at] == '\n' {
         at += 1
       }
       break
     }
-    if !append(base64_storage, &encoded_length, line) {
-      return malformed(arena, status, mark, line_start)
-    }
-    if at < #len(source) && source[at] == '\r' {
+    if !append(base64_storage, &encoded_length, line) { fail malformed(arena, mark, line_start) }
+    if at < source.len && source[at] == '\r' {
       at += 1
     }
-    if at < #len(source) && source[at] == '\n' {
+    if at < source.len && source[at] == '\n' {
       at += 1
     }
   }
-  if !found_end { return malformed(arena, status, mark, at) }
-  decoding: fail.Status
-  decoded := base64.decode(arena, &decoding, base64_storage[..encoded_length])
-  if decoding.failed { return malformed(arena, status, mark, body_start) }
+  if !found_end { fail malformed(arena, mark, at) }
+  decoded := base64.decode(arena, base64_storage[..encoded_length]) catch { fail malformed(arena, mark, body_start) }
   return Block{ data: decoded, label: label, consumed: at }
 }

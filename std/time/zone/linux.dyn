@@ -5,13 +5,13 @@ const zoneinfo_root: []const u8 = "/usr/share/zoneinfo"
 
 // readlinkat(AT_FDCWD, path, storage); path ends in a zero byte.
 fn read_link(path: []const u8, storage: []u8) isize {
-  return #syscall(sys.Readlinkat, -100, &path[0], &storage[0], #len(storage))
+  return #syscall(sys.Readlinkat, -100, &path[0], &storage[0], storage.len)
 }
 
-fn platform_load(arena: *mem.Arena, status: *fail.Status, name: []const u8) Zone {
-  return posix_load(arena, status, name)
+fn platform_load(arena: *mem.Arena, name: []const u8) Zone!io.IoErr {
+  return try posix_load(arena, name)
 }
 
-fn platform_system(arena: *mem.Arena, status: *fail.Status) Zone {
-  return posix_system(arena, status)
+fn platform_system(arena: *mem.Arena) Zone!io.IoErr {
+  return try posix_system(arena)
 }

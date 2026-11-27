@@ -97,7 +97,7 @@ points: [64]Point
 pub fn step(p: Point, d: Point) Point { return Point{x: (p.x + d.x) % 1009, y: (p.y * 3 + d.y) % 1009} }
 fn mix(m: Mixed, by: i32) Mixed { return Mixed{a: m.a - by, b: m.b + 1, flag: !m.flag, scale: m.scale * 2.5, small: m.small + 1.0, wide: -9} }
 fn main() {
-  for i in 0..#len(points) { points[i] = Point{x: #cast(i64, i), y: #cast(i64, (i * 7))} }
+  for i in 0..points.len { points[i] = Point{x: #cast(i64, i), y: #cast(i64, (i * 7))} }
   delta := Point{x: 5, y: 11}
   for round in 0..20 { for *p in points { p.* = step(p.*, delta) } }
   total: i64 = 0

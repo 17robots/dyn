@@ -34,6 +34,7 @@ typedef struct {
   struct SemaHoist { DynExprId call, init; uint32_t local, stmt, local_stmt; } *hoists;
   size_t hoist_count, hoist_capacity;
   uint32_t defer_depth;
+  bool allow_fallible;
 } Sema;
 #define SEMA_HOIST_PENDING UINT32_MAX
 #define SEMA_HOIST_DROPPED (UINT32_MAX - 1)
@@ -366,8 +367,18 @@ static bool suggest_name(DynAstProgram *a, DynSpan unknown, const DynSource *s,
   }
   return true;
 }
+static bool span_present(DynSpan span) { return span.end_byte > span.start_byte; }
 static bool push_loop(Sema *sema, DynAstStmt *st, const DynSource *s,
                       unsigned *errors) {
+  if (span_present(st->label))
+    for (size_t i = 0; i < sema->active_loop_count; ++i)
+      if (span_present(sema->active_loops[i]->label) &&
+          dyn_span_text_equal(st->label, sema->active_loops[i]->label, s)) {
+        error_span(st->label, s, errors, "duplicate active loop label");
+        note_span(sema->active_loops[i]->label, s,
+                  "previous label declared here");
+        break;
+      }
   if (sema->active_loop_count == sema->active_loop_capacity) {
     size_t c = sema->active_loop_capacity ? sema->active_loop_capacity * 2 : 8;
     void *p = realloc(sema->active_loops, c * sizeof(*sema->active_loops));
@@ -393,10 +404,25 @@ static bool resolve_loop_control(Sema *sema, DynAstStmt *st, const DynSource *s,
                                           : "continue requires enclosing loop");
     return false;
   }
-  st->target_loop_id = sema->active_loops[sema->active_loop_count - 1]->loop_id;
-  if (st->kind == DYN_STMT_BREAK)
-    sema->active_loops[sema->active_loop_count - 1]->for_broken = true;
-  return true;
+  if (!span_present(st->control_label)) {
+    DynAstStmt *target = sema->active_loops[sema->active_loop_count - 1];
+    st->target_loop_id = target->loop_id;
+    if (st->kind == DYN_STMT_BREAK)
+      target->for_broken = true;
+    return true;
+  }
+  for (size_t i = sema->active_loop_count; i > 0; --i)
+    if (span_present(sema->active_loops[i - 1]->label) &&
+        dyn_span_text_equal(st->control_label, sema->active_loops[i - 1]->label,
+                            s)) {
+      DynAstStmt *target = sema->active_loops[i - 1];
+      st->target_loop_id = target->loop_id;
+      if (st->kind == DYN_STMT_BREAK)
+        target->for_broken = true;
+      return true;
+    }
+  error_span(st->control_label, s, errors, "unknown active loop label");
+  return false;
 }
 static bool reserve_local(DynAstProgram *a) {
   if (a->local_count < a->local_capacity)
@@ -1134,11 +1160,50 @@ static DynType reported_type(DynType type, DynSpan span, const DynSource *s, uns
   if (type == DYN_TYPE_ERROR) error_out_of_memory(span, s, errors);
   return type;
 }
+static bool type_is_fallible(const DynAstProgram *a, DynType t) {
+  return dyn_type_is_enum(t) && t - DYN_TYPE_ENUM_BASE < a->enum_count &&
+         a->enums[t - DYN_TYPE_ENUM_BASE].is_fallible;
+}
+static bool type_is_error_union(const DynAstProgram *a, DynType t) {
+  return dyn_type_is_enum(t) && t - DYN_TYPE_ENUM_BASE < a->enum_count &&
+         a->enums[t - DYN_TYPE_ENUM_BASE].is_error_union;
+}
+static uint32_t error_members(const DynAstProgram *a, DynType t, DynType out[64]) {
+  if (t == DYN_TYPE_VOID || t == DYN_TYPE_ERROR) return 0;
+  if (type_is_error_union(a, t)) {
+    const DynAstEnum *en = &a->enums[t - DYN_TYPE_ENUM_BASE];
+    uint32_t n = en->variant_count < 64 ? en->variant_count : 64;
+    for (uint32_t i = 0; i < n; ++i)
+      out[i] = a->variants[en->variant_start + i].payload_type;
+    return n;
+  }
+  out[0] = t;
+  return 1;
+}
+static bool error_is_subset(const DynAstProgram *a, DynType from, DynType to) {
+  if (from == to || from == DYN_TYPE_ERROR || to == DYN_TYPE_ERROR) return true;
+  if (to == DYN_TYPE_VOID) return true;
+  if (from == DYN_TYPE_VOID) return false;
+  DynType fm[64], tm[64];
+  uint32_t fn = error_members(a, from, fm);
+  uint32_t tn = error_members(a, to, tm);
+  for (uint32_t i = 0; i < fn; ++i) {
+    bool found = false;
+    for (uint32_t j = 0; j < tn; ++j)
+      if (fm[i] == tm[j]) { found = true; break; }
+    if (!found) return false;
+  }
+  return true;
+}
 static bool can_convert(Sema *sema, DynAstProgram *a, DynType from,
                         DynType to) {
-  if (to == DYN_TYPE_ANY && from != DYN_TYPE_VOID && from != DYN_TYPE_ERROR)
+  if (to == DYN_TYPE_ANY && from != DYN_TYPE_VOID && from != DYN_TYPE_ERROR &&
+      !type_is_fallible(a, from))
     return true;
   if (lossless(sema, from, to))
+    return true;
+  if (type_is_error_union(a, to) && dyn_type_is_enum(from) &&
+      !type_is_fallible(a, from) && error_is_subset(a, from, to))
     return true;
   DynAstPointer *f = pointer_info(a, from), *t = pointer_info(a, to);
   /* Like C's void *: typed to raw is implicit, raw to typed needs #cast. */
@@ -1451,6 +1516,28 @@ static void type_name_params(DynAstProgram *a, DynType t, const DynSource *s,
     snprintf(out, cap, "%s", basic);
     return;
   }
+  if (dyn_type_is_enum(t)) {
+    const DynAstEnum *en = &a->enums[t - DYN_TYPE_ENUM_BASE];
+    if (en->is_fallible) {
+      char ok_buf[256] = "", err_buf[256] = "";
+      if (en->ok_type != DYN_TYPE_VOID)
+        type_name_params(a, en->ok_type, s, ok_buf, sizeof(ok_buf), names);
+      if (en->err_type != DYN_TYPE_VOID)
+        type_name_params(a, en->err_type, s, err_buf, sizeof(err_buf), names);
+      snprintf(out, cap, "%s!%s", ok_buf, err_buf);
+      return;
+    }
+    if (en->is_error_union) {
+      size_t used = 0;
+      out[0] = 0;
+      for (uint32_t i = 0; i < en->variant_count && used + 4 < cap; ++i) {
+        char mem[256];
+        type_name_params(a, a->variants[en->variant_start + i].payload_type, s, mem, sizeof(mem), names);
+        used += (size_t)snprintf(out + used, cap - used, "%s%s", i ? " | " : "", mem);
+      }
+      return;
+    }
+  }
   if (dyn_type_is_struct(t) || dyn_type_is_enum(t)) {
     DynSpan p = dyn_type_is_struct(t)
                     ? a->structs[a->structs[t - DYN_TYPE_STRUCT_BASE].template_of ? a->structs[t - DYN_TYPE_STRUCT_BASE].template_of - 1 : t - DYN_TYPE_STRUCT_BASE].name
@@ -1478,9 +1565,9 @@ static void type_name_params(DynAstProgram *a, DynType t, const DynSource *s,
       for (uint32_t i = 0; i < type_args && used + 2 < cap; ++i) {
         char argument[128];
         type_name_params(a, arguments[i], s, argument, sizeof(argument), names);
-        used += (size_t)snprintf(out + used, cap - used, "%s%s", i ? ", " : "(", argument);
+        used += (size_t)snprintf(out + used, cap - used, "%s%s", i ? ", " : "<", argument);
       }
-      if (used + 2 < cap) snprintf(out + used, cap - used, ")");
+      if (used + 2 < cap) snprintf(out + used, cap - used, ">");
     }
     return;
   }
@@ -1523,7 +1610,7 @@ static void type_name_params(DynAstProgram *a, DynType t, const DynSource *s,
   }
   if (names && dyn_type_is_param(t)) {
     DynSpan name = names[t - DYN_TYPE_PARAM_BASE];
-    snprintf(out, cap, "$%.*s", (int)(name.end_byte - name.start_byte), s->text + name.start_byte);
+    snprintf(out, cap, "%.*s", (int)(name.end_byte - name.start_byte), s->text + name.start_byte);
     return;
   }
   snprintf(out, cap, "unknown");
@@ -1934,184 +2021,167 @@ static DynType generic_function_value(Sema *sema, DynAstProgram *a, DynExprId id
   e->item_count = 0;
   return e->type = reported_type(function_pointer_type(a, function), call, s, errors);
 }
+static void check_nocopy_value(DynAstProgram *a, DynExprId id, const DynSource *s,
+                               unsigned *errors);
 static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
                                   uint32_t generic, const DynSource *s,
                                   unsigned *errors) {
   DynAstGeneric g = a->generics[generic];
   DynSpan call = a->expressions[id].span;
   uint32_t item_start = a->expressions[id].item_start,
-           item_count = a->expressions[id].item_count;
-  /* #instance(f, T, ...) names an instance by its types, for a function
-     whose types its signature does not show (T: type parameters). */
+           item_count = a->expressions[id].item_count,
+           type_arg_count = a->expressions[id].type_arg_count;
+  /* Standalone `f<T, ...>` names a generic instance as a function value. */
   if (a->expressions[id].instance) {
     DynType args[DYN_MAX_TYPE_PARAMS] = {0};
-    bool types = item_count == g.type_param_count;
-    for (uint32_t k = 0; types && k < item_count; ++k) {
+    bool types = type_arg_count == g.type_param_count;
+    for (uint32_t k = 0; types && k < type_arg_count; ++k) {
       DynExprId arg = a->items[item_start + k].expression;
-      if (arg == DYN_NO_EXPR) { types = false; break; }
-      if (a->expressions[arg].kind == DYN_EXPR_TYPE)
-        args[k] = a->expressions[arg].type;
-      else if (a->expressions[arg].kind == DYN_EXPR_NAME &&
-               find_local(sema, a, a->expressions[arg].span, s) == UINT32_MAX)
-        args[k] = sema_work ? (sema_work_abort(), DYN_TYPE_ERROR) : dyn_ast_named_type(a, a->expressions[arg].span, s);
-      else
-        args[k] = DYN_TYPE_ERROR;
+      if (arg == DYN_NO_EXPR || a->expressions[arg].kind != DYN_EXPR_TYPE) { types = false; break; }
+      args[k] = a->expressions[arg].type;
       types = args[k] != DYN_TYPE_ERROR;
     }
     if (!types) {
       char message[160];
       snprintf(message, sizeof(message),
-               "#instance needs one type for each of the function's %u type parameters",
-               g.type_param_count);
+               "expected %u type argument%s for this generic function",
+               g.type_param_count, g.type_param_count == 1 ? "" : "s");
       error_span(call, s, errors, message);
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     return generic_function_value(sema, a, id, generic, args, call, s, errors);
   }
-  if (item_count != g.param_count) {
-    error_span(call, s, errors,
-               item_count == g.type_param_count
-                   ? "function argument count mismatch; to use an instance as a value, give it a function type, as in f: fn(u32) u32 = name"
-                   : "function argument count mismatch");
+  uint32_t value_count = item_count - type_arg_count;
+  if (value_count != g.param_count) {
+    error_span(call, s, errors, "function argument count mismatch");
+    return a->expressions[id].type = DYN_TYPE_ERROR;
+  }
+  if (type_arg_count > g.type_param_count) {
+    char message[160];
+    snprintf(message, sizeof(message),
+             "expected at most %u type argument%s, got %u",
+             g.type_param_count, g.type_param_count == 1 ? "" : "s", type_arg_count);
+    error_span(call, s, errors, message);
     return a->expressions[id].type = DYN_TYPE_ERROR;
   }
   DynType args[DYN_MAX_TYPE_PARAMS] = {0}, values[64];
   for (uint32_t i = 0; i < 64; ++i) values[i] = DYN_TYPE_INFER;
-  /* The argument that first fixed each type parameter, for conflict errors. */
   DynExprId binder[DYN_MAX_TYPE_PARAMS];
   for (uint32_t k = 0; k < DYN_MAX_TYPE_PARAMS; ++k) binder[k] = DYN_NO_EXPR;
-  if (item_count > 64) {
+  if (value_count > 64) {
     error_span(call, s, errors, "too many arguments for a generic function");
     return a->expressions[id].type = DYN_TYPE_ERROR;
   }
   bool failed = false;
-  /* Typed arguments bind first; untyped literals then take the bound type. */
-  for (int pass = 0; pass < 2; ++pass)
-    for (uint32_t i = 0; i < item_count; ++i) {
-      DynAstGenericParam p = a->generic_params[g.param_start + i];
-      DynExprId arg = a->items[item_start + i].expression;
-      if (arg == DYN_NO_EXPR) {
-        failed = true;
-        continue;
-      }
-      if (pass == 0 && a->expressions[arg].kind == DYN_EXPR_NAME &&
-          (p.is_type || find_local(sema, a, a->expressions[arg].span, s) == UINT32_MAX)) {
-        DynType named = sema_work ? (sema_work_abort(), DYN_TYPE_ERROR) : dyn_ast_named_type(a, a->expressions[arg].span, s);
-        if (named != DYN_TYPE_ERROR) {
-          a->expressions[arg].kind = DYN_EXPR_TYPE;
-          a->expressions[arg].type = named;
-        }
-      }
-      bool is_type = a->expressions[arg].kind == DYN_EXPR_TYPE;
-      if (pass == 0 && p.is_type != is_type) {
-        error_span(a->expressions[arg].span, s, errors,
-                   p.is_type ? "expected a type argument"
-                   : item_count == g.type_param_count
-                       ? "a type is not a value; to use an instance as a value, give it a function type, as in f: fn(u32) u32 = name"
-                       : "a type is not a value");
-        failed = true;
-        continue;
-      }
-      if (is_type) {
-        if (pass == 0) {
-          args[p.pattern - DYN_TYPE_PARAM_BASE] = a->expressions[arg].type;
-          binder[p.pattern - DYN_TYPE_PARAM_BASE] = arg;
-        }
-        continue;
-      }
-      /* Untyped literals, and generic functions passed as values, take
-         their types from the other arguments, so they bind second. */
-      bool deferred = untyped_literal(a, arg);
-      if (!deferred && a->expressions[arg].kind == DYN_EXPR_NAME &&
-          find_local(sema, a, a->expressions[arg].span, s) == UINT32_MAX) {
-        uint32_t named = sema_find_function(sema, a, a->expressions[arg].span, s);
-        deferred = named != UINT32_MAX && a->functions[named].is_generic;
-      }
-      if ((pass == 0) == deferred)
-        continue;
-      DynType expected = DYN_TYPE_INFER;
-      if (pass == 1) {
-        DynType known = sema_work ? (sema_work_abort(), DYN_TYPE_ERROR) : dyn_ast_substitute(a, p.pattern, args);
-        bool bound = true;
-        for (uint32_t k = 0; k < g.type_param_count; ++k)
-          bound &= args[k] != DYN_TYPE_INFER;
-        if (bound) expected = known;
-      }
-      values[i] = check_expr(sema, a, arg, s, errors, expected);
-      uint32_t conflict = 0;
-      DynType before[DYN_MAX_TYPE_PARAMS];
-      memcpy(before, args, sizeof(before));
-      bool bound_now = bind_pattern(a, p.pattern, values[i], args, &conflict);
-      if (!bound_now && p.pattern == DYN_TYPE_PARAM_BASE + conflict && numeric(sema, args[conflict]) &&
-          numeric(sema, a->bind_conflict)) {
-        /* Numbers join as operands do: a bare $T bound to u32 and to u64 is
-           u64, and the narrower argument widens at the call. */
-        if (lossless(sema, args[conflict], a->bind_conflict)) {
-          args[conflict] = a->bind_conflict;
-          binder[conflict] = arg;
-          bound_now = true;
-        } else if (lossless(sema, a->bind_conflict, args[conflict]))
-          bound_now = true;
-      }
-      if (!bound_now) {
-        char first[128], second[128], message[640];
-        dyn_type_format(a, args[conflict], s, first, sizeof(first));
-        dyn_type_format(a, a->bind_conflict, s, second, sizeof(second));
-        DynSpan name = g.type_names[conflict];
-        int n = (int)(name.end_byte - name.start_byte);
-        const char *tname = s->text + name.start_byte;
-        /* A type argument written at the call never conflicts: `$T: type`
-           is rejected when an argument's type also carries T. */
-        if (binder[conflict] != DYN_NO_EXPR) {
-          DynSpan from = a->expressions[binder[conflict]].span;
-          int m = (int)(from.end_byte - from.start_byte);
-          if (m > 40) m = 40;
-          snprintf(message, sizeof(message),
-                   "%.*s is %s from `%.*s`%s, but this argument makes it %s",
-                   n, tname, first, m, s->text + from.start_byte,
-                   from.end_byte - from.start_byte > 40 ? "..." : "", second);
-        } else {
-          snprintf(message, sizeof(message), "%.*s is both %s and %s in this call",
-                   n, tname, first, second);
-        }
-        error_span(a->expressions[arg].span, s, errors, message);
-        failed = true;
-      } else {
-        for (uint32_t k = 0; k < g.type_param_count; ++k)
-          if (before[k] == DYN_TYPE_INFER && args[k] != DYN_TYPE_INFER && binder[k] == DYN_NO_EXPR)
-            binder[k] = arg;
-      }
-    }
-  for (uint32_t k = 0; !failed && k < g.type_param_count; ++k)
-    if (args[k] == DYN_TYPE_INFER || args[k] == DYN_TYPE_ERROR) {
-      if (args[k] == DYN_TYPE_INFER) {
-        char message[1024];
-        DynSpan name = g.type_names[k];
-        int used = snprintf(message, sizeof(message), "cannot infer %.*s from the arguments",
-                            (int)(name.end_byte - name.start_byte), s->text + name.start_byte);
-        DynSpan at = call;
-        /* Name the parameter that should have supplied it and the argument
-           whose type did not have that shape. */
-        for (uint32_t i = 0; i < item_count && used > 0; ++i) {
-          DynAstGenericParam p = a->generic_params[g.param_start + i];
-          if (p.is_type || values[i] == DYN_TYPE_INFER || values[i] == DYN_TYPE_ERROR ||
-              !pattern_mentions(a, p.pattern, DYN_TYPE_PARAM_BASE + k, 0))
-            continue;
-          char want[384], got[384];
-          type_name_params(a, p.pattern, s, want, sizeof(want), g.type_names);
-          dyn_type_format(a, values[i], s, got, sizeof(got));
-          snprintf(message + used, sizeof(message) - (size_t)used,
-                   ": parameter '%.*s' has type %s, but this argument is %s",
-                   (int)(p.name.end_byte - p.name.start_byte), s->text + p.name.start_byte, want, got);
-          at = a->expressions[a->items[item_start + i].expression].span;
-          break;
-        }
-        error_span(at, s, errors, message);
-      }
+  for (uint32_t k = 0; k < type_arg_count; ++k) {
+    DynExprId ta = a->items[item_start + k].expression;
+    if (ta == DYN_NO_EXPR || a->expressions[ta].kind != DYN_EXPR_TYPE ||
+        a->expressions[ta].type == DYN_TYPE_ERROR) {
       failed = true;
+      continue;
     }
-  if (failed)
-    return a->expressions[id].type = DYN_TYPE_ERROR;
+    args[k] = a->expressions[ta].type;
+    binder[k] = ta;
+  }
+  if (failed) return a->expressions[id].type = DYN_TYPE_ERROR;
+  bool all_explicit = type_arg_count == g.type_param_count;
+  if (!all_explicit) {
+    /* Infer remaining type parameters from value arguments; typed arguments
+       bind first and untyped literals take the bound type. */
+    for (int pass = 0; pass < 2; ++pass)
+      for (uint32_t i = 0; i < value_count; ++i) {
+        DynAstGenericParam p = a->generic_params[g.param_start + i];
+        DynExprId arg = a->items[item_start + type_arg_count + i].expression;
+        if (arg == DYN_NO_EXPR) {
+          failed = true;
+          continue;
+        }
+        bool deferred = untyped_literal(a, arg);
+        if (!deferred && a->expressions[arg].kind == DYN_EXPR_NAME &&
+            find_local(sema, a, a->expressions[arg].span, s) == UINT32_MAX) {
+          uint32_t named = sema_find_function(sema, a, a->expressions[arg].span, s);
+          deferred = named != UINT32_MAX && a->functions[named].is_generic;
+        }
+        if ((pass == 0) == deferred)
+          continue;
+        DynType expected = DYN_TYPE_INFER;
+        if (pass == 1) {
+          DynType known = sema_work ? (sema_work_abort(), DYN_TYPE_ERROR) : dyn_ast_substitute(a, p.pattern, args);
+          bool bound = true;
+          for (uint32_t k = 0; k < g.type_param_count; ++k)
+            bound &= args[k] != DYN_TYPE_INFER;
+          if (bound) expected = known;
+        }
+        values[i] = check_expr(sema, a, arg, s, errors, expected);
+        uint32_t conflict = 0;
+        DynType before[DYN_MAX_TYPE_PARAMS];
+        memcpy(before, args, sizeof(before));
+        bool bound_now = bind_pattern(a, p.pattern, values[i], args, &conflict);
+        if (!bound_now && p.pattern == DYN_TYPE_PARAM_BASE + conflict && numeric(sema, args[conflict]) &&
+            numeric(sema, a->bind_conflict)) {
+          if (lossless(sema, args[conflict], a->bind_conflict)) {
+            args[conflict] = a->bind_conflict;
+            binder[conflict] = arg;
+            bound_now = true;
+          } else if (lossless(sema, a->bind_conflict, args[conflict]))
+            bound_now = true;
+        }
+        if (!bound_now) {
+          char first[128], second[128], message[640];
+          dyn_type_format(a, args[conflict], s, first, sizeof(first));
+          dyn_type_format(a, a->bind_conflict, s, second, sizeof(second));
+          DynSpan name = g.type_names[conflict];
+          int n = (int)(name.end_byte - name.start_byte);
+          const char *tname = s->text + name.start_byte;
+          if (binder[conflict] != DYN_NO_EXPR) {
+            DynSpan from = a->expressions[binder[conflict]].span;
+            int m = (int)(from.end_byte - from.start_byte);
+            if (m > 40) m = 40;
+            snprintf(message, sizeof(message),
+                     "%.*s is %s from `%.*s`%s, but this argument makes it %s",
+                     n, tname, first, m, s->text + from.start_byte,
+                     from.end_byte - from.start_byte > 40 ? "..." : "", second);
+          } else {
+            snprintf(message, sizeof(message), "%.*s is both %s and %s in this call",
+                     n, tname, first, second);
+          }
+          error_span(a->expressions[arg].span, s, errors, message);
+          failed = true;
+        } else {
+          for (uint32_t k = 0; k < g.type_param_count; ++k)
+            if (before[k] == DYN_TYPE_INFER && args[k] != DYN_TYPE_INFER && binder[k] == DYN_NO_EXPR)
+              binder[k] = arg;
+        }
+      }
+    for (uint32_t k = 0; !failed && k < g.type_param_count; ++k)
+      if (args[k] == DYN_TYPE_INFER || args[k] == DYN_TYPE_ERROR) {
+        if (args[k] == DYN_TYPE_INFER) {
+          char message[1024];
+          DynSpan name = g.type_names[k];
+          int used = snprintf(message, sizeof(message), "cannot infer %.*s from the arguments",
+                              (int)(name.end_byte - name.start_byte), s->text + name.start_byte);
+          DynSpan at = call;
+          for (uint32_t i = 0; i < value_count && used > 0; ++i) {
+            DynAstGenericParam p = a->generic_params[g.param_start + i];
+            if (values[i] == DYN_TYPE_INFER || values[i] == DYN_TYPE_ERROR ||
+                !pattern_mentions(a, p.pattern, DYN_TYPE_PARAM_BASE + k, 0))
+              continue;
+            char want[384], got[384];
+            type_name_params(a, p.pattern, s, want, sizeof(want), g.type_names);
+            dyn_type_format(a, values[i], s, got, sizeof(got));
+            snprintf(message + used, sizeof(message) - (size_t)used,
+                     ": parameter '%.*s' has type %s, but this argument is %s",
+                     (int)(p.name.end_byte - p.name.start_byte), s->text + p.name.start_byte, want, got);
+            at = a->expressions[a->items[item_start + type_arg_count + i].expression].span;
+            break;
+          }
+          error_span(at, s, errors, message);
+        }
+        failed = true;
+      }
+    if (failed)
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+  }
   uint32_t depth = 0;
   if (sema->current_function != UINT32_MAX &&
       a->functions[sema->current_function].is_instance)
@@ -2134,14 +2204,18 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
   }
-  /* Check value arguments against the concrete parameters, dropping type
-     arguments from the call. */
-  uint32_t param = a->functions[function].param_start, kept = 0;
-  for (uint32_t i = 0; i < item_count; ++i) {
-    if (a->generic_params[g.param_start + i].is_type)
-      continue;
-    DynExprId arg = a->items[item_start + i].expression;
-    DynType target = a->params[param++].type;
+  /* Check value arguments against the concrete parameters, dropping leading
+     explicit type arguments from the call. */
+  uint32_t kept = 0;
+  for (uint32_t i = 0; i < value_count; ++i) {
+    DynExprId arg = a->items[item_start + type_arg_count + i].expression;
+    DynType target = a->params[a->functions[function].param_start + i].type;
+    if (all_explicit) {
+      values[i] = check_expr(sema, a, arg, s, errors, target);
+      target = a->params[a->functions[function].param_start + i].type;
+      vet_cast(sema, a, s, arg, target);
+    }
+    check_nocopy_value(a, arg, s, errors);
     if (values[i] != target && values[i] != DYN_TYPE_ERROR && target != DYN_TYPE_ERROR) {
       if (can_convert(sema, a, values[i], target))
         arg = convert_expr(a, arg, target);
@@ -2156,6 +2230,7 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
     error_span(call, s, errors,
                "type has no supported C ABI; use C-compatible storage or a pointer adapter");
   a->expressions[id].item_count = kept;
+  a->expressions[id].type_arg_count = 0;
   a->expressions[id].left = DYN_NO_EXPR;
   a->expressions[id].integer = function;
   return a->expressions[id].type = a->functions[function].return_type;
@@ -2619,22 +2694,199 @@ static DynType narrow_by_range(Sema *sema, DynAstProgram *a, DynExprId id, DynTy
                                     .left = moved, .right = DYN_NO_EXPR, .span = e.span};
   return expected;
 }
+static DynType check_expr_allow_fallible(Sema *sema, DynAstProgram *a, DynExprId id,
+                                         const DynSource *s, unsigned *errors,
+                                         DynType expected, bool allow_fallible) {
+  bool prev = sema->allow_fallible;
+  sema->allow_fallible = allow_fallible;
+  DynType type = check_expr_node(sema, a, id, s, errors, expected);
+  sema->allow_fallible = prev;
+  if (!allow_fallible && type_is_fallible(a, type)) {
+    error_span(a->expressions[id].span, s, errors,
+               "fallible result must be handled with 'try' or 'catch'");
+    return a->expressions[id].type = DYN_TYPE_ERROR;
+  }
+  return narrow_by_range(sema, a, id, type, expected);
+}
 static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                           const DynSource *s, unsigned *errors,
                           DynType expected) {
-  DynType type = check_expr_node(sema, a, id, s, errors, expected);
-  return narrow_by_range(sema, a, id, type, expected);
+  return check_expr_allow_fallible(sema, a, id, s, errors, expected, false);
 }
+static bool sema_block(Sema *, DynAstProgram *, uint32_t, uint32_t, const DynSource *, unsigned *, bool);
+static const char *local_name_conflict(Sema *, DynAstProgram *, DynSpan, const DynSource *, bool);
+static bool type_is_nocopy(DynAstProgram *a, DynType t, unsigned depth) {
+  if (depth > 64 || t == DYN_TYPE_ERROR || t == DYN_TYPE_VOID) return false;
+  while (dyn_type_is_distinct(t) && t - DYN_TYPE_DISTINCT_BASE < a->alias_count)
+    t = a->aliases[t - DYN_TYPE_DISTINCT_BASE].target;
+  if (dyn_type_is_struct(t)) {
+    DynAstStruct *st = &a->structs[t - DYN_TYPE_STRUCT_BASE];
+    if (st->nocopy) return true;
+    for (uint32_t i = 0; i < st->field_count; ++i)
+      if (type_is_nocopy(a, a->fields[st->field_start + i].type, depth + 1))
+        return true;
+    return false;
+  }
+  if (dyn_type_is_array(t))
+    return type_is_nocopy(a, a->arrays[t - DYN_TYPE_ARRAY_BASE].element, depth + 1);
+  if (dyn_type_is_enum(t)) {
+    DynAstEnum *en = &a->enums[t - DYN_TYPE_ENUM_BASE];
+    for (uint32_t i = 0; i < en->variant_count; ++i) {
+      DynType pt = a->variants[en->variant_start + i].payload_type;
+      if (pt != DYN_TYPE_VOID && type_is_nocopy(a, pt, depth + 1))
+        return true;
+    }
+  }
+  return false;
+}
+static bool expr_is_lvalue(const DynAstProgram *a, DynExprId id) {
+  for (unsigned depth = 0; depth < 64 && id != DYN_NO_EXPR && id < a->expression_count; ++depth) {
+    const DynAstExpr *e = &a->expressions[id];
+    if (e->kind == DYN_EXPR_CONVERT) { id = e->left; continue; }
+    if (e->kind == DYN_EXPR_NAME || e->kind == DYN_EXPR_GLOBAL) return true;
+    if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_DEREF) return true;
+    if (e->kind == DYN_EXPR_FIELD) {
+      if (e->left != DYN_NO_EXPR && dyn_type_is_pointer(a->expressions[e->left].type))
+        return true;
+      id = e->left;
+      continue;
+    }
+    if (e->kind == DYN_EXPR_INDEX) {
+      if (e->left != DYN_NO_EXPR && dyn_type_is_slice(a->expressions[e->left].type))
+        return true;
+      id = e->left;
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+static void check_nocopy_value(DynAstProgram *a, DynExprId id, const DynSource *s,
+                               unsigned *errors) {
+  if (id == DYN_NO_EXPR || id >= a->expression_count) return;
+  DynType t = a->expressions[id].type;
+  if (t == DYN_TYPE_ERROR || t == DYN_TYPE_VOID || !type_is_nocopy(a, t, 0))
+    return;
+  if (!expr_is_lvalue(a, id)) return;
+  char name[256];
+  display_type_name(a, t, s, name, sizeof(name));
+  error_format(a->expressions[id].span, s, errors,
+               "cannot copy nocopy type '%s'; pass '&x' or move with '#take(&x)'",
+               name);
+}
+
 static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
                                const DynSource *s, unsigned *errors,
                                DynType expected) {
   if (!dyn_work_step(&s->context, 1)) return DYN_TYPE_ERROR;
   if (id == DYN_NO_EXPR)
     return DYN_TYPE_VOID;
+  if (a->expressions[id].kind == DYN_EXPR_TAKE) {
+    DynSpan span = a->expressions[id].span;
+    DynType op_t = check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_INFER);
+    if (op_t == DYN_TYPE_ERROR) return a->expressions[id].type = DYN_TYPE_ERROR;
+    DynAstPointer *info = pointer_info(a, op_t);
+    if (!info || info->is_const) {
+      error_span(span, s, errors, "#take requires a mutable pointer, such as &x");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    DynType pointee = info->pointee;
+    a->expressions[id].right = DYN_NO_EXPR;
+    if (dyn_type_is_struct(pointee) && struct_has_defaults(a, pointee, 0)) {
+      SEMA_SERIAL_ONLY(return a->expressions[id].type = DYN_TYPE_ERROR);
+      DynExprId fresh = fresh_struct(a, pointee, span);
+      if (fresh != DYN_NO_EXPR) {
+        (void)check_expr(sema, a, fresh, s, errors, pointee);
+        a->expressions[id].right = fresh;
+      }
+    }
+    return a->expressions[id].type = pointee;
+  }
+  if (a->expressions[id].kind == DYN_EXPR_TRY) {
+    DynSpan span = a->expressions[id].span;
+    if (sema->defer_depth > 0)
+      error_span(span, s, errors, "'try' is not allowed inside defer or errdefer; handle the error with 'catch'");
+    DynType op_t = check_expr_allow_fallible(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_INFER, true);
+    if (op_t == DYN_TYPE_ERROR) return a->expressions[id].type = DYN_TYPE_ERROR;
+    if (!type_is_fallible(a, op_t)) {
+      error_span(span, s, errors, "'try' requires a fallible expression");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    if (!type_is_fallible(a, sema->current_return_type)) {
+      error_span(span, s, errors, "'try' can only be used in a fallible function (returning T!E, !E, T!, or !)");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    DynType in_ok = a->enums[op_t - DYN_TYPE_ENUM_BASE].ok_type;
+    DynType in_err = a->enums[op_t - DYN_TYPE_ENUM_BASE].err_type;
+    DynType out_err = a->enums[sema->current_return_type - DYN_TYPE_ENUM_BASE].err_type;
+    if (!error_is_subset(a, in_err, out_err))
+      error_types(a, span, s, errors, "error type cannot propagate through 'try'", out_err, in_err);
+    return a->expressions[id].type = in_ok;
+  }
+  if (a->expressions[id].kind == DYN_EXPR_CATCH) {
+    DynSpan span = a->expressions[id].span;
+    bool is_block = a->expressions[id].boolean;
+    if (is_block) SEMA_SERIAL_ONLY(return DYN_TYPE_ERROR);
+    DynType op_t = check_expr_allow_fallible(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_INFER, true);
+    if (op_t == DYN_TYPE_ERROR) return a->expressions[id].type = DYN_TYPE_ERROR;
+    if (!type_is_fallible(a, op_t)) {
+      error_span(span, s, errors, "'catch' requires a fallible expression");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    DynType in_ok = a->enums[op_t - DYN_TYPE_ENUM_BASE].ok_type;
+    DynType in_err = a->enums[op_t - DYN_TYPE_ENUM_BASE].err_type;
+    if (!is_block) {
+      if (in_ok == DYN_TYPE_VOID)
+        error_span(span, s, errors, "void fallible call cannot use a value fallback; use 'catch { ... }' instead");
+      DynType fb_t = check_expr(sema, a, a->expressions[id].right, s, errors, in_ok);
+      check_nocopy_value(a, a->expressions[id].right, s, errors);
+      if (in_ok != DYN_TYPE_VOID && fb_t != in_ok && fb_t != DYN_TYPE_ERROR) {
+        if (can_convert(sema, a, fb_t, in_ok))
+          a->expressions[id].right = convert_expr(a, a->expressions[id].right, in_ok);
+        else
+          error_types(a, span, s, errors, "catch fallback type mismatch", in_ok, fb_t);
+      }
+      return a->expressions[id].type = in_ok;
+    }
+    DynSpan cname = a->expressions[id].catch_name;
+    uint32_t clocal = UINT32_MAX;
+    if (cname.end_byte > cname.start_byte) {
+      if (in_err == DYN_TYPE_VOID) {
+        error_span(cname, s, errors, "untyped fallible call 'T!' or '!' has no error value to bind");
+      } else {
+        const char *conflict = local_name_conflict(sema, a, cname, s, true);
+        if (conflict) {
+          error_span(cname, s, errors, conflict);
+        } else if (reserve_local(a)) {
+          clocal = (uint32_t)a->local_count;
+          a->locals[a->local_count++] = (DynAstLocal){
+              .name = cname, .type = in_err, .active = true,
+              .depth = sema->block_depth + 1, .owner_function = sema->current_function};
+          a->expressions[id].catch_local = clocal;
+        }
+      }
+    }
+    uint32_t bstart = a->expressions[id].item_start, bcount = a->expressions[id].item_count;
+    bool terminates = sema_block(sema, a, bstart, bcount, s, errors, true);
+    if (clocal != UINT32_MAX) a->locals[clocal].active = false;
+    if (in_ok != DYN_TYPE_VOID && !terminates)
+      error_span(span, s, errors, "catch block for non-void fallible expression must exit via return, fail, break, continue, or #panic");
+    return a->expressions[id].type = in_ok;
+  }
   /* Recursive checks may grow expression, item and interned-type tables.
      Keep IDs/scalar copies across calls, never table-entry pointers. */
-  uint32_t qualified_enum = sema_expr_enum(a, a->expressions[id].left, s);
-  if (a->expressions[id].kind == DYN_EXPR_ENUM && qualified_enum == UINT32_MAX) {
+  bool shorthand_enum = a->expressions[id].kind == DYN_EXPR_ENUM &&
+                        a->expressions[id].left == DYN_NO_EXPR;
+  uint32_t qualified_enum = shorthand_enum
+                                ? (dyn_type_is_enum(expected) && !type_is_error_union(a, expected) && !type_is_fallible(a, expected)
+                                       ? expected - DYN_TYPE_ENUM_BASE : UINT32_MAX)
+                                : sema_expr_enum(a, a->expressions[id].left, s);
+  if (shorthand_enum && qualified_enum == UINT32_MAX) {
+    error_span(a->expressions[id].span, s, errors,
+               "enum shorthand .Variant requires an expected enum type");
+    return a->expressions[id].type = DYN_TYPE_ERROR;
+  }
+  if (a->expressions[id].kind == DYN_EXPR_ENUM && !shorthand_enum && qualified_enum == UINT32_MAX) {
     a->expressions[id].kind = DYN_EXPR_INDIRECT_CALL;
     a->expressions[id].left = a->expressions[id].right;
     a->expressions[id].right = DYN_NO_EXPR;
@@ -2654,7 +2906,7 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     DynAstVariant *v = &a->variants[variant];
-    bool constructor = a->expressions[id].kind == DYN_EXPR_ENUM;
+    bool constructor = a->expressions[id].kind == DYN_EXPR_ENUM && a->expressions[id].boolean;
     a->expressions[id].kind = DYN_EXPR_ENUM;
     a->expressions[id].integer = variant;
     a->expressions[id].type = DYN_TYPE_ENUM_BASE + eid;
@@ -2675,6 +2927,7 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
       uint32_t arg_index = item_start;
       DynType value =
           check_expr(sema, a, a->items[arg_index].expression, s, errors, v->payload_type);
+      check_nocopy_value(a, a->items[arg_index].expression, s, errors);
       vet_cast(sema, a, s, a->items[arg_index].expression, v->payload_type);
       if (value != v->payload_type && value != DYN_TYPE_ERROR) {
         if (can_convert(sema, a, value, v->payload_type))
@@ -2728,9 +2981,9 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
       a->expressions[id].kind = DYN_EXPR_INDIRECT_CALL;
     } else if (a->functions[fn].is_generic) {
       return check_generic_call(sema, a, id, a->functions[fn].generic, s, errors);
-    } else if (a->expressions[id].instance) {
+    } else if (a->expressions[id].instance || a->expressions[id].type_arg_count) {
       error_span(a->expressions[id].span, s, errors,
-                 "#instance needs a generic function; name a plain function directly");
+                 "type arguments require a generic function");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     } else {
       a->expressions[id].left = DYN_NO_EXPR;
@@ -2761,6 +3014,7 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
         uint32_t arg_index = item_start + i;
         DynType target = a->params[callee->param_start + i].type,
                 value = check_expr(sema, a, a->items[arg_index].expression, s, errors, target);
+        check_nocopy_value(a, a->items[arg_index].expression, s, errors);
         vet_cast(sema, a, s, a->items[arg_index].expression, target);
         bool mismatch = false;
         if (value != target && value != DYN_TYPE_ERROR &&
@@ -2818,6 +3072,7 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
           DynType element = slice_info(a, callee->variadic_type)->element;
           DynType value =
               check_expr(sema, a, a->items[arg_index].expression, s, errors, element);
+          check_nocopy_value(a, a->items[arg_index].expression, s, errors);
           if (element != DYN_TYPE_ANY && value != element &&
               value != DYN_TYPE_ERROR) {
             if (can_convert(sema, a, value, element))
@@ -2863,6 +3118,7 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
       uint32_t arg_index = item_start + i;
       DynType want = a->fn_type_params[signature->param_start + i],
               value = check_expr(sema, a, a->items[arg_index].expression, s, errors, want);
+      check_nocopy_value(a, a->items[arg_index].expression, s, errors);
       vet_cast(sema, a, s, a->items[arg_index].expression, want);
       if (value != want && value != DYN_TYPE_ERROR) {
         if (can_convert(sema, a, value, want))
@@ -2988,6 +3244,7 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
     for (uint32_t i = 0; i < a->expressions[id].item_count; ++i) {
       uint32_t item_index = a->expressions[id].item_start + i;
       DynType value = check_expr(sema, a, a->items[item_index].expression, s, errors, element);
+      check_nocopy_value(a, a->items[item_index].expression, s, errors);
       if (element == DYN_TYPE_INFER)
         element = value;
       else if (value != element && value != DYN_TYPE_ERROR) {
@@ -3349,6 +3606,7 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
           error_span(a->items[item_index].name, s, errors, "duplicate struct literal field");
       DynType target = a->fields[st->field_start + field].type;
       DynType value = check_expr(sema, a, a->items[item_index].expression, s, errors, target);
+      check_nocopy_value(a, a->items[item_index].expression, s, errors);
       vet_cast(sema, a, s, a->items[item_index].expression, target);
       if (value != target && value != DYN_TYPE_ERROR &&
           target != DYN_TYPE_ERROR) {
@@ -3367,6 +3625,23 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
       DynAstPointer *p = pointer_info(a, base);
       base = p ? p->pointee : DYN_TYPE_ERROR;
       a->expressions[id].boolean = true;
+    }
+    DynSpan field_span = a->expressions[id].span;
+    if ((dyn_type_is_array(base) || dyn_type_is_slice(base)) &&
+        field_span.end_byte - field_span.start_byte == 3 &&
+        !memcmp(s->text + field_span.start_byte, "len", 3)) {
+      if (a->expressions[id].boolean) {
+        DynExprId left_id = a->expressions[id].left;
+        DynExprId deref = sema_push_expr(a, (DynAstExpr){
+            .kind = DYN_EXPR_UNARY, .op = DYN_OP_DEREF, .type = base,
+            .left = left_id, .right = DYN_NO_EXPR,
+            .span = a->expressions[left_id].span});
+        if (deref == DYN_NO_EXPR) return a->expressions[id].type = DYN_TYPE_ERROR;
+        a->expressions[id].left = deref;
+      }
+      a->expressions[id].kind = DYN_EXPR_LEN;
+      a->expressions[id].boolean = false;
+      return a->expressions[id].type = DYN_TYPE_USIZE;
     }
     if (!dyn_type_is_struct(base)) {
       if (base != DYN_TYPE_ERROR)
@@ -3500,20 +3775,31 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
   }
   DynType left, literal_right = DYN_TYPE_INFER;
   DynOperator op = a->expressions[id].op;
+  bool right_checked = false;
   bool literal_left = a->expressions[id].kind == DYN_EXPR_BINARY &&
                       op != DYN_OP_SHL && op != DYN_OP_SHR &&
                       op != DYN_OP_LOGICAL_AND && op != DYN_OP_LOGICAL_OR &&
                       untyped_numeric_literal(a, a->expressions[id].left) &&
                       !untyped_numeric_literal(a, a->expressions[id].right);
+  bool shorthand_enum_left = a->expressions[id].kind == DYN_EXPR_BINARY &&
+                             (op == DYN_OP_EQ || op == DYN_OP_NE) &&
+                             a->expressions[a->expressions[id].left].kind == DYN_EXPR_ENUM &&
+                             a->expressions[a->expressions[id].left].left == DYN_NO_EXPR;
   if (a->expressions[a->expressions[id].left].kind == DYN_EXPR_NIL &&
-      a->expressions[id].kind == DYN_EXPR_BINARY)
-    left = check_expr(sema, a, a->expressions[id].left, s, errors,
-                      check_expr(sema, a, a->expressions[id].right, s, errors, DYN_TYPE_INFER));
-  else if (literal_left) {
+      a->expressions[id].kind == DYN_EXPR_BINARY) {
+    literal_right = check_expr(sema, a, a->expressions[id].right, s, errors, DYN_TYPE_INFER);
+    right_checked = true;
+    left = check_expr(sema, a, a->expressions[id].left, s, errors, literal_right);
+  } else if (shorthand_enum_left) {
+    literal_right = check_expr(sema, a, a->expressions[id].right, s, errors, DYN_TYPE_INFER);
+    right_checked = true;
+    left = check_expr(sema, a, a->expressions[id].left, s, errors, literal_right);
+  } else if (literal_left) {
     /* A literal adopts the other operand's type, whichever side it is on. */
     bool comparison = op >= DYN_OP_EQ && op <= DYN_OP_GE;
     literal_right = check_expr(sema, a, a->expressions[id].right, s, errors,
                                comparison ? DYN_TYPE_INFER : expected);
+    right_checked = true;
     /* Under target-typed arithmetic the literal takes the target's type. */
     bool arithmetic = op == DYN_OP_ADD || op == DYN_OP_SUB || op == DYN_OP_MUL || op == DYN_OP_DIV ||
                       op == DYN_OP_REM || op == DYN_OP_BIT_AND || op == DYN_OP_BIT_OR || op == DYN_OP_BIT_XOR;
@@ -3570,7 +3856,7 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
       (op == DYN_OP_ADD || op == DYN_OP_SUB || op == DYN_OP_MUL || op == DYN_OP_DIV ||
        op == DYN_OP_REM || op == DYN_OP_BIT_AND || op == DYN_OP_BIT_OR || op == DYN_OP_BIT_XOR) &&
       widens_to_target(sema, left, expected);
-  DynType right = literal_left
+  DynType right = right_checked
                       ? literal_right
                       : check_expr(sema, a, a->expressions[id].right, s, errors,
                                    target_arithmetic ? expected : left);
@@ -3780,9 +4066,10 @@ static void validate_pointer_case_bindings(DynAstProgram *a, DynAstStmt *st,
 static bool valid_defer_stmt(DynAstProgram *a, uint32_t id, const DynSource *s,
                              unsigned *errors) {
   DynAstStmt *st = &a->statements[id];
-  if (st->kind == DYN_STMT_RETURN || st->kind == DYN_STMT_BREAK ||
-      st->kind == DYN_STMT_CONTINUE || st->kind == DYN_STMT_LOCAL ||
-      st->kind == DYN_STMT_DEFER) {
+  if (st->kind == DYN_STMT_RETURN || st->kind == DYN_STMT_FAIL ||
+      st->kind == DYN_STMT_BREAK || st->kind == DYN_STMT_CONTINUE ||
+      st->kind == DYN_STMT_LOCAL || st->kind == DYN_STMT_DEFER ||
+      st->kind == DYN_STMT_ERRDEFER) {
     error_span(st->span, s, errors,
                "deferred block cannot contain control transfer, declaration, "
                "or nested defer");
@@ -3998,6 +4285,142 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     }
     return all_terminate;
   }
+  if (type_is_error_union(a, subject)) {
+    DynAstEnum u = a->enums[subject - DYN_TYPE_ENUM_BASE];
+    uint32_t mcount = u.variant_count;
+    uint32_t mem_off[65];
+    mem_off[0] = 0;
+    for (uint32_t mi = 0; mi < mcount && mi < 64; ++mi) {
+      DynType mt = a->variants[u.variant_start + mi].payload_type;
+      mem_off[mi + 1] = mem_off[mi] + a->enums[mt - DYN_TYPE_ENUM_BASE].variant_count;
+    }
+    uint32_t total_vars = mem_off[mcount < 64 ? mcount : 64];
+    bool *seen = calloc(total_vars ? total_vars : 1, 1);
+    bool wildcard = false, all_terminate = true;
+    for (uint32_t i = 0; i < st->case_arm_count; ++i) {
+      DynAstCaseArm *arm = &a->case_arms[st->case_arm_start + i];
+      if (arm->wildcard) {
+        if (wildcard) error_span(arm->span, s, errors, "duplicate _ case arm");
+        wildcard = true;
+      }
+      for (uint32_t j = 0; j < arm->pattern_count; ++j) {
+        DynAstPattern *p = &a->patterns[arm->pattern_start + j];
+        if (p->range) {
+          error_span(p->span, s, errors, "enum case pattern cannot be a range");
+          continue;
+        }
+        if (p->is_type) {
+          uint32_t mi = UINT32_MAX;
+          for (uint32_t k = 0; k < mcount; ++k)
+            if (a->variants[u.variant_start + k].payload_type == p->type) { mi = k; break; }
+          if (mi == UINT32_MAX) {
+            error_span(p->span, s, errors, "type is not a member of this error union");
+            continue;
+          }
+          p->variant = u.variant_start + mi;
+          bool dup = false;
+          for (uint32_t v = mem_off[mi]; v < mem_off[mi + 1]; ++v) {
+            if (seen[v]) dup = true;
+            seen[v] = true;
+          }
+          if (dup) error_span(p->span, s, errors, "duplicate or overlapping case pattern");
+        } else {
+          if (p->first == DYN_NO_EXPR ||
+              (a->expressions[p->first].kind == DYN_EXPR_ENUM && a->expressions[p->first].left == DYN_NO_EXPR)) {
+            error_span(p->span, s, errors, "enum union case patterns must qualify the enum name, e.g. FsErr.NotFound");
+            continue;
+          }
+          uint32_t qenum = sema_expr_enum(a, a->expressions[p->first].left, s);
+          if (qenum == UINT32_MAX) {
+            error_span(p->span, s, errors, "case pattern must name an enum or enum variant from this union");
+            continue;
+          }
+          DynType member_t = DYN_TYPE_ENUM_BASE + qenum;
+          uint32_t mi = UINT32_MAX;
+          for (uint32_t k = 0; k < mcount; ++k)
+            if (a->variants[u.variant_start + k].payload_type == member_t) { mi = k; break; }
+          if (mi == UINT32_MAX) {
+            error_span(p->span, s, errors, "enum is not a member of this error union");
+            continue;
+          }
+          DynType t = check_expr(sema, a, p->first, s, errors, member_t);
+          DynAstExpr *pe = &a->expressions[p->first];
+          if (t != member_t || pe->kind != DYN_EXPR_ENUM) {
+            error_span(p->span, s, errors, "case enum pattern type mismatch");
+            continue;
+          }
+          p->is_enum = true;
+          p->type = member_t;
+          p->variant = (uint32_t)pe->integer;
+          uint32_t rel = p->variant - a->enums[qenum].variant_start;
+          if (seen[mem_off[mi] + rel])
+            error_span(p->span, s, errors, "duplicate or overlapping case pattern");
+          seen[mem_off[mi] + rel] = true;
+        }
+      }
+      bool binding = arm->binding.end_byte > arm->binding.start_byte;
+      if (binding) {
+        if (arm->wildcard || arm->pattern_count != 1) {
+          error_span(arm->binding, s, errors, "payload binding requires one enum or variant pattern");
+        } else {
+          DynAstPattern *p0 = &a->patterns[arm->pattern_start];
+          DynType payload_t = DYN_TYPE_ERROR;
+          if (p0->is_type) {
+            payload_t = p0->type;
+          } else if (p0->is_enum) {
+            payload_t = a->variants[p0->variant].payload_type;
+            if (payload_t == DYN_TYPE_VOID)
+              error_span(arm->binding, s, errors, "payloadless variant cannot bind payload");
+          }
+          if (payload_t != DYN_TYPE_ERROR && payload_t != DYN_TYPE_VOID) {
+            const char *conflict = local_name_conflict(sema, a, arm->binding, s, true);
+            if (conflict)
+              error_span(arm->binding, s, errors, conflict);
+            else if (reserve_local(a)) {
+              DynType btype = arm->pointer_binding ? sema_intern_pointer(a, payload_t, false) : payload_t;
+              arm->local_id = (uint32_t)a->local_count;
+              a->locals[a->local_count++] = (DynAstLocal){
+                  .name = arm->binding, .depth = sema->block_depth + 1,
+                  .type = btype, .active = true, .owner_function = sema->current_function};
+            }
+          }
+        }
+      }
+      all_terminate = sema_block(sema, a, arm->body_start, arm->body_count, s, errors, true) && all_terminate;
+      if (arm->local_id != UINT32_MAX) a->locals[arm->local_id].active = false;
+    }
+    bool complete = true;
+    uint32_t missing = 0;
+    for (uint32_t v = 0; v < total_vars; ++v) {
+      if (!seen[v]) { complete = false; ++missing; }
+    }
+    if (wildcard && complete) {
+      error_span(st->span, s, errors, "_ case arm is unreachable because all cases are covered");
+    } else if (!wildcard && !complete) {
+      char message[1024];
+      int used = snprintf(message, sizeof(message), "case is not exhaustive: missing");
+      uint32_t listed = 0;
+      for (uint32_t mi = 0; mi < mcount && listed < 4; ++mi) {
+        DynType mt = a->variants[u.variant_start + mi].payload_type;
+        const DynAstEnum *men = &a->enums[mt - DYN_TYPE_ENUM_BASE];
+        char mname[128];
+        display_type_name(a, mt, s, mname, sizeof(mname));
+        for (uint32_t v = 0; v < men->variant_count && listed < 4; ++v) {
+          if (seen[mem_off[mi] + v]) continue;
+          DynSpan vn = a->variants[men->variant_start + v].name;
+          const char *sep = !listed ? " " : listed + 1 == missing ? " and " : ", ";
+          used += snprintf(message + used, sizeof(message) - (size_t)used, "%s%s.%.*s",
+                           sep, mname, (int)(vn.end_byte - vn.start_byte), s->text + vn.start_byte);
+          ++listed;
+        }
+      }
+      if (missing > listed && used > 0 && (size_t)used < sizeof(message))
+        snprintf(message + used, sizeof(message) - (size_t)used, " and %u more", missing - listed);
+      error_span(st->span, s, errors, message);
+    }
+    free(seen);
+    return all_terminate;
+  }
   if (!enum_case && !integer_case) {
     error_span(st->span, s, errors, "case requires integer or enum value");
     return false;
@@ -4039,13 +4462,13 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
         DynType t = check_expr(sema, a, p->first, s, errors, subject);
         bool valid = t == subject;
         if (p->is_signed) {
-          ConstantInt lo = constant_int(a, p->first);
+          ConstantInt lo = constant_int_at(a, p->first, 16);
           valid = valid && lo.valid;
           p->first_value = (uint64_t)lo.value;
           p->last_value = p->first_value;
           if (p->range) {
             DynType ht = check_expr(sema, a, p->last, s, errors, subject);
-            ConstantInt hi = constant_int(a, p->last);
+            ConstantInt hi = constant_int_at(a, p->last, 16);
             valid = valid && ht == subject && hi.valid;
             if (valid && (!p->inclusive && hi.value == INT64_MIN))
               valid = false;
@@ -4053,13 +4476,13 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
               p->last_value = (uint64_t)(hi.value - (p->inclusive ? 0 : 1));
           }
         } else {
-          ConstantUInt lo = constant_uint(a, p->first);
+          ConstantUInt lo = constant_uint_at(a, p->first, 16);
           valid = valid && lo.valid;
           p->first_value = lo.value;
           p->last_value = lo.value;
           if (p->range) {
             DynType ht = check_expr(sema, a, p->last, s, errors, subject);
-            ConstantUInt hi = constant_uint(a, p->last);
+            ConstantUInt hi = constant_uint_at(a, p->last, 16);
             valid = valid && ht == subject && hi.valid;
             if (valid && !p->inclusive && hi.value == 0)
               valid = false;
@@ -4106,11 +4529,23 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
           error_span(arm->binding, s, errors,
                      local_name_conflict(sema, a, arm->binding, s, true));
         else if (reserve_local(a)) {
+          if (!arm->pointer_binding && type_is_nocopy(a, v->payload_type, 0) &&
+              expr_is_lvalue(a, st->expression)) {
+            char pname[256];
+            display_type_name(a, v->payload_type, s, pname, sizeof(pname));
+            error_format(arm->binding, s, errors,
+                         "cannot copy nocopy type '%s'; bind '*%.*s' or move with '#take(&x)'",
+                         pname, (int)(arm->binding.end_byte - arm->binding.start_byte),
+                         s->text + arm->binding.start_byte);
+          }
+          DynType binding_type = arm->pointer_binding
+                                     ? sema_intern_pointer(a, v->payload_type, false)
+                                     : v->payload_type;
           arm->local_id = (uint32_t)a->local_count;
           a->locals[a->local_count++] =
               (DynAstLocal){.name = arm->binding,
                           .depth = sema->block_depth + 1,
-                            .type = v->payload_type,
+                            .type = binding_type,
                             .active = true,
                             .owner_function = sema->current_function};
         }
@@ -4462,7 +4897,9 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                               const DynSource *s, unsigned *errors) {
   if (st->kind == DYN_STMT_INVALID)
     return false;
-  if (st->kind == DYN_STMT_DEFER) {
+  if (st->kind == DYN_STMT_DEFER || st->kind == DYN_STMT_ERRDEFER) {
+    if (st->kind == DYN_STMT_ERRDEFER && !type_is_fallible(a, sema->current_return_type))
+      error_span(st->span, s, errors, "errdefer is only allowed in a fallible function");
     bool valid = true;
     for (uint32_t i = 0; i < st->body_count; ++i)
       valid = valid_defer_stmt(a, a->children[st->body_start + i], s, errors) &&
@@ -4473,6 +4910,36 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                        true);
     --sema->defer_depth;
     return false;
+  }
+  if (st->kind == DYN_STMT_FAIL) {
+    if (!type_is_fallible(a, sema->current_return_type)) {
+      error_span(st->span, s, errors, "fail is only allowed in a fallible function (returning T!E, !E, T!, or !)");
+      if (st->expression != DYN_NO_EXPR)
+        (void)check_expr(sema, a, st->expression, s, errors, DYN_TYPE_INFER);
+      return true;
+    }
+    DynType err_t = a->enums[sema->current_return_type - DYN_TYPE_ENUM_BASE].err_type;
+    if (err_t == DYN_TYPE_VOID) {
+      if (st->expression != DYN_NO_EXPR) {
+        error_span(st->span, s, errors, "untyped fallible function cannot fail with an error value; use bare 'fail'");
+        (void)check_expr(sema, a, st->expression, s, errors, DYN_TYPE_INFER);
+      }
+    } else if (st->expression == DYN_NO_EXPR) {
+      error_span(st->span, s, errors, "fallible function must fail with an error value");
+    } else {
+      DynType value = check_expr(sema, a, st->expression, s, errors, err_t);
+      check_nocopy_value(a, st->expression, s, errors);
+      vet_cast(sema, a, s, st->expression, err_t);
+      if (returns_local_borrow(sema, a, st->expression))
+        error_span(st->span, s, errors, "error value borrows function-local storage");
+      if (value != err_t && value != DYN_TYPE_ERROR) {
+        if (can_convert(sema, a, value, err_t))
+          st->expression = convert_expr(a, st->expression, err_t);
+        else
+          error_types(a, st->span, s, errors, "fail error type mismatch", err_t, value);
+      }
+    }
+    return true;
   }
   if (st->kind == DYN_STMT_ASSERT) {
     /* Checked when the body is: in a generic function, once per instance.
@@ -4518,25 +4985,27 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     return checked;
   }
   if (st->kind == DYN_STMT_RETURN) {
-    if (sema->current_return_type == DYN_TYPE_VOID) {
+    DynType ret_t = type_is_fallible(a, sema->current_return_type)
+                        ? a->enums[sema->current_return_type - DYN_TYPE_ENUM_BASE].ok_type
+                        : sema->current_return_type;
+    if (ret_t == DYN_TYPE_VOID) {
       if (st->expression != DYN_NO_EXPR)
         error_span(st->span, s, errors, "void function cannot return a value");
     } else if (st->expression == DYN_NO_EXPR)
       error_span(st->span, s, errors, "non-void function must return a value");
     else {
-      DynType value = check_expr(sema, a, st->expression, s, errors,
-                                 sema->current_return_type);
-      vet_cast(sema, a, s, st->expression, sema->current_return_type);
+      DynType value = check_expr(sema, a, st->expression, s, errors, ret_t);
+      check_nocopy_value(a, st->expression, s, errors);
+      vet_cast(sema, a, s, st->expression, ret_t);
       if (returns_local_borrow(sema, a, st->expression))
         error_span(st->span, s, errors,
                    "returned value borrows function-local storage");
-      if (value != sema->current_return_type && value != DYN_TYPE_ERROR) {
-        if (can_convert(sema, a, value, sema->current_return_type))
-          st->expression =
-              convert_expr(a, st->expression, sema->current_return_type);
+      if (value != ret_t && value != DYN_TYPE_ERROR) {
+        if (can_convert(sema, a, value, ret_t))
+          st->expression = convert_expr(a, st->expression, ret_t);
         else
           error_types(a, st->span, s, errors, "return type mismatch",
-                      sema->current_return_type, value);
+                      ret_t, value);
       }
     }
     return true;
@@ -4893,6 +5362,14 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                       ? sema_intern_pointer(
                             a, element, sl && sl->is_const)
                       : element;
+      if (!st->for_pointer && type_is_nocopy(a, element, 0)) {
+        char ename[256];
+        display_type_name(a, element, s, ename, sizeof(ename));
+        error_format(st->name, s, errors,
+                     "cannot copy nocopy type '%s' in for-in loop; use 'for *%.*s in ...'",
+                     ename, (int)(st->name.end_byte - st->name.start_byte),
+                     s->text + st->name.start_byte);
+      }
       if (binding == DYN_TYPE_ERROR) {
         error_out_of_memory(st->span, s, errors);
         return false;
@@ -4967,6 +5444,7 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       pristine = copy_untyped(a, st->expression);
     if (st->expression != DYN_NO_EXPR) {
       DynType value = check_expr(sema, a, st->expression, s, errors, type);
+      check_nocopy_value(a, st->expression, s, errors);
       if (type != DYN_TYPE_INFER)
         vet_cast(sema, a, s, st->expression, type);
       if (type == DYN_TYPE_INFER)
@@ -5008,6 +5486,7 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
   if (st->target != DYN_NO_EXPR) {
     DynType target = check_expr(sema, a, st->target, s, errors, DYN_TYPE_INFER),
             value = check_expr(sema, a, st->expression, s, errors, target);
+    check_nocopy_value(a, st->expression, s, errors);
     bool field_shift = st->assignment_op == DYN_OP_SHL || st->assignment_op == DYN_OP_SHR;
     if (!field_shift)
       vet_cast(sema, a, s, st->expression, target);
@@ -5077,6 +5556,7 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       st->assignment_op == DYN_OP_SHL || st->assignment_op == DYN_OP_SHR;
   DynType value = check_expr(sema, a, st->expression, s, errors,
                              shift ? DYN_TYPE_USIZE : target);
+  check_nocopy_value(a, st->expression, s, errors);
   if (!shift)
     vet_cast(sema, a, s, st->expression, target);
   if (shift) {
@@ -5450,6 +5930,7 @@ static void sema_late_finish(SemaLate *late, unsigned *errors) {
 }
 /* Checks function f's signature rules and body: one turn of
    sema_program's loop. A continue in the body ends the turn. */
+#include "sema_errors.inc"
 static void sema_check_function(Sema *sema, DynAstProgram *a, const DynSource *s, unsigned *errors, uint32_t f,
                                 SemaLate *late) {
   do {
@@ -5457,32 +5938,6 @@ static void sema_check_function(Sema *sema, DynAstProgram *a, const DynSource *s
     if (fn->return_type == DYN_TYPE_ANY)
       error_span(fn->name, s, errors,
                  "returning any would escape borrowed storage");
-    /* One way to write a generic: a type an argument already carries is
-       inferred from it (`items: []$T`), and `$T: type` is only for a type
-       no argument carries, such as one used only by the result or body. */
-    if (fn->is_generic && !fn->is_instance) {
-      DynAstGeneric g = a->generics[fn->generic];
-      for (uint32_t i = 0; i < g.param_count; ++i) {
-        DynAstGenericParam explicit_param = a->generic_params[g.param_start + i];
-        if (!explicit_param.is_type) continue;
-        for (uint32_t j = i + 1; j < g.param_count; ++j) {
-          DynAstGenericParam later = a->generic_params[g.param_start + j];
-          if (later.is_type || !pattern_mentions(a, later.pattern, explicit_param.pattern, 0))
-            continue;
-          char message[320];
-          int tn = (int)(explicit_param.name.end_byte - explicit_param.name.start_byte);
-          int pn = (int)(later.name.end_byte - later.name.start_byte);
-          snprintf(message, sizeof(message),
-                   "%.*s is in the type of `%.*s`, so it is inferred: write `$%.*s` there and drop `%.*s: type`",
-                   tn, s->text + explicit_param.name.start_byte,
-                   pn, s->text + later.name.start_byte,
-                   tn, s->text + explicit_param.name.start_byte,
-                   tn, s->text + explicit_param.name.start_byte);
-          error_span(explicit_param.name, s, errors, message);
-          break;
-        }
-      }
-    }
     if (fn->foreign) {
       if (fn->variadic && fn->param_count == 0)
         error_span(fn->name, s, errors,
@@ -5605,7 +6060,10 @@ static void sema_check_function(Sema *sema, DynAstProgram *a, const DynSource *s
     /* A worker leaves lifetimes to the commit, which runs them in order. */
     if (!sema_work && (!late || (!*errors && fn->local_count && !sema_late_add(late, f))))
       life_check_function(sema,a,s,errors,fn);
-    if (fn->return_type != DYN_TYPE_VOID && !terminated)
+    bool void_return = fn->return_type == DYN_TYPE_VOID ||
+                       (type_is_fallible(a, fn->return_type) &&
+                        a->enums[fn->return_type - DYN_TYPE_ENUM_BASE].ok_type == DYN_TYPE_VOID);
+    if (!void_return && !terminated)
       error_span(fn->name, s, errors,
                  "non-void function may exit without return");
     for (uint32_t i = fn->local_start; i < a->local_count; ++i)
@@ -5821,9 +6279,9 @@ static void vet_copied_handles(const DynAstProgram *a, const DynSource *s) {
   free(passed);
 }
 /* dyn vet, by shape: a struct local declared without a value that is only
-   ever passed by pointer, as in `status: fail.Status` given to calls as
-   &status, collects what those calls record and nobody reads it. And a local
-   initialized by such a call, `text := f(&status, ...)`, tested for being
+   ever passed by pointer, as in a `state: State` with a `failed` field given
+   to calls as &state, collects what those calls record and nobody reads it. And a local
+   initialized by such a call, `text := f(&state, ...)`, tested for being
    empty (`#len(text) == 0`) before the struct is read: an empty result can be
    a success, so the emptiness says nothing about a failure. No function or
    type is known by name. `_ = status` reads it, to drop it on purpose. */
@@ -5928,7 +6386,7 @@ static void vet_unread_state(const DynAstProgram *a, const DynSource *s) {
              (int)(state_name.end_byte - state_name.start_byte), s->text + state_name.start_byte);
     sema_vet_note(s, e->span, false, message);
   }
-  /* Reset before read: `status = fail.Status{}` (or any new value) while what
+  /* Reset before read: `state = State{}` (or any new value) while what
      calls recorded in it since it was last read was never looked at. */
   for (size_t i = 0; i < a->statement_count; ++i) {
     const DynAstStmt *st = &a->statements[i];
@@ -5983,6 +6441,8 @@ static void sema_main_init(DynAstProgram *a, const DynSource *s, unsigned *error
     DynAstFn *f = &a->functions[i];
     if (f->is_main && f->param_count)
       error_span(f->name, s, errors, "main takes no parameters; call process.start() for the arguments and an arena");
+    if (f->is_main && type_is_fallible(a, f->return_type))
+      error_span(f->name, s, errors, "main cannot return a fallible type; handle errors with 'catch'");
   }
 }
 bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
@@ -6077,6 +6537,13 @@ bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
         if (to_pointer || from_pointer)
           sema_vet_note(s, e->span, true, "unsafe: pointer cast");
       }
+    }
+  }
+  if (ok) {
+    sema_lower_errors_all(a, s);
+    if (a->allocation_failed) {
+      error_span((DynSpan){0}, s, errors, "out of memory lowering error handling");
+      ok = false;
     }
   }
   if (a->type_capacity_exceeded) {

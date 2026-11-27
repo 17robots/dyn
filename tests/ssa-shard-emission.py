@@ -25,7 +25,7 @@ def function(i):
 fn work{i}(values: []u64, n: u64) u64 {{
   total: u64 = {i}
   for k in 0..n {{
-    total += values[k % #len(values)] * {i + 1}
+    total += values[k % values.len] * {i + 1}
   }}
   case total % 6 {{
     0 => {{ total += 11 }}
@@ -37,7 +37,7 @@ fn work{i}(values: []u64, n: u64) u64 {{
   }}
   label := "shared label"
   own := "label {i}"
-  return total + #len(label) + #len(own)
+  return total + label.len + own.len
 }}
 
 fn scaled{i}(x: f64) f64 {{

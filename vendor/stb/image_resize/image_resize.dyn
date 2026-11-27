@@ -1,5 +1,5 @@
+use io "std/io"
 use "std/mem"
-use "std/fail"
 #link("dyn_stb")
 // Tightly packed u8 pixels, 1..4 channels, dimensions 1..32768. RGBA uses
 // straight alpha. RGB/RGBA may use sRGB; alpha remains linear. No in-place resize.
@@ -7,33 +7,23 @@ use "std/fail"
 // Source/destination storage must remain outside the scratch allocation range.
 // Bad sizes, channels or buffers fail with InvalidInput. An exhausted scratch
 // arena panics.
-pub fn resize(scratch: *mem.Arena, status: *fail.Status, source: []const u8, width: usize, height: usize, destination: []u8, out_width: usize, out_height: usize, channels: usize, srgb: bool) {
-  if status == nil {
-    resize(scratch, &fail.Status{}, source, width, height, destination, out_width, out_height, channels, srgb)
-    return
-  }
-  if status.failed { return }
-  if scratch == nil || #len(source) == 0 || #len(destination) == 0 {
-    fail.invalid(status, "resize", "", "no scratch arena, source or destination")
-    return
-  }
+pub fn resize(scratch: *mem.Arena, source: []const u8, width: usize, height: usize, destination: []u8, out_width: usize, out_height: usize, channels: usize, srgb: bool) !io.IoErr {
+  if scratch == nil || source.len == 0 || destination.len == 0 { fail .InvalidInput }
   if width == 0 || height == 0 || out_width == 0 || out_height == 0 || width > 32768 || height > 32768 || out_width > 32768 || out_height > 32768 || channels == 0 || channels > 4 {
-    fail.invalid(status, "resize", "", "sizes must be 1..32768 and channels 1..4")
-    return
+    fail .InvalidInput
   }
   // Each size is at most 32768, so the products fit in u64.
   input_size := #cast(u64, width) * #cast(u64, height) * #cast(u64, channels)
   output_size := #cast(u64, out_width) * #cast(u64, out_height) * #cast(u64, channels)
-  if input_size > 2147483647 || output_size > 2147483647 || #len(source) < input_size || #len(destination) < output_size {
-    fail.invalid(status, "resize", "", "source or destination is smaller than its image")
-    return
+  if input_size > 2147483647 || output_size > 2147483647 || source.len < input_size || destination.len < output_size {
+    fail .InvalidInput
   }
   mark := mem.arena_mark(scratch)
   defer mem.arena_rewind(scratch, mark)
-  if !native_resize(#cast(rawptr, &source[0]), #len(source), #cast(i32, width), #cast(i32, height), #cast(rawptr, &destination[0]),
-    #len(destination), #cast(i32, out_width), #cast(i32, out_height), #cast(i32, channels), srgb, #cast(rawptr, scratch),
+  if !native_resize(#cast(rawptr, &source[0]), source.len, #cast(i32, width), #cast(i32, height), #cast(rawptr, &destination[0]),
+    destination.len, #cast(i32, out_width), #cast(i32, out_height), #cast(i32, channels), srgb, #cast(rawptr, scratch),
     scratch_allocate) {
-    fail.set(status, fail.make(fail.Kind.System, "resize", "", "the resize failed"))
+    fail io.IoErr.System(0)
   }
 }
 // Private synchronous callback; provider scratch cannot outlive resize.

@@ -7,18 +7,15 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
-COMMON = '''use "std/fail"
-use "std/os/windows" win
+COMMON = '''use win "std/os/windows"
 fn sockets() {
   for i in 0..32 {
-    status: fail.Status
-    opened := win.socket_open(&status, 2, 1, 6)
-    if status.failed { #panic("socket_open without explicit WSAStartup") }
+    opened := win.socket_open(2, 1, 6)
+    if opened < 0 { #panic("socket_open without explicit WSAStartup") }
     if !win.socket_close(#cast(usize, opened)) { #panic("socket_close") }
   }
-  invalid: fail.Status
-  socket := win.socket_open(&invalid, -1, 1, 0)
-  if !invalid.failed || invalid.failure.native == 0 || invalid.failure.native == 10093 || socket != -1 {
+  socket := win.socket_open(-1, 1, 0)
+  if socket >= 0 || socket == -10093 {
     #panic("native socket error lost or Winsock uninitialized")
   }
 }
@@ -26,7 +23,7 @@ fn sockets() {
 CASES = {
     'first-open': COMMON + 'fn main() { sockets() }\n',
     'concurrent-first-open': COMMON + '''
-use "std/sync" sync
+use sync "std/sync"
 ready: sync.AtomicU32 = sync.AtomicU32{}
 start: sync.AtomicU32 = sync.AtomicU32{}
 fn worker(context: rawptr) isize {

@@ -5,7 +5,7 @@ bytes: [1048576]u8
 
 fn scan(cursor: *Cursor) u64 {
   total: u64 = 0
-  for cursor.at < #len(cursor.source) {
+  for cursor.at < cursor.source.len {
     byte := cursor.source[cursor.at]
     cursor.at += 1
     total += #cast(u64, byte)
@@ -15,7 +15,7 @@ fn scan(cursor: *Cursor) u64 {
 
 fn main() {
   expected: u64 = 0
-  for i in 0..#len(bytes) {
+  for i in 0..bytes.len {
     bytes[i] = #cast(u8, (i % 251))
     expected += #cast(u64, bytes[i])
   }
@@ -23,7 +23,7 @@ fn main() {
   for round in 0..100 {
     cursor := Cursor{source: bytes[..]}
     total += scan(&cursor)
-    if cursor.at != #len(bytes) { #panic("cursor position") }
+    if cursor.at != bytes.len { #panic("cursor position") }
   }
   if total != expected * 100 { #panic("cursor checksum") }
   io.println("{}", total)

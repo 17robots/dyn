@@ -1,39 +1,33 @@
 use "std/bufio"
 use "std/bytes"
-use "std/fail"
 use "std/fs"
 use "std/io"
 use "std/strings"
 
-fn report(failure: fail.Failure) {
-  storage: [512]u8
-  io.eprintln("jobs: {}", fail.describe(storage[..], failure))
-}
-
 // Newline characters in path, read a buffer at a time.
-fn count(status: *fail.Status, path: []const u8) usize {
-  file := fs.open(status, path)
+fn count(path: []const u8) usize!io.IoErr {
+  file := try fs.open(path)
   defer fs.close(&file)
   buffer: [65536]u8
   lines: usize = 0
-  for !status.failed {
-    got := fs.read(status, &file, buffer[..])
+  for {
+    got := try fs.read(&file, buffer[..])
     if got == 0 { break }
     lines += bytes.count_occurrences(buffer[..got], "\n")
   }
   return lines
 }
 
-fn copy(status: *fail.Status, from: []const u8, to: []const u8) {
-  input := fs.open(status, from)
+fn copy(from: []const u8, to: []const u8) !io.IoErr {
+  input := try fs.open(from)
   defer fs.close(&input)
-  output := fs.create(status, to)
+  output := try fs.create(to)
   defer fs.close(&output)
   buffer: [65536]u8
-  for !status.failed {
-    got := fs.read(status, &input, buffer[..])
+  for {
+    got := try fs.read(&input, buffer[..])
     if got == 0 { break }
-    fs.write(status, &output, buffer[..got])
+    try fs.write(&output, buffer[..got])
   }
 }
 
@@ -42,38 +36,43 @@ fn run(line: []const u8) bool {
   command := line
   rest: []const u8 = ""
   space := bytes.find_byte(line, ' ')
-  if space < #len(line) {
+  if space < line.len {
     command = line[..space]
     rest = strings.trim(line[space + 1..])
   }
-  status: fail.Status
   case command {
     "count" => {
-      lines := count(&status, rest)
-      if !status.failed { io.println("{} {}", rest, lines) }
+      lines := count(rest) catch err {
+        io.eprintln("jobs: {}: {}", rest, err)
+        return false
+      }
+      io.println("{} {}", rest, lines)
     }
     "copy" => {
       split := bytes.find_byte(rest, ' ')
-      if split == #len(rest) {
+      if split == rest.len {
         io.eprintln("jobs: copy needs FROM and TO: {}", line)
         return false
       }
       from := rest[..split]
-      copy(&status, from, strings.trim(rest[split + 1..]))
-      if !status.failed { io.println("copied {}", from) }
+      to := strings.trim(rest[split + 1..])
+      copy(from, to) catch err {
+        io.eprintln("jobs: copy {} to {}: {}", from, to, err)
+        return false
+      }
+      io.println("copied {}", from)
     }
     "remove" => {
-      fs.remove(&status, rest)
-      if !status.failed { io.println("removed {}", rest) }
+      fs.remove(rest) catch err {
+        io.eprintln("jobs: {}: {}", rest, err)
+        return false
+      }
+      io.println("removed {}", rest)
     }
     _ => {
       io.eprintln("jobs: unknown command: {}", line)
       return false
     }
-  }
-  if status.failed {
-    report(status.failure)
-    return false
   }
   return true
 }
@@ -81,18 +80,16 @@ fn run(line: []const u8) bool {
 fn main() i32 {
   storage: [65536]u8
   input := bufio.reader(io.stdin(), storage[..])
-  reading: fail.Status
   all_good := true
   for {
-    line := bufio.read_line(&reading, &input)
-    if reading.failed {
-      report(reading.failure)
+    line := bufio.read_line(&input) catch err {
+      io.eprintln("jobs: {}", err)
       return 1
     }
     if input.ended { break }
     text := strings.trim(line)
     if bytes.equal(text, "quit") { break }
-    if #len(text) != 0 && !run(text) {
+    if text.len != 0 && !run(text) {
       all_good = false
     }
   }

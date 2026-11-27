@@ -9,32 +9,49 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/io" io
-use "vendor/window" window
-use "std/bytes" bytes
-use "std/fail"
-fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) fail.Failure {
-  status: fail.Status
-  window.open(&status, p0, p1, p2, p3)
-  return status.failure
+SOURCE = r'''use io "std/io"
+use window "vendor/window"
+use bytes "std/bytes"
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+fn failure_of(err: io.IoErr) Failure {
+  case err {
+    .System(code) => { return Failure{ kind: Kind.System, native: code } }
+    _ => { return Failure{ kind: kind_of(err) } }
+  }
+}
+fn window_open(p0: *window.Window, p1: []const u8, p2, p3: i32) Failure {
+  window.open(p0, p1, p2, p3) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_poll(p0: *window.Window) fail.Failure {
-  status: fail.Status
-  window.poll(&status, p0)
-  return status.failure
+fn window_poll(p0: *window.Window) Failure {
+  window.poll(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_wake(p0: *const window.Window) fail.Failure {
-  status: fail.Status
-  window.wake(&status, p0)
-  return status.failure
+fn window_wake(p0: *const window.Window) Failure {
+  window.wake(p0) catch err { return failure_of(err) }
+  return Failure{}
 }
 
-fn window_try_set_clipboard(p0:*window.Window, p1:[]const u8) fail.Failure {
-  status: fail.Status
-  window.try_set_clipboard(&status, p0, p1)
-  return status.failure
+fn window_try_set_clipboard(p0:*window.Window, p1:[]const u8) Failure {
+  window.try_set_clipboard(p0, p1) catch err { return failure_of(err) }
+  return Failure{}
 }
 
 
@@ -46,15 +63,15 @@ fn check(ok: bool, message: []const u8) {
 
 fn main() {
   host := window.Window{}
-  check(window_open(&host, "Dyn desktop input test", 96, 64).kind == fail.Kind.Ok, "open")
+  check(window_open(&host, "Dyn desktop input test", 96, 64).kind == Kind.Ok, "open")
   defer {
     window.close(&host)
   }
   _ = window_poll(&host)
   window.listen_events(&host, true)
-  check(window_wake(&host).kind == fail.Kind.Ok, "wake accepted")
+  check(window_wake(&host).kind == Kind.Ok, "wake accepted")
   window.wait(&host, 100)
-  check(window_poll(&host).kind == fail.Kind.Ok, "poll wake")
+  check(window_poll(&host).kind == Kind.Ok, "poll wake")
   event := window.Event{}
   woke := false
   for window.next_event(&host, &event) {
@@ -67,9 +84,9 @@ fn main() {
   window.set_cursor(&host, window.Cursor.Text)
   window.set_cursor(&host, window.Cursor.Arrow)
   quiet := window.box_input(&host)
-  check(#len(quiet.text) == 0 && !quiet.paste, "no input yet")
+  check(quiet.text.len == 0 && !quiet.paste, "no input yet")
   window.listen_events(&host, true)
-  check(window_try_set_clipboard(&host, "clip ✓ text").kind == fail.Kind.Ok, "clipboard publication")
+  check(window_try_set_clipboard(&host, "clip ✓ text").kind == Kind.Ok, "clipboard publication")
   window.request_paste(&host)
   got := false
   for i in 0..300 {
@@ -111,7 +128,7 @@ fn main() {
   // No input method composes during the test: the composition stays empty.
   window.set_text_input(&host, true, 10, 12, 1, 16)
   _ = window_poll(&host)
-  check(#len(window.box_input(&host).composition) == 0 && window.box_input(&host).composition_cursor == -1, "no composition")
+  check(window.box_input(&host).composition.len == 0 && window.box_input(&host).composition_cursor == -1, "no composition")
   window.set_text_input(&host, false, 0, 0, 0, 0)
   window.wait(&host, 20)
 }
@@ -131,11 +148,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-desktop-') as directory:
         project.mkdir()
         # A Wayland selection requires a real input serial. Supply input only
         # inside the private compositor, never through the user's desktop.
-        source = SOURCE.replace('use "vendor/window" window', 'use "vendor/window/wayland" window')
-        source = source.replace('  _ = window_poll(&host)', '  mapping: fail.Status\n  window.swap(&mapping, &host)\n  check(!mapping.failed, "map window")\n  _ = window_poll(&host)', 1)
+        source = SOURCE.replace('use window "vendor/window"', 'use window "vendor/window/wayland"')
+        source = source.replace('  _ = window_poll(&host)', '  window.swap(&host) catch { #panic("map window") }\n  _ = window_poll(&host)', 1)
         source = source.replace(
-            '  check(window_try_set_clipboard(&host, "clip ✓ text").kind == fail.Kind.Ok, "clipboard publication")',
-            '  for i in 0..300 {\n    if window_try_set_clipboard(&host, "clip ✓ text").kind == fail.Kind.Ok { break }\n    _ = window_poll(&host)\n    window.wait(&host, 10)\n  }\n  check(window_try_set_clipboard(&host, "clip ✓ text").kind == fail.Kind.Ok, "clipboard publication after input")')
+            '  check(window_try_set_clipboard(&host, "clip ✓ text").kind == Kind.Ok, "clipboard publication")',
+            '  for i in 0..300 {\n    if window_try_set_clipboard(&host, "clip ✓ text").kind == Kind.Ok { break }\n    _ = window_poll(&host)\n    window.wait(&host, 10)\n  }\n  check(window_try_set_clipboard(&host, "clip ✓ text").kind == Kind.Ok, "clipboard publication after input")')
         (project / 'main.dyn').write_text(source, encoding='utf-8')
         bridge = project / 'libdyn_window.so'
         subprocess.run([sys.executable, str(ROOT / 'vendor/window/native/build.py'), '--output', str(bridge)], check=True, timeout=120)

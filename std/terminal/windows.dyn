@@ -1,6 +1,5 @@
-use "std/os/windows" native_windows
-use "std/io" io
-use "std/fail"
+use native_windows "std/os/windows"
+use io "std/io"
 #target(kernel: windows)
 
 extern fn get_mode "dyn_terminal_get_mode"(handle: rawptr, mode: *u32) i32
@@ -21,8 +20,8 @@ fn handle_of(descriptor: isize) rawptr {
   return #cast(rawptr, descriptor)
 }
 
-fn failure(status: *fail.Status, operation: []const u8) {
-  fail.set(status, io.from_windows(operation, "", #cast(isize, native_windows.last_error_raw())))
+fn failure() io.IoErr {
+  return io.windows_err(#cast(isize, native_windows.last_error_raw()))
 }
 
 fn mode_of(state: *const State) u32 {
@@ -37,30 +36,17 @@ fn set_mode_bytes(state: *State, mode: u32) {
 }
 
 // The console mode of descriptor; fails when it is not a console.
-pub fn read_state(status: *fail.Status, descriptor: isize) State {
-  if status == nil { return read_state(&fail.Status{}, descriptor) }
+pub fn read_state(descriptor: isize) State!io.IoErr {
   result := State{}
-  if status.failed { return result }
   mode: u32 = 0
-  if get_mode(handle_of(descriptor), &mode) == 0 {
-    failure(status, "read terminal")
-    return result
-  }
+  if get_mode(handle_of(descriptor), &mode) == 0 { fail failure() }
   set_mode_bytes(&result, mode)
   return result
 }
 
-pub fn restore(status: *fail.Status, descriptor: isize, saved: *const State) {
-  if status == nil {
-    restore(&fail.Status{}, descriptor, saved)
-    return
-  }
-  if status.failed { return }
-  if saved == nil {
-    fail.invalid(status, "restore terminal", "", "no saved settings")
-    return
-  }
-  if set_mode(handle_of(descriptor), mode_of(saved)) == 0 { failure(status, "restore terminal") }
+pub fn restore(descriptor: isize, saved: *const State) !io.IoErr {
+  if saved == nil { fail .InvalidInput }
+  if set_mode(handle_of(descriptor), mode_of(saved)) == 0 { fail failure() }
 }
 
 // Output streams (1 and 2) gain virtual-terminal processing. Every other
@@ -78,18 +64,13 @@ fn make_raw(descriptor: isize, state: *State) {
 
 // The visible window of the console screen buffer. Descriptor 0 reports the
 // standard output buffer.
-pub fn size(status: *fail.Status, descriptor: isize) Size {
-  if status == nil { return size(&fail.Status{}, descriptor) }
-  if status.failed { return Size{} }
+pub fn size(descriptor: isize) Size!io.IoErr {
   handle := handle_of(descriptor)
   if descriptor == 0 {
     handle = handle_of(1)
   }
   info: [22]u8
-  if buffer_info(handle, &info[0]) == 0 {
-    failure(status, "terminal size")
-    return Size{}
-  }
+  if buffer_info(handle, &info[0]) == 0 { fail failure() }
   left := #cast(i16, #cast(u16, info[10]) | #cast(u16, info[11]) << 8)
   top := #cast(i16, #cast(u16, info[12]) | #cast(u16, info[13]) << 8)
   right := #cast(i16, #cast(u16, info[14]) | #cast(u16, info[15]) << 8)

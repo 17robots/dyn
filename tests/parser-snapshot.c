@@ -40,7 +40,7 @@ static void test_free(void *p) {
 #undef realloc
 #undef free
 
-static const char source[] = "use \"dep\" d pub fn f(a:i64) i64 { return a+1 }";
+static const char source[] = "use d \"dep\"\npub fn f(a:i64) i64 { return a+1 }";
 static void *reader(void *data) {
   ExpSnapshot *snapshot = data;
   for (unsigned i = 0; i < 10000; ++i) {

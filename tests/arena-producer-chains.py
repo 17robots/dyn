@@ -9,10 +9,9 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/mem"
 use "std/bytes"
-use "std/io" errors
-use "std/fail"
-use "std/encoding/base32" b32
-use "std/encoding/base64" b64
+use errors "std/io"
+use b32 "std/encoding/base32"
+use b64 "std/encoding/base64"
 use "std/encoding/hex"
 use "std/encoding/json"
 use "std/net/dns"
@@ -29,13 +28,17 @@ fn fresh() Fixture {
  mem.fill(prefix,91)
  second:=mem.push_bytes(arena,256)
  mem.fill(second,77)
- _=mem.push(u8,arena)
- check(mem.arena_mark(arena)>#len(arena.data))
+ _=mem.push<u8>(arena)
+ check(mem.arena_mark(arena)>arena.data.len)
  return Fixture{arena:arena,prefix:prefix,second:second}
 }
 fn intact(f:Fixture) {
  for b in f.prefix { check(b==91) }
  for b in f.second { check(b==77) }
+}
+fn b64_fails(arena:*mem.Arena,text:[]const u8) bool {
+ _=b64.decode(arena,text) catch { return true }
+ return false
 }
 fn main() {
  f:=fresh()
@@ -44,34 +47,36 @@ fn main() {
  check(!mem.arena_overlaps_unallocated(f.arena,f.second))
  tail:=f.arena.current.data[f.arena.current.offset..]
  check(mem.arena_overlaps_unallocated(f.arena,tail))
- _=mem.copy(tail,"YQ==")
+ // Malformed input in the free space fails before the overlap check (valid
+ // input there panics) and leaves the arena and the input alone.
+ _=mem.copy(tail,"Y!==")
  mark:=mem.arena_mark(f.arena)
- rejected:fail.Status
- _=b64.decode(f.arena,&rejected,tail[..4])
- check(rejected.failure.kind==fail.Kind.InvalidInput && mem.arena_mark(f.arena)==mark)
- check(bytes.equal(tail[..4],"YQ=="))
- status:fail.Status
- check(bytes.equal(b64.decode(f.arena,&status,"aGVsbG8="),"hello"))
- check(bytes.equal(b32.decode(f.arena,&status,"NBSWY3DP"),"hello"))
- check(bytes.equal(hex.decode(f.arena,&status,"68656c6c6f"),"hello"))
- root:=json.parse(f.arena,&status,"{\"answer\":42,\"text\":\"hello\"}")
- check(!status.failed && json.get(i64,&status,root,"answer")==42)
- chunked:=http.decode_chunked(f.arena,&status,"5\r\nhello\r\n0\r\n\r\n")
- check(!status.failed && bytes.equal(chunked.value,"hello"))
+ check(b64_fails(f.arena,tail[..4]) && mem.arena_mark(f.arena)==mark)
+ check(bytes.equal(tail[..4],"Y!=="))
+ decoded:=b64.decode(f.arena,"aGVsbG8=") catch { #panic("base64") }
+ check(bytes.equal(decoded,"hello"))
+ decoded=b32.decode(f.arena,"NBSWY3DP") catch { #panic("base32") }
+ check(bytes.equal(decoded,"hello"))
+ decoded=hex.decode(f.arena,"68656c6c6f") catch { #panic("hex") }
+ check(bytes.equal(decoded,"hello"))
+ root:=json.parse(f.arena,"{\"answer\":42,\"text\":\"hello\"}") catch { #panic("json") }
+ check((json.get<i64>(root, "answer") catch 0)==42)
+ chunked:=http.decode_chunked(f.arena,"5\r\nhello\r\n0\r\n\r\n") catch { #panic("chunked") }
+ check(bytes.equal(chunked.value,"hello"))
  packet:[46]u8=[18,52,129,128,0,1,0,1,0,0,0,0,7,101,120,97,109,112,108,101,4,116,101,115,116,0,0,1,0,1,192,12,0,1,0,1,0,0,0,1,0,4,1,2,3,4]
- answers:=dns.parse_ipv4(f.arena,&status,packet[..],0x1234,"example.test")
- check(!status.failed && #len(answers)==1 && answers[0].a==1 && answers[0].d==4)
+ answers:=dns.parse_ipv4(f.arena,packet[..],0x1234,"example.test") catch { #panic("dns") }
+ check(answers.len==1 && answers[0].a==1 && answers[0].d==4)
  key:[32]u8
  nonce:[12]u8
- sealed:=aead.seal(f.arena,&status,aead.Cipher.Aes256Gcm,"hello","",key[..],nonce[..])
- opened:=aead.open(f.arena,&status,aead.Cipher.Aes256Gcm,sealed.ciphertext,sealed.tag,"",key[..],nonce[..])
- check(!status.failed && bytes.equal(opened,"hello"))
+ sealed:=aead.seal(f.arena,aead.Cipher.Aes256Gcm,"hello","",key[..],nonce[..]) catch { #panic("seal") }
+ opened:=aead.open(f.arena,aead.Cipher.Aes256Gcm,sealed.ciphertext,sealed.tag,"",key[..],nonce[..]) catch { #panic("open") }
+ check(bytes.equal(opened,"hello"))
  PROCESS_CASE
  intact(f)
 }
 '''
 def main():
-    source=SOURCE.replace('PROCESS_CASE', 'arguments:[3][]const u8=["/bin/sh","-c","printf chain"]\n captured:=process.capture(f.arena,&status,"/bin/sh",arguments[..],process.Options{},process.CaptureOptions{timeout_milliseconds:2000})\n check(!status.failed && captured.exit.code==0 && bytes.equal(captured.output,"chain"))' if sys.platform=='linux' else '_=process.Options{}')
+    source=SOURCE.replace('PROCESS_CASE', 'arguments:[3][]const u8=["/bin/sh","-c","printf chain"]\n captured:=process.capture(f.arena,"/bin/sh",arguments[..],process.Options{},process.CaptureOptions{timeout_milliseconds:2000}) catch { #panic("capture") }\n check(captured.exit.code==0 && bytes.equal(captured.output,"chain"))' if sys.platform=='linux' else '_=process.Options{}')
     with tempfile.TemporaryDirectory(prefix='dyn-chain-producers-') as temporary:
         project=Path(temporary)
         (project/'main.dyn').write_text(source)

@@ -11,55 +11,64 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / 'dyn-release')).resolve()
 ENV = dict(os.environ, DYN_SDK=str(ROOT))
 SOURCE = r'''
-use "std/fail"
-use "std/io" io
-use "std/net/http" http
-use "std/bytes" bytes
-use "std/mem" mem
+use io "std/io"
+use http "std/net/http"
+use bytes "std/bytes"
+use mem "std/mem"
 struct Feed { data: []const u8, at: usize, cut: usize, step: usize }
-fn read_feed(raw: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read_feed(raw: rawptr, destination: []u8) usize!io.IoErr {
   feed := #cast(*Feed, raw)
-  count := #len(feed.data) - feed.at
+  count := feed.data.len - feed.at
   if feed.at < feed.cut && count > feed.cut - feed.at { count = feed.cut - feed.at }
   if count > feed.step { count = feed.step }
-  if count > #len(destination) { count = #len(destination) }
+  if count > destination.len { count = destination.len }
   for i in 0..count { destination[i] = feed.data[feed.at + i] }
   feed.at += count
   return count
 }
-fn sink(raw: rawptr, status: *fail.Status, data: []const u8) usize {
+fn sink(raw: rawptr, data: []const u8) usize!io.IoErr {
   _ = raw
-  return #len(data)
+  return data.len
+}
+fn invalid(err: io.IoErr) bool {
+  case err {
+    .InvalidInput => { return true }
+    _ => { return false }
+  }
 }
 fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8) {
-  splits := #len(wire) + 1
+  splits := wire.len + 1
   if splits > 256 { splits = 2 }
   for cut in 0..splits {
     for step in [1, 7, 65536] {
       feed := Feed{ data: wire, cut: cut, step: #cast(usize, step) }
       arena := mem.arena_alloc(0)
       defer mem.arena_release(arena)
-      status: fail.Status
-      got := http.client_do(arena, &status, io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "")
-      if (!status.failed) != valid { #panic("response validity") }
-      if valid && !bytes.equal(got.body, expected) { #panic("response body") }
-      if !valid && status.failure.kind != fail.Kind.InvalidInput { #panic("response error") }
+      got := http.client_do(arena, io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "") catch err {
+        if valid { #panic("response validity") }
+        if !invalid(err) { #panic("response error") }
+        continue
+      }
+      if !valid { #panic("response validity") }
+      if !bytes.equal(got.body, expected) { #panic("response body") }
     }
   }
 }
+fn receive(state: *http.Server) http.Received {
+  return http.receive(state) catch { #panic("receive") }
+}
 fn server_check(wire: []const u8) {
-  for cut in 0..#len(wire) + 1 {
+  for cut in 0..wire.len + 1 {
     for step in [1, 7, 65536] {
       feed := Feed{ data: wire, cut: cut, step: #cast(usize, step) }
       storage: [65536]u8
       state := http.server(io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, storage[..])
-      status: fail.Status
-      first := http.receive(&status, &state)
-      if status.failed || !bytes.equal(first.request.body, "abc") || !bytes.equal(first.request.target, "/one") { #panic("first request") }
-      second := http.receive(&status, &state)
-      if status.failed || !bytes.equal(second.request.body, "") || !bytes.equal(second.request.target, "/two") { #panic("second request") }
-      last := http.receive(&status, &state)
-      if status.failed || !last.ended { #panic("request eof") }
+      first := receive(&state)
+      if !bytes.equal(first.request.body, "abc") || !bytes.equal(first.request.target, "/one") { #panic("first request") }
+      second := receive(&state)
+      if !bytes.equal(second.request.body, "") || !bytes.equal(second.request.target, "/two") { #panic("second request") }
+      last := receive(&state)
+      if !last.ended { #panic("request eof") }
     }
   }
 }
@@ -67,9 +76,11 @@ fn server_invalid(wire: []const u8) {
   feed := Feed{ data: wire, step: 1 }
   storage: [256]u8
   state := http.server(io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, storage[..])
-  status: fail.Status
-  _ = http.receive(&status, &state)
-  if status.failure.kind != fail.Kind.InvalidInput { #panic("invalid request") }
+  _ = http.receive(&state) catch err {
+    if !invalid(err) { #panic("invalid request kind") }
+    return
+  }
+  #panic("invalid request accepted")
 }
 fn main() {
 '''

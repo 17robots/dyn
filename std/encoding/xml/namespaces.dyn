@@ -12,38 +12,29 @@ const XmlnsNamespace: []const u8 = "http://www.w3.org/2000/xmlns/"
 pub fn namespaces(bindings: []NamespaceBinding, frames: []NamespaceFrame, storage: []u8) Namespaces {
   return Namespaces{ bindings: bindings, frames: frames, storage: storage }
 }
-fn name_failure(status: *fail.Status, kind: fail.Kind, message: []const u8) ExpandedName {
-  fail.set(status, fail.make(kind, "resolve XML namespace", "", message))
-  return ExpandedName{}
-}
-fn qualified(status: *fail.Status, name: []const u8) ExpandedName {
-  colon := #len(name)
+// Namespace failures carry no offset: a malformed or unbound name fails with
+// InvalidInput, full caller storage with Capacity.
+fn qualified(name: []const u8) ExpandedName!stream.IoErr {
+  colon := name.len
   i: usize = 0
-  if #len(name) == 0 || name_end(name, 0) != #len(name) {
-    return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")
-  }
-  for i < #len(name) {
+  if name.len == 0 || name_end(name, 0) != name.len { fail .InvalidInput }
+  for i < name.len {
     if name[i] == ':' {
-      if colon != #len(name) {
-        return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")
-      }
+      if colon != name.len { fail .InvalidInput }
       colon = i
     }
     i += 1
   }
-  if colon == #len(name) { return ExpandedName{ local: name } }
-  if colon == 0 || colon + 1 == #len(name) || name_end(name, colon + 1) != #len(name) {
-    return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")
+  if colon == name.len { return ExpandedName{ local: name } }
+  if colon == 0 || colon + 1 == name.len || name_end(name, colon + 1) != name.len {
+    fail .InvalidInput
   }
   return ExpandedName{ prefix: name[..colon], local: name[colon + 1..] }
 }
 // The expanded name of an element or attribute name in the current scope.
 // Malformed or unbound names fail with InvalidInput.
-pub fn namespace_resolve(status: *fail.Status, state: *const Namespaces, name: []const u8, attribute: bool) ExpandedName {
-  if status == nil { return namespace_resolve(&fail.Status{}, state, name, attribute) }
-  if status.failed { return ExpandedName{} }
-  result := qualified(status, name)
-  if status.failed { return result }
+pub fn namespace_resolve(state: *const Namespaces, name: []const u8, attribute: bool) ExpandedName!stream.IoErr {
+  result := try qualified(name)
   if bytes.equal(result.prefix, "xmlns") || (attribute && bytes.equal(name, "xmlns")) {
     result.uri = XmlnsNamespace
     return result
@@ -52,7 +43,7 @@ pub fn namespace_resolve(status: *fail.Status, state: *const Namespaces, name: [
     result.uri = XmlNamespace
     return result
   }
-  if attribute && #len(result.prefix) == 0 { return result }
+  if attribute && result.prefix.len == 0 { return result }
   i := state.count
   for i > 0 {
     i -= 1
@@ -61,9 +52,7 @@ pub fn namespace_resolve(status: *fail.Status, state: *const Namespaces, name: [
       return result
     }
   }
-  if #len(result.prefix) != 0 {
-    return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")
-  }
+  if result.prefix.len != 0 { fail .InvalidInput }
   return result
 }
 fn namespace_copy(state: *Namespaces, source: []const u8) []const u8 {
@@ -79,11 +68,11 @@ fn namespace_copy(state: *Namespaces, source: []const u8) []const u8 {
 fn namespace_uri(state: *Namespaces, source: []const u8) []const u8 {
   start := state.used
   at: usize = 0
-  for at < #len(source) {
+  for at < source.len {
     byte := source[at]
     if byte != '&' {
       if byte == '\r' {
-        if at + 1 < #len(source) && source[at + 1] == '\n' {
+        if at + 1 < source.len && source[at + 1] == '\n' {
           at += 1
         }
         byte = ' '
@@ -117,7 +106,7 @@ fn namespace_uri(state: *Namespaces, source: []const u8) []const u8 {
           base = 16
           index += 1
         }
-        for index < #len(entity) {
+        for index < entity.len {
           digit := #cast(u32, entity[index])
           if digit >= 48 && digit <= 57 {
             digit -= 48
@@ -136,59 +125,52 @@ fn namespace_uri(state: *Namespaces, source: []const u8) []const u8 {
   }
   return state.storage[start..state.used]
 }
-fn namespace_enter_impl(status: *fail.Status, state: *Namespaces, event: Event) ExpandedName {
-  if event.kind != Kind.Start || !valid_attributes(event) {
-    return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")
-  }
-  if state.depth == #len(state.frames) || #len(event.name) > #len(state.storage) - state.used {
-    return name_failure(status, fail.Kind.Capacity, "the namespace storage is full")
+fn namespace_enter_impl(state: *Namespaces, event: Event) ExpandedName!stream.IoErr {
+  if event.kind != Kind.Start || !valid_attributes(event) { fail .InvalidInput }
+  if state.depth == state.frames.len || event.name.len > state.storage.len - state.used {
+    fail .Capacity
   }
   previous_count := state.count
   previous_used := state.used
   copied := namespace_copy(state, event.name)
   attributes_state := attributes(event)
   for {
-    item := next_attribute(status, &attributes_state)
+    item := next_attribute(&attributes_state) catch { fail .InvalidInput }
     if attributes_state.ended { break }
-    split := qualified(status, item.name)
-    if status.failed { return split }
+    split := try qualified(item.name)
     declaration := bytes.equal(item.name, "xmlns") || bytes.equal(split.prefix, "xmlns")
     if declaration {
       prefix := split.local
-      if #len(split.prefix) == 0 {
+      if split.prefix.len == 0 {
         prefix = ""
       }
-      if state.count == #len(state.bindings) || #len(prefix) + #len(item.value) > #len(state.storage) - state.used {
-        return name_failure(status, fail.Kind.Capacity, "the namespace storage is full")
+      if state.count == state.bindings.len || prefix.len + item.value.len > state.storage.len - state.used {
+        fail .Capacity
       }
       owned_prefix := namespace_copy(state, prefix)
       uri := namespace_uri(state, item.value)
-      if bytes.equal(prefix, "xmlns") || bytes.equal(uri, XmlnsNamespace) || (bytes.equal(prefix, "xml") != bytes.equal(uri, XmlNamespace)) || (#len(prefix) > 0 && #len(uri) == 0) {
-        return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")
+      if bytes.equal(prefix, "xmlns") || bytes.equal(uri, XmlnsNamespace) || (bytes.equal(prefix, "xml") != bytes.equal(uri, XmlNamespace)) || (prefix.len > 0 && uri.len == 0) {
+        fail .InvalidInput
       }
       state.bindings[state.count] = NamespaceBinding{ prefix: owned_prefix, uri: uri }
       state.count += 1
     }
   }
-  resolved := namespace_resolve(status, state, copied, false)
-  if status.failed { return resolved }
-  if bytes.equal(resolved.prefix, "xmlns") {
-    return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")
-  }
+  resolved := try namespace_resolve(state, copied, false)
+  if bytes.equal(resolved.prefix, "xmlns") { fail .InvalidInput }
   scan := attributes(event)
   for {
     before := scan.offset
-    attribute_item := next_attribute(status, &scan)
+    attribute_item := next_attribute(&scan) catch { fail .InvalidInput }
     if scan.ended { break }
-    current := namespace_resolve(status, state, attribute_item.name, true)
-    if status.failed { return current }
+    current := try namespace_resolve(state, attribute_item.name, true)
     prior := attributes(event)
     for prior.offset < before {
-      other := next_attribute(status, &prior)
+      other := next_attribute(&prior) catch { fail .InvalidInput }
       if prior.ended { break }
-      expanded := namespace_resolve(status, state, other.name, true)
+      expanded := try namespace_resolve(state, other.name, true)
       if bytes.equal(current.uri, expanded.uri) && bytes.equal(current.local, expanded.local) {
-        return name_failure(status, fail.Kind.InvalidInput, "malformed or unbound name")
+        fail .InvalidInput
       }
     }
   }
@@ -199,35 +181,24 @@ fn namespace_enter_impl(status: *fail.Status, state: *Namespaces, event: Event) 
 // Enter every Start, including self-closing tags; leave it after consuming its
 // attributes. Failed enter restores scope counters; unused storage may change.
 // Expanded element slices last until scope exit.
-pub fn namespace_enter(status: *fail.Status, state: *Namespaces, event: Event) ExpandedName {
-  if status == nil { return namespace_enter(&fail.Status{}, state, event) }
-  if status.failed { return ExpandedName{} }
-  if bytes.overlaps(state.storage, event.name) || bytes.overlaps(state.storage, event.attributes) {
-    return name_failure(status, fail.Kind.InvalidInput, "the event lies in the namespace storage")
-  }
+// An event that lies in the namespace storage fails with InvalidInput.
+pub fn namespace_enter(state: *Namespaces, event: Event) ExpandedName!stream.IoErr {
+  if bytes.overlaps(state.storage, event.name) || bytes.overlaps(state.storage, event.attributes) { fail .InvalidInput }
   count := state.count
   used := state.used
   depth := state.depth
-  result := namespace_enter_impl(status, state, event)
-  if status.failed {
+  result := namespace_enter_impl(state, event) catch err {
     state.count = count
     state.used = used
     state.depth = depth
+    fail err
   }
   return result
 }
 // Leaves element name; an end tag that does not match the open element fails
 // with InvalidInput.
-pub fn namespace_leave(status: *fail.Status, state: *Namespaces, name: []const u8) {
-  if status == nil {
-    namespace_leave(&fail.Status{}, state, name)
-    return
-  }
-  if status.failed { return }
-  if state.depth == 0 || !bytes.equal(state.frames[state.depth - 1].name, name) {
-    fail.invalid(status, "leave XML element", name, "the end tag does not match the open element")
-    return
-  }
+pub fn namespace_leave(state: *Namespaces, name: []const u8) !stream.IoErr {
+  if state.depth == 0 || !bytes.equal(state.frames[state.depth - 1].name, name) { fail .InvalidInput }
   frame := state.frames[state.depth - 1]
   state.depth -= 1
   state.count = frame.bindings

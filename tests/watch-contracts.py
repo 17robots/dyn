@@ -18,49 +18,60 @@ def bounded_descriptors():
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     resource.setrlimit(resource.RLIMIT_NOFILE, (64 if soft == resource.RLIM_INFINITY else min(64, soft), hard))
 
-SOURCE = r'''use "std/fs/watch" watch
-use "std/fail"
-use "std/fs" fs
-use "std/io" io
-use "std/bytes" bytes
+SOURCE = r'''use watch "std/fs/watch"
+use fs "std/fs"
+use io "std/io"
+use bytes "std/bytes"
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
-struct Got { value: watch.Event, found: bool, failure: fail.Failure }
+// failed with code (the system's, or 0) when the watcher failed.
+struct Got { value: watch.Event, found: bool, failed: bool, code: isize }
+fn code(err: io.IoErr) isize {
+  case err {
+    .System(native) => { return native }
+    _ => { return 0 }
+  }
+}
 fn next(state: *watch.Watcher) Got {
-  status: fail.Status
-  value := watch.next(&status, state)
-  return Got{ value: value, found: !state.ended, failure: status.failure }
+  value := watch.next(state) catch err { return Got{ failed: true, code: code(err) } }
+  return Got{ value: value, found: !state.ended }
 }
 fn event(state: *watch.Watcher) watch.Event {
   got := next(state)
-  require(got.failure.kind == fail.Kind.Ok && got.found, "expected an event")
+  require(!got.failed && got.found, "expected an event")
   return got.value
 }
 fn empty(state: *watch.Watcher) bool {
   got := next(state)
-  return got.failure.kind == fail.Kind.Ok && !got.found
+  return !got.failed && !got.found
 }
 fn add_fails(state: *watch.Watcher, path: []const u8) bool {
-  status: fail.Status
-  _ = watch.add(&status, state, path, watch.Create)
-  return status.failed
+  _ = watch.add(state, path, watch.Create) catch { return true }
+  return false
 }
 fn remove_fails(state: *watch.Watcher, id: i32) bool {
-  status: fail.Status
-  watch.remove(&status, state, id)
-  return status.failed
+  watch.remove(state, id) catch { return true }
+  return false
 }
 fn create(path: []const u8) {
-  status: fail.Status
-  opened := fs.create(&status, path)
-  require(!status.failed, "create file")
+  opened := fs.create(path) catch { #panic("create file") }
   fs.close(&opened)
 }
 fn malformed(storage: []u8, used: usize) {
   // Buffered records are the public seam; this never reads or owns descriptor 0.
   state := watch.Watcher{ descriptor: 0, storage: storage, used: used }
   result := next(&state)
-  require(result.failure.kind != fail.Kind.Ok && result.failure.native == -74, "malformed event")
+  require(result.failed && result.code == -74, "malformed event")
   require(state.offset == 0 && !state.rescan_required, "malformed event changed state")
+}
+// ENOSPC for too little event storage.
+fn open_fails_capacity(storage: []u8) bool {
+  _ = watch.open(storage) catch err {
+    case err {
+      .Capacity => { return true }
+      _ => { return false }
+    }
+  }
+  return false
 }
 fn records() {
   storage: [64]u8
@@ -95,12 +106,7 @@ fn exhausted_open() {
   count: usize = 0
   failed: bool = false
   for count < 128 {
-    status: fail.Status
-    opened := watch.open(&status, storage[..])
-    if status.failed {
-      require(status.failure.native < 0, "open failure error")
-      require(!opened.active, "failed syscall owns stdin")
-      watch.close(&opened)
+    opened := watch.open(storage[..]) catch {
       require(#syscall(72,0,1,0) >= 0, "syscall failure closed stdin")
       failed = true
       break
@@ -119,24 +125,20 @@ fn main() {
   require(#syscall(72,0,1,0) >= 0, "unopened close clobbered stdin")
   require(add_fails(&unopened,"."), "add unopened")
   require(remove_fails(&unopened,0), "remove unopened")
-  require(next(&unopened).failure.kind != fail.Kind.Ok, "read unopened")
+  require(next(&unopened).failed, "read unopened")
   storage: [272]u8
   for length in 0..272 {
-    status: fail.Status
-    failed := watch.open(&status, storage[..length])
-    require(status.failed && status.failure.native == -28, "short backing")
-    watch.close(&failed)
+    require(open_fails_capacity(storage[..length]), "short backing")
     require(#syscall(72,0,1,0) >= 0, "failed open closed stdin")
   }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  state := watch.open(&status, storage[..])
+  state := watch.open(storage[..]) catch { #panic("open watcher") }
   defer { watch.close(&state) }
   require(empty(&state), "empty nonblocking read")
   require(add_fails(&state,""), "empty path")
   invalid: [3]u8 = ['.',0,'x']
   require(add_fails(&state,invalid[..]), "embedded NUL path")
   require(add_fails(&state,"missing-directory"), "missing path")
-  added := watch.add(&status,&state,".",watch.Create)
+  added := watch.add(&state,".",watch.Create) catch { #panic("add watch") }
   create("first")
   create("second")
   first := event(&state)
@@ -146,20 +148,20 @@ fn main() {
   require(bytes.equal(second.name,"second"), "second create event")
   require(state.used == used && bytes.equal(first.name,"first"), "borrowed name changed without refill")
   require(empty(&state), "drained watcher")
-  watch.remove(&status,&state,added)
+  watch.remove(&state,added) catch { #panic("remove watch") }
   ignored := event(&state)
   require(ignored.watch == added && (ignored.mask & watch.Ignored) != 0, "removed watch ignored event")
   create("third")
   require(empty(&state), "removed watch still reports events")
   require(remove_fails(&state,added), "remove stale watch")
-  _ = watch.add(&status,&state,".",watch.Create)
+  _ = watch.add(&state,".",watch.Create) catch { #panic("add watch") }
   create("fourth")
   _ = event(&state)
   descriptor := state.descriptor
   watch.close(&state)
   require(#syscall(72,descriptor,1,0) == -9, "descriptor leaked")
   watch.close(&state)
-  require(next(&state).failure.kind != fail.Kind.Ok, "read closed watcher")
+  require(next(&state).failed, "read closed watcher")
   records()
   exhausted_open()
 }'''

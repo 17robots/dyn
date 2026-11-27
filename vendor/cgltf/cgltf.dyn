@@ -1,98 +1,63 @@
+use io "std/io"
 use "std/c"
-use "std/fail"
 #link("dyn_cgltf")
 // cgltf 1.15. Provider owns parsed model; keep input bytes alive until destroy.
 // In particular GLB binary buffers borrow input. Handles must not be copied for ownership.
 pub type Model = rawptr
 // Malformed or truncated glTF fails with InvalidInput, native keeping
 // cgltf's result code.
-pub fn parse_owned(status: *fail.Status, bytes: []const u8) Model {
-  if status == nil { return parse_owned(&fail.Status{}, bytes) }
-  if status.failed { return nil }
-  if #len(bytes) == 0 {
-    fail.invalid(status, "parse glTF", "", "no data")
-    return nil
-  }
+pub fn parse_owned(bytes: []const u8) Model!io.IoErr {
+  if bytes.len == 0 { fail .InvalidInput }
   model: Model = nil
-  code := native_parse(#cast(rawptr, &bytes[0]), #len(bytes), &model)
+  code := native_parse(#cast(rawptr, &bytes[0]), bytes.len, &model)
   if code != 0 {
-    cgltf_failed(status, "parse glTF", code)
+    try cgltf_failed("parse glTF", code)
     return nil
   }
   return model
 }
 // A cgltf_result as a failure, native keeping the code.
-fn cgltf_failed(status: *fail.Status, operation: []const u8, code: i32) {
-  kind := fail.Kind.InvalidInput
-  message: []const u8 = "malformed glTF"
+fn cgltf_failed(operation: []const u8, code: i32) !io.IoErr {
   // cgltf_result: 6 file_not_found, 7 io_error, 8 out_of_memory, 9 legacy_gltf.
-  if code == 6 {
-    kind = fail.Kind.NotFound
-    message = "file not found"
-  } else if code == 7 {
-    kind = fail.Kind.System
-    message = "I/O error"
-  } else if code == 8 {
-    kind = fail.Kind.Capacity
-    message = "out of memory"
-  } else if code == 9 {
-    kind = fail.Kind.Unsupported
-    message = "glTF 1.0 is not supported"
-  }
-  failure := fail.make(kind, operation, "", message)
-  failure.native = code
-  fail.set(status, failure)
+  _ = operation
+  if code == 6 { fail .NotFound }
+  if code == 7 { fail io.IoErr.System(#cast(isize, code)) }
+  if code == 8 { fail .Capacity }
+  if code == 9 { fail .Unsupported }
+  fail .InvalidInput
 }
 pub fn destroy_owned(model: Model) {
   if model != nil {
     native_free(model)
   }
 }
-pub fn validate(status: *fail.Status, model: Model) {
-  if status == nil {
-    validate(&fail.Status{}, model)
-    return
-  }
-  if status.failed { return }
-  if model == nil {
-    fail.invalid(status, "validate glTF", "", "no model")
-    return
-  }
+pub fn validate(model: Model) !io.IoErr {
+  if model == nil { fail .InvalidInput }
   code := native_validate(model)
   if code != 0 {
-    cgltf_failed(status, "validate glTF", code)
+    try cgltf_failed("validate glTF", code)
   }
 }
 // Loads only embedded data URIs/GLB buffers, never external files. A buffer
 // with an external URI that was not attached fails with InvalidState before
 // any buffer is loaded.
-pub fn load_embedded(status: *fail.Status, model: Model) {
-  if status == nil {
-    load_embedded(&fail.Status{}, model)
-    return
-  }
-  if status.failed { return }
+pub fn load_embedded(model: Model) !io.IoErr {
   code := native_embedded(model)
   if code == -1 {
-    fail.invalid(status, "load glTF buffers", "", "no model")
+    fail .InvalidInput
   } else if code == -2 {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "load glTF buffers", "", "an external buffer is not attached"))
+    fail .InvalidInput
   } else if code != 0 {
-    cgltf_failed(status, "load glTF buffers", code)
+    try cgltf_failed("load glTF buffers", code)
   }
 }
 pub extern fn node_count "dyn_cgltf_nodes"(model: Model) usize
 pub extern fn accessor_count "dyn_cgltf_accessors"(model: Model) usize
 // Non-sparse accessors only. Output borrows caller storage; model remains owned.
 // A missing accessor, sparse accessor or too little output fails with InvalidInput.
-pub fn read_float(status: *fail.Status, model: Model, accessor: usize, element: usize, output: []f32) {
-  if status == nil {
-    read_float(&fail.Status{}, model, accessor, element, output)
-    return
-  }
-  if status.failed { return }
-  if #len(output) == 0 || !native_read(model, accessor, element, &output[0], #len(output)) {
-    fail.invalid(status, "read accessor", "", "no such accessor element, or output too small")
+pub fn read_float(model: Model, accessor: usize, element: usize, output: []f32) !io.IoErr {
+  if output.len == 0 || !native_read(model, accessor, element, &output[0], output.len) {
+    fail .InvalidInput
   }
 }
 extern fn native_parse "dyn_cgltf_parse"(bytes: rawptr, length: usize, output: *Model) i32
@@ -107,19 +72,13 @@ extern fn native_read "dyn_cgltf_read"(model: Model, accessor: usize, element: u
 pub extern fn buffer_count "dyn_cgltf_buffers"(model: Model) usize
 pub extern fn buffer_size "dyn_cgltf_buffer_size"(model: Model, index: usize) usize
 // The bytes must match the buffer's size, and a buffer is attached once.
-pub fn attach_buffer(status: *fail.Status, model: Model, index: usize, bytes: []const u8) {
-  if status == nil {
-    attach_buffer(&fail.Status{}, model, index, bytes)
-    return
-  }
-  if status.failed { return }
-  if #len(bytes) == 0 || !native_attach(model, index, #cast(rawptr, &bytes[0]), #len(bytes)) {
-    fail.invalid(status, "attach buffer", "", "no such buffer, wrong size, or already attached")
+pub fn attach_buffer(model: Model, index: usize, bytes: []const u8) !io.IoErr {
+  if bytes.len == 0 || !native_attach(model, index, #cast(rawptr, &bytes[0]), bytes.len) {
+    fail .InvalidInput
   }
 }
 pub fn buffer_uri(model: Model, index: usize, maximum: usize) []const u8 {
-  reading: fail.Status
-  return c.bytes_from_string(&reading, native_uri(model, index), maximum)
+  return c.bytes_from_string(native_uri(model, index), maximum) catch ""
 }
 pub const Position: i32 = 1
 pub const Normal: i32 = 2
@@ -133,29 +92,22 @@ pub extern fn mesh_count "dyn_cgltf_meshes"(model: Model) usize
 pub extern fn material_count "dyn_cgltf_materials"(model: Model) usize
 pub extern fn primitive_count "dyn_cgltf_primitives"(model: Model, mesh: usize) usize
 // An index the model may not have: NotFound when it has none there.
-fn optional(status: *fail.Status, value: i64, operation: []const u8) usize {
-  if status.failed { return 0 }
-  if value < 0 {
-    fail.set(status, fail.make(fail.Kind.NotFound, operation, "", "the model has none"))
-    return 0
-  }
+fn optional(value: i64, operation: []const u8) usize!io.IoErr {
+  if value < 0 { fail .NotFound }
   return #cast(usize, value)
 }
 // The accessor of an attribute; set is usually 0. NotFound when the primitive
 // has no such attribute.
-pub fn attribute(status: *fail.Status, model: Model, mesh: usize, primitive: usize, kind: i32, set: i32) usize {
-  if status == nil { return attribute(&fail.Status{}, model, mesh, primitive, kind, set) }
-  return optional(status, native_attribute(model, mesh, primitive, kind, set), "read attribute")
+pub fn attribute(model: Model, mesh: usize, primitive: usize, kind: i32, set: i32) usize!io.IoErr {
+  return try optional(native_attribute(model, mesh, primitive, kind, set), "read attribute")
 }
 // The accessor of the primitive's indices. NotFound when it has none.
-pub fn indices(status: *fail.Status, model: Model, mesh: usize, primitive: usize) usize {
-  if status == nil { return indices(&fail.Status{}, model, mesh, primitive) }
-  return optional(status, native_indices(model, mesh, primitive), "read indices")
+pub fn indices(model: Model, mesh: usize, primitive: usize) usize!io.IoErr {
+  return try optional(native_indices(model, mesh, primitive), "read indices")
 }
 // The primitive's material. NotFound when it has none.
-pub fn material(status: *fail.Status, model: Model, mesh: usize, primitive: usize) usize {
-  if status == nil { return material(&fail.Status{}, model, mesh, primitive) }
-  return optional(status, native_material(model, mesh, primitive), "read material")
+pub fn material(model: Model, mesh: usize, primitive: usize) usize!io.IoErr {
+  return try optional(native_material(model, mesh, primitive), "read material")
 }
 extern fn native_attribute "dyn_cgltf_attribute"(model: Model, mesh: usize, primitive: usize, kind: i32, set: i32) i64
 extern fn native_indices "dyn_cgltf_indices"(model: Model, mesh: usize, primitive: usize) i64
@@ -163,40 +115,26 @@ extern fn native_material "dyn_cgltf_material"(model: Model, mesh: usize, primit
 pub extern fn topology "dyn_cgltf_topology"(model: Model, mesh: usize, primitive: usize) i32
 pub extern fn element_count "dyn_cgltf_elements"(model: Model, accessor: usize) usize
 // The node's mesh. NotFound when it has none.
-pub fn node_mesh(status: *fail.Status, model: Model, node: usize) usize {
-  if status == nil { return node_mesh(&fail.Status{}, model, node) }
-  return optional(status, native_node_mesh(model, node), "read node mesh")
+pub fn node_mesh(model: Model, node: usize) usize!io.IoErr {
+  return try optional(native_node_mesh(model, node), "read node mesh")
 }
 extern fn native_node_mesh "dyn_cgltf_node_mesh"(model: Model, node: usize) i64
 // An accessor or element out of range fails with InvalidInput.
-pub fn read_index(status: *fail.Status, model: Model, accessor: usize, element: usize) u32 {
-  if status == nil { return read_index(&fail.Status{}, model, accessor, element) }
-  if status.failed { return 0 }
+pub fn read_index(model: Model, accessor: usize, element: usize) u32!io.IoErr {
   value: u32 = 0
-  if !native_index(model, accessor, element, &value) {
-    fail.invalid(status, "read index", "", "no such accessor element")
-    return 0
-  }
+  if !native_index(model, accessor, element, &value) { fail .InvalidInput }
   return value
 }
 // Column-major world matrix and RGBA base factor, copied into caller storage.
 // A missing node or material fails with InvalidInput.
-pub fn world_transform(status: *fail.Status, model: Model, node: usize) [16]f32 {
-  if status == nil { return world_transform(&fail.Status{}, model, node) }
+pub fn world_transform(model: Model, node: usize) [16]f32!io.IoErr {
   matrix: [16]f32
-  if status.failed { return matrix }
-  if !native_transform(model, node, &matrix[0]) {
-    fail.invalid(status, "world transform", "", "no such node")
-  }
+  if !native_transform(model, node, &matrix[0]) { fail .InvalidInput }
   return matrix
 }
-pub fn base_color(status: *fail.Status, model: Model, material: usize) [4]f32 {
-  if status == nil { return base_color(&fail.Status{}, model, material) }
+pub fn base_color(model: Model, material: usize) [4]f32!io.IoErr {
   color: [4]f32
-  if status.failed { return color }
-  if !native_color(model, material, &color[0]) {
-    fail.invalid(status, "base color", "", "no such material")
-  }
+  if !native_color(model, material, &color[0]) { fail .InvalidInput }
   return color
 }
 extern fn native_uri "dyn_cgltf_uri"(model: Model, index: usize) c.string

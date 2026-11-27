@@ -19,70 +19,82 @@ if platform.system() != 'Linux':
 
 CASES = {
     'lua': ('lua5.4', r'''use "vendor/lua"
-use "std/fail"
-use "std/io" io
+use io "std/io"
 use "std/strings"
 use "std/bytes"
 fn fails(state: lua.State, source: []const u8) bool {
-  status: fail.Status
-  lua.execute(&status, state, source)
-  return status.failed
+  lua.execute(state, source) catch { return true }
+  return false
+}
+fn bytes_fail(state: lua.State, index: i32) bool {
+  _ = lua.bytes(state, index) catch { return true }
+  return false
+}
+fn integer_fails(state: lua.State, index: i32) bool {
+  _ = lua.integer(state, index) catch { return true }
+  return false
 }
 fn main() {
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  state := lua.create_owned(&status)
+  state := lua.create_owned() catch { #panic("unexpected failure") }
   defer lua.destroy_owned(state)
-  lua.execute(&status, state, "return 6 * 7")
-  if lua.integer(&status, state, -1) != 42 {
+  lua.execute(state, "return 6 * 7") catch { #panic("unexpected failure") }
+  if (lua.integer(state, -1) catch 0) != 42 {
     #panic("Lua result")
   }
-  lua.pop(&status, state, 1)
-  lua.execute(&status, state, "return 'hello'")
-  if !bytes.equal(lua.bytes(&status, state, -1), "hello") {
+  lua.pop(state, 1) catch { #panic("unexpected failure") }
+  lua.execute(state, "return 'hello'") catch { #panic("unexpected failure") }
+  if !bytes.equal(lua.bytes(state, -1) catch "", "hello") {
     #panic("Lua bytes")
   }
-  lua.pop(&status, state, 1) // the text expires here.
+  lua.pop(state, 1) catch { #panic("unexpected failure") } // the text expires here.
   if !fails(state, "return (") || lua.stack_size(state) != 1 {
     #panic("Lua syntax failure")
   }
-  lua.pop(&status, state, 1)
+  lua.pop(state, 1) catch { #panic("unexpected failure") }
   if !fails(state, "return missing()") {
     #panic("Lua runtime failure")
   }
-  lua.pop(&status, state, 1)
-  underflow: fail.Status
-  lua.pop(&underflow, state, 1)
-  if lua.stack_size(state) != 0 || !underflow.failed {
+  lua.pop(state, 1) catch { #panic("unexpected failure") }
+  underflow := false
+  lua.pop(state, 1) catch { underflow = true }
+  if lua.stack_size(state) != 0 || !underflow {
     #panic("Lua stack balance")
   }
-  lua.execute(&status, state, "")
+  lua.execute(state, "") catch { #panic("unexpected failure") }
   if lua.stack_size(state) != 1 {
     #panic("empty Lua chunk")
   }
-  not_text: fail.Status
-  _ = lua.bytes(&not_text, state, -1)
-  no_slot: fail.Status
-  _ = lua.integer(&no_slot, state, 0)
-  if !not_text.failed || !no_slot.failed {
+  if !bytes_fail(state, -1) || !integer_fails(state, 0) {
     #panic("Lua result validation")
   }
-  lua.pop(&status, state, 1)
+  lua.pop(state, 1) catch { #panic("unexpected failure") }
   io.println("Lua: 42; protected syntax/runtime failures; balanced stack")
 }
 ''', 'Lua: 42; protected syntax/runtime failures; balanced stack'),
-    'pcre2': ('libpcre2-8', r'''use "vendor/pcre2" regex
-use "std/fail"
-use "std/io" io
+    'pcre2': ('libpcre2-8', r'''use regex "vendor/pcre2"
+use io "std/io"
 use "std/strings"
 use "std/bytes"
 fn fails(pattern: regex.Pattern, data: regex.MatchData, subject: []const u8, start: usize) bool {
-  status: fail.Status
-  _ = regex.match(&status, pattern, data, subject, start)
-  return status.failed
+  _ = regex.match(pattern, data, subject, start) catch { return true }
+  return false
+}
+fn compiles(source: []const u8) bool {
+  bad := regex.compile_owned(source, 0) catch { return false }
+  regex.pattern_destroy_owned(bad)
+  return true
+}
+fn capture_missing(data: regex.MatchData, index: u32) bool {
+  _ = regex.capture(data, index) catch err {
+    case err {
+      .NotFound => { return true }
+      _ => { return false }
+    }
+  }
+  return false
 }
 fn main() {
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  pattern := regex.compile_owned(&status, "name=([a-z]+)", 0)
+  pattern := regex.compile_owned("name=([a-z]+)", 0) catch { #panic("unexpected failure") }
   defer regex.pattern_destroy_owned(pattern)
   data := regex.match_data_create_owned(pattern)
   if data == nil {
@@ -90,26 +102,23 @@ fn main() {
   }
   defer regex.match_data_destroy_owned(data)
   subject := "name=ada"
-  if !regex.match(&status, pattern, data, subject, 0) {
+  if !(regex.match(pattern, data, subject, 0) catch false) {
     #panic("match")
   }
-  span := regex.capture(&status, data, 1)
+  span := regex.capture(data, 1) catch { #panic("unexpected failure") }
   if !bytes.equal(subject[span.start..span.end], "ada") {
     #panic("capture")
   }
-  if regex.match(&status, pattern, data, "123", 0) {
+  if (regex.match(pattern, data, "123", 0) catch true) {
     #panic("no-match status")
   }
   if !fails(pattern, data, subject, 999) {
     #panic("start validation")
   }
-  invalid: fail.Status
-  bad := regex.compile_owned(&invalid, "(", 0)
-  if !invalid.failed {
-    regex.pattern_destroy_owned(bad)
+  if compiles("(") {
     #panic("invalid pattern accepted")
   }
-  unicode := regex.compile_owned(&status, "(.)?", regex.Utf | regex.Ucp)
+  unicode := regex.compile_owned("(.)?", regex.Utf | regex.Ucp) catch { #panic("unexpected failure") }
   defer regex.pattern_destroy_owned(unicode)
   unicode_data := regex.match_data_create_owned(unicode)
   if unicode_data == nil {
@@ -120,71 +129,67 @@ fn main() {
   if !fails(unicode, unicode_data, bad_utf[..], 0) {
     #panic("invalid UTF accepted")
   }
-  if !regex.match(&status, unicode, unicode_data, "", 0) {
+  if !(regex.match(unicode, unicode_data, "", 0) catch false) {
     #panic("empty match")
   }
-  unset: fail.Status
-  _ = regex.capture(&unset, unicode_data, 1)
-  if unset.failure.kind != fail.Kind.NotFound {
+  if !capture_missing(unicode_data, 1) {
     #panic("unset capture")
   }
   io.println("PCRE2: captured ada; no-match and invalid pattern handled")
 }
 ''', 'PCRE2: captured ada; no-match and invalid pattern handled'),
-    'sqlite': ('sqlite3', r'''use "vendor/sqlite" sqlite
-use "std/fail"
-use "std/io" io
+    'sqlite': ('sqlite3', r'''use sqlite "vendor/sqlite"
+use io "std/io"
 
+fn prepares(database: sqlite.Database, sql: []const u8) bool {
+  _ = sqlite.prepare(database, sql) catch { return false }
+  return true
+}
 fn main() {
   backing: [128]u8
-  status: fail.Status
-  database := sqlite.open(&status, ":memory:", backing[..])
-  sqlite.execute(&status, database, "create table task(id integer);", backing[..])
-  insert := sqlite.prepare(&status, database, "insert into task(id) values(?1)").statement
-  sqlite.bind_i64(&status, &insert, 1, 42)
-  if sqlite.step(&status, &insert) != sqlite.State.Done {
+  database := sqlite.open(":memory:", backing[..]) catch { #panic("sqlite failed") }
+  sqlite.execute(database, "create table task(id integer);", backing[..]) catch { #panic("sqlite failed") }
+  inserting := sqlite.prepare(database, "insert into task(id) values(?1)") catch { #panic("sqlite failed") }
+  insert := inserting.statement
+  sqlite.bind_i64(&insert, 1, 42) catch { #panic("sqlite failed") }
+  if (sqlite.step(&insert) catch sqlite.State.Failed) != sqlite.State.Done {
     #panic("sqlite bound insert failed")
   }
-  query := sqlite.prepare(&status, database, "select id from task").statement
-  if sqlite.step(&status, &query) != sqlite.State.Row || sqlite.column(&status, &query, 0).integer != 42 {
+  querying := sqlite.prepare(database, "select id from task") catch { #panic("sqlite failed") }
+  query := querying.statement
+  stepped := sqlite.step(&query) catch { #panic("sqlite row failed") }
+  column := sqlite.column(&query, 0) catch { #panic("sqlite row failed") }
+  if stepped != sqlite.State.Row || column.integer != 42 {
     #panic("sqlite row failed")
   }
-  if status.failed { #panic("sqlite failed") }
-  invalid: fail.Status
-  _ = sqlite.prepare(&invalid, database, "SELECT (")
-  if !invalid.failed { #panic("invalid SQL") }
+  if prepares(database, "SELECT (") { #panic("invalid SQL") }
   sqlite.finalize(&query)
   sqlite.finalize(&query)
   if query.handle != nil { #panic("query ownership") }
   sqlite.finalize(&insert)
   if insert.handle != nil { #panic("insert ownership") }
-  sqlite.close(&status, database)
-  if status.failed { #panic("database leaked statements") }
+  sqlite.close(database) catch { #panic("database leaked statements") }
   io.println("sqlite ok")
 }
 ''', 'sqlite ok'),
     'lz4': ('liblz4', r'''use "vendor/lz4"
-use "std/fail"
-use "std/io" io
+use io "std/io"
 use "std/strings"
 use "std/bytes"
 fn compress_fails(destination: []u8, source: []const u8) bool {
-  status: fail.Status
-  _ = lz4.compress(&status, destination, source)
-  return status.failed
+  _ = lz4.compress(destination, source) catch { return true }
+  return false
 }
 fn decompress_fails(destination: []u8, source: []const u8) bool {
-  status: fail.Status
-  _ = lz4.decompress(&status, destination, source)
-  return status.failed
+  _ = lz4.decompress(destination, source) catch { return true }
+  return false
 }
 fn main() {
   compressed: [128]u8
   output: [128]u8
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   source := "caller buffers caller buffers caller buffers"
-  written := lz4.compress(&status, compressed[..], source)
-  decoded := lz4.decompress(&status, output[..], compressed[..written])
+  written := lz4.compress(compressed[..], source) catch { #panic("unexpected failure") }
+  decoded := lz4.decompress(output[..], compressed[..written]) catch { #panic("unexpected failure") }
   if !bytes.equal(output[..decoded], source) {
     #panic("LZ4 roundtrip")
   }
@@ -198,8 +203,8 @@ fn main() {
   if !decompress_fails(output[..], invalid[..]) {
     #panic("invalid block accepted")
   }
-  empty := lz4.compress(&status, compressed[..], "")
-  _ = lz4.decompress(&status, output[..0], compressed[..empty])
+  empty := lz4.compress(compressed[..], "") catch { #panic("unexpected failure") }
+  _ = lz4.decompress(output[..0], compressed[..empty]) catch { #panic("unexpected failure") }
   if lz4.compress_bound(lz4.MaxInput + 1) != 0 {
     #panic("oversized input accepted")
   }

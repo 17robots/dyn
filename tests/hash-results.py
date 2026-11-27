@@ -78,7 +78,7 @@ for index, (message, expected) in enumerate(UPSTREAM):
 rng = random.Random(64)
 cases = [(message, index) for index, (message, _) in enumerate(UPSTREAM)]
 cases += [(rng.randbytes(n), rng.getrandbits(64)) for n in [*range(0, 130), 255, 256, 1000, 4097]]
-lines = ['use "std/hash" hash', '', 'fn check(ok: bool) {', '  if !ok {', '    #panic("hash results")', '  }', '}', '', 'fn main() {']
+lines = ['use hash "std/hash"', '', 'fn check(ok: bool) {', '  if !ok {', '    #panic("hash results")', '  }', '}', '', 'fn main() {']
 for data, seed in cases:
     lines.append(f'  check(hash.wyhash({literal(data)}, {seed}) == {wyhash(data, seed)})')
     lines.append(f'  check(hash.crc32({literal(data)}) == {zlib.crc32(data)})')

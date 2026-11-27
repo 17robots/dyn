@@ -28,6 +28,13 @@ __attribute__((noreturn)) void dyn_panic(const char *message, size_t count) {
   __builtin_trap();
 }
 
+static unsigned long long dyn_lifetime_checks_flag = 0;
+void dyn_set_lifetime_checks(unsigned long long enabled) { dyn_lifetime_checks_flag = enabled; }
+unsigned char dyn_lifetime_checks_enabled(void) { return dyn_lifetime_checks_flag != 0; }
+void dyn_race_sync(void) {}
+void dyn_race_read(unsigned long long address, unsigned long long size) { (void)address; (void)size; }
+void dyn_race_write(unsigned long long address, unsigned long long size) { (void)address; (void)size; }
+
 // Raw mechanism only. Arena allocation/reuse policy is implemented in std/mem.
 size_t dyn_wasm_grow_pages(size_t pages) {
   return __builtin_wasm_memory_grow(0, pages);

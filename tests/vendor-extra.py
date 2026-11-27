@@ -20,20 +20,17 @@ env['SDL_VIDEODRIVER']='dummy'
 env['SDL_RENDER_DRIVER']='software'
 dyn=str(Path(env.get('DYN',BUILD/'dyn-release')).resolve())
 FIXTURES = {
-    'stb': r'''use "vendor/stb/rect_pack" atlas
-use "vendor/stb/image_resize" image
+    'stb': r'''use atlas "vendor/stb/rect_pack"
+use image "vendor/stb/image_resize"
 use "std/mem"
-use "std/fail"
 use "std/io"
 fn resize_fails(scratch: *mem.Arena, source: []const u8, width: usize, destination: []u8, out_width: usize) bool {
-  status: fail.Status
-  image.resize(scratch, &status, source, width, 2, destination, out_width, out_width, 4, false)
-  return status.failed
+  image.resize(scratch, source, width, 2, destination, out_width, out_width, 4, false) catch { return true }
+  return false
 }
 fn packing_fails(scratch: *mem.Arena, width: usize, height: usize, rectangles: []atlas.Rectangle) bool {
-  status: fail.Status
-  _ = atlas.pack(scratch, &status, width, height, rectangles)
-  return status.failed
+  _ = atlas.pack(scratch, width, height, rectangles) catch { return true }
+  return false
 }
 fn main() {
   backing := mem.arena_alloc(2 * 1024 * 1024)
@@ -45,8 +42,7 @@ fn main() {
   rectangles[1] = atlas.Rectangle{ width: 4, height: 4 }
   rectangles[2] = atlas.Rectangle{ width: 4, height: 4 }
   mark := mem.arena_mark(backing)
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  if atlas.pack(backing, &status, 16, 16, rectangles[..]) != 3 || mem.arena_mark(backing) != mark {
+  if (atlas.pack(backing, 16, 16, rectangles[..]) catch 0) != 3 || mem.arena_mark(backing) != mark {
     #panic("atlas packing")
   }
   i: usize = 0
@@ -65,7 +61,7 @@ fn main() {
     }
     i += 1
   }
-  if atlas.pack(backing, &status, 4, 4, rectangles[..]) != 1 {
+  if (atlas.pack(backing, 4, 4, rectangles[..]) catch 0) != 1 {
     #panic("atlas partial fit")
   }
   rectangles[0].width = -1
@@ -79,13 +75,13 @@ fn main() {
     source[k] = 128
     k += 1
   }
-  image.resize(backing, &status, source[..], 2, 2, destination[..], 4, 4, 4, false)
+  image.resize(backing, source[..], 2, 2, destination[..], 4, 4, 4, false) catch { #panic("unexpected failure") }
   for value in destination[..] {
     if value != 128 {
       #panic("resize constant color")
     }
   }
-  image.resize(backing, &status, source[..], 2, 2, destination[..], 4, 4, 4, true)
+  image.resize(backing, source[..], 2, 2, destination[..], 4, 4, 4, true) catch { #panic("unexpected failure") }
   if !resize_fails(backing, source[..], 2, destination[..1], 4) || !resize_fails(backing, source[..], 2, source[..], 2) || !resize_fails(backing, source[..], 0, destination[..], 4) {
     #panic("resize bounds")
   }
@@ -95,13 +91,12 @@ fn main() {
   io.println("stb atlas and resize passed")
 }
 ''',
-    'microui-sdl3': r'''use "vendor/microui" ui
-use "vendor/sdl3" sdl
-use "vendor/sdl3/microui" backend
-use "std/fail"
+    'microui-sdl3': r'''use ui "vendor/microui"
+use sdl "vendor/sdl3"
+use backend "vendor/sdl3/microui"
 use "std/mem"
 use "std/os/linux"
-use "std/io" io
+use io "std/io"
 use "std/strings"
 use "std/bytes"
 use "std/time"
@@ -111,16 +106,15 @@ fn main() {
     mem.arena_release(arena)
   }
   args := linux.process_arguments(arena)
-  smoke := #len(args) == 2 && bytes.equal(args[1], "--smoke")
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  sdl.init_video(&status)
+  smoke := args.len == 2 && bytes.equal(args[1], "--smoke")
+  sdl.init_video() catch { #panic("unexpected failure") }
   defer sdl.quit()
   text: [256]u8
-  window := sdl.window_create(&status, "Dyn interactive UI", text[..], 640, 360, sdl.WindowResizable)
+  window := sdl.window_create("Dyn interactive UI", text[..], 640, 360, sdl.WindowResizable) catch { #panic("unexpected failure") }
   defer sdl.window_destroy_owned(window)
-  renderer := sdl.renderer_create_default_owned(&status, window)
+  renderer := sdl.renderer_create_default_owned(window) catch { #panic("unexpected failure") }
   defer sdl.renderer_destroy_owned(renderer)
-  context := ui.create(arena, &status)
+  context := ui.create(arena) catch { #panic("unexpected failure") }
   running := true
   clicked := false
   frame: usize = 0
@@ -145,23 +139,23 @@ fn main() {
       }
       ui.mouse(context, 70, 90, action)
     }
-    ui.begin(&status, context)
-    if ui.window(&status, context, "Debug panel", text[..], ui.Rectangle{ x: 20, y: 20, width: 300, height: 220 }) {
+    ui.begin(context) catch { #panic("unexpected failure") }
+    if (ui.window(context, "Debug panel", text[..], ui.Rectangle{ x: 20, y: 20, width: 300, height: 220 }) catch false) {
       if clicked {
-        ui.label(&status, context, "Button clicked!", text[..])
+        ui.label(context, "Button clicked!", text[..]) catch { #panic("unexpected failure") }
       }
       else {
-        ui.label(&status, context, "Click the button below", text[..])
+        ui.label(context, "Click the button below", text[..]) catch { #panic("unexpected failure") }
       }
-      if ui.button(&status, context, "Click me", text[..]) {
+      if (ui.button(context, "Click me", text[..]) catch false) {
         clicked = true
       }
-      ui.window_end(&status, context)
+      ui.window_end(context) catch { #panic("unexpected failure") }
     }
-    ui.end(&status, context)
-    sdl.clear(&status, renderer, 20, 28, 48, 255)
-    backend.render(&status, context, renderer)
-    sdl.present(&status, renderer)
+    ui.end(context) catch { #panic("unexpected failure") }
+    sdl.clear(renderer, 20, 28, 48, 255) catch { #panic("unexpected failure") }
+    backend.render(context, renderer) catch { #panic("unexpected failure") }
+    sdl.present(renderer) catch { #panic("unexpected failure") }
     frame += 1
     if smoke && frame >= 5 {
       break
@@ -174,53 +168,53 @@ fn main() {
   io.println("microui SDL rendering passed")
 }
 ''',
-    'audio-playback': r'''use "vendor/miniaudio" audio
-use "std/fail"
+    'audio-playback': r'''use audio "vendor/miniaudio"
 use "std/mem"
 use "std/os/linux"
-use "std/io" io
+use io "std/io"
 use "std/strings"
 use "std/bytes"
 use "std/time"
+fn sound_fails(arena: *mem.Arena, engine: rawptr, path: []const u8, buffer: []u8) bool {
+  _ = audio.sound_create(arena, engine, path, buffer) catch { return true }
+  return false
+}
 fn main() {
   arena := mem.arena_alloc(2 * 1024 * 1024)
   defer {
     mem.arena_release(arena)
   }
   args := linux.process_arguments(arena)
-  if #len(args) < 2 {
+  if args.len < 2 {
     #panic("usage: audio-playback-example FILE.wav [--offline]")
   }
-  offline := #len(args) == 3 && bytes.equal(args[2], "--offline")
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  engine := audio.engine_create(arena, &status, !offline)
+  offline := args.len == 3 && bytes.equal(args[2], "--offline")
+  engine := audio.engine_create(arena, !offline) catch { #panic("unexpected failure") }
   defer audio.engine_close(engine)
   path: [4096]u8
   mark := mem.arena_mark(arena)
-  missing: fail.Status
-  _ = audio.sound_create(arena, &missing, engine, "/nonexistent/dyn-audio-fixture", path[..])
-  if !missing.failed || mem.arena_mark(arena) != mark {
+  if !sound_fails(arena, engine, "/nonexistent/dyn-audio-fixture", path[..]) || mem.arena_mark(arena) != mark {
     #panic("sound failure rollback")
   }
-  sound := audio.sound_create(arena, &status, engine, args[1], path[..])
+  sound := audio.sound_create(arena, engine, args[1], path[..]) catch { #panic("unexpected failure") }
   defer audio.sound_close(sound)
-  audio.sound_volume(&status, sound, 0.5)
-  negative: fail.Status
-  audio.sound_volume(&negative, sound, -1.0)
-  audio.sound_start(&status, sound)
-  audio.sound_stop(&status, sound)
-  if !negative.failed || audio.sound_playing(sound) {
+  audio.sound_volume(sound, 0.5) catch { #panic("unexpected failure") }
+  negative := false
+  audio.sound_volume(sound, -1.0) catch { negative = true }
+  audio.sound_start(sound) catch { #panic("unexpected failure") }
+  audio.sound_stop(sound) catch { #panic("unexpected failure") }
+  if !negative || audio.sound_playing(sound) {
     #panic("sound controls")
   }
-  audio.sound_rewind(&status, sound)
-  audio.sound_start(&status, sound)
+  audio.sound_rewind(sound) catch { #panic("unexpected failure") }
+  audio.sound_start(sound) catch { #panic("unexpected failure") }
   deadline := time.deadline_after(60 * time.Second)
   samples: [2048]f32
   heard := false
   for !audio.sound_ended(sound) {
     if time.deadline_expired(&deadline) { break }
     if offline {
-      count := audio.mix(&status, engine, samples[..])
+      count := audio.mix(engine, samples[..]) catch { #panic("unexpected failure") }
       for sample in samples[..count] {
         if sample != 0.0 {
           heard = true
@@ -234,34 +228,31 @@ fn main() {
     #panic("audio completion")
   }
   audio.sound_close(sound)
-  closed: fail.Status
-  audio.sound_start(&closed, sound)
-  if !closed.failed {
+  closed := false
+  audio.sound_start(sound) catch { closed = true }
+  if !closed {
     #panic("closed sound accepted")
   }
   io.println("audio playback completion passed")
 }
 ''',
     'lz4': r'''use "vendor/lz4"
-use "std/fail"
-use "std/io" io
+use io "std/io"
 use "std/bytes"
 fn rejected(compress: bool, destination: []u8, source: []const u8) bool {
-  status: fail.Status
   if compress {
-    _ = lz4.compress(&status, destination, source)
-  } else {
-    _ = lz4.decompress(&status, destination, source)
+    _ = lz4.compress(destination, source) catch { return true }
+    return false
   }
-  return status.failed
+  _ = lz4.decompress(destination, source) catch { return true }
+  return false
 }
 fn main() {
   compressed: [128]u8
   output: [128]u8
   source := "caller buffers caller buffers caller buffers"
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  written := lz4.compress(&status, compressed[..], source)
-  decoded := lz4.decompress(&status, output[..], compressed[..written])
+  written := lz4.compress(compressed[..], source) catch { #panic("unexpected failure") }
+  decoded := lz4.decompress(output[..], compressed[..written]) catch { #panic("unexpected failure") }
   if !bytes.equal(output[..decoded], source) {
     #panic("LZ4 roundtrip")
   }
@@ -275,8 +266,8 @@ fn main() {
   if !rejected(false, output[..], invalid[..]) {
     #panic("invalid block accepted")
   }
-  empty := lz4.compress(&status, compressed[..], "")
-  if lz4.decompress(&status, output[..0], compressed[..empty]) != 0 {
+  empty := lz4.compress(compressed[..], "") catch { #panic("unexpected failure") }
+  if (lz4.decompress(output[..0], compressed[..empty]) catch 1) != 0 {
     #panic("empty block")
   }
   if lz4.compress_bound(lz4.MaxInput + 1) != 0 {
@@ -286,49 +277,63 @@ fn main() {
 }
 ''',
     'cgltf': r'''use "vendor/cgltf"
-use "std/io" io
+use io "std/io"
 use "std/bytes"
 use "std/mem"
-use "std/fail"
 use "std/fs"
 use "std/os/linux"
+fn parses(text: []const u8) bool {
+  model := cgltf.parse_owned(text) catch { return false }
+  cgltf.destroy_owned(model)
+  return true
+}
+fn normal_missing(model: cgltf.Model) bool {
+  _ = cgltf.attribute(model, 0, 0, cgltf.Normal, 0) catch err {
+    case err {
+      .NotFound => { return true }
+      _ => { return false }
+    }
+  }
+  return false
+}
+fn no_color(model: cgltf.Model, material: usize) bool {
+  _ = cgltf.base_color(model, material) catch { return true }
+  return false
+}
 fn main() {
   document := "{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{}],\"buffers\":[{\"byteLength\":12,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAgD8AAABA\"}],\"bufferViews\":[{\"buffer\":0,\"byteLength\":12}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":1,\"type\":\"VEC3\"}]}"
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  model := cgltf.parse_owned(&status, document)
+  model := cgltf.parse_owned(document) catch { #panic("unexpected failure") }
   defer cgltf.destroy_owned(model)
-  cgltf.validate(&status, model)
-  cgltf.load_embedded(&status, model)
+  cgltf.validate(model) catch { #panic("unexpected failure") }
+  cgltf.load_embedded(model) catch { #panic("unexpected failure") }
   if cgltf.node_count(model) != 1 {
     #panic("glTF validate/load")
   }
   values: [3]f32
-  cgltf.read_float(&status, model, 0, 0, values[..])
+  cgltf.read_float(model, 0, 0, values[..]) catch { #panic("unexpected failure") }
   if values[0] != 0.0 || values[1] != 1.0 || values[2] != 2.0 {
     #panic("glTF accessor")
   }
-  missing_accessor: fail.Status
-  cgltf.read_float(&missing_accessor, model, 1, 0, values[..])
-  short_output: fail.Status
-  cgltf.read_float(&short_output, model, 0, 0, values[..1])
-  if !missing_accessor.failed || !short_output.failed {
+  missing_accessor := false
+  cgltf.read_float(model, 1, 0, values[..]) catch { missing_accessor = true }
+  short_output := false
+  cgltf.read_float(model, 0, 0, values[..1]) catch { short_output = true }
+  if !missing_accessor || !short_output {
     #panic("glTF invalid accessor accepted")
   }
-  broken: fail.Status
-  _ = cgltf.parse_owned(&broken, "broken")
-  if !broken.failed {
+  if parses("broken") {
     #panic("invalid glTF accepted")
   }
-  external := cgltf.parse_owned(&status, "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":12,\"uri\":\"external.bin\"}]}")
+  external := cgltf.parse_owned("{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":12,\"uri\":\"external.bin\"}]}") catch { #panic("unexpected failure") }
   defer cgltf.destroy_owned(external)
-  unattached: fail.Status
-  cgltf.load_embedded(&unattached, external)
-  if unattached.failure.kind != fail.Kind.InvalidState {
+  unattached := false
+  cgltf.load_embedded(external) catch { unattached = true }
+  if !unattached {
     #panic("external resource not rejected")
   }
   // Application chooses how external URIs are resolved. This example supplies
   // caller-owned arrays; real tools can read files into a retained model arena.
-  mesh := cgltf.parse_owned(&status, "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":36,\"uri\":\"vertices.bin\"},{\"byteLength\":6,\"uri\":\"indices.bin\"}],\"bufferViews\":[{\"buffer\":0,\"byteLength\":36},{\"buffer\":1,\"byteLength\":6}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}],\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,0.5,0.25,1]}}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]}],\"nodes\":[{\"mesh\":0,\"translation\":[1,2,3]}]}")
+  mesh := cgltf.parse_owned("{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":36,\"uri\":\"vertices.bin\"},{\"byteLength\":6,\"uri\":\"indices.bin\"}],\"bufferViews\":[{\"buffer\":0,\"byteLength\":36},{\"buffer\":1,\"byteLength\":6}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}],\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,0.5,0.25,1]}}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]}],\"nodes\":[{\"mesh\":0,\"translation\":[1,2,3]}]}") catch { #panic("unexpected failure") }
   defer cgltf.destroy_owned(mesh)
   vertices: [9]f32
   triangles: [3]u16
@@ -336,39 +341,34 @@ fn main() {
   triangles[2] = 2
   vertex_bytes := #slice(#cast(*const u8, &vertices[0]), 36)
   index_bytes := #slice(#cast(*const u8, &triangles[0]), 6)
-  short_buffer: fail.Status
-  cgltf.attach_buffer(&short_buffer, mesh, 0, vertex_bytes[..1])
-  if cgltf.buffer_count(mesh) != 2 || !bytes.equal(cgltf.buffer_uri(mesh, 0, 256), "vertices.bin") || cgltf.buffer_size(mesh, 0) != 36 || !short_buffer.failed {
+  short_buffer := false
+  cgltf.attach_buffer(mesh, 0, vertex_bytes[..1]) catch { short_buffer = true }
+  if cgltf.buffer_count(mesh) != 2 || !bytes.equal(cgltf.buffer_uri(mesh, 0, 256), "vertices.bin") || cgltf.buffer_size(mesh, 0) != 36 || !short_buffer {
     #panic("mesh resource metadata")
   }
-  cgltf.attach_buffer(&status, mesh, 0, vertex_bytes)
-  cgltf.attach_buffer(&status, mesh, 1, index_bytes)
-  twice: fail.Status
-  cgltf.attach_buffer(&twice, mesh, 0, vertex_bytes)
-  if !twice.failed {
+  cgltf.attach_buffer(mesh, 0, vertex_bytes) catch { #panic("unexpected failure") }
+  cgltf.attach_buffer(mesh, 1, index_bytes) catch { #panic("unexpected failure") }
+  twice := false
+  cgltf.attach_buffer(mesh, 0, vertex_bytes) catch { twice = true }
+  if !twice {
     #panic("mesh buffer attachment")
   }
-  cgltf.load_embedded(&status, mesh)
-  cgltf.validate(&status, mesh)
-  position := cgltf.attribute(&status, mesh, 0, 0, cgltf.Position, 0)
-  indices := cgltf.indices(&status, mesh, 0, 0)
-  material := cgltf.material(&status, mesh, 0, 0)
-  node_mesh := cgltf.node_mesh(&status, mesh, 0)
+  cgltf.load_embedded(mesh) catch { #panic("unexpected failure") }
+  cgltf.validate(mesh) catch { #panic("unexpected failure") }
+  position := cgltf.attribute(mesh, 0, 0, cgltf.Position, 0) catch { #panic("unexpected failure") }
+  indices := cgltf.indices(mesh, 0, 0) catch { #panic("unexpected failure") }
+  material := cgltf.material(mesh, 0, 0) catch { #panic("unexpected failure") }
+  node_mesh := cgltf.node_mesh(mesh, 0) catch { #panic("unexpected failure") }
   if cgltf.mesh_count(mesh) != 1 || cgltf.primitive_count(mesh, 0) != 1 || cgltf.material_count(mesh) != 1 || position != 0 || indices != 1 || material != 0 || cgltf.topology(mesh, 0, 0) != cgltf.Triangles || node_mesh != 0 || cgltf.element_count(mesh, 0) != 3 {
     #panic("mesh traversal")
   }
-  past: fail.Status
-  _ = cgltf.read_index(&past, mesh, 1, 3)
-  normal: fail.Status
-  _ = cgltf.attribute(&normal, mesh, 0, 0, cgltf.Normal, 0)
-  if cgltf.read_index(&status, mesh, 1, 2) != 2 || !past.failed || normal.failure.kind != fail.Kind.NotFound {
+  past := (cgltf.read_index(mesh, 1, 3) catch 999) == 999
+  if (cgltf.read_index(mesh, 1, 2) catch 0) != 2 || !past || !normal_missing(mesh) {
     #panic("mesh indices")
   }
-  transform := cgltf.world_transform(&status, mesh, 0)
-  color := cgltf.base_color(&status, mesh, 0)
-  no_material: fail.Status
-  _ = cgltf.base_color(&no_material, mesh, 1)
-  if transform[12] != 1.0 || transform[13] != 2.0 || transform[14] != 3.0 || color[1] != 0.5 || !no_material.failed {
+  transform := cgltf.world_transform(mesh, 0) catch { #panic("unexpected failure") }
+  color := cgltf.base_color(mesh, 0) catch { #panic("unexpected failure") }
+  if transform[12] != 1.0 || transform[13] != 2.0 || transform[14] != 3.0 || color[1] != 0.5 || !no_color(mesh, 1) {
     #panic("mesh transform/material")
   }
   backing := mem.arena_alloc(2 * 1024 * 1024)
@@ -376,12 +376,12 @@ fn main() {
     mem.arena_release(backing)
   }
   args := linux.process_arguments(backing)
-  if #len(args) == 2 {
-    file := fs.read_all(backing, &status, args[1], 1024 * 1024)
-    binary := cgltf.parse_owned(&status, file)
+  if args.len == 2 {
+    file := fs.read_all(backing, args[1], 1024 * 1024) catch { #panic("cannot read a fixture") }
+    binary := cgltf.parse_owned(file) catch { #panic("unexpected failure") }
     defer cgltf.destroy_owned(binary)
-    cgltf.load_embedded(&status, binary)
-    cgltf.read_float(&status, binary, 0, 0, values[..])
+    cgltf.load_embedded(binary) catch { #panic("unexpected failure") }
+    cgltf.read_float(binary, 0, 0, values[..]) catch { #panic("unexpected failure") }
     if values[2] != 2.0 {
       #panic("GLB accessor")
     }
@@ -389,74 +389,86 @@ fn main() {
   io.println("cgltf embedded accessor passed")
 }
 ''',
-    'box2d': r'''use "vendor/box2d" physics
-use "std/fail"
+    'box2d': r'''use physics "vendor/box2d"
 use "std/io"
 fn stale(body: physics.Body) bool {
-  status: fail.Status
-  _ = physics.position(&status, body)
-  return status.failed
+  _ = physics.position(body) catch { return true }
+  return false
+}
+fn box_fails(body: physics.Body, half: f32) bool {
+  _ = physics.box_create(body, half, 1.0, 1.0) catch { return true }
+  return false
+}
+fn circle_fails(body: physics.Body, radius: f32) bool {
+  _ = physics.circle_create(body, radius, 1.0) catch { return true }
+  return false
+}
+fn joint_fails(first: physics.Body, second: physics.Body) bool {
+  _ = physics.distance_joint(first, second, 2.0) catch { return true }
+  return false
+}
+fn query_fails(world: physics.World, hits: []physics.Shape) bool {
+  _ = physics.query(world, 2.0, 2.0, -2.0, -2.0, hits) catch { return true }
+  return false
+}
+fn contact_missing(world: physics.World, index: usize) bool {
+  _ = physics.contact(world, true, index) catch err {
+    case err {
+      .NotFound => { return true }
+      _ => { return false }
+    }
+  }
+  return false
 }
 fn main() {
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  world := physics.create_owned(&status, 0.0, -10.0)
+  world := physics.create_owned(0.0, -10.0) catch { #panic("unexpected failure") }
   defer physics.destroy_owned(world)
-  ground := physics.body_create(&status, world, 0.0, -1.0, false)
-  falling := physics.body_create(&status, world, 0.0, 4.0, true)
-  _ = physics.box_create(&status, ground, 10.0, 1.0, 0.0)
-  _ = physics.box_create(&status, falling, 0.5, 0.5, 1.0)
-  bad_step: fail.Status
-  physics.step(&bad_step, world, -1.0, 4)
-  bad_box: fail.Status
-  _ = physics.box_create(&bad_box, falling, -1.0, 1.0, 1.0)
-  if !bad_step.failed || !bad_box.failed {
+  ground := physics.body_create(world, 0.0, -1.0, false) catch { #panic("unexpected failure") }
+  falling := physics.body_create(world, 0.0, 4.0, true) catch { #panic("unexpected failure") }
+  _ = physics.box_create(ground, 10.0, 1.0, 0.0) catch { #panic("unexpected failure") }
+  _ = physics.box_create(falling, 0.5, 0.5, 1.0) catch { #panic("unexpected failure") }
+  bad_step := false
+  physics.step(world, -1.0, 4) catch { bad_step = true }
+  if !bad_step || !box_fails(falling, -1.0) {
     #panic("invalid physics input")
   }
-  circle_body := physics.body_create(&status, world, 3.0, 4.0, true)
-  circle := physics.circle_create(&status, circle_body, 0.5, 1.0)
-  physics.contact_events(&status, circle, true)
-  bad_circle: fail.Status
-  _ = physics.circle_create(&bad_circle, circle_body, -1.0, 1.0)
-  if !bad_circle.failed {
+  circle_body := physics.body_create(world, 3.0, 4.0, true) catch { #panic("unexpected failure") }
+  circle := physics.circle_create(circle_body, 0.5, 1.0) catch { #panic("unexpected failure") }
+  physics.contact_events(circle, true) catch { #panic("unexpected failure") }
+  if !circle_fails(circle_body, -1.0) {
     #panic("circle shape")
   }
-  anchor := physics.body_create(&status, world, 20.0, 4.0, false)
-  pendulum := physics.body_create(&status, world, 20.0, 2.0, true)
-  _ = physics.circle_create(&status, pendulum, 0.5, 1.0)
-  joint := physics.distance_joint(&status, anchor, pendulum, 2.0)
-  self_joint: fail.Status
-  _ = physics.distance_joint(&self_joint, anchor, anchor, 2.0)
-  if !self_joint.failed {
+  anchor := physics.body_create(world, 20.0, 4.0, false) catch { #panic("unexpected failure") }
+  pendulum := physics.body_create(world, 20.0, 2.0, true) catch { #panic("unexpected failure") }
+  _ = physics.circle_create(pendulum, 0.5, 1.0) catch { #panic("unexpected failure") }
+  joint := physics.distance_joint(anchor, pendulum, 2.0) catch { #panic("unexpected failure") }
+  if !joint_fails(anchor, anchor) {
     #panic("distance joint")
   }
   contacts := false
   for i in 0..240 {
-    physics.step(&status, world, 1.0 / 60.0, 4)
-    count := physics.contact_count(&status, world, true)
+    physics.step(world, 1.0 / 60.0, 4) catch { #panic("unexpected failure") }
+    count := physics.contact_count(world, true) catch { #panic("unexpected failure") }
     for event_index in 0..count {
-      event := physics.contact(&status, world, true, event_index)
+      event := physics.contact(world, true, event_index) catch { #panic("unexpected failure") }
       if event.first == circle || event.second == circle {
         contacts = true
       }
     }
   }
-  circle_position := physics.position(&status, circle_body)
-  joint_position := physics.position(&status, pendulum)
+  circle_position := physics.position(circle_body) catch { #panic("unexpected failure") }
+  joint_position := physics.position(pendulum) catch { #panic("unexpected failure") }
   if !contacts || circle_position.y < 0.4 || circle_position.y > 0.7 || joint_position.y < 1.9 || joint_position.y > 2.1 {
     #panic("circle contact/joint motion")
   }
   hits: [1]physics.Shape
-  candidates := physics.query(&status, world, -2.0, -2.0, 5.0, 5.0, hits[..])
-  inverted: fail.Status
-  _ = physics.query(&inverted, world, 2.0, 2.0, -2.0, -2.0, hits[..])
-  past: fail.Status
-  _ = physics.contact(&past, world, true, 999)
-  if candidates.total < 3 || candidates.written != 1 || !inverted.failed || past.failure.kind != fail.Kind.NotFound {
+  candidates := physics.query(world, -2.0, -2.0, 5.0, 5.0, hits[..]) catch { #panic("unexpected failure") }
+  if candidates.total < 3 || candidates.written != 1 || !query_fails(world, hits[..]) || !contact_missing(world, 999) {
     #panic("physics query")
   }
   physics.joint_destroy(joint)
   physics.joint_destroy(joint)
-  final := physics.position(&status, falling)
+  final := physics.position(falling) catch { #panic("unexpected failure") }
   if final.y < 0.4 || final.y > 0.7 {
     #panic("body failed to rest on ground")
   }
@@ -468,47 +480,44 @@ fn main() {
   io.println("Box2D falling box passed")
 }
 ''',
-    'microui': r'''use "vendor/microui" ui
-use "std/fail"
+    'microui': r'''use ui "vendor/microui"
 use "std/mem"
-use "std/io" io
+use io "std/io"
 use "std/bytes"
-fn rejected(step: fn(*fail.Status, ui.Context), context: ui.Context) bool {
-  status: fail.Status
-  step(&status, context)
-  return status.failed
+fn rejected(step: fn(ui.Context) !io.IoErr, context: ui.Context) bool {
+  step(context) catch { return true }
+  return false
 }
-fn outside_label(status: *fail.Status, context: ui.Context) {
+fn outside_label(context: ui.Context) !io.IoErr {
   buffer: [64]u8
-  ui.label(status, context, "outside frame", buffer[..])
+  try ui.label(context, "outside frame", buffer[..])
 }
 fn main() {
   storage := mem.arena_alloc(1024 * 1024)
   defer {
     mem.arena_release(storage)
   }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  context := ui.create(storage, &status)
+  context := ui.create(storage) catch { #panic("unexpected failure") }
   buffer: [256]u8
   if !rejected(outside_label, context) || !rejected(ui.end, context) {
     #panic("invalid UI state accepted")
   }
   frame: usize = 0
   for frame < 3 {
-    ui.begin(&status, context)
+    ui.begin(context) catch { #panic("unexpected failure") }
     if !rejected(ui.begin, context) {
       #panic("UI frame")
     }
-    if !ui.window(&status, context, "Debug", buffer[..], ui.Rectangle{ x: 10, y: 10, width: 300, height: 200 }) {
+    if !(ui.window(context, "Debug", buffer[..], ui.Rectangle{ x: 10, y: 10, width: 300, height: 200 }) catch false) {
       #panic("UI window")
     }
-    ui.label(&status, context, "arena backed", buffer[..])
-    _ = ui.button(&status, context, "Button", buffer[..])
+    ui.label(context, "arena backed", buffer[..]) catch { #panic("unexpected failure") }
+    _ = ui.button(context, "Button", buffer[..]) catch { #panic("unexpected failure") }
     if !rejected(ui.end, context) {
       #panic("UI balance")
     }
-    ui.window_end(&status, context)
-    ui.end(&status, context)
+    ui.window_end(context) catch { #panic("unexpected failure") }
+    ui.end(context) catch { #panic("unexpected failure") }
     texts: usize = 0
     rectangles: usize = 0
     for {
@@ -535,42 +544,48 @@ fn main() {
 }
 ''',
     'enet': r'''use "vendor/enet"
-use "std/fail"
 use "std/time"
-use "std/io" io
+use io "std/io"
 use "std/bytes"
+fn client_fails(peers: usize, channels: usize) bool {
+  host := enet.client_channels_owned(peers, channels) catch { return true }
+  enet.destroy_owned(host)
+  return false
+}
+fn listen_fails(ip: []const u8, buffer: []u8) bool {
+  host := enet.listen_at_owned(ip, 0, 1, 1, buffer) catch { return true }
+  enet.destroy_owned(host)
+  return false
+}
 fn main() {
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  enet.init(&status)
+  enet.init() catch { #panic("unexpected failure") }
   defer enet.quit()
   path: [64]u8
-  server := enet.listen_at_owned(&status, "0.0.0.0", 0, 2, 2, path[..])
+  server := enet.listen_at_owned("0.0.0.0", 0, 2, 2, path[..]) catch { #panic("unexpected failure") }
   defer enet.destroy_owned(server)
-  client := enet.client_channels_owned(&status, 1, 2)
+  client := enet.client_channels_owned(1, 2) catch { #panic("unexpected failure") }
   defer enet.destroy_owned(client)
-  peer := enet.connect_channels(&status, client, "127.0.0.1", enet.port(server), 2, path[..])
-  no_peer: fail.Status
-  enet.send(&no_peer, nil, "bad")
-  no_peers: fail.Status
-  _ = enet.client_owned(&no_peers, 0)
-  if !no_peer.failed || !no_peers.failed {
+  peer := enet.connect_channels(client, "127.0.0.1", enet.port(server), 2, path[..]) catch { #panic("unexpected failure") }
+  no_peer := false
+  enet.send(nil, "bad") catch { no_peer = true }
+  if !no_peer || !client_fails(0, 1) {
     #panic("invalid ENet state accepted")
   }
   deadline := time.deadline_after(5 * time.Second)
   done := false
   for !done {
     if time.deadline_expired(&deadline) { break }
-    remote := enet.service(&status, server, 0)
+    remote := enet.service(server, 0) catch { #panic("unexpected failure") }
     if remote.kind == enet.Received {
       if remote.channel != 1 || !bytes.equal(enet.packet_bytes(remote.packet), "ping") {
         #panic("server payload")
       }
-      enet.send_channel(&status, remote.peer, 1, "pong")
+      enet.send_channel(remote.peer, 1, "pong") catch { #panic("unexpected failure") }
       enet.packet_destroy(remote.packet)
     }
-    local := enet.service(&status, client, 0)
+    local := enet.service(client, 0) catch { #panic("unexpected failure") }
     if local.kind == enet.Connected {
-      enet.send_channel(&status, peer, 1, "ping")
+      enet.send_channel(peer, 1, "ping") catch { #panic("unexpected failure") }
     }
     if local.kind == enet.Received {
       if local.channel != 1 || !bytes.equal(enet.packet_bytes(local.packet), "pong") {
@@ -584,13 +599,9 @@ fn main() {
   if !done {
     #panic("ENet loopback timed out")
   }
-  bad_channel: fail.Status
-  enet.send_channel(&bad_channel, peer, 2, "invalid")
-  many_channels: fail.Status
-  _ = enet.client_channels_owned(&many_channels, 1, 256)
-  bad_address: fail.Status
-  _ = enet.listen_at_owned(&bad_address, "bad address", 0, 1, 1, path[..])
-  if !bad_channel.failed || !many_channels.failed || !bad_address.failed {
+  bad_channel := false
+  enet.send_channel(peer, 2, "invalid") catch { bad_channel = true }
+  if !bad_channel || !client_fails(1, 256) || !listen_fails("bad address", path[..]) {
     #panic("invalid ENet configuration")
   }
   enet.disconnect_with_reason(peer, 42)
@@ -599,8 +610,8 @@ fn main() {
   deadline = time.deadline_after(5 * time.Second)
   for (!server_closed || !client_closed) {
     if time.deadline_expired(&deadline) { break }
-    server_event := enet.service(&status, server, 0)
-    client_event := enet.service(&status, client, 0)
+    server_event := enet.service(server, 0) catch { #panic("unexpected failure") }
+    client_event := enet.service(client, 0) catch { #panic("unexpected failure") }
     if server_event.kind == enet.Disconnected {
       if server_event.data != 42 {
         #panic("disconnect reason")
@@ -624,17 +635,15 @@ fn main() {
   io.println("ENet reliable loopback passed")
 }
 ''',
-    'miniaudio': r'''use "vendor/miniaudio" audio
+    'miniaudio': r'''use audio "vendor/miniaudio"
 use "std/mem"
 use "std/os/linux"
 use "std/fs"
-use "std/fail"
 use "std/io"
 use "std/time"
 fn read_fails(decoder: rawptr, output: []f32) bool {
-  status: fail.Status
-  _ = audio.decoder_read(&status, decoder, output)
-  return status.failed
+  _ = audio.decoder_read(decoder, output) catch { return true }
+  return false
 }
 fn main() {
   storage := mem.arena_alloc(4 * 1024 * 1024)
@@ -642,25 +651,22 @@ fn main() {
     mem.arena_release(storage)
   }
   args := linux.process_arguments(storage)
-  if #len(args) != 2 {
+  if args.len != 2 {
     #panic("WAV path required")
   }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  bytes := fs.read_all(storage, &status, args[1], 1024 * 1024)
+  bytes := fs.read_all(storage, args[1], 1024 * 1024) catch { #panic("cannot read a fixture") }
   mark := mem.arena_mark(storage)
-  invalid: fail.Status
-  _ = audio.decoder_create(storage, &invalid, "invalid")
-  if !invalid.failed || mem.arena_mark(storage) != mark {
+  if (audio.decoder_create(storage, "invalid") catch nil) != nil || mem.arena_mark(storage) != mark {
     #panic("invalid decoder rollback")
   }
-  decoder := audio.decoder_create(storage, &status, bytes)
+  decoder := audio.decoder_create(storage, bytes) catch { #panic("unexpected failure") }
   defer audio.decoder_close(decoder)
   samples: [2048]f32
   heard := false
   ended := false
   iterations: usize = 0
   for iterations < 200 {
-    result := audio.decoder_read(&status, decoder, samples[..])
+    result := audio.decoder_read(decoder, samples[..]) catch { #panic("unexpected failure") }
     for sample in samples[..result.samples] {
       if sample != 0.0 {
         heard = true
@@ -679,14 +685,14 @@ fn main() {
   if !read_fails(decoder, samples[..]) {
     #panic("closed decoder accepted")
   }
-  engine := audio.engine_create(storage, &status, false)
+  engine := audio.engine_create(storage, false) catch { #panic("unexpected failure") }
   defer audio.engine_close(engine)
   path: [4096]u8
-  audio.play_file(&status, engine, args[1], path[..])
+  audio.play_file(engine, args[1], path[..]) catch { #panic("unexpected failure") }
   heard = false
   iterations = 0
   for !heard && iterations < 200 {
-    count := audio.mix(&status, engine, samples[..])
+    count := audio.mix(engine, samples[..]) catch { #panic("unexpected failure") }
     for mixed_sample in samples[..count] {
       if mixed_sample != 0.0 {
         heard = true
@@ -706,38 +712,39 @@ fn main() {
     'sdl3-mixer': r'''use "vendor/sdl3/mixer"
 use "std/mem"
 use "std/os/linux"
-use "std/fail"
 use "std/fs"
 use "std/io"
+fn generate_fails(engine: mixer.Mixer, samples: []f32) bool {
+  _ = mixer.generate(engine, samples) catch { return true }
+  return false
+}
 fn main() {
   storage := mem.arena_alloc(4 * 1024 * 1024)
   defer {
     mem.arena_release(storage)
   }
   args := linux.process_arguments(storage)
-  if #len(args) != 2 {
+  if args.len != 2 {
     #panic("WAV path required")
   }
-  status := fail.Status{ on_failure: fail.panic_on_failure }
-  bytes := fs.read_all(storage, &status, args[1], 1024 * 1024)
-  mixer.init(&status)
+  bytes := fs.read_all(storage, args[1], 1024 * 1024) catch { #panic("cannot read a fixture") }
+  mixer.init() catch { #panic("unexpected failure") }
   defer mixer.quit()
-  engine := mixer.create_owned(&status)
+  engine := mixer.create_owned() catch { #panic("unexpected failure") }
   defer mixer.destroy_owned(engine)
-  audio := mixer.decode_owned(&status, engine, bytes)
+  audio := mixer.decode_owned(engine, bytes) catch { #panic("unexpected failure") }
   defer mixer.audio_destroy_owned(audio)
-  invalid: fail.Status
-  if mixer.decode_owned(&invalid, engine, "invalid") != nil || !invalid.failed {
+  if (mixer.decode_owned(engine, "invalid") catch nil) != nil {
     #panic("invalid audio accepted")
   }
-  track := mixer.track_create(&status, engine)
+  track := mixer.track_create(engine) catch { #panic("unexpected failure") }
   defer mixer.track_destroy(track)
-  mixer.play(&status, track, audio)
+  mixer.play(track, audio) catch { #panic("unexpected failure") }
   samples: [2048]f32
   heard := false
   iterations: usize = 0
   for iterations < 200 && mixer.playing(track) {
-    written := mixer.generate(&status, engine, samples[..])
+    written := mixer.generate(engine, samples[..]) catch { #panic("unexpected failure") }
     for sample in samples[..written] {
       if sample != 0.0 {
         heard = true
@@ -748,12 +755,12 @@ fn main() {
   if !heard || mixer.playing(track) {
     #panic("mixer did not finish audio")
   }
-  mixer.play(&status, track, audio)
-  mixer.stop(&status, track)
+  mixer.play(track, audio) catch { #panic("unexpected failure") }
+  mixer.stop(track) catch { #panic("unexpected failure") }
   if mixer.playing(track) {
     #panic("mixer stop")
   }
-  if mixer.generate(&status, engine, samples[..]) != 0 {
+  if (mixer.generate(engine, samples[..]) catch 1) != 0 {
     #panic("mixer silence status")
   }
   for silent_sample in samples {
@@ -761,12 +768,10 @@ fn main() {
       #panic("mixer silence output")
     }
   }
-  odd: fail.Status
-  _ = mixer.generate(&odd, engine, samples[..1])
-  if !odd.failed {
+  if !generate_fails(engine, samples[..1]) {
     #panic("odd sample count accepted")
   }
-  device := mixer.create_device_owned(&status)
+  device := mixer.create_device_owned() catch { #panic("unexpected failure") }
   defer mixer.destroy_owned(device)
   io.println("SDL_mixer offline playback passed")
 }

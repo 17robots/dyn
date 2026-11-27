@@ -1,7 +1,6 @@
-use "vendor/openssl/tls" provider
-use "std/mem" memory
-use "std/fail"
-use "std/io" io
+use provider "vendor/openssl/tls"
+use memory "std/mem"
+use io "std/io"
 pub type Context = provider.Context
 pub type Connection = provider.Connection
 pub type Certificate = provider.Certificate
@@ -12,27 +11,19 @@ pub type Certificate = provider.Certificate
 pub type Want = provider.Want
 pub type Attempt = provider.Attempt
 
-// Calls that can fail take a *fail.Status: a bad argument fails with
+// Calls that can fail return T!io.IoErr: a bad argument fails with
 // InvalidInput, a failed certificate check with PermissionDenied, anything
-// else the provider reports with System and its error code in native.
+// else the provider reports with System and its error code.
 
 // The provider copies the protocol wire bytes during this call.
-pub fn set_alpn_protocols(status: *fail.Status, connection: Connection, protocols: []const u8) {
-  if status == nil {
-    set_alpn_protocols(&fail.Status{}, connection, protocols)
-    return
-  }
-  provider.set_alpn_protocols(status, connection, protocols)
+pub fn set_alpn_protocols(connection: Connection, protocols: []const u8) !io.IoErr {
+  try provider.set_alpn_protocols(connection, protocols)
 }
 // Server ALPN: each handshake picks the first protocol of preference (wire
 // format, such as "\x02h2\x08http/1.1") the client offers. preference must
 // outlive the context; a string literal does.
-pub fn server_alpn(status: *fail.Status, context: Context, preference: *const []const u8) {
-  if status == nil {
-    server_alpn(&fail.Status{}, context, preference)
-    return
-  }
-  provider.set_server_alpn(status, context, preference)
+pub fn server_alpn(context: Context, preference: *const []const u8) !io.IoErr {
+  try provider.set_server_alpn(context, preference)
 }
 // Borrows provider connection memory. Invalid after connection_release or a
 // renegotiation that replaces the negotiated protocol; copy before either.
@@ -52,11 +43,8 @@ pub fn certificate_release(certificate: *Certificate) {
 // Complete provider-formatted subject copied into arena. Failure publishes an
 // empty value and consumes no arena bytes. Exhaustion panics.
 // https://github.com/openssl/openssl/blob/master/crypto/x509/x509_obj.c
-pub fn certificate_subject(arena: *memory.Arena, status: *fail.Status, certificate: Certificate) []u8 {
-  if status == nil { return certificate_subject(arena, &fail.Status{}, certificate) }
-  empty: []u8
-  formatted := provider.subject_text_owned(status, certificate)
-  if status.failed { return empty }
+pub fn certificate_subject(arena: *memory.Arena, certificate: Certificate) []u8!io.IoErr {
+  formatted := try provider.subject_text_owned(certificate)
   defer provider.subject_text_free_owned(formatted)
   length: usize = 0
   for (#cast(*const u8, #cast(usize, formatted) + length)).* != 0 {
@@ -71,51 +59,43 @@ pub fn certificate_subject(arena: *memory.Arena, status: *fail.Status, certifica
 }
 // Runs the handshake. On a nonblocking socket it may stop with a want; call
 // it again once the socket is ready. Want.Nothing means it completed.
-pub fn handshake(status: *fail.Status, connection: Connection) Want {
-  if status == nil { return handshake(&fail.Status{}, connection) }
-  return provider.handshake(status, connection)
+pub fn handshake(connection: Connection) Want!io.IoErr {
+  return try provider.handshake(connection)
 }
-pub fn server_handshake(status: *fail.Status, connection: Connection) Want {
-  if status == nil { return server_handshake(&fail.Status{}, connection) }
-  return provider.server_handshake(status, connection)
+pub fn server_handshake(connection: Connection) Want!io.IoErr {
+  return try provider.server_handshake(connection)
 }
 // Reads what is available; count 0 with no want is the end of the stream.
-pub fn read(status: *fail.Status, connection: Connection, destination: []u8) Attempt {
-  if status == nil { return read(&fail.Status{}, connection, destination) }
-  return provider.read(status, connection, destination)
+pub fn read(connection: Connection, destination: []u8) Attempt!io.IoErr {
+  return try provider.read(connection, destination)
 }
-pub fn write(status: *fail.Status, connection: Connection, source: []const u8) Attempt {
-  if status == nil { return write(&fail.Status{}, connection, source) }
-  return provider.write(status, connection, source)
+pub fn write(connection: Connection, source: []const u8) Attempt!io.IoErr {
+  return try provider.write(connection, source)
 }
 // Sends close_notify. Want.Read means it was sent and the peer's is pending;
 // call again to finish the exchange, or close the socket.
 // https://docs.openssl.org/3.4/man3/SSL_shutdown/
-pub fn shutdown(status: *fail.Status, connection: Connection) Want {
-  if status == nil { return shutdown(&fail.Status{}, connection) }
-  return provider.shutdown(status, connection)
+pub fn shutdown(connection: Connection) Want!io.IoErr {
+  return try provider.shutdown(connection)
 }
 // The provider's text for an error code, in arena.
 pub fn error_string(arena: *memory.Arena, code: u64) []u8 {
   mark := memory.arena_mark(arena)
   space := memory.push_bytes(arena, 256)
   output := provider.error_string(space, code)
-  memory.arena_rewind(arena, mark + #len(output))
+  memory.arena_rewind(arena, mark + output.len)
   return output
 }
 
-pub fn client_config_create(status: *fail.Status) Context {
-  if status == nil { return client_config_create(&fail.Status{}) }
-  return provider.context_create_owned(status)
+pub fn client_config_create() Context!io.IoErr {
+  return try provider.context_create_owned()
 }
 pub fn server_config_create(
   arena: *memory.Arena,
-  status: *fail.Status,
   certificate: []const u8,
   key: []const u8,
-) Context {
-  if status == nil { return server_config_create(arena, &fail.Status{}, certificate, key) }
-  return provider.server_context_create(arena, status, certificate, key)
+) Context!io.IoErr {
+  return try provider.server_context_create(arena, certificate, key)
 }
 // Frees the configuration and clears the handle; releasing a cleared handle does nothing.
 pub fn config_release(context: *Context) {
@@ -125,17 +105,14 @@ pub fn config_release(context: *Context) {
 }
 pub fn client_connection_create(
   arena: *memory.Arena,
-  status: *fail.Status,
   context: Context,
   descriptor: i32,
   hostname: []const u8,
-) Connection {
-  if status == nil { return client_connection_create(arena, &fail.Status{}, context, descriptor, hostname) }
-  return provider.connection_create(arena, status, context, descriptor, hostname)
+) Connection!io.IoErr {
+  return try provider.connection_create(arena, context, descriptor, hostname)
 }
-pub fn server_connection_create(status: *fail.Status, context: Context, descriptor: i32) Connection {
-  if status == nil { return server_connection_create(&fail.Status{}, context, descriptor) }
-  return provider.server_connection_create_owned(status, context, descriptor)
+pub fn server_connection_create(context: Context, descriptor: i32) Connection!io.IoErr {
+  return try provider.server_connection_create_owned(context, descriptor)
 }
 // Frees the connection state and clears the handle. The socket stays open; close it separately.
 pub fn connection_release(connection: *Connection) {
@@ -146,27 +123,20 @@ pub fn connection_release(connection: *Connection) {
 
 // Blocking adapters: a want here means the socket was nonblocking, which they
 // report as WouldBlock.
-fn blocked(status: *fail.Status, operation: []const u8) {
-  fail.set(status, fail.make(fail.Kind.WouldBlock, operation, "", "the socket is nonblocking"))
-}
-fn reader_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
-  result := read(status, #cast(*Connection, data).*, destination)
-  if result.want != Want.Nothing {
-    blocked(status, "read")
-  }
+fn reader_read(data: rawptr, destination: []u8) usize!io.IoErr {
+  result := try read(#cast(*Connection, data).*, destination)
+  if result.want != Want.Nothing { fail .WouldBlock }
   return result.count
 }
 
-fn writer_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+// A connection that accepts no bytes fails with System(0).
+fn writer_write(data: rawptr, source: []const u8) usize!io.IoErr {
   connection := #cast(*Connection, data)
   total: usize = 0
-  for total < #len(source) && !status.failed {
-    result := write(status, connection.*, source[total..])
-    if result.want != Want.Nothing {
-      blocked(status, "write")
-    } else if result.count == 0 && !status.failed {
-      fail.set(status, fail.make(fail.Kind.System, "write", "", "the connection accepted no bytes"))
-    }
+  for total < source.len {
+    result := try write(connection.*, source[total..])
+    if result.want != Want.Nothing { fail .WouldBlock }
+    if result.count == 0 { fail io.IoErr.System(0) }
     total += result.count
   }
   return total

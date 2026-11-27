@@ -252,7 +252,9 @@ static void prove_unsigned_ranges(DynIrProgram *ir, unsigned pointer_bytes) {
 static bool validate_ir(const DynIrProgram *ir) {
   for (size_t i = 0; i < ir->expression_count; ++i) {
     const DynIrExpr *e = &ir->expressions[i];
-    if (e->type == DYN_TYPE_INFER || e->type == DYN_TYPE_ERROR || !valid_expr_id(ir, e->left) || !valid_expr_id(ir, e->right) || (size_t)e->item_start + e->item_count > ir->item_count) return false;
+    /* A block catch keeps its body as a children range in item_start/count. */
+    size_t range_limit = e->kind == DYN_EXPR_CATCH && e->boolean ? ir->child_count : ir->item_count;
+    if (e->type == DYN_TYPE_INFER || e->type == DYN_TYPE_ERROR || !valid_expr_id(ir, e->left) || !valid_expr_id(ir, e->right) || (size_t)e->item_start + e->item_count > range_limit) return false;
     if (e->kind == DYN_EXPR_NAME && e->integer >= ir->local_count) return false;
     if (e->kind == DYN_EXPR_GLOBAL && e->integer >= ir->global_count) return false;
     if (e->kind == DYN_EXPR_CALL && e->integer >= ir->function_count) return false;
@@ -717,7 +719,8 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   for (size_t i = 0; i < a->struct_count; ++i)
     name_bytes += a->structs[i].template_of ? IR_INSTANCE_NAME : span_bytes(a->structs[i].name);
   for (size_t i = 0; i < a->enum_count; ++i)
-    name_bytes += a->enums[i].template_of ? IR_INSTANCE_NAME : span_bytes(a->enums[i].name);
+    name_bytes += (a->enums[i].template_of || a->enums[i].is_fallible || a->enums[i].is_error_union)
+                      ? IR_INSTANCE_NAME : span_bytes(a->enums[i].name);
   for (size_t i = 0; i < a->variant_count; ++i) name_bytes += span_bytes(a->variants[i].name);
   for (size_t i = 0; i < a->param_count; ++i) name_bytes += span_bytes(a->params[i].name);
   for (size_t i = 0; i < a->local_count; ++i) name_bytes += span_bytes(a->locals[i].name);
@@ -727,14 +730,18 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     return false;
   }
   char *cursor = ir->names;
-  for (size_t i = 0; i < a->expression_count; ++i)
+  for (size_t i = 0; i < a->expression_count; ++i) {
     ir->expressions[i] = (DynIrExpr){
         .kind = a->expressions[i].kind,             .type = lower_type(a, a->expressions[i].type),
         .op = a->expressions[i].op,                 .left = a->expressions[i].left,
-        .right = a->expressions[i].right,           .integer = a->expressions[i].integer,
-        .floating = a->expressions[i].floating,     .boolean = a->expressions[i].boolean,
+        .right = a->expressions[i].right,           .boolean = a->expressions[i].boolean,
         .item_start = a->expressions[i].item_start, .item_count = a->expressions[i].item_count,
         .span = a->expressions[i].span,             .wrap = a->expressions[i].wrap};
+    if (a->expressions[i].kind == DYN_EXPR_FLOAT)
+      ir->expressions[i].floating = a->expressions[i].floating;
+    else
+      ir->expressions[i].integer = a->expressions[i].integer;
+  }
   /* Runtime integer arithmetic wraps. Sema has already rejected constant
      overflow. Division and shift counts have their own rules. */
   for (size_t i = 0; i < ir->expression_count; ++i) {
@@ -768,8 +775,9 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   }
   for (size_t i = 0; i < a->enum_count; ++i) {
     ir->enums[i] =
-        (DynIrEnum){.name = a->enums[i].template_of ? copy_instance_name(a, DYN_TYPE_ENUM_BASE + (DynType)i, source, &cursor)
-                                                    : copy_span(a->enums[i].name, source, &cursor),
+        (DynIrEnum){.name = (a->enums[i].template_of || a->enums[i].is_fallible || a->enums[i].is_error_union)
+                                ? copy_instance_name(a, DYN_TYPE_ENUM_BASE + (DynType)i, source, &cursor)
+                                : copy_span(a->enums[i].name, source, &cursor),
                     .span = a->enums[i].span,
                     .tag_type = a->enums[i].tag_type,
                     .variant_start = a->enums[i].variant_start,

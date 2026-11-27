@@ -7,35 +7,56 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "vendor/ui/vulkan" gpu
-use "std/ui" ui
-use "std/ui/software" software
-use "std/mem" mem
-use "std/io" errors
-use "std/fail"
-struct gpu_open_Outcome { failure: fail.Failure, kind: fail.Kind }
+SOURCE=r'''use gpu "vendor/ui/vulkan"
+use ui "std/ui"
+use software "std/ui/software"
+use mem "std/mem"
+use errors "std/io"
+use io "std/io"
+// The kinds of failure these fixtures meet; Ok when a call worked.
+enum Kind { Ok, NotFound, PermissionDenied, AlreadyExists, InvalidInput, WouldBlock, Interrupted, Unsupported, Capacity, System }
+fn kind_of(err: io.IoErr) Kind {
+ case err {
+  .NotFound => { return Kind.NotFound }
+  .PermissionDenied => { return Kind.PermissionDenied }
+  .AlreadyExists => { return Kind.AlreadyExists }
+  .InvalidInput => { return Kind.InvalidInput }
+  .WouldBlock => { return Kind.WouldBlock }
+  .Interrupted => { return Kind.Interrupted }
+  .Unsupported => { return Kind.Unsupported }
+  .Capacity => { return Kind.Capacity }
+  .System => { return Kind.System }
+ }
+}
+struct Failure { kind: Kind, native: isize }
+struct gpu_open_Outcome { failure: Failure, kind: Kind }
 fn gpu_open(p0: *gpu.Renderer, p1: gpu.Limits) gpu_open_Outcome {
-  status: fail.Status
-  gpu.open(&status, p0, p1)
-  return gpu_open_Outcome{ failure: status.failure, kind: status.failure.kind }
+  gpu.open(p0, p1) catch err {
+    kind := kind_of(err)
+    return gpu_open_Outcome{ failure: Failure{ kind: kind }, kind: kind }
+  }
+  return gpu_open_Outcome{}
 }
 
-struct gpu_render_Outcome { failure: fail.Failure, kind: fail.Kind }
+struct gpu_render_Outcome { failure: Failure, kind: Kind }
 fn gpu_render(p0: *gpu.Renderer, p1: *mem.Arena, p2: *software.Surface, p3: *const ui.Command, p4: software.Font) gpu_render_Outcome {
-  status: fail.Status
-  gpu.render(&status, p0, p1, p2, p3, p4)
-  return gpu_render_Outcome{ failure: status.failure, kind: status.failure.kind }
+  gpu.render(p0, p1, p2, p3, p4) catch err {
+    kind := kind_of(err)
+    return gpu_render_Outcome{ failure: Failure{ kind: kind }, kind: kind }
+  }
+  return gpu_render_Outcome{}
 }
 
-struct software_render_Outcome { failure: fail.Failure, kind: fail.Kind }
+struct software_render_Outcome { failure: Failure, kind: Kind }
 fn software_render(p0: *software.Surface, p1: *const ui.Command, p2: software.Font) software_render_Outcome {
-  status: fail.Status
-  software.render(&status, p0, p1, p2)
-  return software_render_Outcome{ failure: status.failure, kind: status.failure.kind }
+  software.render(p0, p1, p2) catch {
+    return software_render_Outcome{ failure: Failure{ kind: Kind.InvalidInput }, kind: Kind.InvalidInput }
+  }
+  return software_render_Outcome{}
 }
 
-fn failed(failure: fail.Failure) bool {
-  return failure.kind != fail.Kind.Ok
+fn failed(failure: Failure) bool {
+  return failure.kind != Kind.Ok
 }
 
 fn check(ok: bool) { if !ok { #panic("Vulkan UI contract") } }
@@ -52,7 +73,7 @@ fn main() {
  renderer := gpu.Renderer{}
  check(!failed(gpu_open(&renderer,gpu.Limits{}).failure))
  defer { gpu.close(&renderer) }
- check(gpu_open(&renderer,gpu.Limits{}).kind == fail.Kind.InvalidState)
+ check(gpu_open(&renderer,gpu.Limits{}).kind == Kind.InvalidInput)
  commands: [5]ui.Command = [
  ui.Command{kind:ui.Kind.Rectangle,bounds:ui.Rect{x:2,y:3,width:12,height:9},clip:ui.Rect{x:5,y:4,width:6,height:5},color:ui.Color{r:230,g:60,b:90,a:128}},
  ui.Command{kind:ui.Kind.Rectangle,bounds:ui.Rect{x:4,y:4,width:12,height:9},clip:ui.Rect{width:32,height:32},color:ui.Color{r:80,g:220,b:30,a:70}},
@@ -64,13 +85,13 @@ fn main() {
  font := software.Font{data:&font_data,glyph:bitmap,line_height:3}
  pixels: [4224]u8
  actual: [4224]u8
- for i in 0..#len(pixels) { pixels[i] = #cast(u8,i*37+19)
+ for i in 0..pixels.len { pixels[i] = #cast(u8,i*37+19)
  actual[i] = pixels[i] }
  surface := software.Surface{pixels:pixels[..],width:32,height:32,stride:132}
  target := software.Surface{pixels:actual[..],width:32,height:32,stride:132}
  check(!failed(software_render(&surface,&commands[0],font).failure))
  check(!failed(gpu_render(&renderer,arena,&target,&commands[0],font).failure))
- for i in 0..#len(pixels) { check(pixels[i] == actual[i]) }
+ for i in 0..pixels.len { check(pixels[i] == actual[i]) }
  // Reuse persistent GPU buffer on a smaller frame.
  surface.width = 7
  surface.height = 5
@@ -78,22 +99,22 @@ fn main() {
  target.height = 5
  check(!failed(software_render(&surface,&commands[0],font).failure))
  check(!failed(gpu_render(&renderer,arena,&target,&commands[0],font).failure))
- for i in 0..#len(pixels) { check(pixels[i] == actual[i]) }
+ for i in 0..pixels.len { check(pixels[i] == actual[i]) }
  renderer.limits.draws = 0
- check(gpu_render(&renderer,arena,&target,&commands[0],font).kind == fail.Kind.Capacity)
+ check(gpu_render(&renderer,arena,&target,&commands[0],font).kind == Kind.Capacity)
  renderer.limits = gpu.Limits{coverage_bytes:0}
  target.width = 32
  target.height = 32
- check(gpu_render(&renderer,arena,&target,&commands[2],font).kind == fail.Kind.Capacity)
+ check(gpu_render(&renderer,arena,&target,&commands[2],font).kind == Kind.Capacity)
  renderer.limits = gpu.Limits{}
  bad := commands[3]
  bad.codepoint = 0
- check(gpu_render(&renderer,arena,&target,&bad,font).kind == fail.Kind.InvalidInput)
+ check(gpu_render(&renderer,arena,&target,&bad,font).kind == Kind.InvalidInput)
  target.stride = 0
- check(gpu_render(&renderer,arena,&target,&commands[0],font).kind == fail.Kind.InvalidInput)
+ check(gpu_render(&renderer,arena,&target,&commands[0],font).kind == Kind.InvalidInput)
  gpu.close(&renderer)
  gpu.close(&renderer)
- check(gpu_render(&renderer,arena,&target,&commands[0],font).kind == fail.Kind.InvalidState)
+ check(gpu_render(&renderer,arena,&target,&commands[0],font).kind == Kind.InvalidInput)
 }
 '''
 if not shutil.which('glslangValidator'):

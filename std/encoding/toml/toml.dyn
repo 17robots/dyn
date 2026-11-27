@@ -1,6 +1,7 @@
-use "std/mem" mem
-use "std/fail"
-use "std/unicode/utf8" utf8
+use mem "std/mem"
+use io "std/io"
+use parse "std/parse"
+use utf8 "std/unicode/utf8"
 use "std/bytes"
 use "std/container/array"
 // TOML 1.0 tree. All parsed strings, keys and scalar lexemes are arena-owned.
@@ -11,14 +12,14 @@ pub struct Value { kind: Kind, text: []const u8, boolean: bool, key: []const u8,
 pub const nil_value: Value = Value{}
 struct Parser { arena: *mem.Arena, source: []const u8, at: usize, failed: bool, depth: usize }
 fn copy(arena: *mem.Arena, source: []const u8) []u8 {
-  result := mem.push_array(u8, arena, #len(source))
-  for i in 0..#len(source) {
+  result := mem.push_array<u8>(arena, source.len)
+  for i in 0..source.len {
     result[i] = source[i]
   }
   return result
 }
 fn node(parser: *Parser, kind: Kind) *Value {
-  value := mem.push(Value, parser.arena)
+  value := mem.push<Value>(parser.arena)
   value.kind = kind
   return value
 }
@@ -55,7 +56,7 @@ pub fn index(parent: *const Value, at: usize) *const Value {
   return &nil_value
 }
 fn peek(parser: *const Parser) u8 {
-  if parser.at == #len(parser.source) { return 0 }
+  if parser.at == parser.source.len { return 0 }
   return parser.source[parser.at]
 }
 fn horizontal(parser: *Parser) {
@@ -79,7 +80,7 @@ fn newline(parser: *Parser) bool {
 }
 fn comment(parser: *Parser) {
   if peek(parser) != 35 { return }
-  for parser.at < #len(parser.source) && peek(parser) != 10 && peek(parser) != 13 {
+  for parser.at < parser.source.len && peek(parser) != 10 && peek(parser) != 13 {
     c := peek(parser)
     if (c < 32 && c != 9) || c == 127 {
       parser.failed = true
@@ -103,18 +104,18 @@ fn hex(c: u8) i32 {
 fn quoted(parser: *Parser, key: bool) []const u8 {
   quote := peek(parser)
   parser.at += 1
-  multiline := !key && #len(parser.source) - parser.at >= 2 && parser.source[parser.at] == quote && parser.source[parser.at + 1] == quote
+  multiline := !key && parser.source.len - parser.at >= 2 && parser.source[parser.at] == quote && parser.source[parser.at + 1] == quote
   if multiline {
     parser.at += 2
     _ = newline(parser)
   }
-  output: array.Array(u8)
+  output: array.Array<u8>
   array.init(&output, parser.arena)
-  for parser.at < #len(parser.source) {
+  for parser.at < parser.source.len {
     c := peek(parser)
     if c == quote {
       count: usize = 0
-      for parser.at < #len(parser.source) && peek(parser) == quote {
+      for parser.at < parser.source.len && peek(parser) == quote {
         count += 1
         parser.at += 1
       }
@@ -167,7 +168,7 @@ fn quoted(parser: *Parser, key: bool) []const u8 {
         }
       }
       c = peek(parser)
-      if parser.at == #len(parser.source) {
+      if parser.at == parser.source.len {
         parser.failed = true
         return output.items
       }
@@ -188,7 +189,7 @@ fn quoted(parser: *Parser, key: bool) []const u8 {
           count = 8
         }
         scalar: u32 = 0
-        if count > #len(parser.source) - parser.at {
+        if count > parser.source.len - parser.at {
           parser.failed = true
           return output.items
         }
@@ -237,14 +238,14 @@ fn keypart(parser: *Parser) []const u8 {
 fn digits(source: []const u8, at: *usize, base: i32) bool {
   start := at.*
   previous := false
-  for at.* < #len(source) {
+  for at.* < source.len {
     c := source[at.*]
     digit := hex(c)
     if digit >= 0 && digit < base {
       previous = true
       at.* += 1
     } else if c == 95 {
-      if !previous || at.* + 1 == #len(source) || hex(source[at.* + 1]) < 0 || hex(source[at.* + 1]) >= base {
+      if !previous || at.* + 1 == source.len || hex(source[at.* + 1]) < 0 || hex(source[at.* + 1]) >= base {
         return false
       }
       previous = false
@@ -256,7 +257,7 @@ fn digits(source: []const u8, at: *usize, base: i32) bool {
   return at.* > start && previous
 }
 fn fixed(source: []const u8, at, count: usize) i32 {
-  if at > #len(source) || count > #len(source) - at { return -1 }
+  if at > source.len || count > source.len - at { return -1 }
   result: i32 = 0
   for i in at..at + count {
     if source[i] < 48 || source[i] > 57 { return -1 }
@@ -266,7 +267,7 @@ fn fixed(source: []const u8, at, count: usize) i32 {
 }
 fn datetime(source: []const u8) bool {
   at: usize = 0
-  date := #len(source) >= 10 && source[4] == 45 && source[7] == 45
+  date := source.len >= 10 && source[4] == 45 && source[7] == 45
   if date {
     year := fixed(source, 0, 4)
     month := fixed(source, 5, 2)
@@ -278,11 +279,11 @@ fn datetime(source: []const u8) bool {
     }
     if day > days[month - 1] { return false }
     at = 10
-    if at == #len(source) { return true }
+    if at == source.len { return true }
     if source[at] != 84 && source[at] != 116 && source[at] != 32 { return false }
     at += 1
   }
-  if #len(source) - at < 8 || source[at + 2] != 58 || source[at + 5] != 58 { return false }
+  if source.len - at < 8 || source[at + 2] != 58 || source[at + 5] != 58 { return false }
   hour := fixed(source, at, 2)
   minute := fixed(source, at + 3, 2)
   // RFC 3339/TOML ABNF includes leap second 60; retain it as text.
@@ -291,18 +292,18 @@ fn datetime(source: []const u8) bool {
     return false
   }
   at += 8
-  if at < #len(source) && source[at] == 46 {
+  if at < source.len && source[at] == 46 {
     at += 1
     start := at
-    for at < #len(source) && source[at] >= 48 && source[at] <= 57 {
+    for at < source.len && source[at] >= 48 && source[at] <= 57 {
       at += 1
     }
     if at == start { return false }
   }
-  if at == #len(source) { return true }
+  if at == source.len { return true }
   if !date { return false }
-  if (source[at] == 90 || source[at] == 122) && at + 1 == #len(source) { return true }
-  if #len(source) - at != 6 || (source[at] != 43 && source[at] != 45) || source[at + 3] != 58 {
+  if (source[at] == 90 || source[at] == 122) && at + 1 == source.len { return true }
+  if source.len - at != 6 || (source[at] != 43 && source[at] != 45) || source[at + 3] != 58 {
     return false
   }
   offset_hour := fixed(source, at + 1, 2)
@@ -315,14 +316,14 @@ fn scalar_kind(source: []const u8) Kind {
   at: usize = 0
   negative := false
   signed := false
-  if #len(source) > 0 && (source[0] == 43 || source[0] == 45) {
+  if source.len > 0 && (source[0] == 43 || source[0] == 45) {
     signed = true
     negative = source[0] == 45
     at += 1
   }
   if bytes.equal(source[at..], "inf") || bytes.equal(source[at..], "nan") { return Kind.Float }
   base: i32 = 10
-  if #len(source) - at >= 2 && source[at] == 48 {
+  if source.len - at >= 2 && source[at] == 48 {
     prefix := source[at + 1]
     if prefix == 120 {
       base = 16
@@ -340,27 +341,27 @@ fn scalar_kind(source: []const u8) Kind {
   if !digits(source, &at, base) { return Kind.Missing }
   if base == 10 && at - start > 1 && source[start] == 48 { return Kind.Missing }
   floating := false
-  if base == 10 && at < #len(source) && source[at] == 46 {
+  if base == 10 && at < source.len && source[at] == 46 {
     floating = true
     at += 1
     if !digits(source, &at, 10) { return Kind.Missing }
   }
-  if base == 10 && at < #len(source) && (source[at] == 101 || source[at] == 69) {
+  if base == 10 && at < source.len && (source[at] == 101 || source[at] == 69) {
     floating = true
     at += 1
-    if at < #len(source) && (source[at] == 43 || source[at] == 45) {
+    if at < source.len && (source[at] == 43 || source[at] == 45) {
       at += 1
     }
     if !digits(source, &at, 10) { return Kind.Missing }
   }
-  if at != #len(source) { return Kind.Missing }
+  if at != source.len { return Kind.Missing }
   if floating { return Kind.Float }
   maximum: u64 = 9223372036854775807
   if negative {
     maximum += 1
   }
   number: u64 = 0
-  for i in start..#len(source) {
+  for i in start..source.len {
     if source[i] == 95 { continue }
     digit := #cast(u64, hex(source[i]))
     if number > (maximum - digit) / #cast(u64, base) { return Kind.Missing }
@@ -435,7 +436,7 @@ fn value(parser: *Parser) *Value {
     return result
   }
   start := parser.at
-  for parser.at < #len(parser.source) {
+  for parser.at < parser.source.len {
     c = peek(parser)
     if c == 32 || c == 9 || c == 10 || c == 13 || c == 35 || c == 44 || c == 93 || c == 125 {
       break
@@ -443,9 +444,9 @@ fn value(parser: *Parser) *Value {
     parser.at += 1
   }
   // A single space may separate the date and time portions.
-  if parser.at - start == 10 && peek(parser) == 32 && #len(parser.source) - parser.at >= 9 && parser.source[parser.at + 3] == 58 {
+  if parser.at - start == 10 && peek(parser) == 32 && parser.source.len - parser.at >= 9 && parser.source[parser.at + 3] == 58 {
     parser.at += 1
-    for parser.at < #len(parser.source) {
+    for parser.at < parser.source.len {
       c = peek(parser)
       if c == 32 || c == 9 || c == 10 || c == 13 || c == 35 || c == 44 || c == 93 || c == 125 {
         break
@@ -577,24 +578,20 @@ fn bounded(value: *const Value, depth: usize) bool {
 // successful trees own all input text.
 // Inputs must be UTF-8. Nesting is limited to 64
 // exhausted arenas panic.
-// Malformed input fails with InvalidInput at the offending byte.
-pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *const Value {
-  if status == nil { return parse(arena, &fail.Status{}, source) }
-  if status.failed { return &nil_value }
-  if !utf8.valid(source) {
-    fail.at(status, fail.Kind.InvalidInput, "parse TOML", "the text is not UTF-8", 0)
-    return &nil_value
-  }
+// Malformed input fails with Invalid at the offending byte; text that is
+// not UTF-8 with Invalid(0).
+pub fn parse(arena: *mem.Arena, source: []const u8) *const Value!parse.ParseErr {
+  if !utf8.valid(source) { fail parse.ParseErr.Invalid(0) }
   mark := mem.arena_mark(arena)
   parser := Parser{ arena: arena, source: source }
   root := node(&parser, Kind.Table)
   current := root
   spaces(&parser)
-  for parser.at < #len(source) && !parser.failed {
+  for parser.at < source.len && !parser.failed {
     if peek(&parser) == 91 { current = header(&parser, root) } else { assign(&parser, current) }
     horizontal(&parser)
     comment(&parser)
-    if parser.at != #len(source) && !newline(&parser) {
+    if parser.at != source.len && !newline(&parser) {
       parser.failed = true
     }
     spaces(&parser)
@@ -604,12 +601,11 @@ pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *const
   }
   if parser.failed {
     mem.arena_rewind(arena, mark)
-    fail.at(status, fail.Kind.InvalidInput, "parse TOML", "malformed TOML", parser.at)
-    return &nil_value
+    fail parse.ParseErr.Invalid(parser.at)
   }
   return root
 }
-fn emit_string(output: *array.Array(u8), text: []const u8) {
+fn emit_string(output: *array.Array<u8>, text: []const u8) {
   array.push(output, #cast(u8, 34))
   hexes := "0123456789abcdef"
   for c in text {
@@ -648,7 +644,7 @@ fn valid_children(current: *const Value) bool {
   }
   return true
 }
-fn emit(output: *array.Array(u8), current: *const Value, depth: usize) bool {
+fn emit(output: *array.Array<u8>, current: *const Value, depth: usize) bool {
   if current == nil || depth >= 64 { return false }
   if current.kind == Kind.String {
     if !utf8.valid(current.text) { return false }
@@ -690,26 +686,23 @@ fn emit(output: *array.Array(u8), current: *const Value, depth: usize) bool {
 // Normalized writer uses quoted keys and inline tables, preserving scalar lexemes.
 // Inputs must not borrow unused backing of the output arena.
 // Output borrows arena
-// malformed/manual trees return InvalidInput and rewind.
-pub fn encode(arena: *mem.Arena, status: *fail.Status, root: *const Value) []u8 {
-  if status == nil { return encode(arena, &fail.Status{}, root) }
-  empty: []u8
-  if status.failed { return empty }
-  if root == nil || root.kind != Kind.Table || !valid_children(root) { return unencodable(status) }
+// A tree that is not a valid TOML document fails with InvalidInput and rewinds.
+pub fn encode(arena: *mem.Arena, root: *const Value) []u8!io.IoErr {
+  if root == nil || root.kind != Kind.Table || !valid_children(root) { fail .InvalidInput }
   mark := mem.arena_mark(arena)
-  output: array.Array(u8)
+  output: array.Array<u8>
   array.init(&output, arena)
   child := root.first
   for child != nil {
     if !utf8.valid(child.key) {
       mem.arena_rewind(arena, mark)
-      return unencodable(status)
+      fail .InvalidInput
     }
     emit_string(&output, child.key)
     array.push_all(&output, " = ")
     if !emit(&output, child, 0) {
       mem.arena_rewind(arena, mark)
-      return unencodable(status)
+      fail .InvalidInput
     }
     array.push(&output, #cast(u8, 10))
     child = child.next
@@ -717,8 +710,3 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, root: *const Value) []u8 
   return output.items
 }
 
-fn unencodable(status: *fail.Status) []u8 {
-  fail.invalid(status, "encode TOML", "", "the tree is not a valid TOML document")
-  empty: []u8
-  return empty
-}

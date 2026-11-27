@@ -100,38 +100,42 @@ def fixture():
     offset=12+16*len(tables);directory=b'';body=b''
     for tag,data in tables.items(): directory+=tag.encode()+u32(0)+u32(offset)+u32(len(data));body+=data;offset+=len(data)
     return u32(0x10000)+u16(len(tables))+b'\0'*6+directory+body
-SOURCE='''use "std/font" font
-use "std/fail"
-use "std/mem" mem
+SOURCE='''use font "std/font"
+use mem "std/mem"
+use parse "std/parse"
 fn check(ok: bool) { if !ok { #panic("composite contract") } }
+enum Kind { Ok, InvalidInput, Capacity, Unsupported }
+struct Failure { kind: Kind, offset: usize }
+fn failure_of(err: parse.ParseErr) Failure {
+ case err {
+  .Invalid(at) => { return Failure{ kind: Kind.InvalidInput, offset: at } }
+  .TooLarge(at) => { return Failure{ kind: Kind.Capacity, offset: at } }
+  .Unsupported(at) => { return Failure{ kind: Kind.Unsupported, offset: at } }
+ }
+}
 fn same(arena: *mem.Arena, face: *const font.Face, a, b: u16, size: u16) {
   mark := mem.arena_mark(arena)
-  status: fail.Status
-  left := font.raster(arena, &status, face, a, size)
-  right := font.raster(arena, &status, face, b, size)
-  check(!status.failed)
+  left := font.raster(arena, face, a, size) catch { #panic("raster") }
+  right := font.raster(arena, face, b, size) catch { #panic("raster") }
   check(left.width == right.width && left.height == right.height)
   check(left.x_offset == right.x_offset && left.y_offset == right.y_offset && left.advance == right.advance)
-  check(#len(left.pixels) == #len(right.pixels))
-  for i in 0..#len(left.pixels) { check(left.pixels[i] == right.pixels[i]) }
+  check(left.pixels.len == right.pixels.len)
+  for i in 0..left.pixels.len { check(left.pixels[i] == right.pixels[i]) }
   mem.arena_rewind(arena, mark)
 }
-fn raster_kind(arena: *mem.Arena, face: *const font.Face, glyph: u16) fail.Kind {
-  status: fail.Status
-  _ = font.raster(arena, &status, face, glyph, 16)
-  return status.failure.kind
+fn raster_kind(arena: *mem.Arena, face: *const font.Face, glyph: u16) Kind {
+  _ = font.raster(arena, face, glyph, 16) catch err { return failure_of(err).kind }
+  return Kind.Ok
 }
 fn main() {
   arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
-  opening: fail.Status
-  face := font.open(&opening, data[..])
-  check(!opening.failed)
+  face := font.open(data[..]) catch { #panic("unexpected failure") }
 '''
 for a,b in pairs:
     for size in (16,25): SOURCE+=f'  same(arena, &face, {a}, {b}, {size})\n'
 for index,kind in failures:
-    SOURCE+=f'  before_{index} := mem.arena_mark(arena)\n  check(raster_kind(arena, &face, {index}) == fail.Kind.{ {'Syntax':'InvalidInput'}.get(kind, kind) })\n  check(mem.arena_mark(arena) == before_{index})\n'
+    SOURCE+=f'  before_{index} := mem.arena_mark(arena)\n  check(raster_kind(arena, &face, {index}) == Kind.{ {'Syntax':'InvalidInput','Overflow':'Capacity','InvalidState':'InvalidInput'}.get(kind, kind) })\n  check(mem.arena_mark(arena) == before_{index})\n'
 SOURCE+='}\n'
 with tempfile.TemporaryDirectory(prefix='dyn-composite-results-') as directory:
     work=Path(directory);data=fixture()

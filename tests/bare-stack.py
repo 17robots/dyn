@@ -22,7 +22,7 @@ RECURSION = '''use "std/io"
 
 fn descend(depth: usize) u8 {
   frame: [4096]u8
-  for i in 0..#len(frame) { frame[i] = #cast(u8, i % 251) }
+  for i in 0..frame.len { frame[i] = #cast(u8, i % 251) }
   if depth == 0 { return frame[0] }
   child := descend(depth - 1)
   return frame[#cast(usize, child)]
@@ -38,7 +38,7 @@ fn main() {
 FRAME = '''use "std/io"
 
 fn fill(bytes: []u8) {
-  for i in 0..#len(bytes) { bytes[i] = #cast(u8, i % 251) }
+  for i in 0..bytes.len { bytes[i] = #cast(u8, i % 251) }
 }
 
 fn main() {

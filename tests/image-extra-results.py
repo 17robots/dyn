@@ -9,49 +9,42 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-CLI='''use "std/image/FORMAT" codec
-use "std/io" io
-use "std/mem" mem
-use "std/fail"
-use "std/fs" fs
-use "std/process" process
-use "std/strings" strings
+CLI='''use codec "std/image/FORMAT"
+use io "std/io"
+use mem "std/mem"
+use fs "std/fs"
+use process "std/process"
+use strings "std/strings"
 use "std/bytes"
 fn main() {
   arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
-  args_status: fail.Status
-  args := process.arguments(arena, &args_status)
-  if args_status.failed || #len(args) != 4 { #panic("image arguments") }
+  args := process.arguments(arena) catch { #panic("cannot read arguments") }
+  if args.len != 4 { #panic("image arguments") }
   ENCODER
-  source_file: fail.Status
-  source := fs.read_all(arena, &source_file, args[2], 64000000)
-  if source_file.failed { #panic("image source") }
+  source := fs.read_all(arena, args[2], 64000000) catch { #panic("image source") }
   before := mem.arena_mark(arena)
-  decoding: fail.Status
-  result := codec.decode(arena, &decoding, source)IMAGE
-  if decoding.failed {
+  decoded := codec.decode(arena, source) catch {
     if mem.arena_mark(arena) != before { #panic("image rollback") }
-    io.println("ERR {}", #cast(u32, decoding.failure.kind))
+    io.println("ERR")
     return
   }
+  result := decodedIMAGE
   if !fs_write_file(args[3], result.pixels) { #panic("image output") }
   io.println("{} {}", result.info.width, result.info.height)
 }
 
 // Writes data to path; whether it worked.
 fn fs_write_file(path: []const u8, data: []const u8) bool {
-  status: fail.Status
-  fs.write_all(&status, path, data)
-  return !status.failed
+  fs.write_all(path, data) catch { return false }
+  return true
 }
 '''
 ENCODER='''if bytes.starts_with(args[1], "encode") {
-  channels := strings.parse(u8, args[1][6..])
+  channels := strings.parse<u8>(args[1][6..])
   pixels: [16]u8
   for i in 0..4 { for j in 0..#cast(usize, channels) { pixels[i * #cast(usize, channels) + j] = #cast(u8, (i * 51 + j * 37)) } }
-  encoding := fail.Status{ on_failure: fail.panic_on_failure }
-  encoded := codec.encode(arena, &encoding, pixels[..4 * #cast(usize, channels)], 2, 2, channels)
+  encoded := codec.encode(arena, pixels[..4 * #cast(usize, channels)], 2, 2, channels) catch { #panic("unexpected failure") }
   if !fs_write_file(args[2], encoded) { #panic("image encode") }
   return
 }'''
@@ -112,9 +105,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-image-extra-') as directory:
             ran=subprocess.run([str(programs[kind,mode]),'decode',str(source),str(output)],capture_output=True,text=True,timeout=30)
             assert ran.returncode==0,(kind,mode,ran.stdout,ran.stderr)
             if expected is False:
-                assert ran.stdout.startswith('ERR '),(kind,ran.stdout)
+                assert ran.stdout.startswith('ERR'),(kind,ran.stdout)
             elif expected is not None:
-                assert not ran.stdout.startswith('ERR '),(kind,ran.stdout)
+                assert not ran.stdout.startswith('ERR'),(kind,ran.stdout)
                 if dimensions:assert tuple(map(int,ran.stdout.split()))==dimensions,(kind,ran.stdout)
                 pixels=output.read_bytes();assert len(pixels)==len(expected)
                 assert max((abs(a-b) for a,b in zip(pixels,expected)),default=0)<=tolerance,(kind,mode,max(abs(a-b) for a,b in zip(pixels,expected)))
@@ -202,7 +195,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-image-extra-') as directory:
     if shutil.which('cjpeg'):fixture_data['jpeg']=data
     for kind,fixture in fixture_data.items():
         project=work/(kind+'-portable');project.mkdir()
-        source='use "std/image/'+kind+'" codec\nuse "std/fail"\nuse "std/mem" mem\nfn main() { arena := mem.arena_alloc(0); defer { mem.arena_release(arena) }; source: ['+str(len(fixture))+']u8 = ['+','.join(map(str,fixture))+']; status: fail.Status; result := codec.decode(arena,&status,source[..])'+('.image' if kind=='gif' else '')+'; if status.failed || result.info.width == 0 { #panic("portable image") } }'
+        source='use codec "std/image/'+kind+'"\nuse mem "std/mem"\nfn main() { arena := mem.arena_alloc(0); defer { mem.arena_release(arena) }; source: ['+str(len(fixture))+']u8 = ['+','.join(map(str,fixture))+']; decoded := codec.decode(arena,source[..]) catch { #panic("portable image") }; result := decoded'+('.image' if kind=='gif' else '')+'; if result.info.width == 0 { #panic("portable image") } }'
         (project/'main.dyn').write_text(source.replace('; ', '\n'))
         for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
             subprocess.run([DYN,'build',str(project),'--release','--target',target,'--quiet','--output',str(work/(kind+'-'+target))],check=True,timeout=300)

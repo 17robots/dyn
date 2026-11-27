@@ -1,6 +1,6 @@
-use "std/ui" ui
-use "std/text/layout" layout
-use "std/math" math
+use ui "std/ui"
+use layout "std/text/layout"
+use math "std/math"
 struct Coordinate { value: i64, ok: bool }
 fn coordinate(value: f64) Coordinate {
   // Origins farther away cannot intersect any i32 rectangle even with the

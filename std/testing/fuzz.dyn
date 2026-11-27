@@ -7,7 +7,7 @@
 pub struct FuzzOptions { seed: u64, cases: usize, shrink_checks: usize }
 
 // iteration counts corpus replays first, then generated cases. corpus_entry is
-// the corpus index of a failing replay, or #len(corpus) for generated input.
+// the corpus index of a failing replay, or corpus.len for generated input.
 pub struct FuzzResult {
   passed: bool, seed: u64, iteration: usize, corpus_entry: usize,
   example: []const u8, checks: usize, shrink_exhausted: bool,
@@ -16,9 +16,9 @@ pub struct FuzzResult {
 const interesting: [10]u8 = [0, 1, 2, 16, 32, 64, 127, 128, 254, 255]
 
 fn copy_into(destination: []u8, source: []const u8) usize {
-  count := #len(source)
-  if count > #len(destination) {
-    count = #len(destination)
+  count := source.len
+  if count > destination.len {
+    count = destination.len
   }
   for i in 0..count {
     destination[i] = source[i]
@@ -28,7 +28,7 @@ fn copy_into(destination: []u8, source: []const u8) usize {
 
 // Applies one random mutation to sample[..length] and returns the new length.
 fn mutate(generator: *Random, sample: []u8, length: usize, corpus: []const []const u8) usize {
-  capacity := #len(sample)
+  capacity := sample.len
   choice := random_below(generator, 7)
   if length == 0 && choice < 4 {
     choice = 4
@@ -43,7 +43,7 @@ fn mutate(generator: *Random, sample: []u8, length: usize, corpus: []const []con
     return length
   }
   if choice == 2 {
-    sample[random_below(generator, length)] = interesting[random_below(generator, #len(interesting))]
+    sample[random_below(generator, length)] = interesting[random_below(generator, interesting.len)]
     return length
   }
   if choice == 3 {
@@ -80,12 +80,12 @@ fn mutate(generator: *Random, sample: []u8, length: usize, corpus: []const []con
     }
     return length + count
   }
-  if #len(corpus) != 0 {
+  if corpus.len != 0 {
     // Splice: keep a prefix, append a suffix of another corpus entry.
-    other := corpus[random_below(generator, #len(corpus))]
+    other := corpus[random_below(generator, corpus.len)]
     keep := random_below(generator, length + 1)
-    if #len(other) == 0 { return keep }
-    from := random_below(generator, #len(other))
+    if other.len == 0 { return keep }
+    from := random_below(generator, other.len)
     return keep + copy_into(sample[keep..], other[from..])
   }
   return length
@@ -99,16 +99,16 @@ fn failure(options: FuzzOptions, iteration: usize, entry: usize, sample: []u8, t
 }
 
 // Runs predicate over the corpus and then options.cases mutated inputs of at
-// most #len(work) / 2 bytes. Longer corpus entries are truncated. A failure's
+// most work.len / 2 bytes. Longer corpus entries are truncated. A failure's
 // minimized example borrows work. The same seed, corpus, work capacity and
 // deterministic predicate reproduce a run.
 pub fn fuzz(options: FuzzOptions, corpus: []const []const u8, work: []u8,
   predicate: fn(rawptr, []const u8) bool, context: rawptr) FuzzResult {
-  capacity := #len(work) / 2
+  capacity := work.len / 2
   sample := work[..capacity]
   trial := work[capacity..]
   iteration: usize = 0
-  for entry in 0..#len(corpus) {
+  for entry in 0..corpus.len {
     length := copy_into(sample, corpus[entry])
     if !predicate(context, sample[..length]) {
       return failure(options, iteration, entry, sample, trial, length, predicate, context)
@@ -118,8 +118,8 @@ pub fn fuzz(options: FuzzOptions, corpus: []const []const u8, work: []u8,
   generator := random(options.seed)
   for case_index in 0..options.cases {
     length: usize = 0
-    if #len(corpus) != 0 && random_below(&generator, 4) != 0 {
-      length = copy_into(sample, corpus[random_below(&generator, #len(corpus))])
+    if corpus.len != 0 && random_below(&generator, 4) != 0 {
+      length = copy_into(sample, corpus[random_below(&generator, corpus.len)])
     } else {
       length = random_below(&generator, capacity + 1)
       for i in 0..length {
@@ -131,11 +131,11 @@ pub fn fuzz(options: FuzzOptions, corpus: []const []const u8, work: []u8,
       length = mutate(&generator, sample, length, corpus)
     }
     if !predicate(context, sample[..length]) {
-      return failure(options, iteration, #len(corpus), sample, trial, length, predicate, context)
+      return failure(options, iteration, corpus.len, sample, trial, length, predicate, context)
     }
     iteration += 1
   }
-  return FuzzResult{ passed: true, seed: options.seed, iteration: iteration, corpus_entry: #len(corpus) }
+  return FuzzResult{ passed: true, seed: options.seed, iteration: iteration, corpus_entry: corpus.len }
 }
 
 // Decodes structured values from fuzz input, front to back. Reads past the end
@@ -148,11 +148,11 @@ pub fn source(data: []const u8) Source {
 }
 
 pub fn remaining(state: *const Source) usize {
-  return #len(state.data) - state.at
+  return state.data.len - state.at
 }
 
 pub fn take_u8(state: *Source) u8 {
-  if state.at == #len(state.data) { return 0 }
+  if state.at == state.data.len { return 0 }
   value := state.data[state.at]
   state.at += 1
   return value

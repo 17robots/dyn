@@ -62,12 +62,12 @@ fn by_shape(shape: Shape) i64 {
 fn by_type(target: any) bool {
   wide: i64
   case target {
-    *i32 p => {
+    *i32(p) => {
       ok := fill(&wide, 70000)
       p.* = #cast(i32, wide)
       return ok
     }
-    *u8 p => {
+    *u8(p) => {
       ok := fill(&wide, 200)
       p.* = #cast(u8, wide)
       return ok

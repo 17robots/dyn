@@ -73,6 +73,7 @@ static bool compact_add_struct_names(const DynSource *s, DynAstProgram *a,
       return false;
     }
     bool packed = compact_flag(d, EXP_PACKED);
+    bool nocopy = compact_flag(d, EXP_NOCOPY);
     uint32_t template_parameters = 0;
     for (CompactNode c = compact_child(d, 1); !compact_null(c); c = compact_next(c))
       if (compact_kind(c) == EXP_TYPE_PARAMETER) ++template_parameters;
@@ -84,6 +85,7 @@ static bool compact_add_struct_names(const DynSource *s, DynAstProgram *a,
         (DynAstStruct){.span = compact_span(d),
                        .name = ns,
                        .packed = packed,
+                       .nocopy = nocopy,
                        .is_template = template_parameters != 0,
                        .type_param_count = template_parameters,
                        .alignment = 0,
@@ -214,7 +216,9 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
       continue;
     uint32_t enum_id = ei++;
     DynAstEnum *en = &a->enums[enum_id];
-    en->variant_start = (uint32_t)a->variant_count;
+    DynAstVariant local_variants[32];
+    DynAstVariant *vbuf = local_variants;
+    uint32_t vcap = 32, vcount = 0;
     bool saw_name = false;
     a->scope_count = 0;
     a->declaring_generic = en->is_template;
@@ -222,6 +226,7 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
       uint16_t k = compact_kind(c);
       if (!saw_name && !(k != EXP_PRIMITIVE)) {
         en->tag_type = compact_type(c, s, a);
+        en = &a->enums[enum_id];
         continue;
       }
       if (!saw_name && !(k != EXP_NAME)) {
@@ -241,9 +246,8 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
         continue;
       CompactNode name = compact_child(c, 0);
       bool duplicate = false;
-      for (uint32_t q = 0; q < en->variant_count; ++q)
-        if (dyn_span_text_equal(compact_span(name),
-                                a->variants[en->variant_start + q].name, s))
+      for (uint32_t q = 0; q < vcount; ++q)
+        if (dyn_span_text_equal(compact_span(name), vbuf[q].name, s))
           duplicate = true;
       if (duplicate) {
         compact_report(name, s, errors, "duplicate enum variant");
@@ -251,9 +255,7 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
       }
       DynType payload = DYN_TYPE_VOID;
       /* Tags count up from the previous variant; Name = value sets one. */
-      uint64_t value = en->variant_count
-                           ? a->variants[en->variant_start + en->variant_count - 1].tag + 1
-                           : 0;
+      uint64_t value = vcount ? vbuf[vcount - 1].tag + 1 : 0;
       for (CompactNode part = compact_child(c, 1); !compact_null(part); part = compact_next(part)) {
         if (compact_kind(part) != SRC_QUALIFIER) {
           uint64_t explicit_value = 0;
@@ -271,11 +273,11 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
             continue;
           }
           uint64_t tag = negative ? (uint64_t)0 - explicit_value : explicit_value;
-          if (!en->variant_count && tag != 0)
+          if (!vcount && tag != 0)
             compact_report(part, s, errors, "the first enum variant must be 0, so zeroed storage is valid");
-          else if (en->variant_count && (dyn_type_tag_signed(en->tag_type)
-                                             ? (int64_t)tag <= (int64_t)(value - 1)
-                                             : tag < value))
+          else if (vcount && (dyn_type_tag_signed(en->tag_type)
+                                  ? (int64_t)tag <= (int64_t)(value - 1)
+                                  : tag < value))
             compact_report(part, s, errors, "enum values must increase in declaration order");
           value = tag;
           en->explicit_tags = true;
@@ -283,19 +285,37 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
         }
         payload = compact_type(compact_child(part, 0), s, a);
         en = &a->enums[enum_id]; /* an instance may have moved the table */
-        /* Zeroed storage holds the first variant, so it must be complete. */
-        if (!en->variant_count)
-          compact_report(part, s, errors, "the first enum variant has no payload, so zeroed storage is valid");
       }
-      if (!reserve_variant(a)) {
-        compact_report(c, s, errors, "out of memory");
-        return false;
+      if (vcount == vcap) {
+        uint32_t next_cap = vcap * 2;
+        DynAstVariant *grown = malloc(next_cap * sizeof(*grown));
+        if (!grown) {
+          if (vbuf != local_variants) free(vbuf);
+          a->allocation_failed = true;
+          compact_report(c, s, errors, "out of memory");
+          return false;
+        }
+        memcpy(grown, vbuf, vcount * sizeof(*grown));
+        if (vbuf != local_variants) free(vbuf);
+        vbuf = grown;
+        vcap = next_cap;
       }
-      a->variants[a->variant_count++] = (DynAstVariant){compact_span(name), payload, value};
-      ++en->variant_count;
+      vbuf[vcount++] = (DynAstVariant){compact_span(name), payload, value};
       if (payload != DYN_TYPE_VOID)
         en->has_payload = true;
     }
+    en = &a->enums[enum_id];
+    en->variant_start = (uint32_t)a->variant_count;
+    for (uint32_t q = 0; q < vcount; ++q) {
+      if (!reserve_variant(a)) {
+        if (vbuf != local_variants) free(vbuf);
+        compact_report(d, s, errors, "out of memory");
+        return false;
+      }
+      a->variants[a->variant_count++] = vbuf[q];
+    }
+    en->variant_count = vcount;
+    if (vbuf != local_variants) free(vbuf);
     a->scope_count = 0;
     a->declaring_generic = false;
     if (!en->variant_count)
@@ -419,20 +439,11 @@ static bool compact_add_asserts(const DynSource *s, DynAstProgram *a, unsigned *
   }
   return true;
 }
-/* Only type parameters use `$`, and a signature ends at its body's `{`. */
+/* Generic functions declare type parameters in `<T, ...>` after their name. */
 static bool compact_has_type_parameter(CompactNode n, const DynSource *s) {
+  (void)s;
   for (CompactNode c = compact_first(n); !compact_null(c); c = compact_next(c)) {
-    if (compact_kind(c) != SRC_FN_PARAM) continue;
-    DynSpan text = compact_span(compact_child(compact_last(c), 0));
-    if (text.end_byte - text.start_byte == 4 && !memcmp(s->text + text.start_byte, "type", 4))
-      return true;
-  }
-  for (uint32_t i = compact_span(n).start_byte; i < compact_span(n).end_byte; ++i) {
-    if (!(i % 1024) && !dyn_work_step(&s->context, 1)) return false;
-    if (s->text[i] == '{')
-      return false;
-    if (s->text[i] == '$')
-      return true;
+    if (compact_kind(c) == EXP_TYPE_PARAMETER) return true;
   }
   return false;
 }
@@ -453,36 +464,23 @@ static bool compact_add_generic(const DynSource *s, DynAstProgram *a, unsigned *
   bool ok = true;
   for (CompactNode c = compact_child(d, 0); !compact_null(c); c = compact_next(c)) {
     uint16_t kind = compact_kind(c);
-    if (!(kind != SRC_VARIADIC_PARAM)) {
+    if (kind == EXP_TYPE_PARAMETER) {
+      DynSpan name = compact_span(c);
+      DynType param = scope_type(a, name, s, true);
+      if (param == DYN_TYPE_ERROR) {
+        compact_report(c, s, errors, "duplicate or too many type parameters");
+        ok = false;
+      } else {
+        a->scope_explicit[param - DYN_TYPE_PARAM_BASE] = true;
+      }
+    } else if (!(kind != SRC_VARIADIC_PARAM)) {
       compact_report(c, s, errors, "generic functions cannot be variadic");
       ok = false;
     } else if (!(kind != SRC_FN_PARAM)) {
       CompactNode qualifier = compact_last(c);
       CompactNode written_type = compact_child(qualifier, 0);
-      DynSpan text = compact_span(written_type);
-      if (text.end_byte - text.start_byte == 4 && !memcmp(s->text + text.start_byte, "type", 4)) {
-        /* `T: type` or `K, V: type`: types the caller passes. */
-        for (CompactNode q = compact_child(c, 0); !compact_null(q); q = compact_next(q)) {
-          if (compact_kind(q) != EXP_NAME)
-            continue;
-          DynSpan name = compact_span(q);
-          DynType param = scope_type(a, name, s, true);
-          if (param == DYN_TYPE_ERROR) {
-            compact_report(q, s, errors, "duplicate or too many type parameters");
-            ok = false;
-          } else {
-            a->scope_explicit[param - DYN_TYPE_PARAM_BASE] = true;
-          }
-          a->generic_params[a->generic_param_count++] =
-              (DynAstGenericParam){.name = name, .pattern = param, .is_type = true};
-          ++g.param_count;
-        }
-        continue;
-      }
-      a->binding_params = true;
       a->type_param_error = NULL;
       DynType type = compact_type(written_type, s, a);
-      a->binding_params = false;
       if (type == DYN_TYPE_ERROR) {
         compact_report(written_type, s, errors,
                        a->type_param_error ? a->type_param_error : "unknown type in parameter");
@@ -836,7 +834,8 @@ static bool body_merge(DynAstProgram *a, BodyRun *r, const BodyBase *b) {
     e.type = body_type(&m, e.type);
     e.left = BODY_SHIFT(e.left, be, de);
     e.right = BODY_SHIFT(e.right, be, de);
-    if (e.kind != DYN_EXPR_OFFSET) e.item_start = BODY_SHIFT(e.item_start, bi, di);
+    if (e.kind == DYN_EXPR_CATCH && e.boolean) e.item_start = BODY_SHIFT(e.item_start, bc, dc);
+    else if (e.kind != DYN_EXPR_OFFSET) e.item_start = BODY_SHIFT(e.item_start, bi, di);
     if (e.kind == DYN_EXPR_SLICE) e.integer = BODY_SHIFT((uint32_t)e.integer, be, de);
     else if (e.kind == DYN_EXPR_STRING) e.integer = (uint32_t)e.integer + dstr;
     else if (e.kind == DYN_EXPR_CAST || e.kind == DYN_EXPR_BITCAST || e.kind == DYN_EXPR_OFFSET ||
@@ -1006,13 +1005,8 @@ static bool body_parallel(const DynSource *s, DynAstProgram *a, BodyJob *jobs, s
 }
 static void compact_create_instances(CompactNode n, const DynSource *s, DynAstProgram *a, unsigned depth) {
   if (compact_null(n) || depth > 2048 || !dyn_work_step(&s->context, 1)) return;
-  uint16_t kind = compact_kind(n);
-  if (kind == EXP_GENERIC_TYPE) (void)compact_type(n, s, a);
-  else if (kind == EXP_CALL) {
-    CompactNode callee = compact_first(n);
-    if (!compact_null(callee) && compact_template(a, compact_span(callee), s, NULL, NULL))
-      (void)compact_instance(callee, compact_next(callee), s, a);
-  }
+  uint16_t k = compact_kind(n);
+  if (k == EXP_GENERIC_TYPE || k == EXP_UNION_TYPE || k == EXP_FALLIBLE_TYPE) (void)compact_type(n, s, a);
   for (CompactNode c = compact_first(n); !compact_null(c); c = compact_next(c))
     compact_create_instances(c, s, a, depth + 1);
 }
@@ -1031,13 +1025,8 @@ typedef struct {
 #ifndef _WIN32 /* Windows builds scan serially (compact_create_instances_parallel). */
 static void instance_scan_node(InstanceScan *w, CompactNode n, unsigned depth) {
   if (compact_null(n) || depth > 2048 || w->failed) return;
-  uint16_t kind = compact_kind(n);
-  bool hit = kind == EXP_GENERIC_TYPE;
-  if (kind == EXP_CALL) {
-    CompactNode callee = compact_first(n);
-    hit = !compact_null(callee) && compact_template(w->a, compact_span(callee), w->s, NULL, NULL);
-  }
-  if (hit) {
+  uint16_t k = compact_kind(n);
+  if (k == EXP_GENERIC_TYPE || k == EXP_UNION_TYPE || k == EXP_FALLIBLE_TYPE) {
     if (w->count == w->capacity) {
       size_t capacity = w->capacity ? w->capacity * 2 : 64;
       CompactNode *found = realloc(w->found, capacity * sizeof(*found));
@@ -1056,11 +1045,8 @@ static void *instance_scan(void *data) {
   return NULL;
 }
 static void compact_create_found(CompactNode n, const DynSource *s, DynAstProgram *a) {
-  if (compact_kind(n) == EXP_GENERIC_TYPE) (void)compact_type(n, s, a);
-  else {
-    CompactNode callee = compact_first(n);
-    (void)compact_instance(callee, compact_next(callee), s, a);
-  }
+  uint16_t k = compact_kind(n);
+  if (k == EXP_GENERIC_TYPE || k == EXP_UNION_TYPE || k == EXP_FALLIBLE_TYPE) (void)compact_type(n, s, a);
 }
 #endif
 /* Creates every instance the bodies name; false means the parallel scan

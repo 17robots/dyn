@@ -9,7 +9,6 @@
 //
 // Run: dyn run examples/09-primes --release -- 10000000 8
 
-use "std/fail"
 use "std/io"
 use "std/math"
 use "std/mem"
@@ -69,10 +68,8 @@ fn work(w: *Worker) isize {
 }
 
 fn argument(args: [][]const u8, index: usize, fallback: u64) u64 {
-  if index >= #len(args) { return fallback }
-  status: fail.Status
-  value := parse.u64_decimal(&status, args[index])
-  if status.failed {
+  if index >= args.len { return fallback }
+  value := parse.u64_decimal(args[index]) catch {
     io.eprintln("primes: {} is not a number", args[index])
     return fallback
   }
@@ -94,16 +91,19 @@ fn main() i32 {
   workers: [MaxWorkers]Worker
   threads: [MaxWorkers]*thread.Thread
   // A thread that cannot start or join ends the program.
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   for i in 0..count {
     workers[i].shared = &shared
-    threads[i] = thread.spawn_with_size(program.arena, &status, 256 * mem.KiB, work, &workers[i])
+    threads[i] = thread.spawn_with_size(program.arena, 256 * mem.KiB, work, &workers[i]) catch {
+      #panic("cannot start a worker thread")
+    }
   }
 
   total: u64 = 0
   largest: u64 = 0
   for i in 0..count {
-    thread.join(&status, threads[i])
+    thread.join(threads[i]) catch {
+      #panic("cannot join a worker thread")
+    }
     // After join, the worker's thread is done: reading its struct is safe.
     total += workers[i].primes
     largest = math.max(largest, workers[i].largest)

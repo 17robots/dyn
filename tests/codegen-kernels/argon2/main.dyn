@@ -1,6 +1,5 @@
 // Argon2id at OWASP's first setting, 20 hashes.
 use "std/crypto/password"
-use "std/fail"
 use "std/io"
 use "std/mem"
 
@@ -8,12 +7,11 @@ fn main() {
   arena := mem.arena_alloc(64 * mem.MiB)
   defer mem.arena_release(arena)
   parameters := password.Argon2Recommended
-  workspace := mem.push_array(u64, arena, password.argon2id_workspace_words(parameters))
+  workspace := mem.push_array<u64>(arena, password.argon2id_workspace_words(parameters))
   out: [32]u8
   check: u64 = 0
-  status := fail.Status{ on_failure: fail.panic_on_failure }
   for i in 0..20 {
-    password.argon2id(&status, out[..], "correct-horse-battery", "saltsaltsaltsalt", parameters, workspace)
+    password.argon2id(out[..], "correct-horse-battery", "saltsaltsaltsalt", parameters, workspace) catch { #panic("unexpected failure") }
     check += #cast(u64, out[i % 32])
   }
   io.println("{}", check)

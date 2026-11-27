@@ -1,4 +1,4 @@
-use "std/fail"
+use io "std/io"
 #link("zstd")
 
 pub const ContentSizeUnknown: u64 = 18446744073709551615
@@ -12,48 +12,39 @@ pub fn compress_bound(source_size: usize) usize {
   return zstd_compress_bound(source_size)
 }
 // The compressed size. Too small a destination fails with Capacity.
-pub fn compress(status: *fail.Status, destination: []u8, source: []const u8, level: i32) usize {
-  if status == nil { return compress(&fail.Status{}, destination, source, level) }
-  if status.failed { return 0 }
+pub fn compress(destination: []u8, source: []const u8, level: i32) usize!io.IoErr {
   destination_pointer: rawptr = nil
   source_pointer: rawptr = nil
-  if #len(destination) > 0 {
+  if destination.len > 0 {
     destination_pointer = #cast(rawptr, &destination[0])
   }
-  if #len(source) > 0 {
+  if source.len > 0 {
     source_pointer = #cast(rawptr, &source[0])
   }
-  code := zstd_compress(destination_pointer, #len(destination), source_pointer, #len(source), level)
-  return checked(status, "compress", code)
+  code := zstd_compress(destination_pointer, destination.len, source_pointer, source.len, level)
+  return try checked(code)
 }
 // The decompressed size. Malformed input fails with InvalidInput, too small a
 // destination with Capacity.
-pub fn decompress(status: *fail.Status, destination: []u8, source: []const u8) usize {
-  if status == nil { return decompress(&fail.Status{}, destination, source) }
-  if status.failed { return 0 }
+pub fn decompress(destination: []u8, source: []const u8) usize!io.IoErr {
   destination_pointer: rawptr = nil
   source_pointer: rawptr = nil
-  if #len(destination) > 0 {
+  if destination.len > 0 {
     destination_pointer = #cast(rawptr, &destination[0])
   }
-  if #len(source) > 0 {
+  if source.len > 0 {
     source_pointer = #cast(rawptr, &source[0])
   }
-  code := zstd_decompress(destination_pointer, #len(destination), source_pointer, #len(source))
-  return checked(status, "decompress", code)
+  code := zstd_decompress(destination_pointer, destination.len, source_pointer, source.len)
+  return try checked(code)
 }
 // A malformed or empty frame header fails with InvalidInput.
-pub fn frame_size(status: *fail.Status, source: []const u8) FrameSize {
-  if status == nil { return frame_size(&fail.Status{}, source) }
-  if status.failed { return FrameSize{} }
+pub fn frame_size(source: []const u8) FrameSize!io.IoErr {
   size := ContentSizeError
-  if #len(source) != 0 {
-    size = zstd_frame_content_size(#cast(rawptr, &source[0]), #len(source))
+  if source.len != 0 {
+    size = zstd_frame_content_size(#cast(rawptr, &source[0]), source.len)
   }
-  if size == ContentSizeError {
-    fail.invalid(status, "read zstd frame", "", "malformed frame header")
-    return FrameSize{}
-  }
+  if size == ContentSizeError { fail .InvalidInput }
   return FrameSize{ size: size, known: size != ContentSizeUnknown }
 }
 pub fn error_name(code: usize, maximum: usize) []const u8 {
@@ -70,28 +61,17 @@ pub fn error_name(code: usize, maximum: usize) []const u8 {
 
 extern fn zstd_error_code "ZSTD_getErrorCode"(code: usize) i32
 
-// Records a zstd error code: the library's name for it, native keeps the code.
-fn provider_failed(status: *fail.Status, operation: []const u8, code: usize) {
-  // ZSTD_error_dstSize_tooSmall and memory_allocation; the rest is the data.
-  kind := fail.Kind.InvalidInput
+// A zstd error code: Capacity for ZSTD_error_dstSize_tooSmall and
+// memory_allocation, InvalidInput for the rest, which is the data. error_name
+// gives the library's name for a code.
+fn provider_failed(code: usize) io.IoErr {
   number := zstd_error_code(code)
-  if number == 70 || number == 64 {
-    kind = fail.Kind.Capacity
-  }
-  message := error_name(code, 128)
-  if #len(message) == 0 {
-    message = "zstd failed"
-  }
-  failure := fail.make(kind, operation, "", message)
-  failure.native = #bitcast(isize, code)
-  fail.set(status, failure)
+  if number == 70 || number == 64 { return io.IoErr.Capacity }
+  return io.IoErr.InvalidInput
 }
 // Provider error codes are not byte counts. Failed output must be discarded.
-fn checked(status: *fail.Status, operation: []const u8, code: usize) usize {
-  if zstd_is_error(code) != 0 {
-    provider_failed(status, operation, code)
-    return 0
-  }
+fn checked(code: usize) usize!io.IoErr {
+  if zstd_is_error(code) != 0 { fail provider_failed(code) }
   return code
 }
 
@@ -111,56 +91,38 @@ pub fn stream_workspace_size(window_log: u32) usize {
   return size + 7
 }
 // Too small a workspace, or a window_log outside 10..30, fails with Capacity.
-pub fn stream_context(status: *fail.Status, workspace: []u8, window_log: u32) StreamContext {
-  if status == nil { return stream_context(&fail.Status{}, workspace, window_log) }
-  if status.failed { return StreamContext{ failed: true } }
+pub fn stream_context(workspace: []u8, window_log: u32) StreamContext!io.IoErr {
   required := stream_workspace_size(window_log)
-  if required == 0 || #len(workspace) < required {
-    fail.set(status, fail.make(fail.Kind.Capacity, "start zstd stream", "", "the workspace is too small"))
-    return StreamContext{ failed: true }
-  }
+  if required == 0 || workspace.len < required { fail .Capacity }
   address := #cast(usize, &workspace[0])
   eight: usize = 8
   padding := (eight - (address & 7)) & 7
-  value := zstd_init_static_dstream(#cast(rawptr, &workspace[padding]), #len(workspace) - padding)
-  if value == nil {
-    fail.set(status, fail.make(fail.Kind.Capacity, "start zstd stream", "", "the workspace is too small"))
-    return StreamContext{ failed: true }
-  }
+  value := zstd_init_static_dstream(#cast(rawptr, &workspace[padding]), workspace.len - padding)
+  if value == nil { fail .Capacity }
   code := zstd_dctx_set_parameter(value, 100, #cast(i32, window_log))
-  if zstd_is_error(code) != 0 {
-    provider_failed(status, "start zstd stream", code)
-    return StreamContext{ provider_code: code, failed: true }
-  }
+  if zstd_is_error(code) != 0 { fail provider_failed(code) }
   return StreamContext{ value: value }
 }
-pub fn stream_decode(status: *fail.Status, context: *StreamContext, destination: []u8, source: []const u8) Decoded {
-  if status == nil { return stream_decode(&fail.Status{}, context, destination, source) }
-  if status.failed { return Decoded{} }
+pub fn stream_decode(context: *StreamContext, destination: []u8, source: []const u8) Decoded!io.IoErr {
   if context.failed {
-    if context.provider_code == 0 {
-      fail.set(status, fail.make(fail.Kind.InvalidState, "decompress", "", "the stream context failed"))
-    } else {
-      provider_failed(status, "decompress", context.provider_code)
-    }
-    return Decoded{}
+    if context.provider_code == 0 { fail .InvalidInput }
+    fail provider_failed(context.provider_code)
   }
   output_pointer: rawptr = nil
   input_pointer: rawptr = nil
-  if #len(destination) != 0 {
+  if destination.len != 0 {
     output_pointer = #cast(rawptr, &destination[0])
   }
-  if #len(source) != 0 {
+  if source.len != 0 {
     input_pointer = #cast(rawptr, &source[0])
   }
   written: usize = 0
   consumed: usize = 0
-  code := zstd_decompress_stream(context.value, output_pointer, #len(destination), &written, input_pointer, #len(source), &consumed)
+  code := zstd_decompress_stream(context.value, output_pointer, destination.len, &written, input_pointer, source.len, &consumed)
   if zstd_is_error(code) != 0 {
     context.failed = true
     context.provider_code = code
-    provider_failed(status, "decompress", code)
-    return Decoded{}
+    fail provider_failed(code)
   }
   return Decoded{ written: written, consumed: consumed, ended: code == 0 }
 }

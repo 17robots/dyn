@@ -1,0 +1,157 @@
+use io "std/io"
+use mem "std/mem"
+use sync "std/sync"
+use thread "std/thread"
+use pool "std/thread/pool"
+
+fn check(ok: bool, what: str) {
+  if !ok { #panic(what) }
+}
+
+struct Producer {
+  out: *sync.Channel<u64>,
+  first: u64,
+  count: u64,
+}
+
+fn produce(p: *Producer) isize {
+  for i in 0..p.count {
+    sync.send(p.out, p.first + i) catch { return 1 }
+  }
+  return 0
+}
+
+struct Consumer {
+  input: *sync.Channel<u64>,
+  sum: u64,
+  received: u64,
+}
+
+fn consume(c: *Consumer) isize {
+  for {
+    value := sync.recv(c.input) catch err {
+      case err {
+        .Closed => { break }
+        .Full, .Empty => { return 1 }
+      }
+    }
+    c.sum += value
+    c.received += 1
+  }
+  return 0
+}
+
+// 0 when a value arrived, else 1 Closed, 2 Full, 3 Empty.
+fn error_code(err: sync.ChanErr) i32 {
+  case err {
+    .Closed => { return 1 }
+    .Full => { return 2 }
+    .Empty => { return 3 }
+  }
+}
+
+fn recv_error(c: *sync.Channel<i32>) i32 {
+  _ = sync.recv(c) catch err { return error_code(err) }
+  return 0
+}
+
+fn try_recv_error(c: *sync.Channel<i32>) i32 {
+  _ = sync.try_recv(c) catch err { return error_code(err) }
+  return 0
+}
+
+fn try_forms(arena: *mem.Arena) {
+  c := sync.channel<i32>(arena, 2)
+  sync.try_send(c, 1) catch { check(false, "try_send into empty") }
+  sync.try_send(c, 2) catch { check(false, "try_send second") }
+  full := 0
+  sync.try_send(c, 3) catch err { full = error_code(err) }
+  check(full == 2, "try_send reports Full")
+  check(sync.channel_len(c) == 2, "channel_len")
+  check((sync.try_recv(c) catch -1) == 1, "first in first out")
+  sync.close(c)
+  sync.close(c)
+  closed_send := false
+  sync.send(c, 9) catch { closed_send = true }
+  check(closed_send, "send after close fails")
+  // Values sent before close still arrive, then Closed.
+  check((sync.recv(c) catch -1) == 2, "drain after close")
+  check(recv_error(c) == 1, "recv on drained closed channel")
+  empty := sync.channel<i32>(arena, 1)
+  check(try_recv_error(empty) == 3, "try_recv reports Empty")
+}
+
+fn pipeline(arena: *mem.Arena) !io.IoErr {
+  numbers := sync.channel<u64>(arena, 8)
+  producers: [4]Producer
+  consumers: [3]Consumer
+  scope := thread.scope(arena)
+  // Joined before the stack frame holding producers and consumers ends.
+  defer thread.scope_join(&scope)
+  for *c in consumers {
+    c.input = numbers
+    try thread.scope_spawn(&scope, 65536, consume, c)
+  }
+  workers := thread.scope(arena)
+  for i in 0..producers.len {
+    producers[i] = Producer{ out: numbers, first: #cast(u64, i) * 1000, count: 1000 }
+    try thread.scope_spawn(&workers, 65536, produce, &producers[i])
+  }
+  thread.scope_join(&workers)
+  sync.close(numbers)
+  thread.scope_join(&scope)
+  total: u64 = 0
+  received: u64 = 0
+  for c in consumers {
+    total += c.sum
+    received += c.received
+  }
+  check(received == 4000, "every value received once")
+  // Sum of 0..3999.
+  check(total == 7998000, "pipeline sum")
+}
+
+counter: sync.AtomicU64
+
+fn add_value(value: *u64) {
+  _ = sync.fetch_add_u64(&counter, value.*)
+}
+
+fn typed_pool(arena: *mem.Arena) {
+  values: [100]u64
+  for i in 0..values.len {
+    values[i] = #cast(u64, i + 1)
+  }
+  workers := pool.start(arena, 3, 128, 65536) catch { #panic("pool start") }
+  check(workers != nil, "pool starts")
+  for *v in values {
+    check(pool.submit(workers, add_value, v), "submit")
+  }
+  pool.wait(workers)
+  pool.stop(workers) catch { #panic("pool stop") }
+  check(sync.load_u64(&counter) == 5050, "typed pool sum")
+}
+
+fn bad_spawn(arena: *mem.Arena) {
+  scope := thread.scope(arena)
+  defer thread.scope_join(&scope)
+  unused: Producer
+  invalid := false
+  thread.scope_spawn(&scope, 16, produce, &unused) catch err {
+    case err {
+      .InvalidInput => { invalid = true }
+      _ => {}
+    }
+  }
+  check(invalid, "tiny stack is InvalidInput")
+}
+
+fn main() {
+  arena := mem.arena_alloc(16777216)
+  defer mem.arena_release(arena)
+  try_forms(arena)
+  pipeline(arena) catch { check(false, "pipeline spawn") }
+  typed_pool(arena)
+  bad_spawn(arena)
+  io.println("phase5 ok")
+}

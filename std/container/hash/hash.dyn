@@ -9,22 +9,22 @@
 // size. Nothing here allocates except slots. Keys of other types use the same
 // fields with a hand-written comparison loop over the chain.
 
-use "std/mem" mem
+use mem "std/mem"
 
 // Returns count empty slots from arena. count must be nonzero.
-pub fn slots(T: type, arena: *mem.Arena, count: usize) []*T {
+pub fn slots<T>(arena: *mem.Arena, count: usize) []*T {
   if count == 0 {
     #panic("hash table needs at least one slot")
   }
-  return mem.push_array(*T, arena, count)
+  return mem.push_array<*T>(arena, count)
 }
 
-fn slot_of(slots: []*$T, hash: u64) usize {
-  return #cast(usize, hash % #cast(u64, #len(slots)))
+fn slot_of<T>(slots: []*T, hash: u64) usize {
+  return #cast(usize, hash % #cast(u64, slots.len))
 }
 
 // Finds the node with this hash and key, or returns nil_node.
-pub fn find(slots: []*$T, hash: u64, key: []const u8, nil_node: *const $T) *T {
+pub fn find<T>(slots: []*T, hash: u64, key: []const u8, nil_node: *const T) *T {
   node := slots[slot_of(slots, hash)]
   for node != nil {
     if node.hash == hash && bytes_equal(node.key, key) { return node }
@@ -35,14 +35,14 @@ pub fn find(slots: []*$T, hash: u64, key: []const u8, nil_node: *const $T) *T {
 
 // Adds node at the front of its chain. node.hash and node.key must be set.
 // Does not check for an existing node with the same key.
-pub fn insert(slots: []*$T, node: *$T) {
+pub fn insert<T>(slots: []*T, node: *T) {
   slot := slot_of(slots, node.hash)
   node.hash_next = slots[slot]
   slots[slot] = node
 }
 
 // Unlinks node from its chain. Returns false when node is not in the table.
-pub fn remove(slots: []*$T, node: *$T) bool {
+pub fn remove<T>(slots: []*T, node: *T) bool {
   link := &slots[slot_of(slots, node.hash)]
   for link.* != nil {
     if link.* == node {
@@ -56,8 +56,8 @@ pub fn remove(slots: []*$T, node: *$T) bool {
 }
 
 fn bytes_equal(left: []const u8, right: []const u8) bool {
-  if #len(left) != #len(right) { return false }
-  for i in 0..#len(left) {
+  if left.len != right.len { return false }
+  for i in 0..left.len {
     if left[i] != right[i] { return false }
   }
   return true
@@ -94,7 +94,7 @@ pub fn hash_bytes(seed: u64, key: []const u8) u64 {
     v2: k0 ^ 0x6c7967656e657261,
     v3: k1 ^ 0x7465646279746573,
   }
-  length := #len(key)
+  length := key.len
   full := length - length % 8
   i: usize = 0
   for i < full {

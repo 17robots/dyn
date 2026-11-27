@@ -10,7 +10,7 @@ def run(args,**kwargs):
  p=subprocess.run(list(map(str,args)),capture_output=True,text=True,timeout=120,**kwargs)
  assert p.returncode==0,(args,p.stdout,p.stderr)
  return p
-SOURCE='''use "std/encoding/json/read" json
+SOURCE='''use json "std/encoding/json/read"
 extern fn oracle() i32
 pub fn prefix(source:[]const u8) usize { return json.test_prefix(source) }
 pub fn floating(source:[]const u8,a,b,c,d,e,f,g,h:f64) f64 {

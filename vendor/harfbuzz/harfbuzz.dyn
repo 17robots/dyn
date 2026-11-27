@@ -1,7 +1,6 @@
-use "std/fail"
-use "std/dynlib" dynlib
-use "std/mem" mem
-use "std/io" io
+use dynlib "std/dynlib"
+use mem "std/mem"
+use io "std/io"
 // Dynamic HarfBuzz OpenType shaping. Keep the loader handle open for every
 // table/object lifetime. Buffer glyphs borrow native storage until mutation;
 // shape copies them into the caller arena. HarfBuzz shapes one directional run:
@@ -39,20 +38,14 @@ pub const BeginningOfText: u32 = 1
 pub const EndOfText: u32 = 2
 // Copies font bytes into HarfBuzz-owned storage. The returned font owns native
 // references and is destroyed with api.font_destroy. Scale uses caller units.
-pub fn font_owned(status: *fail.Status, api: *const Api, bytes: []const u8, face_index: u32) rawptr {
-  if status == nil { return font_owned(&fail.Status{}, api, bytes, face_index) }
-  if status.failed { return nil }
-  if #len(bytes) == 0 || #cast(u64, #len(bytes)) > 0xffffffff {
-    hb_failed(status, fail.Kind.InvalidInput, "font owned", 0)
-    return nil
-  }
-  blob := api.blob_create(&bytes[0], #cast(u32, #len(bytes)), 0, nil, nil)
-  if blob == nil || api.blob_length(blob) != #cast(u32, #len(bytes)) {
+pub fn font_owned(api: *const Api, bytes: []const u8, face_index: u32) rawptr!io.IoErr {
+  if bytes.len == 0 || #cast(u64, bytes.len) > 0xffffffff { fail .InvalidInput }
+  blob := api.blob_create(&bytes[0], #cast(u32, bytes.len), 0, nil, nil)
+  if blob == nil || api.blob_length(blob) != #cast(u32, bytes.len) {
     if blob != nil {
       api.blob_destroy(blob)
     }
-    hb_failed(status, fail.Kind.System, "font owned", 0)
-    return nil
+    fail io.IoErr.System(0)
   }
   face := api.face_create(blob, face_index)
   api.blob_destroy(blob)
@@ -60,13 +53,11 @@ pub fn font_owned(status: *fail.Status, api: *const Api, bytes: []const u8, face
     if face != nil {
       api.face_destroy(face)
     }
-    hb_failed(status, fail.Kind.System, "font owned", 0)
-    return nil
+    fail io.IoErr.System(0)
   }
   if api.face_glyph_count(face) == 0 {
     api.face_destroy(face)
-    hb_failed(status, fail.Kind.InvalidInput, "font owned", 0)
-    return nil
+    fail .InvalidInput
   }
   font := api.font_create(face)
   api.face_destroy(face)
@@ -74,8 +65,7 @@ pub fn font_owned(status: *fail.Status, api: *const Api, bytes: []const u8, face
     if font != nil {
       api.font_destroy(font)
     }
-    hb_failed(status, fail.Kind.System, "font owned", 0)
-    return nil
+    fail io.IoErr.System(0)
   }
   api.ot_font_set_funcs(font)
   return font
@@ -83,55 +73,38 @@ pub fn font_owned(status: *fail.Status, api: *const Api, bytes: []const u8, face
 // Set direction to zero to guess from the run; explicit values are HB constants.
 // Clusters are byte offsets into UTF-8 input. Invalid sequences use HB recovery.
 // Feature ranges are input cluster offsets; feature tags are big-endian ASCII.
-pub fn shape(arena: *mem.Arena, status: *fail.Status, api: *const Api, font: rawptr, text: []const u8, direction: u32, features: []const Feature) []Glyph {
-  if status == nil { return shape(arena, &fail.Status{}, api, font, text, direction, features) }
-  empty: []Glyph
-  if status.failed { return empty }
-  return shape_run(arena, status, api, font, text, Options{direction:direction}, features)
+pub fn shape(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const u8, direction: u32, features: []const Feature) []Glyph!io.IoErr {
+  return try shape_run(arena, api, font, text, Options{direction:direction}, features)
 }
 // Shapes a single run. Text recovery follows HarfBuzz as in shape; layout
 // clients that preserve editor offsets must validate UTF-8 before calling.
-pub fn shape_run(arena: *mem.Arena, status: *fail.Status, api: *const Api, font: rawptr, text: []const u8, options: Options, features: []const Feature) []Glyph {
-  if status == nil { return shape_run(arena, &fail.Status{}, api, font, text, options, features) }
+pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const u8, options: Options, features: []const Feature) []Glyph!io.IoErr {
   empty: []Glyph
-  if status.failed { return empty }
   direction:=options.direction
-  if options.cluster_level>2 || (options.flags&~#cast(u32, 255))!=0 || #len(options.language)>2147483647 {
-    hb_failed(status, fail.Kind.InvalidInput, "shape run", 0)
-    return empty
+  if options.cluster_level>2 || (options.flags&~#cast(u32, 255))!=0 || options.language.len>2147483647 {
+    fail .InvalidInput
   }
   for byte in options.language {
-    if byte==0 {
-      hb_failed(status, fail.Kind.InvalidInput, "shape run", 0)
-      return empty
-    }
+    if byte==0 { fail .InvalidInput }
   }
-  if font == nil || #len(text) > 2147483647 || #cast(u64, #len(features)) > 0xffffffff || (direction != 0 && (direction < 4 || direction > 7)) {
-    hb_failed(status, fail.Kind.InvalidInput, "shape run", 0)
-    return empty
+  if font == nil || text.len > 2147483647 || #cast(u64, features.len) > 0xffffffff || (direction != 0 && (direction < 4 || direction > 7)) {
+    fail .InvalidInput
   }
-  if #cast(usize, options.item_offset)>#len(text) || (options.has_item_length && options.item_length<0) {
-    hb_failed(status, fail.Kind.InvalidInput, "shape run", 0)
-    return empty
+  if #cast(usize, options.item_offset)>text.len || (options.has_item_length && options.item_length<0) {
+    fail .InvalidInput
   }
   item_length:=options.item_length
   if !options.has_item_length {
-    item_length=#cast(i32, #len(text)-#cast(usize, options.item_offset))
+    item_length=#cast(i32, text.len-#cast(usize, options.item_offset))
   }
-  if #cast(usize, item_length)>#len(text)-#cast(usize, options.item_offset) {
-    hb_failed(status, fail.Kind.InvalidInput, "shape run", 0)
-    return empty
-  }
+  if #cast(usize, item_length)>text.len-#cast(usize, options.item_offset) { fail .InvalidInput }
   buffer := api.buffer_create()
-  if buffer == nil {
-    hb_failed(status, fail.Kind.System, "shape run", 0)
-    return empty
-  }
+  if buffer == nil { fail io.IoErr.System(0) }
   defer {
     api.buffer_destroy(buffer)
   }
-  if #len(text) != 0 {
-    api.buffer_add_utf8(buffer, &text[0], #cast(i32, #len(text)), options.item_offset, item_length)
+  if text.len != 0 {
+    api.buffer_add_utf8(buffer, &text[0], #cast(i32, text.len), options.item_offset, item_length)
   }
   if direction != 0 {
     api.buffer_set_direction(buffer, direction)
@@ -139,42 +112,32 @@ pub fn shape_run(arena: *mem.Arena, status: *fail.Status, api: *const Api, font:
   if options.script!=0 {
     api.buffer_set_script(buffer, options.script)
   }
-  if #len(options.language)!=0 {
-    language:=api.language_from_string(&options.language[0], #cast(i32, #len(options.language)))
-    if language==nil {
-      hb_failed(status, fail.Kind.InvalidInput, "shape run", 0)
-      return empty
-    }
+  if options.language.len!=0 {
+    language:=api.language_from_string(&options.language[0], #cast(i32, options.language.len))
+    if language==nil { fail .InvalidInput }
     api.buffer_set_language(buffer, language)
   }
   api.buffer_set_cluster_level(buffer, options.cluster_level)
   api.buffer_set_flags(buffer, options.flags)
   api.buffer_guess_properties(buffer)
   feature_pointer: *const Feature
-  if #len(features) != 0 {
+  if features.len != 0 {
     feature_pointer = &features[0]
   }
-  api.shape(font, buffer, feature_pointer, #cast(u32, #len(features)))
-  if api.buffer_allocation_successful(buffer) == 0 {
-    hb_failed(status, fail.Kind.System, "shape run", 0)
-    return empty
-  }
+  api.shape(font, buffer, feature_pointer, #cast(u32, features.len))
+  if api.buffer_allocation_successful(buffer) == 0 { fail io.IoErr.System(0) }
   count: u32 = 0
   positions_count: u32 = 0
   infos := api.glyph_infos(buffer, &count)
   positions := api.glyph_positions(buffer, &positions_count)
   if count != positions_count || (count != 0 && (infos == nil || positions == nil)) {
-    hb_failed(status, fail.Kind.System, "shape run", 0)
-    return empty
+    fail io.IoErr.System(0)
   }
-  if #cast(u64, count) > #cast(u64, #max(usize)/#sizeof(Glyph)) {
-    hb_failed(status, fail.Kind.Overflow, "shape run", 0)
-    return empty
-  }
-  glyphs := mem.push_array(Glyph, arena, #cast(usize, count))
+  if #cast(u64, count) > #cast(u64, #max(usize)/#sizeof(Glyph)) { fail .Capacity }
+  glyphs := mem.push_array<Glyph>(arena, #cast(usize, count))
   info_view := #slice(infos, count)
   position_view := #slice(positions, count)
-  for i in 0..#len(glyphs) {
+  for i in 0..glyphs.len {
     info := info_view[i]
     position := position_view[i]
     glyphs[i] = Glyph{index:info.codepoint, cluster:info.cluster, x_advance:position.x_advance, y_advance:position.y_advance, x_offset:position.x_offset, y_offset:position.y_offset}
@@ -182,99 +145,80 @@ pub fn shape_run(arena: *mem.Arena, status: *fail.Status, api: *const Api, font:
   return glyphs
 }
 
-fn missing(status: *fail.Status, name: []const u8) Api {
-  fail.set(status, fail.make(fail.Kind.NotFound, "load HarfBuzz", name, "the library lacks this function"))
-  return Api{}
+fn missing(name: []const u8) Api!io.IoErr {
+  fail .NotFound
 }
 fn symbol(handle: dynlib.Handle, name: []const u8) rawptr {
-  status: fail.Status
-  return dynlib.symbol(&status, handle, name)
+  return dynlib.symbol(handle, name) catch nil
 }
 // A missing function fails with NotFound, its name as the failure's path.
-pub fn load(status: *fail.Status, handle: dynlib.Handle) Api {
-  if status == nil { return load(&fail.Status{}, handle) }
-  if status.failed { return Api{} }
+pub fn load(handle: dynlib.Handle) Api!io.IoErr {
   api := Api{}
   api.blob_create = #cast(fn(*const u8, u32, u32, rawptr, fn(rawptr))rawptr, symbol(handle, "hb_blob_create_or_fail"))
-  if api.blob_create == nil { return missing(status, "hb_blob_create_or_fail") }
+  if api.blob_create == nil { return try missing("hb_blob_create_or_fail") }
   api.blob_destroy = #cast(fn(rawptr), symbol(handle, "hb_blob_destroy"))
-  if api.blob_destroy == nil { return missing(status, "hb_blob_destroy") }
+  if api.blob_destroy == nil { return try missing("hb_blob_destroy") }
   api.blob_length = #cast(fn(rawptr)u32, symbol(handle, "hb_blob_get_length"))
-  if api.blob_length == nil { return missing(status, "hb_blob_get_length") }
+  if api.blob_length == nil { return try missing("hb_blob_get_length") }
   api.face_create = #cast(fn(rawptr, u32)rawptr, symbol(handle, "hb_face_create"))
-  if api.face_create == nil { return missing(status, "hb_face_create") }
+  if api.face_create == nil { return try missing("hb_face_create") }
   api.face_get_empty = #cast(fn()rawptr, symbol(handle, "hb_face_get_empty"))
-  if api.face_get_empty == nil { return missing(status, "hb_face_get_empty") }
+  if api.face_get_empty == nil { return try missing("hb_face_get_empty") }
   api.face_destroy = #cast(fn(rawptr), symbol(handle, "hb_face_destroy"))
-  if api.face_destroy == nil { return missing(status, "hb_face_destroy") }
+  if api.face_destroy == nil { return try missing("hb_face_destroy") }
   api.face_glyph_count = #cast(fn(rawptr)u32, symbol(handle, "hb_face_get_glyph_count"))
-  if api.face_glyph_count == nil { return missing(status, "hb_face_get_glyph_count") }
+  if api.face_glyph_count == nil { return try missing("hb_face_get_glyph_count") }
   api.font_create = #cast(fn(rawptr)rawptr, symbol(handle, "hb_font_create"))
-  if api.font_create == nil { return missing(status, "hb_font_create") }
+  if api.font_create == nil { return try missing("hb_font_create") }
   api.font_get_empty = #cast(fn()rawptr, symbol(handle, "hb_font_get_empty"))
-  if api.font_get_empty == nil { return missing(status, "hb_font_get_empty") }
+  if api.font_get_empty == nil { return try missing("hb_font_get_empty") }
   api.font_destroy = #cast(fn(rawptr), symbol(handle, "hb_font_destroy"))
-  if api.font_destroy == nil { return missing(status, "hb_font_destroy") }
+  if api.font_destroy == nil { return try missing("hb_font_destroy") }
   api.font_set_scale = #cast(fn(rawptr, i32, i32), symbol(handle, "hb_font_set_scale"))
-  if api.font_set_scale == nil { return missing(status, "hb_font_set_scale") }
+  if api.font_set_scale == nil { return try missing("hb_font_set_scale") }
   api.font_set_ppem = #cast(fn(rawptr, u32, u32), symbol(handle, "hb_font_set_ppem"))
-  if api.font_set_ppem == nil { return missing(status, "hb_font_set_ppem") }
+  if api.font_set_ppem == nil { return try missing("hb_font_set_ppem") }
   api.ot_font_set_funcs = #cast(fn(rawptr), symbol(handle, "hb_ot_font_set_funcs"))
-  if api.ot_font_set_funcs == nil { return missing(status, "hb_ot_font_set_funcs") }
+  if api.ot_font_set_funcs == nil { return try missing("hb_ot_font_set_funcs") }
   api.buffer_create = #cast(fn()rawptr, symbol(handle, "hb_buffer_create"))
-  if api.buffer_create == nil { return missing(status, "hb_buffer_create") }
+  if api.buffer_create == nil { return try missing("hb_buffer_create") }
   api.buffer_destroy = #cast(fn(rawptr), symbol(handle, "hb_buffer_destroy"))
-  if api.buffer_destroy == nil { return missing(status, "hb_buffer_destroy") }
+  if api.buffer_destroy == nil { return try missing("hb_buffer_destroy") }
   api.buffer_allocation_successful = #cast(fn(rawptr)i32, symbol(handle, "hb_buffer_allocation_successful"))
   if api.buffer_allocation_successful == nil {
-    return missing(status, "hb_buffer_allocation_successful")
+    return try missing("hb_buffer_allocation_successful")
   }
   api.buffer_add_utf8 = #cast(fn(rawptr, *const u8, i32, u32, i32), symbol(handle, "hb_buffer_add_utf8"))
-  if api.buffer_add_utf8 == nil { return missing(status, "hb_buffer_add_utf8") }
+  if api.buffer_add_utf8 == nil { return try missing("hb_buffer_add_utf8") }
   api.buffer_guess_properties = #cast(fn(rawptr), symbol(handle, "hb_buffer_guess_segment_properties"))
-  if api.buffer_guess_properties == nil {
-    return missing(status, "hb_buffer_guess_segment_properties")
-  }
+  if api.buffer_guess_properties == nil { return try missing("hb_buffer_guess_segment_properties") }
   api.buffer_set_direction = #cast(fn(rawptr, u32), symbol(handle, "hb_buffer_set_direction"))
-  if api.buffer_set_direction == nil { return missing(status, "hb_buffer_set_direction") }
+  if api.buffer_set_direction == nil { return try missing("hb_buffer_set_direction") }
   api.buffer_set_script = #cast(fn(rawptr, u32), symbol(handle, "hb_buffer_set_script"))
-  if api.buffer_set_script == nil { return missing(status, "hb_buffer_set_script") }
+  if api.buffer_set_script == nil { return try missing("hb_buffer_set_script") }
   api.buffer_set_language = #cast(fn(rawptr, rawptr), symbol(handle, "hb_buffer_set_language"))
-  if api.buffer_set_language == nil { return missing(status, "hb_buffer_set_language") }
+  if api.buffer_set_language == nil { return try missing("hb_buffer_set_language") }
   api.language_from_string = #cast(fn(*const u8, i32)rawptr, symbol(handle, "hb_language_from_string"))
-  if api.language_from_string == nil { return missing(status, "hb_language_from_string") }
+  if api.language_from_string == nil { return try missing("hb_language_from_string") }
   api.shape = #cast(fn(rawptr, rawptr, *const Feature, u32), symbol(handle, "hb_shape"))
-  if api.shape == nil { return missing(status, "hb_shape") }
+  if api.shape == nil { return try missing("hb_shape") }
   api.glyph_infos = #cast(fn(rawptr, *u32)*const GlyphInfo, symbol(handle, "hb_buffer_get_glyph_infos"))
-  if api.glyph_infos == nil { return missing(status, "hb_buffer_get_glyph_infos") }
+  if api.glyph_infos == nil { return try missing("hb_buffer_get_glyph_infos") }
   api.glyph_positions = #cast(fn(rawptr, *u32)*const GlyphPosition, symbol(handle, "hb_buffer_get_glyph_positions"))
-  if api.glyph_positions == nil { return missing(status, "hb_buffer_get_glyph_positions") }
+  if api.glyph_positions == nil { return try missing("hb_buffer_get_glyph_positions") }
   api.unicode_get_default=#cast(fn()rawptr, symbol(handle, "hb_unicode_funcs_get_default"))
-  if api.unicode_get_default==nil { return missing(status, "hb_unicode_funcs_get_default") }
+  if api.unicode_get_default==nil { return try missing("hb_unicode_funcs_get_default") }
   api.unicode_script=#cast(fn(rawptr, u32)u32, symbol(handle, "hb_unicode_script"))
-  if api.unicode_script==nil { return missing(status, "hb_unicode_script") }
+  if api.unicode_script==nil { return try missing("hb_unicode_script") }
   api.script_horizontal_direction=#cast(fn(u32)u32, symbol(handle, "hb_script_get_horizontal_direction"))
   if api.script_horizontal_direction==nil {
-    return missing(status, "hb_script_get_horizontal_direction")
+    return try missing("hb_script_get_horizontal_direction")
   }
   api.buffer_set_cluster_level=#cast(fn(rawptr, u32), symbol(handle, "hb_buffer_set_cluster_level"))
-  if api.buffer_set_cluster_level==nil { return missing(status, "hb_buffer_set_cluster_level") }
+  if api.buffer_set_cluster_level==nil { return try missing("hb_buffer_set_cluster_level") }
   api.buffer_set_flags=#cast(fn(rawptr, u32), symbol(handle, "hb_buffer_set_flags"))
-  if api.buffer_set_flags==nil { return missing(status, "hb_buffer_set_flags") }
+  if api.buffer_set_flags==nil { return try missing("hb_buffer_set_flags") }
   return api
 }
 
 // Records a HarfBuzz failure of kind for operation.
-fn hb_failed(status: *fail.Status, kind: fail.Kind, operation: []const u8, code: isize) {
-  message: []const u8 = "HarfBuzz failed"
-  if kind == fail.Kind.InvalidInput {
-    message = "invalid argument"
-  } else if kind == fail.Kind.Overflow {
-    message = "too large"
-  } else if kind == fail.Kind.Capacity {
-    message = "out of memory"
-  }
-  failure := fail.make(kind, operation, "", message)
-  failure.native = code
-  fail.set(status, failure)
-}

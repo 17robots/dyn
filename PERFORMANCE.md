@@ -1,6 +1,205 @@
 # Performance qualification
 
 
+## Branchless sort, SSA passes, guarded check hoisting and spill coloring — 2026-11-26
+
+`tools/bench/extended.py` (11 interleaved samples, 2 warmups, ms) on x86-64 Linux
+against GCC 16.2 `-O2`, Rust 1.94 (`-O`), and Go 1.27:
+
+| kernel | dyn before | dyn after | c -O2 | rust | go |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| sort (32k × 8 u32) | 11.06 | 2.86–3.04 | 17.76 | 2.27 | 11.86 |
+| utf8 (262k × 16) | 6.98 | 4.71–4.96 | 4.83–5.04 | 6.08 | 9.16 |
+| map (64k × 8) | 5.93 | 4.72–4.87 | 4.75–4.87 | 4.69 | 5.05 |
+| allocate (8k × 32) | 1.26 | 1.26 | 3.11 | 5.43 | 4.97 |
+
+`tools/bench/run.py --samples 7` on x86-64 Linux against GCC 16.2 `-O2`,
+Clang 23.1 `-O2`, Go 1.27, and Zig 0.17 (ReleaseFast / ReleaseSafe), seconds:
+
+| kernel | dyn | gcc -O2 | clang -O2 | go | zig | zig safe |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| bodies | 0.016 | 0.016 | 0.016 | 0.049 | 0.025 | 0.025 |
+| fib | 0.081 | 0.065 | 0.160 | 0.285 | 0.160 | 0.272 |
+| hash | 0.076 | 0.078 | 0.076 | 0.078 | 0.077 | 0.077 |
+| matmul | 0.052 | 0.058 | 0.118 | 0.109 | 0.132 | 0.131 |
+| points | 0.010 | 0.009 | 0.012 | 0.013 | 0.010 | 0.009 |
+| sieve | 0.123 | 0.114 | 0.113 | 0.132 | 0.106 | 0.109 |
+
+`std/sort` now uses pattern-defeating branchless cyclic Lomuto partitioning
+(`pdqsort` with Tukey's ninther pivot selection), optimal branchless sorting
+networks (`sort2`–`sort8`), and a branchless split-loop bidirectional merge
+for slices of 9–16 elements. Extended `sort` drops from 11.06 ms to 2.86–3.04 ms
+(3.6–3.9× faster, 3.9× faster than Go `slices.Sort`, 5.8× faster than `qsort`).
+`std/unicode/utf8.codepoint_count` also now uses an 8-byte SWAR ASCII fast-path
+matching `utf8.valid`.
+
+Eight general SSA backend passes and memory refinements landed in
+`src/backend/ssa.inc` and `src/backend/ssa_a64.inc`:
+
+- **Constant-phi jump threading and empty-join flattening**
+  (`ssa_thread_const_phis`): flattens chained empty phi-only join blocks from
+  nested `if / else if` chains, threads constant-set phi comparisons, and
+  specializes small blocks so `utf8` decodes 1–4 byte sequences with zero
+  re-tests of the continuation count.
+- **Interprocedural slice return-length summary**
+  (`ssa_callee_slice_len_param` in `ssa_call`): for any direct slice-returning
+  callee whose every return path yields length equal to an unmodified `usize`
+  parameter (such as `mem.push_array` or `mem.push_bytes`), callers reuse the
+  length argument directly, freeing registers and exposing exact slice lengths
+  to `ssa_prove` and loop lowering.
+- **Bitmask check rewriting and SSA zero-loop lowering**
+  (`ssa_masked_by_cap_m1`, `ssa_zero_loops`, header invariant check hoisting):
+  rewrites `(x & (cap - 1)) <u cap` to the exact loop-invariant equivalence
+  `cap != 0`, hoists invariant checks from loop headers into preheaders, and
+  lowers bounds-check-free `0..N` slice zeroing loops to hardware `REP STOSB`
+  (`SO_FILLMEM`), dropping `map` from 5.93 ms to 4.78 ms (faster than GCC
+  `-O2` at 4.81 ms and Go at 5.20 ms) and `codegen-bench/map-large` from
+  0.740 s to 0.702 s.
+- **Chained `SO_ADD` folding, x86-64 index displacement folding, and inductive
+  `<=` phi bounds** (`ssa_fold`, `ssa_addressing`, `ssa_phi_bounded_le`,
+  `ssa_below_via_phi_le`): folds `(i + 1) + 1` chains after phi threading,
+  folds `[base + (idx +/- c)*scale]` into `disp(base, idx, scale)` when the
+  offset has no non-address uses, and proves `used <= v.len` across nested
+  `if / else if` setup loops so `utf8` drops the per-byte `v[i]` check while
+  still coalescing `v[i+1..i+3]` into one check with parallel displacement
+  loads — cutting `utf8` from 6.98 ms to 4.82 ms (faster than GCC `-O2` at
+  4.89 ms, Rust at 6.37 ms, and Go at 9.51 ms).
+- **Pure-read bounds-check coalescing** (`ssa_coalesce_checks`): collapses
+  consecutive same-origin index checks on `root + 0..k` inside one pure-read
+  block into a single overflow-free check `k <u (len - root)` once `root <= len`
+  is established.
+- **Inductive phi bound proving and step-above bounds elimination**
+  (`ssa_phi_bounded`, `ssa_established_step_above` in `ssa_prove`): proves a
+  loop-carried phi stays `<u bound` when every non-self arm is established
+  `<u bound` (base range, bound fact, or earlier check), eliminating redundant
+  in-loop and post-loop `values[left]` bounds checks in cyclic Lomuto.
+- **32-bit unsigned `div`/`rem` narrowing** (`ssa_narrow32`, `SO_DIV`/`SO_REM`
+  in x86-64 and AArch64): uses 32-bit `div r32` / `udiv w` when both operands
+  fit in 32 bits, avoiding 64-bit divider latency.
+- **Guarded preheader hoisting for loop-invariant `SO_CHECK`s**
+  (`hoist_checks` in `ssa_hoist`): runs after pure-value hoisting, follows
+  single-predecessor `SB_PLAIN` blocks from inlined calls, and hoists
+  loop-invariant checks (such as non-zero divisor checks before `%`) into a
+  trip-guarded preheader block so 0-trip loops never panic and `>= 1`-trip loops
+  check once. Together with 32-bit `div`, extended `map` drops to 5.27 ms
+  (beating Go's 5.29 ms, within 1.07× of C `-O2` and 1.09× of Rust).
+- **Multi-select flag fusion** (`ssa_fuse`, `SO_SELECT`): fuses a `SO_CMP`
+  shared by multiple `SO_SELECT`s in the same block and reuses live
+  RFLAGS/NZCV across adjacent selects (`cmp; cmov; mov; cmov` on x86-64,
+  `cmp; csel; csel` on AArch64).
+- **IEEE-754 exact `2.0 * x -> x + x` folding, inductive sibling-phi bounds
+  proving, plain-block coalescing, and x86-64 memory-operand `cmp` fusion**
+  (`ssa_fold`, `ssa_phi_step_le_sibling`, `ssa_merge_plain`, `ssa_fuse`,
+  `SO_SELECT`, `ssa_compare_values`): rewrites exact `2.0 * x` (`f32`/`f64`) to
+  `x + x` (`mandelbrot` 0.233 s → 0.225 s), proves `p1 + d <u bound` from a
+  sibling step-1 loop phi `p2 <u bound` (eliminating `values[left + 1]` checks
+  in cyclic Lomuto), coalesces single-predecessor `SB_PLAIN` chains after
+  `ssa_selects` (collapsing trivial 1-arm phis after `ssa_order`) so `SO_CMP`
+  fuses into consecutive `SO_SELECT`s (`cmp; cmov; cmov; cmov`), relaxes
+  `SO_SELECT` fusion when `base` is already in destination `d`, and folds
+  single-use 64-bit / `u32` loads directly into branch `cmp reg/imm, mem`.
+- **Dead-hole register sharing, left-edge spill-slot coloring, and pure leaf
+  frame-pointer omission** (`hole_share`, `spill_reuse`, `omit_fp`): generalizes
+  dead-hole register reuse before spilling, colors non-overlapping spilled
+  values and per-call save slots onto shared stack slots (`tools/codegen-bench.py`
+  spills: `argon2` 110 → 77, `json` 68 → 54, `deflate` 74 → 66, `pbkdf2`
+  50 → 46), omits frame-pointer prologue/epilogue on zero-frame pure leaves, and
+  tightens `SSA_POOL_LIMIT` (4 MiB/worker) and `SsaPipeline.window`
+  (`4 * workers`).
+
+`tools/compare/compare.py --sizes 10000 100000 --runs 5`: 100k-line release
+build completes in **0.30 s at 80.5 MiB RSS** — #1 fastest and #1 lowest
+memory across all four languages (Go 0.32 s / 93.1 MiB, C 0.35 s / 117.1 MiB,
+Odin 7.19 s / 619.6 MiB; 10k-line check is 0.01 s / 12.7 MiB). Static zero-libc
+runtime binaries drop from 40–48 KiB down to **10–18 KiB** (`fib` and
+`mandelbrot` at **10 KiB** — 37% smaller than dynamically-linked C at 16 KiB —
+with 0.5–0.6 MiB RSS vs C's 1.6 MiB and full symbol tables intact):
+
+| benchmark | dyn | c -O2 | go | odin | dyn RSS | dyn binary |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| fib | 0.031 s | 0.059 s | 0.108 s | 0.058 s | 0.5 MiB | 10 KiB |
+| hashmap | 0.118 s | 0.127 s | 0.135 s | 0.141 s | 129.9 MiB | 16 KiB |
+| mandelbrot | 0.225 s | 0.450 s | 0.222 s | 0.224 s | 0.6 MiB | 10 KiB |
+| sieve | 0.274 s | 0.272 s | 0.277 s | 0.276 s | 96.0 MiB | 16 KiB |
+| sort | 0.614 s | 0.573 s | 0.590 s | 0.571 s | 78.0 MiB | 17 KiB |
+| trees | 0.156 s | 0.817 s | 0.508 s | 1.203 s | 10.0 MiB | 18 KiB |
+
+Binary-size and compiler-memory reductions (zero loss of diagnostics or runtime
+safety):
+
+- **Release panic fast-path without dead trace tables**
+  (`runtime/linux_x86_64_start.S`, `runtime/linux_aarch64_start.S`,
+  `runtime/linux_riscv64_start.S`): release builds never dump a stack trace on
+  panic, so `dyn_panic` calls `dyn_unwind_begin` directly (preserving
+  `panic.set_handler` and stderr reporting) instead of pulling `dyn_trace_capture`,
+  `trace_walk`, and `unwind_slot` into every release binary.
+- **Stack-buffered scalar formatting in `std/io/io.dyn`**: `print_value` formats
+  scalar integers and floats into a 64-byte stack buffer via `fmt.buffer`,
+  dropping the `std/mem` arena dependency from programs that only print scalars.
+- **Whole-program `case any` arm reachability pruning**
+  (`src/ir_reachability.inc`, `src/backend/reachability.inc`,
+  `src/backend/driver.c`, `src/backend/ssa.inc`): tracks every type converted
+  to `any` (including variadic `...any` arguments) across executable builds,
+  falling back conservatively to all arms whenever `any` is dereferenced, cast
+  to/from pointer or raw memory (such as `std/reflect`), or crosses a foreign
+  boundary; dead `case any` arms (and transitively unreachable formatting/float
+  or reflection helpers) are omitted from IR reachability and codegen.
+- **Per-function `.text` section splitting for runtime support objects**
+  (`src/backend/driver.c`): emits each function in `dynrt_support.o` /
+  `dynrt_aarch64_support.o` into its own `.text` section with matching
+  `.rela.text` relocations so `src/link_elf.c` automatically garbage-collects
+  unused runtime helpers (`race_access`, `fmod`/`fmodf`, `trace_*`, fault
+  handlers, etc.).
+- **Compact AST/IR records and early source release**
+  (`src/dyn_ast.h`, `src/ir.h`, `src/ir.c`, `src/check.c`, `src/codegen.c`,
+  `src/main.c`): packs `DynAstExpr` (80 → 48 B), `DynIrExpr` (64 → 48 B), and
+  `DynAstStmt` bitfields, frees unmerged `DynSources` immediately after
+  `dyn_sources_merge` on `check` and `--no-cache` builds, and trims glibc heap
+  after freeing the AST — cutting 100k-line release compiler RSS from 98.7 MiB
+  to 80.5 MiB (`check`: 86.0 → 76.3 MiB, `debug`: 98.0 → 79.3 MiB).
+
+`tests/compile-budget.py` and the full test suite (`just test`,
+`just test-backend`, `just test-native-debug`, `just test-native-a64`) pass
+cleanly.
+
+
+## Loop elements, hoisting and short loops — 2026-11-26
+
+`tools/bench/run.py`, median of 7 runs on x86-64 Linux, against `cc -O2`
+(gcc 16.2), Go 1.27 and Zig 0.17. Times in seconds.
+
+| kernel | dyn | c -O2 | go | zig | /c | /go | /zig |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| bodies | 0.015 | 0.016 | 0.048 | 0.025 | 0.96 | 0.32 | 0.61 |
+| fib | 0.084 | 0.064 | 0.292 | 0.162 | 1.30 | 0.29 | 0.51 |
+| hash | 0.076 | 0.076 | 0.076 | 0.075 | 1.00 | 1.01 | 1.01 |
+| matmul | 0.052 | 0.059 | 0.108 | 0.129 | 0.87 | 0.48 | 0.40 |
+| points | 0.011 | 0.009 | 0.013 | 0.011 | 1.18 | 0.82 | 1.03 |
+| sieve | 0.125 | 0.114 | 0.131 | 0.107 | 1.09 | 0.96 | 1.17 |
+
+`bodies` went from 1.86× C to 0.96×. `for b in bodies` copied each
+64-byte element into `b` before the body ran; when the body writes no
+memory and never takes `&b`, `b` now reads the element where it lies.
+Loop-invariant hoisting also no longer stops at a small integer constant
+operand (the constants stay in the loop as immediates), so the expanded
+`1.0 + (round % 3)` leaves the inner loop. points and sieve compile to the
+same bytes as before; their ratios move with the machine.
+
+A range loop `for j in 0..n`, where n is one of a few constants of at most
+four, such as a UTF-8 decoder's continuation count, runs as guarded
+straight-line copies of its body. The extended UTF-8 decoder
+(`tools/bench/extended.py`) runs about 10% faster: 100 ms against C's 70 ms
+on 200,000 characters × 400 rounds, where Rust takes longer than Dyn. What
+remains is the bounds check on each byte and re-testing the constant count.
+
+The inliner now lets a pointer parameter given `&local` use the local
+directly, so `next(&x)` keeps a generator's state in a register.
+
+`tools/compare` programs, fastest of 5: fib 0.032 s (C 0.060), hashmap
+0.132 (0.128), mandelbrot 0.234 (0.449), sieve 0.277 (0.284), sort 0.607
+(0.587), trees 0.157 (0.832).
+
+
 ## Against C, Go and Zig — 2026-11-17
 
 `tools/bench/run.py` builds each kernel in Dyn (`--release`), C (`cc -O2`,

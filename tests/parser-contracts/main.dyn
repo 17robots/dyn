@@ -1,24 +1,24 @@
-use "std/fail"
-use "std/encoding/csv" csv
-use "std/encoding/xml" xml
-use "std/encoding/ini" ini
-use "std/io" io
-use "std/bytes" bytes
-use "std/encoding/json" json
-use "std/mem" mem
-use "std/unicode/utf8" utf8
+use parse "std/parse"
+use csv "std/encoding/csv"
+use xml "std/encoding/xml"
+use ini "std/encoding/ini"
+use io "std/io"
+use bytes "std/bytes"
+use json "std/encoding/json"
+use mem "std/mem"
+use utf8 "std/unicode/utf8"
 struct Chunk { source: []const u8, at: usize, split: usize, limit: usize }
-fn read_chunk(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn read_chunk(data: rawptr, destination: []u8) usize!io.IoErr {
   state := #cast(*Chunk, data)
-  take := #len(state.source) - state.at
+  take := state.source.len - state.at
   if state.at < state.split && take > state.split - state.at {
     take = state.split - state.at
   }
   if state.limit > 0 && take > state.limit {
     take = state.limit
   }
-  if take > #len(destination) {
-    take = #len(destination)
+  if take > destination.len {
+    take = destination.len
   }
   for i in 0..take {
     destination[i] = state.source[state.at + i]
@@ -29,6 +29,39 @@ fn read_chunk(data: rawptr, status: *fail.Status, destination: []u8) usize {
 fn input(state: *Chunk) io.Reader {
   return io.Reader{ data: #cast(rawptr, state), read: read_chunk }
 }
+// A failure as a comparable code: 0 none, 1 malformed, 2 too large, 3 other.
+fn parse_code(err: parse.ParseErr) u8 {
+  case err {
+    .Invalid(_) => { return 1 }
+    .TooLarge(_) => { return 2 }
+    .Unsupported(_) => { return 2 }
+  }
+}
+fn io_code(err: io.IoErr) u8 {
+  case err {
+    .InvalidInput => { return 1 }
+    .Capacity => { return 2 }
+    _ => { return 3 }
+  }
+}
+struct CsvOutcome { field: csv.Field, code: u8 }
+fn csv_direct(state: *csv.Scanner, destination: []u8) CsvOutcome {
+  field := csv.next(state, destination) catch err { return CsvOutcome{ code: parse_code(err) } }
+  return CsvOutcome{ field: field }
+}
+fn csv_stream(state: *csv.StreamScanner, destination: []u8) CsvOutcome {
+  field := csv.next_stream(state, destination) catch err { return CsvOutcome{ code: io_code(err) } }
+  return CsvOutcome{ field: field }
+}
+struct XmlOutcome { event: xml.Event, code: u8 }
+fn xml_direct(state: *xml.Scanner) XmlOutcome {
+  event := xml.next(state) catch err { return XmlOutcome{ code: parse_code(err) } }
+  return XmlOutcome{ event: event }
+}
+fn xml_stream(state: *xml.StreamScanner) XmlOutcome {
+  event := xml.next_stream(state) catch err { return XmlOutcome{ code: io_code(err) } }
+  return XmlOutcome{ event: event }
+}
 fn csv_check(source: []const u8, expected: bool) {
   for limit in 1..4 {
     for capacity in 0..5 {
@@ -37,11 +70,11 @@ fn csv_check(source: []const u8, expected: bool) {
       direct := csv.scanner(source)
       a: [32]u8
       b: [32]u8
-      direct_status: fail.Status
-      stream_status: fail.Status
-      first := csv.next(&direct_status, &direct, a[..capacity])
-      second := csv.next_stream(&stream_status, &streamed, b[..capacity])
-      if direct.ended != streamed.ended || (capacity == 4 && direct.ended == expected) || direct_status.failure.kind != stream_status.failure.kind {
+      first_outcome := csv_direct(&direct, a[..capacity])
+      second_outcome := csv_stream(&streamed, b[..capacity])
+      first := first_outcome.field
+      second := second_outcome.field
+      if direct.ended != streamed.ended || (capacity == 4 && direct.ended == expected) || first_outcome.code != second_outcome.code {
         #panic("CSV scanner acceptance mismatch")
       }
       if !direct.ended && (!bytes.equal(first.text, second.text) || first.end_record != second.end_record) {
@@ -52,35 +85,36 @@ fn csv_check(source: []const u8, expected: bool) {
 }
 fn xml_check(source: []const u8, expected: bool) {
   direct := xml.scanner(source)
-  direct_status: fail.Status
-  original := xml.next(&direct_status, &direct)
+  direct_outcome := xml_direct(&direct)
+  original := direct_outcome.event
   if direct.ended == expected {
     #panic("XML fixture invalid")
   }
   if expected {
-    for capacity in 0..#len(source) {
+    for capacity in 0..source.len {
       chunk := Chunk{source: source, limit: 1}
       storage: [128]u8
       streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
-      stream_status: fail.Status
-      event := xml.next_stream(&stream_status, &streamed)
-      if !streamed.ended || stream_status.failure.kind != fail.Kind.Capacity {
+      if !streamed.ended && xml_stream(&streamed).code != 2 {
+        #panic("XML short storage")
+      }
+      if !streamed.ended {
         #panic("XML short storage")
       }
     }
   }
   for limit in 0..4 {
-    for split in 1..#len(source) + 1 {
+    for split in 1..source.len + 1 {
       chunk := Chunk{source: source, split: split, limit: limit}
       storage: [128]u8
-      capacity := #len(source)
+      capacity := source.len
       if !expected {
         capacity += 1
       }
       streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
-      stream_status: fail.Status
-      event := xml.next_stream(&stream_status, &streamed)
-      if streamed.ended != direct.ended || stream_status.failure.kind != direct_status.failure.kind {
+      outcome := xml_stream(&streamed)
+      event := outcome.event
+      if streamed.ended != direct.ended || outcome.code != direct_outcome.code {
         #panic("XML chunk acceptance mismatch")
       }
       if !streamed.ended && (event.kind != original.kind || !bytes.equal(event.name, original.name) || !bytes.equal(event.text, original.text) || !bytes.equal(event.attributes, original.attributes)) {
@@ -88,6 +122,10 @@ fn xml_check(source: []const u8, expected: bool) {
       }
     }
   }
+}
+fn json_parses(arena: *mem.Arena, source: []const u8) bool {
+  _ = json.parse(arena, source) catch { return false }
+  return true
 }
 fn json_document(source: []const u8, expected: bool) {
   if json.valid(source) != expected {
@@ -101,12 +139,11 @@ fn json_document(source: []const u8, expected: bool) {
     prefix[i] = 91
   }
   mark := mem.arena_mark(arena)
-  parsing: fail.Status
-  _ = json.parse(arena, &parsing, source)
-  if (!parsing.failed) != expected {
+  parsed := json_parses(arena, source)
+  if parsed != expected {
     #panic("JSON parse UTF8 result")
   }
-  if parsing.failed && mem.arena_mark(arena) != mark {
+  if !parsed && mem.arena_mark(arena) != mark {
     #panic("JSON allocation rollback")
   }
   for byte in prefix {
@@ -118,15 +155,15 @@ fn json_document(source: []const u8, expected: bool) {
 fn json_stream_check(value: *const json.Value, document: []const u8, expected: bool, prefix: []const u8) {
   storage: [128]u8
   output := io.buffer_writer(storage[..])
-  status: fail.Status
-  json.write(&status, io.buffer_writer_adapter(&output), value)
+  code: u8 = 0
+  json.write(io.buffer_writer_adapter(&output), value) catch err { code = io_code(err) }
   written := io.buffer_writer_bytes(&output)
   if expected {
-    if status.failed || !bytes.equal(written, document) {
+    if code != 0 || !bytes.equal(written, document) {
       #panic("JSON streaming UTF8 roundtrip")
     }
   } else {
-    if !status.failed || status.failure.kind != fail.Kind.InvalidInput || !bytes.equal(written, prefix) {
+    if code != 1 || !bytes.equal(written, prefix) {
       #panic("JSON streaming invalid UTF8")
     }
   }
@@ -134,11 +171,11 @@ fn json_stream_check(value: *const json.Value, document: []const u8, expected: b
 fn json_bytes(value: []const u8, expected: bool) {
   quoted: [64]u8
   quoted[0] = '"'
-  for i in 0..#len(value) {
+  for i in 0..value.len {
     quoted[i+1] = value[i]
   }
-  quoted[#len(value)+1] = '"'
-  length := #len(value)+2
+  quoted[value.len+1] = '"'
+  length := value.len+2
   json_document(quoted[..length], expected)
   arena_storage: [512]u8
   arena := mem.arena_from_buffer(arena_storage[..])
@@ -153,30 +190,30 @@ fn json_bytes(value: []const u8, expected: bool) {
     object[i+1] = quoted[i]
   }
   tail := ":null}"
-  for i in 0..#len(tail) {
+  for i in 0..tail.len {
     object[length+1+i] = tail[i]
   }
-  json_document(object[..length+1+#len(tail)], expected)
+  json_document(object[..length+1+tail.len], expected)
   object_value := json.push_object(arena)
   child := json.push_null(arena)
   if object_value == nil || child == nil || !json.add_member(object_value, value, child) {
     #panic("JSON test member allocation")
   }
-  json_stream_check(object_value, object[..length+1+#len(tail)], expected, "{")
+  json_stream_check(object_value, object[..length+1+tail.len], expected, "{")
   head := "{\"k\":"
-  for i in 0..#len(head) {
+  for i in 0..head.len {
     object[i] = head[i]
   }
   for i in 0..length {
-    object[#len(head)+i] = quoted[i]
+    object[head.len+i] = quoted[i]
   }
-  object[#len(head)+length] = '}'
-  json_document(object[..#len(head)+length+1], expected)
+  object[head.len+length] = '}'
+  json_document(object[..head.len+length+1], expected)
   storage: [64 + mem.ArenaBufferOverhead]u8
   output := mem.arena_from_buffer(storage[..])
   written := json.write_string(output, value)
   if !expected {
-    if #len(written) != 0 || mem.arena_used(output) != 0 {
+    if written.len != 0 || mem.arena_used(output) != 0 {
       #panic("JSON writes invalid UTF8")
     }
   } else if !bytes.equal(written, quoted[..length]) || mem.arena_used(output) != length {
@@ -191,7 +228,7 @@ fn json_contracts() {
     [194, 0, 0, 0], [226, 40, 161, 0], [240, 159, 152, 0],
   ]
   lengths: [13]usize = [1, 1, 2, 2, 3, 3, 4, 4, 4, 2, 1, 3, 3]
-  for i in 0..#len(invalid) {
+  for i in 0..invalid.len {
     json_bytes(invalid[i][..lengths[i]], false)
   }
   codepoints: [12]u32 = [32, 127, 128, 2047, 2048, 55295, 57344, 65535, 65536, 128512, 1114110, 1114111]
@@ -203,45 +240,53 @@ fn json_contracts() {
   json_bytes("café 😀", true)
   json_bytes("", true)
 }
-// Scanners keep their first error; the caller checks once after the loop.
+// Scanners stop at their first error and stay ended after it.
 fn recorded_errors() {
   scan := ini.scanner("a=1\nbroken\n[]\nb=2\n[ok]\nc=3\n")
-  scanning: fail.Status
   keys: usize = 0
+  ini_failed := false
   for {
-    item := ini.next(&scanning, &scan)
+    item := ini.next(&scan) catch {
+      ini_failed = true
+      break
+    }
     if scan.ended { break }
     if item.kind == ini.Kind.Pair {
       keys += 1
     }
   }
-  if keys != 1 || scanning.failure.kind != fail.Kind.InvalidInput || scan.error_line != 2 {
+  if keys != 1 || !ini_failed || scan.error_line != 2 {
     #panic("INI stops at the first error")
   }
   fields := csv.scanner("a,b\"c,d")
   buffer: [8]u8
   count: usize = 0
-  reading: fail.Status
+  at: usize = 0
   for {
-    _ = csv.next(&reading, &fields, buffer[..])
+    _ = csv.next(&fields, buffer[..]) catch err {
+      at = parse.offset(err) + 100
+      break
+    }
     if fields.ended { break }
     count += 1
   }
-  again: fail.Status
-  _ = csv.next(&again, &fields, buffer[..])
-  if count != 1 || reading.failure.kind != fail.Kind.InvalidInput || reading.failure.offset != 2 || !fields.ended {
+  again := csv_direct(&fields, buffer[..])
+  if count != 1 || at != 102 || again.code != 0 || !fields.ended {
     #panic("CSV error is sticky")
   }
   events := xml.scanner("<a></b <c/>")
   seen: usize = 0
-  scanning_xml: fail.Status
+  xml_failed := false
   for {
-    _ = xml.next(&scanning_xml, &events)
+    _ = xml.next(&events) catch {
+      xml_failed = true
+      break
+    }
     if events.ended { break }
     seen += 1
   }
-  _ = xml.next(&again, &events)
-  if seen != 1 || scanning_xml.failure.kind != fail.Kind.InvalidInput || !events.ended {
+  after := xml_direct(&events)
+  if seen != 1 || !xml_failed || after.code != 0 || !events.ended {
     #panic("XML error is sticky")
   }
 }

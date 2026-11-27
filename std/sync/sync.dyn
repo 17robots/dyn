@@ -1,7 +1,6 @@
 #target(pointer_bits: 64)
-use "std/io" io
-use "std/fail"
-use "std/time" time
+use io "std/io"
+use time "std/time"
 
 pub struct Mutex { state: AtomicU32 }
 
@@ -33,13 +32,21 @@ fn wait_mutex_unlock(value: *Mutex) {
 }
 
 
+extern fn race_sync "dyn_race_sync"()
+
 pub fn try_lock(value: *Mutex) bool {
-  return native_mutex_try_lock(value)
+  if native_mutex_try_lock(value) {
+    race_sync()
+    return true
+  }
+  return false
 }
 pub fn lock(value: *Mutex) {
   native_mutex_lock(value)
+  race_sync()
 }
 pub fn unlock(value: *Mutex) {
+  race_sync()
   native_mutex_unlock(value)
 }
 
@@ -69,13 +76,8 @@ pub enum Wait { Signaled, TimedOut }
 // TimedOut without unlocking; negative durations are InvalidInput. Signaled
 // permits spurious wakeups: always recheck the protected predicate. Mutex
 // reacquisition and scheduling may finish after the timeout has elapsed.
-pub fn condition_wait_timeout(status: *fail.Status, value: *Condition, lock_value: *Mutex, timeout: i64) Wait {
-  if status == nil { return condition_wait_timeout(&fail.Status{}, value, lock_value, timeout) }
-  if status.failed { return Wait.TimedOut }
-  if timeout < 0 {
-    fail.invalid(status, "wait", "", "negative timeout")
-    return Wait.TimedOut
-  }
+pub fn condition_wait_timeout(value: *Condition, lock_value: *Mutex, timeout: i64) Wait!io.IoErr {
+  if timeout < 0 { fail .InvalidInput }
   if timeout == 0 { return Wait.TimedOut }
   deadline := time.deadline_after(timeout)
   sequence := load_u32(&value.sequence)
@@ -96,8 +98,8 @@ pub fn condition_wait_timeout(status: *fail.Status, value: *Condition, lock_valu
     // Timeouts are checked against the same deadline, including finite native
     // timeout chunks on Windows. EINTR never restarts the original budget.
     if code != 1 && !native_wait_interrupted(code) {
-      fail.set(status, native_sync_failure(code))
-      break
+      lock(lock_value)
+      fail native_sync_failure(code)
     }
   }
   lock(lock_value)

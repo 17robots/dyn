@@ -272,9 +272,8 @@ fn put_f64_shortest(state: *Buffer, value: f64) bool {
 // write_f64_shortest. At most 24 bytes.
 pub fn f64_shortest(arena: *mem.Arena, value: f64) []u8 {
   storage: [32]u8
-  // 32 bytes always fit, so this status never fails.
-  unused: fail.Status
-  state := buffer(&unused, storage[..])
+  // 32 bytes always fit.
+  state := buffer(storage[..])
   _ = put_f64_shortest(&state, value)
   return copy_out(arena, bytes(&state))
 }

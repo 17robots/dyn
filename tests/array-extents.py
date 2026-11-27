@@ -32,7 +32,7 @@ fn main() {
   local: [(Local + 1) * 2]u8
   rows: [2]Row
   grid := layout.grid()
-  if #len(bytes) != 4096 || #len(local) != 12 || #sizeof(rows) != 6 || #sizeof(grid) != 12 {
+  if bytes.len != 4096 || local.len != 12 || #sizeof(rows) != 6 || #sizeof(grid) != 12 {
     #panic("constant array extent")
   }
   bytes[4095] = 42

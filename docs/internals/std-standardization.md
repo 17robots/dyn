@@ -73,7 +73,7 @@ bound. Compare with the stub or the length only when the miss matters.
 
 ```dyn
 v := json.object_get(root, "name") // &json.nil_value on a miss
-i := bytes.find(text, ":")       // #len(text) on a miss
+i := bytes.find(text, ":")       // text.len on a miss
 ```
 
 ### 3. Results are returned, not written through out parameters
@@ -173,17 +173,17 @@ first; that is the caller's job.
 One generic function per format replaces per-type getters and parsers:
 
 ```dyn
-x := json.get(f32, item, "x")
-name := json.get([]const u8, item, "name")
-tags := json.get(*json.Value, item, "tags")
-port := strings.parse(u16, text)
+x := json.get<f32>(item, "x")
+name := json.get<[]const u8>(item, "name")
+tags := json.get<*json.Value>(item, "tags")
+port := strings.parse<u16>(text)
 ```
 
 A miss, a type mismatch or bad text gives zero (`""`, the stub). Callers that
 must reject bad human input check first:
 
 ```dyn
-if !strings.valid(u16, text) {
+if !strings.valid<u16>(text) {
   report("bad port: {}", text)
 }
 ```
@@ -237,7 +237,7 @@ struct EnemyChunk { next: *EnemyChunk, count: usize, items: [64]Enemy }
 struct EnemyList { first: *EnemyChunk, last: *EnemyChunk, total: usize }
 
 e := chunk.push(&level.arena, &level.enemies, Enemy{hp: 10}) // *Enemy, stable
-flat := chunk.to_slice(&scratch, &level.enemies)
+flat := chunk.to_slice<&scratch>(&level.enemies)
 ```
 
 Field names are listed under [link field names](#link-field-names).

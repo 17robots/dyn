@@ -1,6 +1,6 @@
 // Mixed number types meet at the wider one when the widening is lossless on
 // every target. Each operand keeps its own arithmetic until then.
-use "std/io" io
+use io "std/io"
 
 struct Totals { sum: u64, scale: f64 }
 

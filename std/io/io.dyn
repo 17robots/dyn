@@ -1,155 +1,169 @@
-use "std/fail"
-use "std/mem" memory
-use "std/fmt" format
-// Byte streams. A Reader or Writer is a data pointer and one function; the
-// function takes the caller's *fail.Status and records any failure there,
-// like every call that can fail. Adapters borrow their state and never own
-// or close it.
+use format "std/fmt"
+// Byte streams. A Reader or Writer is a data pointer and one function that
+// fails with an IoErr. Adapters borrow their state and never own or close it.
 //
 // A read returns how many bytes it put in destination. Zero means the end of
-// the stream, and also comes after a failure: status.failed says which.
+// the stream.
 pub struct Reader {
   data: rawptr,
-  read: fn(rawptr, *fail.Status, []u8) usize,
+  read: fn(rawptr, []u8) usize!IoErr,
 }
 // A write returns how many bytes of source it took, possibly fewer than all;
 // io.write keeps calling until everything is written.
 pub struct Writer {
   data: rawptr,
-  write: fn(rawptr, *fail.Status, []const u8) usize,
+  write: fn(rawptr, []const u8) usize!IoErr,
 }
 
-// Reads into destination; the count read, zero at the end of the stream and
-// after a failure.
-pub fn read(status: *fail.Status, reader: Reader, destination: []u8) usize {
-  if status == nil { return read(&fail.Status{}, reader, destination) }
-  if status.failed || #len(destination) == 0 { return 0 }
-  if reader.read == nil {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "read", "", "reader has no read function"))
-    return 0
+// Why an I/O call failed, shared by std/io, std/fs, std/net and
+// std/process. System carries the system's own code when no other variant
+// fits; it is negative (the errno, or the Windows error, negated).
+pub enum IoErr {
+  NotFound,
+  PermissionDenied,
+  AlreadyExists,
+  InvalidInput,
+  WouldBlock,
+  Interrupted,
+  Unsupported,
+  Capacity,
+  System(isize),
+}
+
+// What err means, such as "not found"; for System, the system's own text
+// for its code when there is one.
+pub fn text(err: IoErr) []const u8 {
+  case err {
+    .NotFound => { return "not found" }
+    .PermissionDenied => { return "permission denied" }
+    .AlreadyExists => { return "already exists" }
+    .InvalidInput => { return "invalid input" }
+    .WouldBlock => { return "would block" }
+    .Interrupted => { return "interrupted" }
+    .Unsupported => { return "unsupported" }
+    .Capacity => { return "too large or out of space" }
+    .System(code) => {
+      reason := system_text(code)
+      if reason.len == 0 { return "system error" }
+      return reason
+    }
   }
-  count := reader.read(reader.data, status, destination)
-  if count > #len(destination) {
-    failure := fail.make(fail.Kind.System, "read", "", "reader returned more bytes than asked for")
-    failure.native = -5
-    fail.set(status, failure)
-    return 0
-  }
+}
+
+// Reads into destination; the count read, zero at the end of the stream.
+// A zero Reader fails with InvalidInput.
+pub fn read(reader: Reader, destination: []u8) usize!IoErr {
+  if destination.len == 0 { return 0 }
+  // A zero Reader has no read function.
+  if reader.read == nil { fail .InvalidInput }
+  count := try reader.read(reader.data, destination)
+  // A reader that claims more than it was given is broken: EIO.
+  if count > destination.len { fail IoErr.System(-5) }
   return count
 }
 
-// Fills destination. Returns #len(destination), or 0 when the stream was
-// already at its end; a stream that ends partway is a failure.
-pub fn read_exact(status: *fail.Status, reader: Reader, destination: []u8) usize {
-  if status == nil { return read_exact(&fail.Status{}, reader, destination) }
+// Fills destination. Returns destination.len, or 0 when the stream was
+// already at its end; a stream that ends partway fails with InvalidInput.
+pub fn read_exact(reader: Reader, destination: []u8) usize!IoErr {
   total: usize = 0
-  for total < #len(destination) {
-    count := read(status, reader, destination[total..])
-    if status.failed { return 0 }
+  for total < destination.len {
+    count := try read(reader, destination[total..])
     if count == 0 {
       if total == 0 { return 0 }
-      fail.set(status, fail.make(fail.Kind.InvalidInput, "read", "", "stream ended early"))
-      return 0
+      fail .InvalidInput
     }
     total += count
   }
   return total
 }
 
-// Writes all of source.
-pub fn write(status: *fail.Status, writer: Writer, source: []const u8) {
-  if status == nil {
-    write(&fail.Status{}, writer, source)
-    return
-  }
-  if status.failed || #len(source) == 0 { return }
-  if writer.write == nil {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "write", "", "writer has no write function"))
-    return
-  }
+// Writes all of source. A zero Writer fails with InvalidInput.
+pub fn write(writer: Writer, source: []const u8) !IoErr {
+  if source.len == 0 { return }
+  // A zero Writer has no write function.
+  if writer.write == nil { fail .InvalidInput }
   total: usize = 0
-  for total < #len(source) {
-    count := writer.write(writer.data, status, source[total..])
-    if status.failed { return }
-    if count == 0 || count > #len(source) - total {
-      message: []const u8 = "writer made no progress"
-      if count != 0 {
-        message = "writer reported more bytes than it was given"
-      }
-      failure := fail.make(fail.Kind.System, "write", "", message)
-      failure.native = -5
-      fail.set(status, failure)
-      return
-    }
+  for total < source.len {
+    count := try writer.write(writer.data, source[total..])
+    // No progress, or more than it was given: EIO.
+    if count == 0 || count > source.len - total { fail IoErr.System(-5) }
     total += count
   }
 }
 
-fn print_value(status: *fail.Status, writer: Writer, value: any) {
-  storage: [64 + memory.ArenaBufferOverhead]u8
-  scratch := memory.arena_from_buffer(storage[..])
+fn print_value(writer: Writer, value: any) !IoErr {
+  storage: [64]u8
+  buf := format.buffer(storage[..])
   case value {
-    f32 item => {
-      write(status, writer, format.f64_decimal(scratch, item, 6))
+    f32(item) => {
+      format.write_f64(&buf, item)
+      try write(writer, format.bytes(&buf))
     }
-    f64 item => {
-      write(status, writer, format.f64_decimal(scratch, item, 6))
+    f64(item) => {
+      format.write_f64(&buf, item)
+      try write(writer, format.bytes(&buf))
     }
-    bool item => {
+    bool(item) => {
       if item {
-        write(status, writer, "true")
+        try write(writer, "true")
       } else {
-        write(status, writer, "false")
+        try write(writer, "false")
       }
     }
-    i8 item => {
-      write(status, writer, format.i64_decimal(scratch, item))
+    i8(item) => {
+      format.write_i64(&buf, item)
+      try write(writer, format.bytes(&buf))
     }
-    i16 item => {
-      write(status, writer, format.i64_decimal(scratch, item))
+    i16(item) => {
+      format.write_i64(&buf, item)
+      try write(writer, format.bytes(&buf))
     }
-    i32 item => {
-      write(status, writer, format.i64_decimal(scratch, item))
+    i32(item) => {
+      format.write_i64(&buf, item)
+      try write(writer, format.bytes(&buf))
     }
-    i64 item => {
-      write(status, writer, format.i64_decimal(scratch, item))
+    i64(item) => {
+      format.write_i64(&buf, item)
+      try write(writer, format.bytes(&buf))
     }
-    isize item => {
-      write(status, writer, format.i64_decimal(scratch, item))
+    isize(item) => {
+      format.write_i64(&buf, item)
+      try write(writer, format.bytes(&buf))
     }
-    u8 item => {
-      write(status, writer, format.u64_decimal(scratch, item))
+    u8(item) => {
+      format.write_u64(&buf, item)
+      try write(writer, format.bytes(&buf))
     }
-    u16 item => {
-      write(status, writer, format.u64_decimal(scratch, item))
+    u16(item) => {
+      format.write_u64(&buf, item)
+      try write(writer, format.bytes(&buf))
     }
-    u32 item => {
-      write(status, writer, format.u64_decimal(scratch, item))
+    u32(item) => {
+      format.write_u64(&buf, item)
+      try write(writer, format.bytes(&buf))
     }
-    u64 item => {
-      write(status, writer, format.u64_decimal(scratch, item))
+    u64(item) => {
+      format.write_u64(&buf, item)
+      try write(writer, format.bytes(&buf))
     }
-    usize item => {
-      write(status, writer, format.u64_decimal(scratch, item))
+    usize(item) => {
+      format.write_u64(&buf, item)
+      try write(writer, format.bytes(&buf))
     }
-    []u8 item => {
-      write(status, writer, item)
-    }
-    []const u8 item => {
-      write(status, writer, item)
-    }
+    []u8(item) => { try write(writer, item) }
+    []const u8(item) => { try write(writer, item) }
+    IoErr(item) => { try write(writer, text(item)) }
     _ => {
       // Structs and plain enums print through fmt, which reads their
       // TypeInfo; a type with no text form prints as a marker rather than
       // ending the line.
       text: [1024]u8
-      rendering: fail.Status
-      rendered := format.buffer(&rendering, text[..])
+      rendered := format.buffer(text[..])
       format.write_value(&rendered, value)
-      if rendering.failed || #len(format.bytes(&rendered)) == 0 {
-        write(status, writer, "{?}")
+      if format.overflowed(&rendered) || format.bytes(&rendered).len == 0 {
+        try write(writer, "{?}")
       } else {
-        write(status, writer, format.bytes(&rendered))
+        try write(writer, format.bytes(&rendered))
       }
     }
   }
@@ -160,37 +174,32 @@ fn print_value(status: *fail.Status, writer: Writer, value: any) {
 // write literal braces. dyn vet checks a literal template's {} count. A
 // template made at run time that does not match its arguments still prints:
 // a {} with no argument prints {?}, a lone brace prints as itself, and each
-// extra argument prints at the end as {+value}. The result then reports
-// InvalidInput with everything that was written.
-pub fn print_arguments(status: *fail.Status, writer: Writer, template: []const u8, arguments: []const any) {
-  if status == nil {
-    print_arguments(&fail.Status{}, writer, template, arguments)
-    return
-  }
-  if status.failed { return }
+// extra argument prints at the end as {+value}. The call then fails with
+// InvalidInput after everything is written.
+pub fn print_arguments(writer: Writer, template: []const u8, arguments: []const any) !IoErr {
   argument_index: usize = 0
   mismatch := false
   span_start: usize = 0
   index: usize = 0
-  for index < #len(template) {
+  for index < template.len {
     byte := template[index]
     if byte != '{' && byte != '}' {
       index += 1
       continue
     }
     if span_start < index {
-      write(status, writer, template[span_start..index])
+      try write(writer, template[span_start..index])
     }
     next: u8 = 0
-    if index + 1 < #len(template) {
+    if index + 1 < template.len {
       next = template[index + 1]
     }
     piece := template[index..index + 1]
     step: usize = 1
     if byte == '{' && next == '}' {
       step = 2
-      if argument_index < #len(arguments) {
-        print_value(status, writer, arguments[argument_index])
+      if argument_index < arguments.len {
+        try print_value(writer, arguments[argument_index])
         argument_index += 1
         piece = ""
       } else {
@@ -202,100 +211,79 @@ pub fn print_arguments(status: *fail.Status, writer: Writer, template: []const u
     } else {
       mismatch = true
     }
-    if #len(piece) > 0 {
-      write(status, writer, piece)
+    if piece.len > 0 {
+      try write(writer, piece)
     }
     index += step
     span_start = index
   }
-  if span_start < #len(template) {
-    write(status, writer, template[span_start..])
+  if span_start < template.len {
+    try write(writer, template[span_start..])
   }
-  for argument_index < #len(arguments) {
+  for argument_index < arguments.len {
     mismatch = true
-    write(status, writer, " {+")
-    print_value(status, writer, arguments[argument_index])
-    write(status, writer, "}")
+    try write(writer, " {+")
+    try print_value(writer, arguments[argument_index])
+    try write(writer, "}")
     argument_index += 1
   }
-  if mismatch {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "print", "", "template does not match its arguments"))
-  }
+  if mismatch { fail .InvalidInput }
 }
 
 // Checked formatting to any writer: {} takes the next argument.
-pub fn print_to(status: *fail.Status, writer: Writer, template: []const u8, arguments: ...any) {
-  print_arguments(status, writer, template, arguments)
+pub fn print_to(writer: Writer, template: []const u8, arguments: ...any) !IoErr {
+  try print_arguments(writer, template, arguments)
 }
 
 // Terminal output, print/println/eprint/eprintln, lives with stdout() in each
 // platform file; targets without standard streams have neither.
 
 // Like print_arguments, then a newline. A template that did not match its
-// arguments still prints its line before the failure is recorded.
-pub fn println_arguments(status: *fail.Status, writer: Writer, template: []const u8, arguments: []const any) {
-  if status == nil {
-    println_arguments(&fail.Status{}, writer, template, arguments)
-    return
+// arguments still prints its line before failing with InvalidInput.
+pub fn println_arguments(writer: Writer, template: []const u8, arguments: []const any) !IoErr {
+  mismatch := false
+  print_arguments(writer, template, arguments) catch err {
+    case err {
+      .InvalidInput => { mismatch = true }
+      _ => { fail err }
+    }
   }
-  if status.failed { return }
-  line: fail.Status
-  print_arguments(&line, writer, template, arguments)
-  if line.failed && line.failure.kind != fail.Kind.InvalidInput {
-    fail.set(status, line.failure)
-    return
-  }
-  write(status, writer, "\n")
-  fail.set(status, line.failure)
+  try write(writer, "\n")
+  if mismatch { fail .InvalidInput }
 }
 
-pub fn println_to(status: *fail.Status, writer: Writer, template: []const u8, arguments: ...any) {
-  println_arguments(status, writer, template, arguments)
+pub fn println_to(writer: Writer, template: []const u8, arguments: ...any) !IoErr {
+  try println_arguments(writer, template, arguments)
 }
 
 // Copies reader to writer until the end of the reader, through scratch;
-// the count copied.
-pub fn copy(status: *fail.Status, writer: Writer, reader: Reader, scratch: []u8) usize {
-  if status == nil { return copy(&fail.Status{}, writer, reader, scratch) }
-  if status.failed { return 0 }
-  if #len(scratch) == 0 {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "copy", "", "scratch buffer is empty"))
-    return 0
-  }
+// the count copied. An empty scratch fails with InvalidInput.
+pub fn copy(writer: Writer, reader: Reader, scratch: []u8) usize!IoErr {
+  if scratch.len == 0 { fail .InvalidInput }
   total: usize = 0
   for {
-    count := read(status, reader, scratch)
+    count := try read(reader, scratch)
     if count == 0 { break }
-    write(status, writer, scratch[..count])
-    if status.failed { break }
+    try write(writer, scratch[..count])
     total += count
   }
-  if status.failed { return 0 }
   return total
 }
 
-// Copies exactly amount bytes; a reader that ends first is a failure.
-pub fn copy_n(status: *fail.Status, writer: Writer, reader: Reader, amount: usize, scratch: []u8) {
-  if status == nil {
-    copy_n(&fail.Status{}, writer, reader, amount, scratch)
-    return
-  }
-  if status.failed || amount == 0 { return }
-  if #len(scratch) == 0 {
-    fail.set(status, fail.make(fail.Kind.InvalidInput, "copy", "", "scratch buffer is empty"))
-    return
-  }
+// Copies exactly amount bytes; a reader that ends first fails with
+// InvalidInput.
+pub fn copy_n(writer: Writer, reader: Reader, amount: usize, scratch: []u8) !IoErr {
+  if amount == 0 { return }
+  if scratch.len == 0 { fail .InvalidInput }
   total: usize = 0
-  for total < amount && !status.failed {
+  for total < amount {
     take := amount - total
-    if take > #len(scratch) {
-      take = #len(scratch)
+    if take > scratch.len {
+      take = scratch.len
     }
-    count := read_exact(status, reader, scratch[..take])
-    if count == 0 && !status.failed {
-      fail.set(status, fail.make(fail.Kind.InvalidInput, "copy", "", "stream ended early"))
-    }
-    write(status, writer, scratch[..count])
+    count := try read_exact(reader, scratch[..take])
+    if count == 0 { fail .InvalidInput }
+    try write(writer, scratch[..count])
     total += count
   }
 }
@@ -309,16 +297,13 @@ pub fn cursor(data: []const u8) Cursor {
   return Cursor{ data: data, offset: 0 }
 }
 
-fn cursor_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+fn cursor_read(data: rawptr, destination: []u8) usize!IoErr {
   state := #cast(*Cursor, data)
-  if state.offset > #len(state.data) {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "read", "", "cursor offset is past its data"))
-    return 0
-  }
-  remaining := #len(state.data) - state.offset
+  if state.offset > state.data.len { fail .InvalidInput }
+  remaining := state.data.len - state.offset
   take := remaining
-  if #len(destination) < take {
-    take = #len(destination)
+  if destination.len < take {
+    take = destination.len
   }
   for i in 0..take {
     destination[i] = state.data[state.offset + i]
@@ -348,24 +333,20 @@ pub fn buffer_writer_reset(state: *BufferWriter) {
   state.length = 0
 }
 
-fn buffer_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+// Takes what fits; fails with Capacity only when nothing fits.
+fn buffer_write(data: rawptr, source: []const u8) usize!IoErr {
   state := #cast(*BufferWriter, data)
-  if state.length > #len(state.data) {
-    fail.set(status, fail.make(fail.Kind.InvalidState, "write", "", "buffer length is past its storage"))
-    return 0
-  }
-  remaining := #len(state.data) - state.length
-  take := #len(source)
+  if state.length > state.data.len { fail .InvalidInput }
+  remaining := state.data.len - state.length
+  take := source.len
   if remaining < take {
     take = remaining
   }
   for i in 0..take {
     state.data[state.length + i] = source[i]
   }
+  if take == 0 && source.len != 0 { fail .Capacity }
   state.length += take
-  if take != #len(source) {
-    fail.set(status, fail.make(fail.Kind.Capacity, "write", "", "buffer is full"))
-  }
   return take
 }
 

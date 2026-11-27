@@ -13,7 +13,7 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve()
 ENV={**os.environ,'DYN_SDK':str(ROOT)}
 SOURCE=r'''
-use "std/io" io
+use io "std/io"
 input: u64 = 1234567890123456789
 state: u64 = 0
 fn next() u64 { state += 1
@@ -185,7 +185,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-uniform-params-') as temporary:
     # invalidate inferred facts without a signature/body change to the callee.
     helper=project/'helper.dyn';helper.write_text(SOURCE[SOURCE.index('fn digit_sum('):SOURCE.index('fn conflicting(')])
     for radix,expected in [(10,90),(16,84),(10,90)]:
-        source.write_text('use "std/io" io\ninput:u64=1234567890123456789\nfn main(){io.println("{}",digit_sum(input,'+str(radix)+'))}\n')
+        source.write_text('use io "std/io"\ninput:u64=1234567890123456789\nfn main(){io.println("{}",digit_sum(input,'+str(radix)+'))}\n')
         executable=root/'cached';build(project,executable,'--release',cache=True,env={**ENV,'DYN_CACHE_DIR':str(root/'cache')})
         assert run(executable).stdout==str(expected)+'\n'
         # A second unchanged build exercises native/executable cache hits too.
@@ -203,8 +203,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-uniform-params-') as temporary:
         executable=root/'typed';build(project,executable,*flags);run(executable)
     # A uniform zero must still fail in the callee, after argument effects,
     # without moving observations; the panic handler reads them.
-    source.write_text('''use "std/io" io
-use "std/panic" panic
+    source.write_text('''use io "std/io"
+use panic "std/panic"
 state:u64=0
 fn next()u64{state+=1
 return state}
@@ -219,8 +219,8 @@ _ = divide_loop(next(),0) }
         executable=root/'panic';build(project,executable,*flags);result=run(executable,success=False)
         assert result.stdout=='cleanup 1\n',result
         assert re.match(r'^runtime check failed \(divide.ok\) in divide_loop(?:\n| at )',result.stderr),result
-    source.write_text('''use "std/io" io
-use "std/panic" panic
+    source.write_text('''use io "std/io"
+use panic "std/panic"
 state:u64=0
 fn next_min()i64{state+=1
 return -9223372036854775807 - 1}

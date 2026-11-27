@@ -1,18 +1,28 @@
-use "std/fail"
 use "std/fs"
 use "std/io"
 use "std/mem"
 use "std/process"
 use "std/strings"
 
-fn report(failure: fail.Failure) {
-  storage: [512]u8
-  io.eprintln("move: {}", fail.describe(storage[..], failure))
+// TO appears only once it is complete: written beside it, then renamed.
+fn move(arena: *mem.Arena, from: []const u8, to: []const u8) !io.IoErr {
+  input := try fs.open(from)
+  defer fs.close(&input)
+  output := try fs.atomic_begin(to, strings.format(arena, "{}.move-partial", to))
+  defer fs.atomic_abort(&output)
+  buffer: [65536]u8
+  for {
+    count := try fs.read(&input, buffer[..])
+    if count == 0 { break }
+    try fs.write(&output.file, buffer[..count])
+  }
+  try fs.atomic_commit(&output)
+  try fs.remove(from)
 }
 
 fn main() i32 {
   program := process.start()
-  if #len(program.args) != 3 {
+  if program.args.len != 3 {
     io.eprintln("move: usage: move FROM TO")
     return 1
   }
@@ -20,22 +30,8 @@ fn main() i32 {
   to := program.args[2]
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  status: fail.Status
-  input := fs.open(&status, from)
-  defer fs.close(&input)
-  // TO appears only once it is complete: written beside it, then renamed.
-  output := fs.atomic_begin(&status, to, strings.format(arena, "{}.move-partial", to))
-  buffer: [65536]u8
-  for !status.failed {
-    count := fs.read(&status, &input, buffer[..])
-    if count == 0 { break }
-    fs.write(&status, &output.file, buffer[..count])
-  }
-  fs.atomic_commit(&status, &output)
-  fs.atomic_abort(&output)
-  fs.remove(&status, from)
-  if status.failed {
-    report(status.failure)
+  move(arena, from, to) catch err {
+    io.eprintln("move: {} to {}: {}", from, to, err)
     return 1
   }
   return 0

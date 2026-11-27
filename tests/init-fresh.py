@@ -12,35 +12,35 @@ SOURCE = '''use "std/io"
 use "std/mem"
 
 enum Color { Red, Green, Blue }
-enum Shape { Dot, Circle: f64 }
+enum Shape { Dot, Circle(f64) }
 struct Settings { size: i32 = 7, name: []const u8 = "x", flags: u64 }
 
-fn dirty(T: type, arena: *mem.Arena) *T {
-  value := mem.push(T, arena)
+fn dirty<T>(arena: *mem.Arena) *T {
+  value := mem.push<T>(arena)
   bytes := #slice(#cast(*u8, value), #sizeof(T))
-  for i in 0..#len(bytes) { bytes[i] = 0xab }
+  for i in 0..bytes.len { bytes[i] = 0xab }
   return value
 }
 
 fn main() {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  s := dirty(Settings, arena)
+  s := dirty<Settings>(arena)
   #init(s)
-  n := dirty(u64, arena)
+  n := dirty<u64>(arena)
   #init(n)
-  a := dirty([5]u16, arena)
+  a := dirty<[5]u16>(arena)
   #init(a)
-  t := dirty([]const u8, arena)
+  t := dirty<[]const u8>(arena)
   #init(t)
-  c := dirty(Color, arena)
+  c := dirty<Color>(arena)
   #init(c)
-  p := dirty(Shape, arena)
+  p := dirty<Shape>(arena)
   #init(p)
-  f := dirty(f64, arena)
+  f := dirty<f64>(arena)
   #init(f)
-  pushed := mem.push(Settings, arena)
-  io.println("{} {} {} {} {} {} {} {} {}", s.size, s.name, s.flags, n.*, a.*[4], #len(t.*), c.* == Color.Red, f.*, pushed.size)
+  pushed := mem.push<Settings>(arena)
+  io.println("{} {} {} {} {} {} {} {} {}", s.size, s.name, s.flags, n.*, a.*[4], t.*.len, c.* == Color.Red, f.*, pushed.size)
   case p.* {
     Shape.Dot => { io.println("dot") }
     _ => { io.println("not dot") }
