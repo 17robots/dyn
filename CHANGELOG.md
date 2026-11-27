@@ -12,9 +12,10 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.41
 
-Breaking: the next-design redesign ([docs/internals/next-design.md](docs/internals/next-design.md)).
+Breaking: the next-design redesign ([docs/migrations/0.1.0-preview.41.md](docs/migrations/0.1.0-preview.41.md)
+and [docs/internals/next-design.md](docs/internals/next-design.md)).
 Each removed form is an error whose message gives the new spelling; the
 [language reference](docs/guide/language.md) and [rules](docs/guide/rules.md) describe
 the result.
@@ -65,14 +66,17 @@ Library:
   `config.large_body = evented.large_bodies(upload)` where you had
   `config.on_large_body = upload`. `receive_body` is unchanged.
 
-Fixes:
+Fixes and performance:
 
+- Native release optimizer improvements: in-place loop element reads, hoisting
+  past small constants, short-loop straightening, pointer-parameter aliasing
+  when given `&local`, and tighter SSA lowering, plus faster `std/sort` and
+  `std/unicode/utf8` hot paths.
 - The removed-API hints and their `dyn fix` renames work from an installed
   SDK. They matched the module's path as `std/mem`, which only a checkout
   has; installed SDKs keep std modules in `share/dyn/mem`, so preview 40's
   release gave the plain "has no pub member" error instead of
   "'mem.push_bytes_uninit' was removed: use mem.push_bytes(arena, count)".
-
 - Release builds could compute wrong results when two adjacent `f32` fields
   were stored together and the same values had been read earlier in the
   function by a condition spanning several blocks (`a && x > p.x && ...`).

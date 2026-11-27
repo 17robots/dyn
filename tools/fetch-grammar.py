@@ -8,8 +8,8 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 if os.environ.get('TS_DIR'):
     target = Path(os.environ['TS_DIR']).resolve()
-    if not all((target/name).is_file() for name in ('src/parser.c','src/scanner.c')):
-        raise SystemExit('TS_DIR must contain generated parser.c and scanner.c')
+    if not (target/'src/parser.c').is_file():
+        raise SystemExit('TS_DIR must contain generated src/parser.c')
     print('Using explicit grammar checkout:',target)
 else:
     lock = json.loads((ROOT/'grammar.lock.json').read_text())

@@ -1170,8 +1170,9 @@ static int32_t ssa_binary(Ssa *s, const DynIrExpr *e, int32_t left, int32_t righ
   if (comparison) {
     static const Cond signed_conditions[] = {CC_E, CC_NE, CC_L, CC_LE, CC_G, CC_GE};
     static const Cond unsigned_conditions[] = {CC_E, CC_NE, CC_B, CC_BE, CC_A, CC_AE};
-    bool sign = signed_scalar(storage_type(ir, operand));
-    return ssa_compare(s, left, right, (sign ? signed_conditions : unsigned_conditions)[e->op - DYN_OP_EQ]);
+    unsigned index = (unsigned)(e->op - DYN_OP_EQ);
+    Cond condition = signed_scalar(storage_type(ir, operand)) ? signed_conditions[index] : unsigned_conditions[index];
+    return ssa_compare(s, left, right, condition);
   }
   if (!integer_type(operand)) { SSA_GIVE_UP(s); return 0; }
   DynType type = e->type;

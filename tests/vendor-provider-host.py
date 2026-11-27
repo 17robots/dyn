@@ -45,11 +45,14 @@ for key in ('DYN_LIBRARY_PATH', 'PATH' if os.name == 'nt' else 'DYLD_LIBRARY_PAT
     paths = [str(Path(path).resolve().parent/'bin') for path in directories] if key == 'PATH' else directories
     env[key] = os.pathsep.join([*paths, *([env[key]] if env.get(key) else [])])
 GRAMMAR = Path(os.environ.get('TREE_SITTER_DYN', BUILD/'deps/tree-sitter-dyn')).resolve()
-grammar_sources = [GRAMMAR/'src/parser.c', GRAMMAR/'src/scanner.c']
+grammar_sources = [GRAMMAR/'src/parser.c']
+scanner_source = GRAMMAR/'src/scanner.c'
+if scanner_source.is_file():
+    grammar_sources.append(scanner_source)
 for path in [DYN, *grammar_sources]:
     if not path.is_file():
         raise RuntimeError('Missing required artifact (set TREE_SITTER_DYN to a grammar checkout): ' + str(path))
-objects = [BUILD/'vendor-provider-grammar-parser.o', BUILD/'vendor-provider-grammar-scanner.o']
+objects = [BUILD/f'vendor-provider-grammar-{source.stem}.o' for source in grammar_sources]
 for source, output in zip(grammar_sources, objects):
     subprocess.run([*CC, '-O2', '-I' + str(GRAMMAR/'src'), '-c', str(source), '-o', str(output)], check=True)
 LAYOUTS = {'Point': ('TSPoint', ['row', 'column']),

@@ -690,8 +690,9 @@ static unsigned binary(WG *g, DynOperator o, DynType t, DynType rt, unsigned l,
     unsigned s[] = {0x46, 0x47, 0x48, 0x4c, 0x4a, 0x4e},
              u[] = {0x46, 0x47, 0x49, 0x4d, 0x4b, 0x4f},
              f[] = {0x5b, 0x5c, 0x5d, 0x5f, 0x5e, 0x60};
-    c = flt ? f[o - DYN_OP_EQ] + (vt == 0x7c ? 6 : 0)
-            : (sign ? s : u)[o - DYN_OP_EQ] + (wide ? 11 : 0);
+    unsigned idx = (unsigned)(o - DYN_OP_EQ);
+    c = flt ? f[idx] + (vt == 0x7c ? 6 : 0)
+            : (sign ? s[idx] : u[idx]) + (wide ? 11 : 0);
     get(g, l);
     get(g, r);
     op(g, c);
