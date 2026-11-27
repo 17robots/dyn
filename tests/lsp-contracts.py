@@ -418,6 +418,106 @@ class Contracts(unittest.TestCase):
         self.assertTrue(any(d.get('code') == 'unused-variable' and "'lonely'" in d['message'] for d in warnings), warnings)
         self.assertFalse(any(d.get('code') == 'unused-parameter' and d['range']['start']['line'] == 1 for d in warnings), warnings)
 
+    def test_unused_bindings_after_error_lowering_and_preview41_hover(self):
+        text = (
+            'enum MyErr { Bad, Empty }\n'
+            'fn check(a: i32, b: i32) i32!MyErr {\n'
+            '  if a == 0 { fail .Empty }\n'
+            '  return a + b\n'
+            '}\n'
+            'fn caller(x: i32, y: i32, unused_param: i32) i32!MyErr {\n'
+            '  saved := x\n'
+            '  errdefer { _ = saved }\n'
+            '  res := try check(x, y)\n'
+            '  fallback := check(res, y) catch 0\n'
+            '  unused_local := 1\n'
+            '  return fallback\n'
+            '}\n'
+            'fn main() {\n'
+            '  _ = caller(1, 2, 3) catch 0\n'
+            '}\n'
+        )
+        path = self.file('main.dyn', text)
+        hover_variant = request('textDocument/hover', {
+            'textDocument': {'uri': path.as_uri()},
+            'position': {'line': 2, 'character': 20},
+        }, 10)
+        complete = request('textDocument/completion', {
+            'textDocument': {'uri': path.as_uri()},
+            'position': {'line': 14, 'character': 2},
+        }, 11)
+        responses, stderr = run_lsp([opened(path, text), hover_variant, complete])
+        self.assertEqual(stderr, '')
+        warnings = diagnostics(responses, path)
+        unused_names = {d['message'] for d in warnings if str(d.get('code', '')).startswith('unused-')}
+        self.assertIn("unused parameter 'unused_param'", unused_names, warnings)
+        self.assertIn("unused variable 'unused_local'", unused_names, warnings)
+        for used in ('a', 'b', 'x', 'y', 'saved', 'res', 'fallback'):
+            self.assertFalse(any(f"'{used}'" in m for m in unused_names), (used, warnings))
+        hover_res = next(r['result'] for r in responses if r.get('id') == 10)
+        self.assertIsNotNone(hover_res)
+        self.assertIn('variant Empty: MyErr', hover_res['contents']['value'])
+        comp_res = next(r['result'] for r in responses if r.get('id') == 11)
+        items = comp_res['items'] if isinstance(comp_res, dict) else comp_res
+        labels = {item['label'] for item in items}
+        for kw in ('try', 'catch', 'fail', 'errdefer', 'nocopy', 'str', '#take', '#slice'):
+            self.assertIn(kw, labels)
+
+    def test_enum_shorthand_completion_follows_checked_context(self):
+        base = 'enum Color { Red, Green }\nenum MyErr { Bad, Empty }\n'
+        cases = {
+            'fail': (base + 'fn f(a: i32) i32!MyErr {\n  if a == 0 { fail .E$ }\n  return a\n}\n'
+                     'fn main() { _ = f(1) catch 0 }\n', {'Bad': 'Bad', 'Empty': 'Empty'}),
+            'case': (base + 'fn main() {\n  c := Color.Red\n  case c {\n    .$ => {}\n  }\n}\n',
+                     {'Red': 'Red', 'Green': 'Green'}),
+            'compare': (base + 'fn main() {\n  c := Color.Red\n  if c == .$ { }\n}\n',
+                        {'Red': 'Red', 'Green': 'Green'}),
+            'argument': (base + 'fn g(c: Color) {}\nfn main() {\n  g(.$)\n}\n',
+                         {'Red': 'Red', 'Green': 'Green'}),
+            'declaration': (base + 'fn main() {\n  c: Color = R$\n  _ = c\n}\n',
+                            {'Red': '.Red', 'Green': '.Green'}),
+        }
+        for name, (marked, expected) in cases.items():
+            with self.subTest(name):
+                rows = marked.split('\n')
+                line = next(i for i, row in enumerate(rows) if '$' in row)
+                character = rows[line].index('$')
+                text = marked.replace('$', '')
+                path = self.file('main.dyn', text)
+                responses, stderr = run_lsp([opened(path, text), request('textDocument/completion', {
+                    'textDocument': {'uri': path.as_uri()},
+                    'position': {'line': line, 'character': character}}, 2)])
+                self.assertEqual(stderr, '')
+                result = next(r['result'] for r in responses if r.get('id') == 2)
+                items = result['items'] if isinstance(result, dict) else result
+                variants = {item['label']: item['insertText'] for item in items if item.get('kind') == 20}
+                self.assertEqual(variants, expected)
+
+    def test_fill_fields_spells_struct_literals_and_hover_spells_str(self):
+        self.file('types/module.dyn', 'pub struct Inner { n: i32 }\npub struct Record { inner: Inner, flag: bool }\n')
+        text = ('use t "./types"\nstruct Local { x: i32 }\n'
+                'struct Outer { local: Local, record: t.Record, name: str }\n'
+                'fn greet(name: str, parts: [][]const u8) str { return name }\n'
+                'fn main() {\n value := Outer{\n }\n _ = value\n _ = greet\n}\n')
+        path = self.file('main.dyn', text)
+        point = {'line': 6, 'character': 1}
+        responses, stderr = run_lsp([opened(path, text), request('textDocument/codeAction', {
+            'textDocument': {'uri': path.as_uri()}, 'range': {'start': point, 'end': point},
+            'context': {'diagnostics': []}}, 2), request('textDocument/hover', {
+            'textDocument': {'uri': path.as_uri()}, 'position': {'line': 3, 'character': 4}}, 3)])
+        self.assertEqual(stderr, '')
+        actions = next(r['result'] for r in responses if r.get('id') == 2)
+        action = next(a for a in actions if a['title'] == 'Fill missing struct fields')
+        edit = action['edit']['changes'][path.as_uri()][0]
+        self.assertEqual(edit['newText'], 'local: Local{}, record: t.Record{}, name: ""')
+        lines = text.splitlines(keepends=True)
+        offset = sum(map(len, lines[:6])) + 1
+        path.write_text(text[:offset] + edit['newText'] + text[offset:])
+        result = subprocess.run([DYN, 'check', str(self.root), '--quiet'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        hover = next(r['result'] for r in responses if r.get('id') == 3)
+        self.assertIn('fn greet(name: str, parts: []str) str', hover['contents']['value'])
+
     def test_default_utf16_positions_and_edits(self):
         text = 'fn main() { /* 😀 */ missing() }\n'
         path = self.file('main.dyn', text)

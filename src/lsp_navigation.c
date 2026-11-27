@@ -464,7 +464,8 @@ void lsp_document_symbols(long id, const LspDocument *document) {
 
 static bool lsp_foldable(unsigned kind) {
   return kind == SRC_FN || kind == SRC_EXTERN_FN || kind == SRC_STRUCT ||
-         kind == SRC_ENUM || kind == SRC_BLOCK || kind == SRC_CASE || kind == SRC_DEFER;
+         kind == SRC_ENUM || kind == SRC_BLOCK || kind == SRC_CASE ||
+         kind == SRC_DEFER || kind == SRC_ERRDEFER;
 }
 
 static void lsp_folding_nodes(const LspDocument *document, char *body, size_t capacity,
@@ -867,7 +868,7 @@ void lsp_inlay_hints(long id, LspDocument *documents, size_t count,
     if (after[0] != ':' || after[1] != '=')
       continue;
     char type[128];
-    dyn_type_format(&semantic.ast, local->type, &semantic.source, type,
+    lsp_type_format(&semantic, local->type, type,
                     sizeof(type));
     at += (size_t)lsp_bounded_printf(
         body + at, sizeof(body) - at,
@@ -1361,6 +1362,49 @@ void lsp_call_hierarchy(long id, LspDocument *documents, size_t count,
   lsp_semantic_free(&semantic);
 }
 
+void lsp_type_format(LspSemantic *semantic, DynType type, char *out,
+                     size_t capacity) {
+  char raw[512];
+  dyn_type_format(&semantic->ast, type, &semantic->source, raw, sizeof(raw));
+  static const char spelled[] = "[]const u8";
+  size_t spelled_length = sizeof(spelled) - 1;
+  size_t at = 0;
+  if (!capacity)
+    return;
+  for (const char *c = raw; *c && at + 1 < capacity;) {
+    if (!strncmp(c, spelled, spelled_length) &&
+        !isalnum((unsigned char)c[spelled_length]) && c[spelled_length] != '_') {
+      if (at + 3 >= capacity)
+        break;
+      memcpy(out + at, "str", 3);
+      at += 3;
+      c += spelled_length;
+      continue;
+    }
+    out[at++] = *c++;
+  }
+  out[at] = 0;
+}
+
+static void lsp_unmangle_name(const char *text, size_t length,
+                              const char **out_text, size_t *out_length) {
+  if (length > 22 && !memcmp(text, "dyn_m", 5) && text[21] == '_') {
+    bool hex = true;
+    for (size_t i = 5; i < 21; ++i)
+      if (!isxdigit((unsigned char)text[i])) {
+        hex = false;
+        break;
+      }
+    if (hex) {
+      *out_text = text + 22;
+      *out_length = length - 22;
+      return;
+    }
+  }
+  *out_text = text;
+  *out_length = length;
+}
+
 static void lsp_function_hover(LspSemantic *semantic, uint32_t index, char *out,
                                size_t capacity) {
   DynAstProgram *a = &semantic->ast;
@@ -1386,14 +1430,15 @@ static void lsp_function_hover(LspSemantic *semantic, uint32_t index, char *out,
            (int)(end - fn->span.start_byte), text + fn->span.start_byte);
     return;
   }
+  const char *fn_name = semantic->source.text + fn->name.start_byte;
+  size_t fn_name_len = fn->name.end_byte - fn->name.start_byte;
+  lsp_unmangle_name(fn_name, fn_name_len, &fn_name, &fn_name_len);
   APPEND("%s%sfn %.*s(", fn->is_public ? "pub " : "",
-         fn->foreign ? "extern " : "",
-         (int)(fn->name.end_byte - fn->name.start_byte),
-         semantic->source.text + fn->name.start_byte);
+         fn->foreign ? "extern " : "", (int)fn_name_len, fn_name);
   for (uint32_t i = 0; i < fn->param_count; ++i) {
     DynAstParam *p = &a->params[fn->param_start + i];
     char type[128];
-    dyn_type_format(a, p->type, &semantic->source, type, sizeof(type));
+    lsp_type_format(semantic, p->type, type, sizeof(type));
     APPEND("%s%.*s: %s", i ? ", " : "",
            (int)(p->name.end_byte - p->name.start_byte),
            semantic->source.text + p->name.start_byte, type);
@@ -1409,7 +1454,7 @@ static void lsp_function_hover(LspSemantic *semantic, uint32_t index, char *out,
           t = a->slices[i].element;
       }
       char type[128];
-      dyn_type_format(a, t, &semantic->source, type, sizeof(type));
+      lsp_type_format(semantic, t, type, sizeof(type));
       APPEND("%.*s: ...%s",
              (int)(fn->variadic_name.end_byte - fn->variadic_name.start_byte),
              semantic->source.text + fn->variadic_name.start_byte, type);
@@ -1419,7 +1464,7 @@ static void lsp_function_hover(LspSemantic *semantic, uint32_t index, char *out,
   APPEND(")");
   if (fn->return_type != DYN_TYPE_VOID) {
     char type[128];
-    dyn_type_format(a, fn->return_type, &semantic->source, type, sizeof(type));
+    lsp_type_format(semantic, fn->return_type, type, sizeof(type));
     APPEND(" %s", type);
   }
 #undef APPEND
@@ -1491,20 +1536,20 @@ static void lsp_struct_hover(LspSemantic *semantic, uint32_t index, char *out,
         at += (size_t)n < capacity - at ? (size_t)n : capacity - at - 1;       \
     }                                                                          \
   } while (0)
+  const char *sname = semantic->source.text + s->name.start_byte;
+  size_t sname_len = s->is_template
+                         ? (size_t)(strchr(semantic->source.text + s->name.end_byte, '>') + 1 -
+                                    (semantic->source.text + s->name.start_byte))
+                         : s->name.end_byte - s->name.start_byte;
+  lsp_unmangle_name(sname, sname_len, &sname, &sname_len);
   APPEND_STRUCT("%s%sstruct %.*s {", s->is_public ? "pub " : "",
-                s->packed ? "packed " : "",
-                /* A template's name runs on through its parameters. */
-                (int)(s->is_template
-                          ? (size_t)(strchr(semantic->source.text + s->name.end_byte, '>') + 1 -
-                                     (semantic->source.text + s->name.start_byte))
-                          : s->name.end_byte - s->name.start_byte),
-                semantic->source.text + s->name.start_byte);
+                s->packed ? "packed " : "", (int)sname_len, sname);
   uint32_t shown = s->field_count < 8 ? s->field_count : 8;
   for (uint32_t i = 0; i < shown; ++i) {
     DynAstField *field = &a->fields[s->field_start + i];
     char type[128];
     if (!lsp_field_source_type(semantic, field, type, sizeof(type)))
-      dyn_type_format(a, field->type, &semantic->source, type, sizeof(type));
+      lsp_type_format(semantic, field->type, type, sizeof(type));
     APPEND_STRUCT("\n  %.*s: %s",
                   (int)(field->name.end_byte - field->name.start_byte),
                   semantic->source.text + field->name.start_byte, type);
@@ -1519,16 +1564,18 @@ static void lsp_enum_hover(LspSemantic *semantic, uint32_t index, char *out,
                            size_t capacity) {
   DynAstProgram *a = &semantic->ast;
   DynAstEnum *e = &a->enums[index];
+  const char *ename = semantic->source.text + e->name.start_byte;
+  size_t ename_len = e->name.end_byte - e->name.start_byte;
+  lsp_unmangle_name(ename, ename_len, &ename, &ename_len);
   size_t at = (size_t)snprintf(out, capacity, "%senum %.*s {",
                                e->is_public ? "pub " : "",
-                               (int)(e->name.end_byte - e->name.start_byte),
-                               semantic->source.text + e->name.start_byte);
+                               (int)ename_len, ename);
   uint32_t shown = e->variant_count < 8 ? e->variant_count : 8;
   for (uint32_t i = 0; i < shown && at < capacity; ++i) {
     DynAstVariant *v = &a->variants[e->variant_start + i];
     char payload[128] = {0};
     if (v->payload_type != DYN_TYPE_VOID)
-      dyn_type_format(a, v->payload_type, &semantic->source, payload,
+      lsp_type_format(semantic, v->payload_type, payload,
                       sizeof(payload));
     int n = snprintf(out + at, capacity - at, "\n  %.*s%s%s",
                      (int)(v->name.end_byte - v->name.start_byte),
@@ -1551,24 +1598,26 @@ static void lsp_alias_hover(LspSemantic *semantic, uint32_t index, char *out,
                             size_t capacity) {
   DynAstAlias *alias = &semantic->ast.aliases[index];
   char target[256];
-  dyn_type_format(&semantic->ast, alias->target, &semantic->source, target,
+  lsp_type_format(semantic, alias->target, target,
                   sizeof(target));
+  const char *aname = semantic->source.text + alias->name.start_byte;
+  size_t aname_len = alias->name.end_byte - alias->name.start_byte;
+  lsp_unmangle_name(aname, aname_len, &aname, &aname_len);
   snprintf(out, capacity, "%s%stype %.*s = %s", alias->is_public ? "pub " : "",
-           alias->distinct ? "distinct " : "",
-           (int)(alias->name.end_byte - alias->name.start_byte),
-           semantic->source.text + alias->name.start_byte, target);
+           alias->distinct ? "distinct " : "", (int)aname_len, aname, target);
 }
 
 static void lsp_global_hover(LspSemantic *semantic, uint32_t index, char *out,
                              size_t capacity) {
   DynAstGlobal *global = &semantic->ast.globals[index];
   char type[256];
-  dyn_type_format(&semantic->ast, global->type, &semantic->source, type,
+  lsp_type_format(semantic, global->type, type,
                   sizeof(type));
+  const char *gname = semantic->source.text + global->name.start_byte;
+  size_t gname_len = global->name.end_byte - global->name.start_byte;
+  lsp_unmangle_name(gname, gname_len, &gname, &gname_len);
   snprintf(out, capacity, "%s%s %.*s: %s", global->is_public ? "pub " : "",
-           global->is_const ? "const" : "global",
-           (int)(global->name.end_byte - global->name.start_byte),
-           semantic->source.text + global->name.start_byte, type);
+           global->is_const ? "const" : "global", (int)gname_len, gname, type);
 }
 
 bool lsp_typed_symbol(LspSemantic *semantic, uint32_t offset, char *hover,
@@ -1643,6 +1692,9 @@ bool lsp_typed_symbol(LspSemantic *semantic, uint32_t offset, char *hover,
               a->fields[structure->field_start + (uint32_t)best->integer].name;
         kind = "field";
       }
+    } else if (best->kind == DYN_EXPR_ENUM && best->integer < a->variant_count) {
+      declared = a->variants[best->integer].name;
+      kind = "variant";
     }
   }
   if (function == UINT32_MAX && offset < semantic->source.length) {
@@ -1754,7 +1806,7 @@ bool lsp_typed_symbol(LspSemantic *semantic, uint32_t offset, char *hover,
     return true;
   }
   char name[384];
-  dyn_type_format(a, type, &semantic->source, name, sizeof(name));
+  lsp_type_format(semantic, type, name, sizeof(name));
   if (declared.end_byte > declared.start_byte) {
     size_t declared_length = declared.end_byte - declared.start_byte;
     if (declared_length > 96)

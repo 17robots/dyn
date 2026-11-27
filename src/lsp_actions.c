@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "lsp_internal.h"
+extern char *realpath(const char *, char *);
 
 typedef struct {
   const char *name;
@@ -13,8 +14,10 @@ static void lsp_find_public_import(const char *directory, const char *import_pat
                                   LspImportChoices *choices, unsigned depth);
 static void lsp_missing_import(const LspDocument *document, const char *symbol,
                                size_t length, LspImportChoices *choices);
-static bool lsp_default_value(LspSemantic *semantic, DynType type, char *out,
-                              size_t capacity, size_t *at, unsigned depth);
+static bool lsp_default_value(LspSemantic *semantic,
+                              const LspDocument *document, DynType type,
+                              char *out, size_t capacity, size_t *at,
+                              unsigned depth);
 static bool lsp_fill_struct_fields(LspDocument *documents, size_t count,
                                    LspDocument *document, size_t line,
                                    size_t character, char *text,
@@ -110,8 +113,59 @@ static bool lsp_send_import_choices(long id, const LspImportChoices *choices,
   lsp_send(response); free(response); return true;
 }
 
-static bool lsp_default_value(LspSemantic *semantic, DynType type, char *out,
-                              size_t capacity, size_t *at, unsigned depth) {
+/* Whether two directories are the same one on disk. */
+static bool lsp_same_directory(const char *a, const char *b) {
+  char *x = realpath(a, NULL), *y = realpath(b, NULL);
+  bool same = x && y && !strcmp(x, y);
+  free(x);
+  free(y);
+  return same;
+}
+
+/* How `document` spells struct `index`: Name inside its own module,
+   alias.Name through an import. False when the document cannot name it. */
+static bool lsp_struct_spelling(LspSemantic *semantic,
+                                const LspDocument *document, uint32_t index,
+                                char *out, size_t capacity) {
+  DynAstStruct *structure = &semantic->ast.structs[index];
+  if (structure->template_of)
+    structure = &semantic->ast.structs[structure->template_of - 1];
+  char name[256];
+  lsp_type_format(semantic, DYN_TYPE_STRUCT_BASE + index, name, sizeof(name));
+  const char *path = NULL;
+  unsigned line = 0, column = 0;
+  dyn_source_location(&semantic->source, structure->name.start_byte, &path,
+                      &line, &column);
+  if (!path)
+    return false;
+  char *owner = lsp_directory(lsp_file_path(path)),
+       *here = lsp_directory(lsp_file_path(document->uri));
+  bool found = owner && here && lsp_same_directory(owner, here);
+  if (found) {
+    int written = snprintf(out, capacity, "%s", name);
+    found = written > 0 && (size_t)written < capacity;
+  }
+  LspImport imports[32];
+  size_t n = owner && !found ? lsp_imports(document, imports, 32) : 0;
+  for (size_t i = 0; i < n && !found; ++i) {
+    char *target = lsp_resolve_import(document, imports[i].path);
+    if (target && lsp_same_directory(target, owner)) {
+      int written = snprintf(out, capacity, "%s.%s", imports[i].alias, name);
+      found = written > 0 && (size_t)written < capacity;
+      free(target);
+      break;
+    }
+    free(target);
+  }
+  free(owner);
+  free(here);
+  return found;
+}
+
+static bool lsp_default_value(LspSemantic *semantic,
+                              const LspDocument *document, DynType type,
+                              char *out, size_t capacity, size_t *at,
+                              unsigned depth) {
   if (depth > 16)
     return false;
   DynAstProgram *a = &semantic->ast;
@@ -126,7 +180,7 @@ static bool lsp_default_value(LspSemantic *semantic, DynType type, char *out,
   if (dyn_type_is_distinct(type)) {
     uint32_t index = type - DYN_TYPE_DISTINCT_BASE;
     return index < a->alias_count &&
-           lsp_default_value(semantic, a->aliases[index].target, out, capacity,
+           lsp_default_value(semantic, document, a->aliases[index].target, out, capacity,
                              at, depth + 1);
   }
   if (type == DYN_TYPE_BOOL) {
@@ -157,7 +211,7 @@ static bool lsp_default_value(LspSemantic *semantic, DynType type, char *out,
       if (i) {
         DEFAULT_APPEND(", ");
       }
-      if (!lsp_default_value(semantic, a->arrays[index].element, out, capacity,
+      if (!lsp_default_value(semantic, document, a->arrays[index].element, out, capacity,
                              at, depth + 1))
         return false;
     }
@@ -166,20 +220,12 @@ static bool lsp_default_value(LspSemantic *semantic, DynType type, char *out,
     uint32_t index = type - DYN_TYPE_STRUCT_BASE;
     if (index >= a->struct_count)
       return false;
-    DynAstStruct *structure = &a->structs[index];
-    DEFAULT_APPEND(".{");
-    bool comma = false;
-    for (uint32_t i = 0; i < structure->field_count; ++i) {
-      DynAstField *field = &a->fields[structure->field_start + i];
-      DEFAULT_APPEND("%s%.*s: ", comma ? ", " : "",
-                     (int)(field->name.end_byte - field->name.start_byte),
-                     semantic->source.text + field->name.start_byte);
-      if (!lsp_default_value(semantic, field->type, out, capacity, at,
-                             depth + 1))
-        return false;
-      comma = true;
-    }
-    DEFAULT_APPEND("}");
+    /* A struct literal names its type, Type{...} not .{...}; its
+       omitted fields take their defaults. */
+    char name[256];
+    if (!lsp_struct_spelling(semantic, document, index, name, sizeof(name)))
+      return false;
+    DEFAULT_APPEND("%s{}", name);
   } else if (dyn_type_is_enum(type)) {
     uint32_t index = type - DYN_TYPE_ENUM_BASE;
     if (index >= a->enum_count || !a->enums[index].variant_count)
@@ -190,7 +236,7 @@ static bool lsp_default_value(LspSemantic *semantic, DynType type, char *out,
                    semantic->source.text + variant->name.start_byte);
     if (variant->payload_type != DYN_TYPE_VOID) {
       DEFAULT_APPEND("(");
-      if (!lsp_default_value(semantic, variant->payload_type, out, capacity, at,
+      if (!lsp_default_value(semantic, document, variant->payload_type, out, capacity, at,
                              depth + 1))
         return false;
       DEFAULT_APPEND(")");
@@ -282,7 +328,7 @@ static bool lsp_fill_struct_fields(LspDocument *documents, size_t count,
         break;
       }
       at += (size_t)n;
-      if (!lsp_default_value(&semantic, field->type, text, capacity, &at, 0)) {
+      if (!lsp_default_value(&semantic, document, field->type, text, capacity, &at, 0)) {
         ok = false;
         break;
       }

@@ -12,6 +12,25 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## 0.1.0-preview.42
+
+Editor fixes only; no language or std changes. Restart editor language servers after
+upgrading.
+
+- `dyn lsp` no longer reports used parameters and variables as unused in functions
+  that use `try`, `catch`, `fail`, `errdefer` or return `T!E`.
+- Completion knows the preview 41 language: `try`, `catch`, `fail`, `errdefer`,
+  `nocopy` and `str`; `#take`, `#slice`, `#init`, `#instance` and `#offset`; `errdefer`
+  and `catch` snippets.
+- A typed `.` completes `.Variant` wherever one enum type is expected: after `fail`, in
+  `case` arms, after `==`, in assignments, arguments and returns. Completing a variant
+  where an enum is expected inserts `.Variant`, not `Enum.Variant`.
+- Hover shows `.Variant` targets, prints `str` for `[]const u8`, and no longer shows
+  module-prefixed names.
+- "Fill missing struct fields" writes `Type{}` or `alias.Type{}` for struct fields
+  instead of the rejected `.{...}`.
+- `errdefer` blocks fold.
+
 ## 0.1.0-preview.41
 
 Breaking: the next-design redesign ([docs/migrations/0.1.0-preview.41.md](docs/migrations/0.1.0-preview.41.md)

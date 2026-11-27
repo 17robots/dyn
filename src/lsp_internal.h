@@ -89,6 +89,9 @@ LspSemantic lsp_semantic_project(LspDocument *documents, size_t count,
                                  LspDocument *requested,
                                  const char *replacement);
 void lsp_semantic_free(LspSemantic *semantic);
+/* A type as Dyn source spells it: module prefixes dropped, []const u8 as str. */
+void lsp_type_format(LspSemantic *semantic, DynType type, char *out,
+                     size_t capacity);
 bool lsp_semantic_offset(LspSemantic *semantic, LspDocument *document,
                          size_t line, size_t character, uint32_t *offset);
 
