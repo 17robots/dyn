@@ -14,5 +14,6 @@ exports:
                _pthread_mach_thread_np, _sched_yield, _sysctlbyname, _dlopen, _dlsym, _dlclose, _dlerror,
                _dispatch_queue_create, _dispatch_sync_f, _dispatch_release, _os_sync_wait_on_address, _os_sync_wait_on_address_with_timeout,
                _os_sync_wake_by_address_any, _os_sync_wake_by_address_all,
-               _os_unfair_lock_lock, _os_unfair_lock_trylock, _os_unfair_lock_unlock, _getentropy ]
+               _os_unfair_lock_lock, _os_unfair_lock_trylock, _os_unfair_lock_unlock, _getentropy,
+               _setpgid ]
 ...

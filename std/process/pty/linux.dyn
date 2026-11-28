@@ -1,0 +1,175 @@
+#target(kernel: linux)
+use io "std/io"
+use "std/os/linux/sys"
+
+// Linux pseudo-terminals through /dev/ptmx and devpts. ioctl numbers and open
+// flags are the same on x86-64, AArch64 and RISC-V.
+const AtWorkingDirectory: isize = -100
+const SessionSupported: bool = true
+
+fn native_setsid() isize {
+  return #syscall(sys.Setsid)
+}
+// O_RDWR | O_NOCTTY | O_CLOEXEC, and O_NONBLOCK for the master.
+const PeerFlags: usize = 524546
+const MasterFlags: usize = 526594
+const PipeCloseOnExec: usize = 524288
+const DuplicateCloseOnExec: usize = 1030
+const SetSize: usize = 21524
+const SetControllingTerminal: usize = 21518
+const GetPeer: usize = 21569
+const GetNumber: usize = 2147767344
+const SetLock: usize = 1074025521
+const WaitNoHang: usize = 1
+const SignalStop: usize = 19
+
+fn native_err(code: isize) io.IoErr {
+  return io.linux_err(code)
+}
+
+// The master, unlocked, nonblocking and close-on-exec.
+fn native_open_master() isize {
+  path: str = "/dev/ptmx\0"
+  master := #syscall(sys.Openat, AtWorkingDirectory, &path[0], MasterFlags, 0)
+  if master < 0 { return master }
+  unlocked: i32 = 0
+  value := #syscall(sys.Ioctl, master, SetLock, &unlocked)
+  if value < 0 {
+    _ = #syscall(sys.Close, master)
+    return value
+  }
+  return master
+}
+
+// The terminal side, close-on-exec and not yet anyone's controlling terminal.
+// TIOCGPTPEER (Linux 4.13) opens it without a path lookup; older kernels go
+// through /dev/pts/N.
+fn native_open_peer(master: isize) isize {
+  peer := #syscall(sys.Ioctl, master, GetPeer, PeerFlags)
+  if peer >= 0 || (peer != -22 && peer != -25) { return peer }
+  number: u32 = 0
+  value := #syscall(sys.Ioctl, master, GetNumber, &number)
+  if value < 0 { return value }
+  path: [32]u8
+  prefix: str = "/dev/pts/"
+  for at in 0..prefix.len {
+    path[at] = prefix[at]
+  }
+  digits: [10]u8
+  count: usize = 0
+  for count == 0 || number > 0 {
+    digits[count] = #cast(u8, number % 10) + '0'
+    number = number / 10
+    count += 1
+  }
+  used := prefix.len
+  for count > 0 {
+    count -= 1
+    path[used] = digits[count]
+    used += 1
+  }
+  path[used] = 0
+  return #syscall(sys.Openat, AtWorkingDirectory, &path[0], PeerFlags, 0)
+}
+
+fn native_set_size(descriptor: isize, window: *WindowSize) isize {
+  return #syscall(sys.Ioctl, descriptor, SetSize, window)
+}
+
+fn native_duplicate_above(descriptor: isize, lowest: isize) isize {
+  return #syscall(sys.Fcntl, descriptor, DuplicateCloseOnExec, lowest)
+}
+
+fn native_report_pipe(channel: *[2]isize) isize {
+  descriptors: [2]i32
+  value := #syscall(sys.Pipe2, &descriptors[0], PipeCloseOnExec)
+  if value < 0 { return value }
+  channel.*[0] = descriptors[0]
+  channel.*[1] = descriptors[1]
+  return 0
+}
+
+// fork, as clone with only SIGCHLD: the one spelling every architecture has.
+fn native_fork() isize {
+  return #syscall(sys.Clone, 17, 0, 0, 0, 0)
+}
+
+// Clears the signal mask and sets every catchable signal to its default
+// action: handlers reset on exec anyway, but ignored signals and the mask
+// would carry over into the terminal's programs.
+fn native_reset_signals() isize {
+  empty: u64 = 0
+  value := #syscall(sys.RtSigprocmask, 2, &empty, 0, 8)
+  if value < 0 { return value }
+  action: [4]u64
+  for number in 1..65 {
+    if number != 9 && number != SignalStop {
+      _ = #syscall(sys.RtSigaction, number, &action[0], 0, 8)
+    }
+  }
+  return 0
+}
+
+fn native_control_terminal(descriptor: isize) isize {
+  return #syscall(sys.Ioctl, descriptor, SetControllingTerminal, 0)
+}
+
+fn native_duplicate_to(descriptor: isize, target: isize) isize {
+  value := #syscall(sys.Dup2, descriptor, target, 0)
+  for value == -4 {
+    value = #syscall(sys.Dup2, descriptor, target, 0)
+  }
+  return value
+}
+
+fn native_chdir(directory: *const u8) isize {
+  return #syscall(sys.Chdir, directory)
+}
+
+fn native_execve(path: *const u8, argv: *CString, environment: *CString) isize {
+  return #syscall(sys.Execve, path, argv, environment)
+}
+
+fn native_exit(code: isize) {
+  _ = #syscall(sys.ExitGroup, code)
+  #panic("exit returned")
+}
+
+fn native_read(descriptor: isize, destination: *u8, count: usize) isize {
+  return #syscall(sys.Read, descriptor, destination, count)
+}
+
+fn native_write(descriptor: isize, source: *const u8, count: usize) isize {
+  return #syscall(sys.Write, descriptor, source, count)
+}
+
+fn native_close(descriptor: isize) isize {
+  return #syscall(sys.Close, descriptor)
+}
+
+fn native_kill(target: isize, signal: isize) isize {
+  return #syscall(sys.Kill, target, signal)
+}
+
+// The pid when the child ended, 0 when nonblocking finds it running.
+fn native_wait(child: isize, status: *i32, nonblocking: bool) isize {
+  options: usize = 0
+  if nonblocking {
+    options = WaitNoHang
+  }
+  return #syscall(sys.Wait4, child, status, options, 0)
+}
+
+struct PollTimeout { seconds: isize, nanoseconds: isize }
+// ppoll, since AArch64 and RISC-V have no poll. Negative milliseconds wait
+// without limit.
+fn native_poll(entry: *PollDescriptor, milliseconds: i32) isize {
+  timeout := PollTimeout{}
+  limit: *PollTimeout = nil
+  if milliseconds >= 0 {
+    timeout.seconds = (milliseconds / 1000)
+    timeout.nanoseconds = #cast(isize, (milliseconds % 1000)) * 1000000
+    limit = &timeout
+  }
+  return #syscall(sys.Ppoll, entry, 1, limit, 0, 8)
+}

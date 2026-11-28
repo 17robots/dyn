@@ -22,6 +22,9 @@ const DynTarget *dyn_target_find(const char *name);
 const DynTarget *dyn_target_at(size_t index);
 const char *dyn_target_property(const DynTarget *target, const char *key);
 bool dyn_target_syscall_number(const DynTarget *target, uint64_t source, uint64_t *native);
+/* The x86-64 Linux call name for a portable #syscall number, and the call to
+   use on a target that lacks it (NULL when every Linux target has it). */
+bool dyn_target_syscall_name(uint64_t source, const char **name, const char **replacement);
 typedef struct DynSyntaxCacheEntry DynSyntaxCacheEntry;
 /* Zero limits select the defaults, sized so a whole project's sources stay
    cached between edits: least-recently-used eviction of a project larger

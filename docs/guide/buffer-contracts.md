@@ -39,7 +39,8 @@ is reported as `ok` false; size never is.
 | `fmt.u64_decimal`, `i64_decimal`, `f64_decimal`, `u64_base` | Text in arena |
 | Hex/Base32/Base64 `encode`, `decode` | Bytes in arena; `decode` returns `{value, ok}` |
 | JSON `encode`, `encode_pretty`, `write_string` | Text in arena; empty when the value is not encodable |
-| `path.join`, `clean`, `safe_join`, `relative`, `url.percent_encode`, `percent_decode` | Text in arena |
+| `path.join`, `clean`, `safe_join`, `relative`, `url.percent_encode`, `percent_decode`, `file_uri_from_path`, `path_from_file_uri` | Text in arena |
+| `diff.lines` | Hunks in arena; temporary work in a scratch arena, rewound |
 | `c.string_from_bytes` | NUL-terminated copy in arena; embedded NUL is invalid input |
 | `deflate.inflate`, `gunzip`, `gzip.decompress`, `zstd.compress`, `decompress`, `zip.extract` | Bytes in arena |
 | `png`, `qoi` `encode`, `decode` | Bytes or pixels in arena |

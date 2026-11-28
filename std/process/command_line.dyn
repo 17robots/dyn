@@ -1,0 +1,272 @@
+use mem "std/mem"
+use io "std/io"
+use utf8 "std/unicode/utf8"
+use utf16 "std/unicode/utf16"
+// Command-line text: quoting arguments for a POSIX shell and for a Windows
+// command line, and splitting a Windows command line the way the Microsoft
+// C runtime does. The functions work on every target, so code can prepare a
+// command for another system.
+
+// text as one POSIX shell word, in arena: wrapped in single quotes, each
+// single quote written as '\''. `sh -c` reads it back as exactly text, any
+// bytes included; empty text is ''. NUL cannot reach a shell and is the
+// caller's to reject.
+pub fn shell_quote(arena: *mem.Arena, text: []const u8) []u8 {
+  size: usize = 2
+  for byte in text {
+    if byte == 39 { size += 4 } else { size += 1 }
+  }
+  result := mem.push_bytes(arena, size)
+  used := shell_word(result, 0, text)
+  return result[..used]
+}
+
+// arguments as shell words separated by spaces, in arena: the command that
+// `sh -c` runs as exactly these arguments. No arguments give empty text.
+pub fn shell_command(arena: *mem.Arena, arguments: [][]const u8) []u8 {
+  size: usize = 0
+  for argument in arguments {
+    if size > 0 {
+      size += 1
+    }
+    size += 2
+    for byte in argument {
+      if byte == 39 { size += 4 } else { size += 1 }
+    }
+  }
+  result := mem.push_bytes(arena, size)
+  used: usize = 0
+  for argument_text in arguments {
+    if used > 0 {
+      result[used] = 32
+      used += 1
+    }
+    used = shell_word(result, used, argument_text)
+  }
+  return result[..used]
+}
+
+fn shell_word(destination: []u8, start: usize, text: []const u8) usize {
+  used := start
+  destination[used] = 39
+  used += 1
+  for byte in text {
+    if byte == 39 {
+      destination[used] = 39
+      destination[used + 1] = 92
+      destination[used + 2] = 39
+      destination[used + 3] = 39
+      used += 4
+    } else {
+      destination[used] = byte
+      used += 1
+    }
+  }
+  destination[used] = 39
+  return used + 1
+}
+
+// text as one Windows command-line argument (not the first), in arena: in
+// double quotes, with each run of backslashes before a quote, and before the
+// closing quote, doubled and each quote escaped as \". windows_arguments, and
+// every program using the Microsoft C runtime, reads it back as text. NUL
+// cannot reach a command line and is the caller's to reject.
+pub fn windows_quote(arena: *mem.Arena, text: []const u8) []u8 {
+  empty: []u8
+  size := windows_word(empty, 0, text, false, false)
+  result := mem.push_bytes(arena, size)
+  _ = windows_word(result, 0, text, false, true)
+  return result
+}
+
+// The Windows command line for arguments (argv[0] first), in arena, joined
+// with spaces: what spawn passes to CreateProcessW, and the exact inverse of
+// windows_arguments. argv[0] is quoted without escapes, as the C runtime
+// reads it with backslashes literal, so it cannot hold a double quote. Fails
+// with InvalidInput for no arguments, NUL in any argument, or a double quote
+// in argv[0]. Bytes are copied as they are: spawn, not this, rejects text
+// that is not UTF-8.
+pub fn windows_command_line(arena: *mem.Arena, arguments: [][]const u8) []u8!io.IoErr {
+  if arguments.len == 0 { fail .InvalidInput }
+  for argument in arguments {
+    for byte in argument {
+      if byte == 0 { fail .InvalidInput }
+    }
+  }
+  for first_byte in arguments[0] {
+    if first_byte == 34 { fail .InvalidInput }
+  }
+  empty: []u8
+  size: usize = 0
+  index: usize = 0
+  for argument_text in arguments {
+    if index > 0 {
+      size += 1
+    }
+    size += windows_word(empty, 0, argument_text, index == 0, false)
+    index += 1
+  }
+  result := mem.push_bytes(arena, size)
+  used: usize = 0
+  index = 0
+  for quoted_text in arguments {
+    if index > 0 {
+      result[used] = 32
+      used += 1
+    }
+    used += windows_word(result, used, quoted_text, index == 0, true)
+    index += 1
+  }
+  return result
+}
+
+// One quoted argument at destination[start..]: its size, written only when
+// writing. first quotes argv[0], whose backslashes the C runtime keeps.
+fn windows_word(destination: []u8, start: usize, text: []const u8, first: bool, writing: bool) usize {
+  used := start
+  used = windows_put(destination, used, 34, 1, writing)
+  slashes: usize = 0
+  for byte in text {
+    if byte == 92 && !first {
+      slashes += 1
+      continue
+    }
+    if byte == 34 {
+      used = windows_put(destination, used, 92, slashes * 2 + 1, writing)
+    } else {
+      used = windows_put(destination, used, 92, slashes, writing)
+    }
+    slashes = 0
+    used = windows_put(destination, used, byte, 1, writing)
+  }
+  used = windows_put(destination, used, 92, slashes * 2, writing)
+  used = windows_put(destination, used, 34, 1, writing)
+  return used - start
+}
+fn windows_put(destination: []u8, at: usize, byte: u8, count: usize, writing: bool) usize {
+  if writing {
+    for offset in 0..count {
+      destination[at + offset] = byte
+    }
+  }
+  return at + count
+}
+
+// Splits a Windows command line into arguments the way the Microsoft C
+// runtime builds argv: spaces and tabs separate arguments outside double
+// quotes; in argv[0] backslashes are literal and quotes only group; later,
+// 2n backslashes before a quote are n backslashes and the quote groups, 2n+1
+// are n backslashes and a literal quote, and "" inside quotes is a quote.
+// The arguments and their bytes are in arena. Fails with InvalidInput for
+// text that is not UTF-8 or holds NUL, and Capacity for a line longer than
+// Windows allows (32767 UTF-16 units). On failure the arena is unchanged.
+pub fn windows_arguments(arena: *mem.Arena, command_line: []const u8) [][]const u8!io.IoErr {
+  units: [32767]u16
+  used: usize = 0
+  at: usize = 0
+  for at < command_line.len {
+    decoded := utf8.decode(command_line, at)
+    if !decoded.valid || decoded.codepoint == 0 { fail .InvalidInput }
+    width := utf16.encode(units[used..], decoded.codepoint)
+    if width == 0 { fail .Capacity }
+    used += width
+    at += decoded.width
+  }
+  mark := mem.arena_mark(arena)
+  errdefer mem.arena_rewind(arena, mark)
+  return try split_wide(arena, units[..used])
+}
+
+struct ArgumentToken { next: usize, length: usize, ok: bool }
+fn argument_emit(destination: []u8, at: usize, value: u32, writing: bool) usize {
+  if writing { return utf8.encode(destination[at..], value) }
+  return utf8.encoded_width(value)
+}
+// Microsoft CRT quoting: argv[0] treats backslashes literally; later arguments
+// interpret backslash runs before quotes. Two passes avoid temporary allocations.
+fn argument_token(command: []const u16, start: usize, first: bool, destination: []u8, writing: bool) ArgumentToken {
+  at := start
+  used: usize = 0
+  quoted: bool = false
+  for at < command.len {
+    byte := command[at]
+    if !quoted && (byte == 32 || byte == 9) { break }
+    if !first && byte == 92 {
+      slashes: usize = 0
+      for at < command.len && command[at] == 92 {
+        slashes += 1
+        at += 1
+      }
+      if at < command.len && command[at] == 34 {
+        pairs := slashes / 2
+        for pairs > 0 {
+          used += argument_emit(destination, used, 92, writing)
+          pairs -= 1
+        }
+        if slashes % 2 != 0 {
+          used += argument_emit(destination, used, 34, writing)
+          at += 1
+          continue
+        }
+      } else {
+        for slashes > 0 {
+          used += argument_emit(destination, used, 92, writing)
+          slashes -= 1
+        }
+        continue
+      }
+    }
+    if command[at] == 34 {
+      if !first && quoted && at + 1 < command.len && command[at + 1] == 34 {
+        used += argument_emit(destination, used, 34, writing)
+        at += 2
+      } else {
+        quoted = !quoted
+        at += 1
+      }
+      continue
+    }
+    decoded := utf16.decode(command, at)
+    if !decoded.valid { return ArgumentToken{} }
+    width := argument_emit(destination, used, decoded.codepoint, writing)
+    if width == 0 { return ArgumentToken{} }
+    used += width
+    at += decoded.width
+  }
+  return ArgumentToken{ next: at, length: used, ok: true }
+}
+fn argument_skip(command: []const u16, at: usize) usize {
+  value := at
+  for value < command.len && (command[value] == 32 || command[value] == 9) {
+    value += 1
+  }
+  return value
+}
+// The arguments of a UTF-16 command line, in arena.
+fn split_wide(arena: *mem.Arena, command: []const u16) [][]const u8!io.IoErr {
+  empty: []u8
+  count: usize = 0
+  size: usize = 0
+  at := argument_skip(command, 0)
+  for at < command.len {
+    token := argument_token(command, at, count == 0, empty, false)
+    if !token.ok { fail .InvalidInput }
+    size += token.length
+    count += 1
+    at = argument_skip(command, token.next)
+  }
+  result := argument_slots(arena, count)
+  bytes := mem.push_bytes(arena, size)
+  used: usize = 0
+  index: usize = 0
+  at = argument_skip(command, 0)
+  for at < command.len {
+    copied := argument_token(command, at, index == 0, bytes[used..], true)
+    if !copied.ok { fail .InvalidInput }
+    result[index] = bytes[used..used + copied.length]
+    used += copied.length
+    index += 1
+    at = argument_skip(command, copied.next)
+  }
+  return result
+}

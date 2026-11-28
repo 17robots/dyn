@@ -1,16 +1,32 @@
 use native_windows "std/os/windows"
 use io "std/io"
+use sync "std/sync"
 #target(kernel: windows)
 
 extern fn get_mode "dyn_terminal_get_mode"(handle: rawptr, mode: *u32) i32
 extern fn set_mode "dyn_terminal_set_mode"(handle: rawptr, mode: u32) i32
 extern fn buffer_info "dyn_terminal_buffer_info"(handle: rawptr, info: *u8) i32
+extern fn native_write "dyn_terminal_write"(handle: rawptr, bytes: *const u8, count: u32, written: *u32, overlapped: rawptr) i32
+extern fn input_page "dyn_terminal_input_page"() u32
+extern fn output_page "dyn_terminal_output_page"() u32
+extern fn set_input_page "dyn_terminal_set_input_page"(page: u32) i32
+extern fn set_output_page "dyn_terminal_set_output_page"(page: u32) i32
+extern fn control_handler "dyn_terminal_control_handler"(handler: fn(u32) i32, add: i32) i32
+extern fn exception_filter "dyn_terminal_exception_filter"(filter: rawptr) rawptr
+extern fn create_process "dyn_terminal_create_process"(application: *const u16, command: *u16, process_security: rawptr, thread_security: rawptr, inherit: i32, flags: u32, environment: rawptr, directory: rawptr, startup: *Startup, result: *ProcessInformation) i32
+extern fn environment_value "dyn_terminal_environment"(name: *const u16, value: *u16, size: u32) u32
+extern fn swap_panic_hook "dyn_swap_panic_hook"(hook: fn(*const u8, u64)) fn(*const u8, u64)
 
 const line_input: u32 = 2
 const echo_input: u32 = 4
 const processed_input: u32 = 1
 const virtual_terminal_input: u32 = 512
 const virtual_terminal_output: u32 = 4
+const processed_output: u32 = 1
+const no_automatic_return: u32 = 8
+const quick_edit: u32 = 64
+const extended_flags: u32 = 128
+const utf8_page: u32 = 65001
 
 // Maps 0, 1 and 2 to the standard input, output and error handles.
 fn handle_of(descriptor: isize) rawptr {
@@ -78,4 +94,204 @@ pub fn size(descriptor: isize) Size!io.IoErr {
   columns := #cast(usize, right - left + 1)
   rows := #cast(usize, bottom - top + 1)
   return Size{ columns: columns, rows: rows }
+}
+
+// Output streams (1 and 2) gain virtual-terminal processing; any other
+// descriptor virtual-terminal input.
+fn make_virtual(descriptor: isize, state: *State) bool {
+  mode := mode_of(state)
+  if descriptor == 1 || descriptor == 2 {
+    mode = mode | virtual_terminal_output
+  } else {
+    mode = mode | virtual_terminal_input
+  }
+  set_mode_bytes(state, mode)
+  return true
+}
+
+fn write_some(descriptor: isize, bytes: []const u8) usize!io.IoErr {
+  count: u32 = 0
+  limit := bytes.len
+  if limit > 2147483647 {
+    limit = 2147483647
+  }
+  if native_write(handle_of(descriptor), &bytes[0], #cast(u32, limit), &count, nil) == 0 { fail failure() }
+  return count
+}
+
+// A session keeps the console code page in bytes 4 to 7 of each saved state,
+// beside the console mode.
+fn page_of(state: *const State) u32 {
+  return #cast(u32, state.bytes[4]) | #cast(u32, state.bytes[5]) << 8 | #cast(u32, state.bytes[6]) << 16 | #cast(u32, state.bytes[7]) << 24
+}
+
+fn set_page_bytes(state: *State, page: u32) {
+  state.bytes[4] = #cast(u8, page & 255)
+  state.bytes[5] = #cast(u8, page >> 8 & 255)
+  state.bytes[6] = #cast(u8, page >> 16 & 255)
+  state.bytes[7] = #cast(u8, page >> 24)
+}
+
+fn session_save(session: *Session) !io.IoErr {
+  session.saved_input = try read_state(session.input)
+  session.saved_output = try read_state(session.output)
+  set_page_bytes(&session.saved_input, input_page())
+  set_page_bytes(&session.saved_output, output_page())
+}
+
+// Raw virtual-terminal input, with quick edit off for mouse reports. Output
+// tries virtual-terminal processing without automatic carriage returns, as a
+// raw termios clears OPOST, then plain virtual-terminal processing for
+// consoles without that flag.
+fn session_raw(session: *Session) !io.IoErr {
+  input := session.saved_input
+  make_raw(0, &input)
+  if session.modes.mouse {
+    set_mode_bytes(&input, mode_of(&input) & ~quick_edit | extended_flags)
+  }
+  try restore(session.input, &input)
+  output := handle_of(session.output)
+  mode := mode_of(&session.saved_output) | processed_output | virtual_terminal_output
+  if set_mode(output, mode | no_automatic_return) == 0 && set_mode(output, mode) == 0 {
+    failed := failure()
+    session_restore(session) catch {}
+    fail failed
+  }
+  if set_input_page(utf8_page) == 0 || set_output_page(utf8_page) == 0 {
+    failed := failure()
+    session_restore(session) catch {}
+    fail failed
+  }
+}
+
+// Every setting is put back even when one fails; the first failure is
+// reported.
+fn session_restore(session: *const Session) !io.IoErr {
+  failed := false
+  failure_code := io.IoErr.InvalidInput
+  if set_mode(handle_of(session.input), mode_of(&session.saved_input)) == 0 {
+    failed = true
+    failure_code = failure()
+  }
+  if set_mode(handle_of(session.output), mode_of(&session.saved_output)) == 0 && !failed {
+    failed = true
+    failure_code = failure()
+  }
+  if set_input_page(page_of(&session.saved_input)) == 0 && !failed {
+    failed = true
+    failure_code = failure()
+  }
+  if set_output_page(page_of(&session.saved_output)) == 0 && !failed {
+    failed = true
+    failure_code = failure()
+  }
+  if failed { fail failure_code }
+}
+
+crash_filter_previous: rawptr
+crash_filter_installed: bool
+crash_control_installed: bool
+
+// The unhandled-exception filter runs on the faulting thread once Windows
+// finds no handler. EXCEPTION_CONTINUE_SEARCH (0) lets the system end the
+// process as it would have.
+fn crash_filter(information: rawptr) i32 {
+  crash_restore()
+  previous := crash_filter_previous
+  if previous != nil {
+    filter := #cast(fn(rawptr) i32, previous)
+    return filter(information)
+  }
+  return 0
+}
+
+// CTRL_CLOSE_EVENT 2, CTRL_LOGOFF_EVENT 5 and CTRL_SHUTDOWN_EVENT 6 end the
+// process once the handlers return. Returning 0 passes each event on.
+fn crash_control(event: u32) i32 {
+  if event == 2 || event == 5 || event == 6 {
+    crash_restore()
+  }
+  return 0
+}
+
+fn crash_install() {
+  crash_filter_previous = exception_filter(#cast(rawptr, crash_filter))
+  crash_filter_installed = true
+  crash_control_installed = control_handler(crash_control, 1) != 0
+}
+
+// A filter that replaced the session's stays.
+fn crash_uninstall() {
+  if crash_filter_installed {
+    current := exception_filter(crash_filter_previous)
+    if #cast(usize, current) != #cast(usize, #cast(rawptr, crash_filter)) {
+      _ = exception_filter(current)
+    }
+    crash_filter_installed = false
+    crash_filter_previous = nil
+  }
+  if crash_control_installed {
+    _ = control_handler(crash_control, 0)
+    crash_control_installed = false
+  }
+}
+
+struct Startup {
+  size: u32, reserved: rawptr, desktop: rawptr, title: rawptr,
+  x: u32, y: u32, width: u32, height: u32, columns: u32, rows: u32,
+  fill: u32, flags: u32, show: u16, reserved_size: u16, reserved_bytes: rawptr,
+  input: rawptr, output: rawptr, error: rawptr,
+}
+struct ProcessInformation { process: rawptr, thread: rawptr, process_id: u32, thread_id: u32 }
+
+// Ctrl-C and Ctrl-Break reach every process on the console; while the shell
+// runs they are its own.
+fn shell_control(event: u32) i32 {
+  if event <= 1 { return 1 }
+  return 0
+}
+
+// Runs "%ComSpec%" (quoted), else cmd.exe, in this console and waits for it.
+fn pause() !io.IoErr {
+  command: [1024]u16
+  name: [8]u16 = [67, 111, 109, 83, 112, 101, 99, 0]
+  length := environment_value(&name[0], &command[1], 1020)
+  if length == 0 || length >= 1020 {
+    fallback: [8]u16 = [99, 109, 100, 46, 101, 120, 101, 0]
+    for unit, i in fallback {
+      command[i] = unit
+    }
+  } else {
+    command[0] = 34
+    command[length + 1] = 34
+    command[length + 2] = 0
+  }
+  if control_handler(shell_control, 1) == 0 { fail failure() }
+  defer _ = control_handler(shell_control, 0)
+  startup := Startup{ size: #cast(u32, #sizeof(Startup)) }
+  child := ProcessInformation{}
+  if create_process(nil, &command[0], nil, nil, 0, 0, nil, nil, &startup, &child) == 0 { fail failure() }
+  _ = native_windows.close_handle_raw(child.thread)
+  _ = native_windows.wait_raw(child.process, 4294967295)
+  _ = native_windows.close_handle_raw(child.process)
+}
+
+crash_claimed: sync.AtomicU32
+crash_armed: sync.AtomicU32
+
+fn crash_claim() bool {
+  return sync.compare_exchange_u32(&crash_claimed, 0, 1)
+}
+
+fn crash_release() {
+  sync.store_u32(&crash_claimed, 0)
+}
+
+fn crash_set_armed(armed: bool) {
+  if armed { sync.store_u32(&crash_armed, 1) } else { sync.store_u32(&crash_armed, 0) }
+}
+
+// Lock-free, so a signal handler may take it.
+fn crash_take() bool {
+  return sync.exchange_u32(&crash_armed, 0) != 0
 }

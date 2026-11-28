@@ -636,9 +636,12 @@ or compatible pointer conversion; explicit integer-pointer casts serve OS ABI bo
 requires numbers of equal size; it never takes pointers.
 `#max(T)` and `#min(T)` are the largest and smallest values of integer type `T`, as constants of
 type `T`; `#max(usize)` is the target's. `#syscall(number, args...)` returns `isize` and accepts at
-most six integer/pointer arguments on
-Linux x86-64. It does not depend on `std`. The number may be a named constant: `std/os/linux/sys`
-and `std/os/macos/sys` name each call std makes, as in `#syscall(sys.Getpid)`.
+most six integer/pointer arguments. A Linux number is the x86-64 one: on aarch64 and riscv64 the
+compiler substitutes the number of the call with the same name, and a call the target lacks, such
+as `open`, is a compile error that names the replacement (`openat`). Only the number changes;
+arguments and structures keep each architecture's layout. It does not depend on `std`. The number
+may be a named constant: `std/os/linux/sys` and `std/os/macos/sys` name the calls std makes and
+other common ones, as in `#syscall(sys.Getpid)`.
 `#offsetof(Type, field)` is a field's byte offset as a `usize` constant.
 `#init(pointer)` is a statement that sets `*T` to a fresh `T`, as a declaration without an
 initializer would: zero, then field defaults. It works for every type. `#take(&value)` returns

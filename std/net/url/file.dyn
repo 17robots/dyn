@@ -1,0 +1,205 @@
+use mem "std/mem"
+use parse "std/parse"
+
+// How a file path is written: Posix ("/home/a.txt") or Windows ("C:\a.txt",
+// "\\server\share\a.txt"). The conversions take it as a parameter, so a
+// program on any system can handle paths of either.
+pub enum PathStyle { Posix, Windows }
+
+const UpperHex: []const u8 = "0123456789ABCDEF"
+
+fn lower(byte: u8) u8 {
+  if byte >= 'A' && byte <= 'Z' { return byte + 32 }
+  return byte
+}
+fn letter(byte: u8) bool {
+  return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z')
+}
+fn slash(byte: u8, style: PathStyle) bool {
+  return byte == '/' || (style == PathStyle.Windows && byte == '\\')
+}
+// Appends source to destination at *at, percent-encoding every byte but
+// unreserved ones; separators become '/'.
+fn escape(destination: []u8, at: *usize, source: []const u8, style: PathStyle) {
+  for byte in source {
+    if slash(byte, style) {
+      destination[at.*] = '/'
+      at.* += 1
+    } else if unreserved(byte) {
+      destination[at.*] = byte
+      at.* += 1
+    } else {
+      destination[at.*] = '%'
+      destination[at.* + 1] = UpperHex[(byte >> 4)]
+      destination[at.* + 2] = UpperHex[(byte & 15)]
+      at.* += 3
+    }
+  }
+}
+
+// The file URI (RFC 8089) of an absolute path, in arena: "/tmp/a b" is
+// "file:///tmp/a%20b"; "C:\a b" is "file:///C:/a%20b"; "\\server\share\a"
+// is "file://server/share/a", and "\\?\C:\a" and "\\?\UNC\server\share\a"
+// drop their prefix. Every byte but letters, digits, '-', '.', '_', '~', the
+// separators and a drive's colon is percent-encoded with capital hex digits.
+// Failure: Invalid at the offset of a NUL byte, or at 0 for a path that is
+// not absolute in style (a relative path, "C:a", or a Windows "\a" with no
+// drive); nothing is pushed.
+pub fn file_uri_from_path(arena: *mem.Arena, path: []const u8, style: PathStyle) []u8!parse.ParseErr {
+  for byte, index in path {
+    if byte == 0 { fail parse.ParseErr.Invalid(index) }
+  }
+  rest := path
+  host := path[..0]
+  drive := false
+  if style == PathStyle.Posix {
+    if path.len == 0 || path[0] != '/' { fail parse.ParseErr.Invalid(0) }
+  } else {
+    unc := false
+    if rest.len >= 8 && rest[0] == '\\' && rest[1] == '\\' && rest[2] == '?' && rest[3] == '\\' &&
+      lower(rest[4]) == 'u' && lower(rest[5]) == 'n' && lower(rest[6]) == 'c' && rest[7] == '\\' {
+      // "\\?\UNC\server\share" is "\\server\share".
+      rest = rest[8..]
+      unc = true
+    } else if rest.len >= 4 && rest[0] == '\\' && rest[1] == '\\' && rest[2] == '?' && rest[3] == '\\' {
+      rest = rest[4..]
+    }
+    if !unc && rest.len >= 3 && letter(rest[0]) && rest[1] == ':' && slash(rest[2], style) {
+      drive = true
+    } else if unc || (rest.len >= 3 && slash(rest[0], style) && slash(rest[1], style) && rest[2] != '?' && rest[2] != '.') {
+      start: usize = 2
+      if unc {
+        start = 0
+      }
+      end := start
+      for end < rest.len && !slash(rest[end], style) {
+        end += 1
+      }
+      host = rest[start..end]
+      if host.len == 0 { fail parse.ParseErr.Invalid(0) }
+      rest = rest[end..]
+      if rest.len == 0 {
+        rest = "/"
+      }
+    } else {
+      fail parse.ParseErr.Invalid(0)
+    }
+  }
+  mark := mem.arena_mark(arena)
+  space := mem.push_bytes(arena, 9 + 3 * (host.len + rest.len))
+  at: usize = 0
+  for byte in "file://" {
+    space[at] = byte
+    at += 1
+  }
+  escape(space, &at, host, style)
+  if drive {
+    space[at] = '/'
+    space[at + 1] = rest[0]
+    space[at + 2] = ':'
+    at += 3
+    rest = rest[2..]
+  }
+  escape(space, &at, rest, style)
+  mem.arena_rewind(arena, mark + at)
+  return space[..at]
+}
+
+// Decodes the %XX escapes of source into destination at *used; offset is
+// where source starts in the URI, for failures.
+fn unescape(destination: []u8, used: *usize, source: []const u8, offset: usize) !parse.ParseErr {
+  i: usize = 0
+  for i < source.len {
+    byte := source[i]
+    if byte == '%' {
+      if source.len - i < 3 || hex_value(source[i + 1]) < 0 || hex_value(source[i + 2]) < 0 {
+        fail parse.ParseErr.Invalid(offset + i)
+      }
+      byte = #cast(u8, hex_value(source[i + 1]) * 16 + hex_value(source[i + 2]))
+      if byte == 0 { fail parse.ParseErr.Invalid(offset + i) }
+      i += 3
+    } else {
+      i += 1
+    }
+    destination[used.*] = byte
+    used.* += 1
+  }
+}
+
+// The path a file URI names, in arena: the inverse of file_uri_from_path.
+// The scheme compares without case; "file:/a", "file:///a" and
+// "file://localhost/a" all name "/a". Under Windows, "file:///C:/a" and
+// "file:///c%3A/a" give "C:\a" and "c:\a", and "file://server/share/a"
+// gives "\\server\share\a".
+// Failure: Invalid at the offending byte for another scheme, a malformed or
+// NUL (%00) escape, a query or fragment, userinfo or a port, or a path that
+// does not start with '/'; Unsupported for a host other than localhost
+// under Posix, or a path with no drive and no host under Windows. Nothing is
+// pushed on failure.
+pub fn path_from_file_uri(arena: *mem.Arena, uri: []const u8, style: PathStyle) []u8!parse.ParseErr {
+  if uri.len < 5 || lower(uri[0]) != 'f' || lower(uri[1]) != 'i' || lower(uri[2]) != 'l' || lower(uri[3]) != 'e' || uri[4] != ':' {
+    fail parse.ParseErr.Invalid(0)
+  }
+  at: usize = 5
+  host_start := at
+  host_end := at
+  if uri.len - at >= 2 && uri[at] == '/' && uri[at + 1] == '/' {
+    host_start = at + 2
+    host_end = host_start
+    for host_end < uri.len && uri[host_end] != '/' && uri[host_end] != '?' && uri[host_end] != '#' {
+      if uri[host_end] == '@' || uri[host_end] == ':' { fail parse.ParseErr.Invalid(host_end) }
+      host_end += 1
+    }
+    at = host_end
+  }
+  for index in at..uri.len {
+    if uri[index] == '?' || uri[index] == '#' { fail parse.ParseErr.Invalid(index) }
+  }
+  if at == uri.len || uri[at] != '/' { fail parse.ParseErr.Invalid(at) }
+  host := uri[host_start..host_end]
+  if host.len == 9 && lower(host[0]) == 'l' && lower(host[1]) == 'o' && lower(host[2]) == 'c' && lower(host[3]) == 'a' &&
+    lower(host[4]) == 'l' && lower(host[5]) == 'h' && lower(host[6]) == 'o' && lower(host[7]) == 's' && lower(host[8]) == 't' {
+    host = host[..0]
+  }
+  if host.len > 0 && style == PathStyle.Posix { fail parse.ParseErr.Unsupported(host_start) }
+  mark := mem.arena_mark(arena)
+  space := mem.push_bytes(arena, 2 + host.len + uri.len - at)
+  used: usize = 0
+  if host.len > 0 {
+    space[0] = '\\'
+    space[1] = '\\'
+    used = 2
+    unescape(space, &used, host, host_start) catch err {
+      mem.arena_rewind(arena, mark)
+      fail err
+    }
+  }
+  path_start := used
+  unescape(space, &used, uri[at..], at) catch err {
+    mem.arena_rewind(arena, mark)
+    fail err
+  }
+  if style == PathStyle.Windows {
+    if host.len == 0 {
+      // "/C:/a" is "C:\a"; "/C:" is "C:\".
+      decoded := space[..used]
+      if used < 3 || !letter(decoded[1]) || decoded[2] != ':' || (used > 3 && decoded[3] != '/' && decoded[3] != '\\') {
+        mem.arena_rewind(arena, mark)
+        fail parse.ParseErr.Unsupported(at)
+      }
+      _ = mem.move(space[..used - 1], space[1..used])
+      used -= 1
+      if used == 2 {
+        space[2] = '/'
+        used = 3
+      }
+    }
+    for index in path_start..used {
+      if space[index] == '/' {
+        space[index] = '\\'
+      }
+    }
+  }
+  mem.arena_rewind(arena, mark + used)
+  return space[..used]
+}

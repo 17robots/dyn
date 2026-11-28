@@ -12,6 +12,105 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+Breaking: `std/fs` code that read `fs.Directory`'s fields. Everything else is additive.
+
+New platform-neutral text modules, all building for bare metal:
+
+- `std/text/fuzzy` (core): `score`, `positions` (byte offsets of each matched code point, for
+  highlighting), `word_start`, `word_prefix_match` and `substring_match` for pickers and command
+  palettes. Subsequence matching by code point with word-start, run and case bonuses; nothing allocates.
+- `std/text/diff` (heap): `diff.lines(arena, scratch, old, new, max_edits)` returns exact line hunks
+  (`Insert`, `Delete`, `Change`) from Myers' algorithm, or one `Change` marked not `exact` past the
+  edit bound. `scratch_bytes` sizes a fixed scratch buffer; `line_count` counts lines.
+- `std/text/position` (core): `position_from_offset`, `offset_from_position` and a `Cursor` for
+  ascending batches, with columns in bytes, UTF-16 units or code points and LSP's `\n`, `\r\n` and
+  `\r` line breaks.
+- `std/encoding/jsonrpc` (core): Content-Length framing. `header(length)` and an incremental
+  `Decoder` with `max_header` and `max_body` that reports `needed` bytes and fails with
+  `parse.ParseErr`.
+- `std/net/url`: `file_uri_from_path` and `path_from_file_uri` for Posix and Windows paths
+  (`PathStyle`), including drive letters, `%3A`, UNC and `\\?\` prefixes.
+- `std/unicode/utf8`: `truncate(text, limit)`, the longest prefix that does not split a code point.
+
+- `terminal.enter(&session, 0, 1, terminal.Modes{ ... })` takes over a terminal for a
+  full-screen program: raw input, then any of `alternate_screen`, `hide_cursor`,
+  `bracketed_paste`, `mouse`, `mouse_motion` and `kitty_keyboard`; on Windows also
+  virtual-terminal input and output and the UTF-8 code page. `terminal.leave` restores
+  everything, and `terminal.suspend` leaves, stops the job (on Windows runs `%ComSpec%`)
+  and enters again. With `crash_restore: true` a panic, a fatal signal or an unhandled
+  Windows exception restores the terminal first; `terminal.crash_restore()` is
+  async-signal-safe for a program's own handlers. `terminal.virtual_terminal(descriptor)`
+  turns on Windows virtual-terminal processing or input alone.
+- `signal.Kind` gains `WindowChange` (SIGWINCH; console resizes on Windows), `Suspend`
+  (SIGTSTP) and `Continue` (SIGCONT), with matching `signal.Set` fields
+  `window_change`, `suspend` and `continue` that default to false. Existing kinds keep
+  their values. `signal.stop_job()` stops the process group as Ctrl-Z does.
+
+- `pty.spawn(arena, path, arguments, options)` starts a child on a pseudo-terminal of
+  `options.size`, with an explicit environment and directory. `read` and `write` never
+  wait (`WouldBlock` when nothing is ready), `readable` waits with a timeout, `resize`
+  changes the window (SIGWINCH on Linux and macOS), `wait` and `terminate` match
+  `std/process`, and `close` kills and reaps a child still running. On Linux and macOS
+  `terminal.terminal` is a descriptor for `std/event`. Windows uses ConPTY (Windows 10
+  1809 or later) with a job object.
+
+- `Options.group` starts a child at the root of its own process tree: a new process
+  group on Linux and macOS, a kill-on-close Job Object on Windows (the child starts
+  suspended and joins the job before it runs). `process.terminate_tree(child)` kills the
+  whole tree; `process.close(child)` kills the tree (or a still-running child), reaps
+  it through interruptions and frees the job. Close every group child, even after
+  `wait`. `capture` with `Options.group` kills the tree when it stops.
+- `process.open_pipe(process.PipeOptions{ nonblocking_input: true })` chooses which
+  pipe ends never block; `read_pipe` and `write_pipe` fail with `WouldBlock` instead of
+  waiting, and a write without a reader fails with `System` instead of raising SIGPIPE.
+  On Linux and macOS the ends go straight into `std/event`.
+- `process.find_executable(arena, "rg")` and `find_executable_in(arena, name, search)`
+  look a program up on PATH like `which` (PATHEXT and `;` on Windows).
+- `process.shell_quote`, `shell_command`, `windows_quote` and `windows_command_line`
+  quote arguments for `sh -c` and for the Microsoft C runtime;
+  `windows_arguments` splits a Windows command line on any target.
+
+- `#syscall` on aarch64-linux and riscv64-linux maps every x86-64 Linux call that
+  the target has, by name, from the kernel 7.3 tables (`tools/linux-syscalls.tsv`).
+  `renameat2`, `copy_file_range`, `fchmod`, `pidfd_open` and the rest now compile
+  there. A call the target lacks names its replacement:
+  `syscall 2 (open) does not exist on aarch64-linux; use openat with AT_FDCWD`.
+- Fix: x86-64 `chmod` (90) and `setrlimit` (160) mapped to `fchmod` and `prlimit64`
+  on aarch64. `chmod` is now an error (use `fchmodat`); `setrlimit` maps to
+  `setrlimit`. `renameat` (264) is an error on riscv64, which lacks it (use
+  `renameat2`); `std/fs` renames with `renameat2`.
+- `std/os/linux/sys` names more calls: `Renameat2`, `CopyFileRange`, `Fchmod`,
+  `Fchmodat`, `Fchmodat2`, `PidfdOpen`, `PidfdSendSignal`, `Clone3`, `CloseRange`,
+  `MemfdCreate`, `Pread64`, `Pwrite64`, `Readv`, `Writev`, `Faccessat2`, `Dup3`,
+  `EpollPwait2`, `IoUringSetup` and others.
+
+- `std/fs` is the same on Linux, macOS and Windows. `app_directory`, the
+  atomic-file functions, `lock`, `truncate`, `read_link`, `copy_file`,
+  `sync_directory`, `symbolic_link` and `remove_tree` were Linux-only and now
+  work everywhere; each documents what differs (Windows locks are
+  mandatory, `sync_directory` only checks the directory there, and a
+  symbolic link needs Developer Mode or the privilege). `fs.Directory` has
+  one shape everywhere, `{ path, ended, storage, state }`; the platform's
+  fields moved into `state`. `remove_tree` needs `fs.RemovalScratch` bytes
+  per frame on every platform (Linux still accepts 280).
+- New: `create_private` and `create_private_executable` (owner-only at
+  creation: 0o600 or 0o700, or a protected owner DACL on Windows),
+  `rename_exclusive` (fails with `AlreadyExists` instead of replacing),
+  `open_no_follow`, `link_metadata` and `is_symbolic_link`,
+  `set_permissions`, `preserve_permissions`, `is_executable`, `copy_range`
+  (kernel copy or ReFS block cloning) and `clone_file` (copy-on-write clone
+  on Btrfs, XFS, APFS and ReFS, a copy elsewhere).
+- `fs.Metadata` gains `modified_seconds`, `modified_nanoseconds`,
+  `changed_seconds` and `changed_nanoseconds` after its existing fields;
+  `fs.same_file` and `fs.unchanged` compare two reads to tell whether a file
+  was replaced or rewritten. On Windows `metadata(path)` now fills `inode`
+  and `device` too, and on Linux it no longer opens the file, so a FIFO or a
+  file without read permission reports instead of blocking or failing.
+- Linux AArch64 also no longer follows a symbolic link to a directory inside
+  a tree given to `remove_tree`: it used x86-64 open flags there.
+
 ## 0.1.0-preview.45
 
 Breaking: `std/encoding/json` and `std/encoding/json/read`.

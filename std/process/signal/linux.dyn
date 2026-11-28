@@ -3,7 +3,8 @@ use "std/os/linux/sys"
 #target(kernel: linux)
 
 // Blocked signals are read from a signalfd. Numbers: SIGHUP 1, SIGINT 2,
-// SIGTERM 15.
+// SIGTERM 15, SIGCONT 18, SIGTSTP 20, SIGWINCH 28; bit n - 1 of the mask is
+// signal n.
 fn mask_of(set: Set) u64 {
   mask: u64 = 0
   if set.hangup {
@@ -14,6 +15,15 @@ fn mask_of(set: Set) u64 {
   }
   if set.terminate {
     mask |= 16384
+  }
+  if set.continue {
+    mask |= 131072
+  }
+  if set.suspend {
+    mask |= 524288
+  }
+  if set.window_change {
+    mask |= 134217728
   }
   return mask
 }
@@ -35,6 +45,9 @@ fn kind_of(number: u32) Kind {
   if number == 1 { return Kind.Hangup }
   if number == 2 { return Kind.Interrupt }
   if number == 15 { return Kind.Terminate }
+  if number == 18 { return Kind.Continue }
+  if number == 20 { return Kind.Suspend }
+  if number == 28 { return Kind.WindowChange }
   return Kind.None
 }
 
@@ -72,4 +85,33 @@ fn platform_close(state: *Watch) bool {
   mask := mask_of(state.set)
   _ = #syscall(sys.RtSigprocmask, 1, &mask, 0, 8)
   return true
+}
+
+// The kernel's sigaction is at most four words on every Linux architecture;
+// the disposition is only read whole and written back.
+struct Disposition { words: [4]u64 }
+
+// SIGTSTP may be blocked for a watch, which would leave it queued for the
+// signalfd: this thread unblocks it, with the default action, until the job
+// continues. kill(0, ...) stops the whole process group, as the shell does.
+fn platform_stop() !io.IoErr {
+  previous: Disposition
+  code := #syscall(sys.RtSigaction, 20, 0, &previous, 8)
+  if code < 0 { fail io.linux_err(code) }
+  changed := previous.words[0] != 0
+  if changed {
+    standard := Disposition{}
+    code = #syscall(sys.RtSigaction, 20, &standard, 0, 8)
+    if code < 0 { fail io.linux_err(code) }
+  }
+  bit: u64 = 524288
+  mask: u64 = 0
+  // SIG_UNBLOCK 1, then SIG_SETMASK 2.
+  _ = #syscall(sys.RtSigprocmask, 1, &bit, &mask, 8)
+  sent := #syscall(sys.Kill, 0, 20)
+  _ = #syscall(sys.RtSigprocmask, 2, &mask, 0, 8)
+  if changed {
+    _ = #syscall(sys.RtSigaction, 20, &previous, 0, 8)
+  }
+  if sent < 0 { fail io.linux_err(sent) }
 }

@@ -1,0 +1,196 @@
+// Content-Length framing for JSON-RPC messages on a byte stream: the base
+// protocol of the Language Server Protocol and the Debug Adapter Protocol.
+// Each message is a header of "Name: value" lines, each ended by "\r\n",
+// then an empty line, then exactly Content-Length bytes of body:
+//
+//   Content-Length: 17\r\n
+//   \r\n
+//   {"jsonrpc":"2.0"}
+//
+// This module frames bytes; it neither reads the stream nor parses the JSON
+// (see std/encoding/json). Nothing allocates.
+use parse "std/parse"
+
+// The longest header that header makes: "Content-Length: ", 20 digits and
+// "\r\n\r\n".
+pub const HeaderLimit: usize = 40
+
+// A message header, in bytes[..length].
+pub struct Header { bytes: [40]u8, length: usize }
+
+// The header for a body of body_length bytes: "Content-Length: N\r\n\r\n".
+// Send header.bytes[..header.length], then the body.
+pub fn header(body_length: usize) Header {
+  result := Header{}
+  prefix := "Content-Length: "
+  for byte in prefix {
+    result.bytes[result.length] = byte
+    result.length += 1
+  }
+  digits: [20]u8
+  count: usize = 0
+  number := body_length
+  for {
+    digits[count] = #cast(u8, number % 10) + '0'
+    count += 1
+    number /= 10
+    if number == 0 { break }
+  }
+  for count > 0 {
+    count -= 1
+    result.bytes[result.length] = digits[count]
+    result.length += 1
+  }
+  for byte in "\r\n\r\n" {
+    result.bytes[result.length] = byte
+    result.length += 1
+  }
+  return result
+}
+
+// Finds frames at the start of a buffer of received bytes. Zero is a fresh
+// decoder with the default limits; set them before the first decode.
+//
+// A decoder that fails stays failed and returns the same failure; #init it
+// to start over (after resynchronizing the stream, which framing alone
+// cannot do).
+pub struct Decoder {
+  // The most bytes a header may take, its final empty line included.
+  max_header: usize = 8192,
+  // The largest Content-Length accepted.
+  max_body: usize = 8388608,
+  // Bytes already searched for the end of the header.
+  scanned: usize,
+  // Header and body sizes once the header has been read, else 0.
+  header_length: usize,
+  body_length: usize,
+  failed: bool,
+  failure: parse.ParseErr,
+}
+
+// The result of decode. When ready, body is the message body, borrowing the
+// buffer, and the frame takes the first length bytes of it. When not ready,
+// needed is the size the buffer must reach for this frame once its header has
+// been read, else 0.
+pub struct Frame { ready: bool, body: []const u8, length: usize, needed: usize }
+
+// The frame at the start of buffered, the bytes received and not yet
+// consumed. Call it after each read with the same bytes plus what arrived;
+// once a frame is ready, drop its length bytes from the front before the next
+// call. The decoder remembers how far it searched, so a header split across
+// many reads is searched once.
+//
+// Fails with Invalid at the offending byte for a header line that is not
+// "Name: value" or not ended by "\r\n", for a missing or repeated
+// Content-Length, or for a value that is not a decimal number; with TooLarge
+// for a header longer than max_header or a body longer than max_body. Other
+// header fields, such as Content-Type, are accepted and ignored; names
+// compare without ASCII case.
+pub fn decode(decoder: *Decoder, buffered: []const u8) Frame!parse.ParseErr {
+  if decoder.failed { fail decoder.failure }
+  if decoder.header_length == 0 {
+    end := header_end(decoder, buffered)
+    if end == 0 {
+      if buffered.len >= decoder.max_header {
+        fail stop(decoder, parse.ParseErr.TooLarge(decoder.max_header))
+      }
+      return Frame{}
+    }
+    if end > decoder.max_header { fail stop(decoder, parse.ParseErr.TooLarge(decoder.max_header)) }
+    body := content_length(decoder, buffered[..end]) catch err { fail stop(decoder, err) }
+    decoder.header_length = end
+    decoder.body_length = body
+  }
+  total := decoder.header_length + decoder.body_length
+  if buffered.len < total { return Frame{ needed: total } }
+  frame := Frame{ ready: true, body: buffered[decoder.header_length..total], length: total }
+  decoder.header_length = 0
+  decoder.body_length = 0
+  decoder.scanned = 0
+  return frame
+}
+
+fn stop(decoder: *Decoder, failure: parse.ParseErr) parse.ParseErr {
+  decoder.failed = true
+  decoder.failure = failure
+  return failure
+}
+
+// The offset just past "\r\n\r\n" within the first max_header bytes, or 0.
+fn header_end(decoder: *Decoder, buffered: []const u8) usize {
+  limit := buffered.len
+  if limit > decoder.max_header {
+    limit = decoder.max_header
+  }
+  at: usize = 0
+  if decoder.scanned > 3 && decoder.scanned <= limit {
+    at = decoder.scanned - 3
+  }
+  for at + 4 <= limit {
+    if buffered[at] == '\r' && buffered[at + 1] == '\n' && buffered[at + 2] == '\r' && buffered[at + 3] == '\n' {
+      return at + 4
+    }
+    at += 1
+  }
+  decoder.scanned = limit
+  return 0
+}
+
+fn lower(byte: u8) u8 {
+  if byte >= 'A' && byte <= 'Z' { return byte + 32 }
+  return byte
+}
+
+// The Content-Length of a header that ends with "\r\n\r\n".
+fn content_length(decoder: *const Decoder, header_text: []const u8) usize!parse.ParseErr {
+  name := "content-length"
+  found := false
+  length: usize = 0
+  at: usize = 0
+  // The final "\r\n" ends the header; every line before it is a field.
+  for at + 2 < header_text.len {
+    end := at
+    for header_text[end] != '\r' && header_text[end] != '\n' {
+      end += 1
+    }
+    if header_text[end] != '\r' || header_text[end + 1] != '\n' { fail parse.ParseErr.Invalid(end) }
+    colon := at
+    for colon < end && header_text[colon] != ':' {
+      if header_text[colon] == ' ' || header_text[colon] == '\t' { fail parse.ParseErr.Invalid(colon) }
+      colon += 1
+    }
+    if colon == end || colon == at { fail parse.ParseErr.Invalid(colon) }
+    matched := colon - at == name.len
+    index: usize = 0
+    for matched && index < name.len {
+      if lower(header_text[at + index]) != name[index] {
+        matched = false
+      }
+      index += 1
+    }
+    if matched {
+      if found { fail parse.ParseErr.Invalid(at) }
+      found = true
+      first := colon + 1
+      for first < end && (header_text[first] == ' ' || header_text[first] == '\t') {
+        first += 1
+      }
+      last := end
+      for last > first && (header_text[last - 1] == ' ' || header_text[last - 1] == '\t') {
+        last -= 1
+      }
+      if first == last { fail parse.ParseErr.Invalid(first) }
+      for digit_at in first..last {
+        byte := header_text[digit_at]
+        if byte < '0' || byte > '9' { fail parse.ParseErr.Invalid(digit_at) }
+        digit: usize = byte - '0'
+        if length > (#max(usize) - digit) / 10 { fail parse.ParseErr.TooLarge(digit_at) }
+        length = length * 10 + digit
+        if length > decoder.max_body { fail parse.ParseErr.TooLarge(digit_at) }
+      }
+    }
+    at = end + 2
+  }
+  if !found { fail parse.ParseErr.Invalid(0) }
+  return length
+}

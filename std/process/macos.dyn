@@ -3,6 +3,7 @@
 // Native Darwin adapter. libSystem handles OS calls; buffers use the caller arena.
 use io "std/io"
 use c "std/c"
+use fs "std/fs"
 extern fn native_chdir "chdir"(path: *const u8) i32
 extern fn native_fork "fork"() i32
 extern fn native_pipe "pipe"(descriptors: *i32) i32
@@ -13,6 +14,7 @@ extern fn native_exec "execve"(path: *const u8, arguments: rawptr, environment: 
 extern fn native_exit "_exit"(code: i32)
 extern fn native_wait "waitpid"(child: i32, status: *i32, flags: i32) i32
 extern fn native_kill "kill"(child: i32, signal: i32) i32
+extern fn native_group "setpgid"(child: i32, group: i32) i32
 extern fn native_read "read"(descriptor: i32, destination: *u8, count: usize) isize
 extern fn native_write "write"(descriptor: i32, source: rawptr, count: usize) isize
 extern fn native_close "close"(descriptor: i32) i32
@@ -96,7 +98,10 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
   if child == 0 {
     _ = native_close(reader)
     failed: bool = false
-    if copies[0] >= 0 && native_dup(copies[0], 0) < 0 {
+    if configuration.group && native_group(0, 0) < 0 {
+      failed = true
+    }
+    if !failed && copies[0] >= 0 && native_dup(copies[0], 0) < 0 {
       failed = true
     }
     if !failed && copies[1] >= 0 && native_dup(copies[1], 1) < 0 {
@@ -132,7 +137,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     }
     fail io.darwin_err(reported)
   }
-  return Child{ handle: child, active: true }
+  return Child{ handle: child, active: true, group: configuration.group }
 }
 fn wait_native(child: *Child, nonblocking: bool) Exit!io.IoErr {
   wait_status: i32 = 0
@@ -155,6 +160,25 @@ fn wait_native(child: *Child, nonblocking: bool) Exit!io.IoErr {
 fn terminate_native(child: *Child) !io.IoErr {
   if native_kill(#cast(i32, child.handle), 9) < 0 { fail io.darwin_err(mac_error()) }
 }
+// SIGKILL to the group the child leads, and to the child itself in case it
+// left the group. ESRCH: nothing is left.
+fn terminate_tree_native(child: *Child) !io.IoErr {
+  group_error: isize = 0
+  if native_kill(0 - #cast(i32, child.handle), 9) < 0 {
+    group_error = mac_error()
+  }
+  if child.active && native_kill(#cast(i32, child.handle), 9) < 0 {
+    leader_error := mac_error()
+    if leader_error != -3 { fail io.darwin_err(leader_error) }
+  }
+  if group_error != 0 && group_error != -3 { fail io.darwin_err(group_error) }
+}
+fn close_tree_native(child: *Child) {
+  _ = native_kill(0 - #cast(i32, child.handle), 9)
+}
+// A child that cannot be waited for holds nothing else.
+fn forget_native(_child: *Child) {
+}
 fn close_native(handle: isize) {
   _ = native_close(#cast(i32, handle))
 }
@@ -168,6 +192,45 @@ fn pipe_native() Pipe!io.IoErr {
     fail io.darwin_err(code)
   }
   return Pipe{ input: descriptors[0], output: descriptors[1] }
+}
+fn pipe_open_native(options: PipeOptions) Pipe!io.IoErr {
+  descriptors: [2]i32
+  if native_pipe(&descriptors[0]) != 0 { fail io.darwin_err(mac_error()) }
+  failed := native_fcntl(descriptors[0], 2, 1) < 0 || native_fcntl(descriptors[1], 2, 1) < 0
+  chosen: [2]bool = [options.nonblocking_input, options.nonblocking_output]
+  for index in 0..2 {
+    if !failed && chosen[index] {
+      flags := native_fcntl(descriptors[index], 3)
+      failed = flags < 0 || native_fcntl(descriptors[index], 4, flags | 4) < 0
+    }
+  }
+  if failed {
+    code := mac_error()
+    _ = native_close(descriptors[0])
+    _ = native_close(descriptors[1])
+    fail io.darwin_err(code)
+  }
+  return Pipe{ input: descriptors[0], output: descriptors[1] }
+}
+// F_SETNOSIGPIPE makes a write without a reader fail with EPIPE instead of
+// raising SIGPIPE.
+fn pipe_write_native(handle: isize, source: []const u8) usize!io.IoErr {
+  if native_fcntl(#cast(i32, handle), 73, 1) < 0 { fail io.darwin_err(mac_error()) }
+  amount := native_write(#cast(i32, handle), #cast(rawptr, &source[0]), source.len)
+  for amount < 0 && native_errno().* == 4 {
+    amount = native_write(#cast(i32, handle), #cast(rawptr, &source[0]), source.len)
+  }
+  if amount < 0 { fail io.darwin_err(mac_error()) }
+  return #cast(usize, amount)
+}
+const PathListSeparator: u8 = 58
+const DirectorySeparator: u8 = 47
+const WindowsPaths: bool = false
+// A regular file with an execute bit, symlinks followed (stat, which never
+// opens the file).
+fn executable_native(path: []const u8) bool {
+  information := fs.metadata(path) catch { return false }
+  return (information.mode & 0o170000) == 0o100000 && (information.mode & 0o111) != 0
 }
 // A pipe with nothing to read yet is no failure: count 0, not ended.
 fn read_native(handle: isize, destination: []u8) Read!io.IoErr {

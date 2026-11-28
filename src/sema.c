@@ -3524,10 +3524,20 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
                    "non-x86 Linux #syscall number must be a constant portable Linux "
                    "syscall ID");
       else if (!dyn_target_syscall_number(dyn_context_target(&s->context),
-                                          number->integer, &native))
-        error_span(number->span, s, errors,
-                   "syscall has no mapping for this Linux target");
-      else
+                                          number->integer, &native)) {
+        const char *name = NULL, *replacement = NULL;
+        if (!dyn_target_syscall_name(number->integer, &name, &replacement))
+          error_format(number->span, s, errors,
+                       "syscall %llu is not an x86-64 Linux syscall number; #syscall takes "
+                       "x86-64 numbers and maps them to %s",
+                       (unsigned long long)number->integer,
+                       dyn_context_target(&s->context)->name);
+        else
+          error_format(number->span, s, errors, "syscall %llu (%s) does not exist on %s; %s",
+                       (unsigned long long)number->integer, name,
+                       dyn_context_target(&s->context)->name,
+                       replacement ? replacement : "it has no portable replacement");
+      } else
         number->integer = native;
     }
     return a->expressions[id].type = DYN_TYPE_ISIZE;

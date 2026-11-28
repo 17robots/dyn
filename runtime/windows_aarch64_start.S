@@ -485,6 +485,42 @@ dyn_process_read:
     adrp x16, __imp_ReadFile
     ldr x16, [x16, :lo12:__imp_ReadFile]
     br x16
+// std/process: process trees, nonblocking pipe writes.
+.global dyn_process_write
+dyn_process_write:
+    adrp x16, __imp_WriteFile
+    ldr x16, [x16, :lo12:__imp_WriteFile]
+    br x16
+.global dyn_process_job_create
+dyn_process_job_create:
+    adrp x16, __imp_CreateJobObjectW
+    ldr x16, [x16, :lo12:__imp_CreateJobObjectW]
+    br x16
+.global dyn_process_job_limit
+dyn_process_job_limit:
+    adrp x16, __imp_SetInformationJobObject
+    ldr x16, [x16, :lo12:__imp_SetInformationJobObject]
+    br x16
+.global dyn_process_job_assign
+dyn_process_job_assign:
+    adrp x16, __imp_AssignProcessToJobObject
+    ldr x16, [x16, :lo12:__imp_AssignProcessToJobObject]
+    br x16
+.global dyn_process_job_terminate
+dyn_process_job_terminate:
+    adrp x16, __imp_TerminateJobObject
+    ldr x16, [x16, :lo12:__imp_TerminateJobObject]
+    br x16
+.global dyn_process_resume
+dyn_process_resume:
+    adrp x16, __imp_ResumeThread
+    ldr x16, [x16, :lo12:__imp_ResumeThread]
+    br x16
+.global dyn_process_pipe_mode
+dyn_process_pipe_mode:
+    adrp x16, __imp_SetNamedPipeHandleState
+    ldr x16, [x16, :lo12:__imp_SetNamedPipeHandleState]
+    br x16
 .global dyn_watch_open
 dyn_watch_open:
     adrp x16, __imp_CreateFileW
@@ -605,6 +641,178 @@ dyn_stdio_error:
     adrp x16, __imp_GetLastError
     ldr x16, [x16, :lo12:__imp_GetLastError]
     br x16
+// std/terminal sessions and std/process/signal window changes.
+.global dyn_terminal_write
+dyn_terminal_write:
+    adrp x16, __imp_WriteFile
+    ldr x16, [x16, :lo12:__imp_WriteFile]
+    br x16
+.global dyn_terminal_input_page
+dyn_terminal_input_page:
+    adrp x16, __imp_GetConsoleCP
+    ldr x16, [x16, :lo12:__imp_GetConsoleCP]
+    br x16
+.global dyn_terminal_output_page
+dyn_terminal_output_page:
+    adrp x16, __imp_GetConsoleOutputCP
+    ldr x16, [x16, :lo12:__imp_GetConsoleOutputCP]
+    br x16
+.global dyn_terminal_set_input_page
+dyn_terminal_set_input_page:
+    adrp x16, __imp_SetConsoleCP
+    ldr x16, [x16, :lo12:__imp_SetConsoleCP]
+    br x16
+.global dyn_terminal_set_output_page
+dyn_terminal_set_output_page:
+    adrp x16, __imp_SetConsoleOutputCP
+    ldr x16, [x16, :lo12:__imp_SetConsoleOutputCP]
+    br x16
+.global dyn_terminal_control_handler
+dyn_terminal_control_handler:
+    adrp x16, __imp_SetConsoleCtrlHandler
+    ldr x16, [x16, :lo12:__imp_SetConsoleCtrlHandler]
+    br x16
+.global dyn_terminal_exception_filter
+dyn_terminal_exception_filter:
+    adrp x16, __imp_SetUnhandledExceptionFilter
+    ldr x16, [x16, :lo12:__imp_SetUnhandledExceptionFilter]
+    br x16
+.global dyn_terminal_create_process
+dyn_terminal_create_process:
+    adrp x16, __imp_CreateProcessW
+    ldr x16, [x16, :lo12:__imp_CreateProcessW]
+    br x16
+.global dyn_terminal_environment
+dyn_terminal_environment:
+    adrp x16, __imp_GetEnvironmentVariableW
+    ldr x16, [x16, :lo12:__imp_GetEnvironmentVariableW]
+    br x16
+.global dyn_signal_buffer_info
+dyn_signal_buffer_info:
+    adrp x16, __imp_GetConsoleScreenBufferInfo
+    ldr x16, [x16, :lo12:__imp_GetConsoleScreenBufferInfo]
+    br x16
+// std/process/pty: pseudoconsole pipes, job objects and the lazy ConPTY lookup.
+.global dyn_pty_pipe
+dyn_pty_pipe:
+    adrp x16, __imp_CreatePipe
+    ldr x16, [x16, :lo12:__imp_CreatePipe]
+    br x16
+.global dyn_pty_pipe_state
+dyn_pty_pipe_state:
+    adrp x16, __imp_SetNamedPipeHandleState
+    ldr x16, [x16, :lo12:__imp_SetNamedPipeHandleState]
+    br x16
+.global dyn_pty_peek
+dyn_pty_peek:
+    adrp x16, __imp_PeekNamedPipe
+    ldr x16, [x16, :lo12:__imp_PeekNamedPipe]
+    br x16
+.global dyn_pty_read
+dyn_pty_read:
+    adrp x16, __imp_ReadFile
+    ldr x16, [x16, :lo12:__imp_ReadFile]
+    br x16
+.global dyn_pty_write
+dyn_pty_write:
+    adrp x16, __imp_WriteFile
+    ldr x16, [x16, :lo12:__imp_WriteFile]
+    br x16
+.global dyn_pty_close
+dyn_pty_close:
+    adrp x16, __imp_CloseHandle
+    ldr x16, [x16, :lo12:__imp_CloseHandle]
+    br x16
+.global dyn_pty_error
+dyn_pty_error:
+    adrp x16, __imp_GetLastError
+    ldr x16, [x16, :lo12:__imp_GetLastError]
+    br x16
+.global dyn_pty_wait
+dyn_pty_wait:
+    adrp x16, __imp_WaitForSingleObject
+    ldr x16, [x16, :lo12:__imp_WaitForSingleObject]
+    br x16
+.global dyn_pty_exit_code
+dyn_pty_exit_code:
+    adrp x16, __imp_GetExitCodeProcess
+    ldr x16, [x16, :lo12:__imp_GetExitCodeProcess]
+    br x16
+.global dyn_pty_terminate_process
+dyn_pty_terminate_process:
+    adrp x16, __imp_TerminateProcess
+    ldr x16, [x16, :lo12:__imp_TerminateProcess]
+    br x16
+.global dyn_pty_create_process
+dyn_pty_create_process:
+    adrp x16, __imp_CreateProcessW
+    ldr x16, [x16, :lo12:__imp_CreateProcessW]
+    br x16
+.global dyn_pty_init_attributes
+dyn_pty_init_attributes:
+    adrp x16, __imp_InitializeProcThreadAttributeList
+    ldr x16, [x16, :lo12:__imp_InitializeProcThreadAttributeList]
+    br x16
+.global dyn_pty_update_attributes
+dyn_pty_update_attributes:
+    adrp x16, __imp_UpdateProcThreadAttribute
+    ldr x16, [x16, :lo12:__imp_UpdateProcThreadAttribute]
+    br x16
+.global dyn_pty_delete_attributes
+dyn_pty_delete_attributes:
+    adrp x16, __imp_DeleteProcThreadAttributeList
+    ldr x16, [x16, :lo12:__imp_DeleteProcThreadAttributeList]
+    br x16
+.global dyn_pty_compare
+dyn_pty_compare:
+    adrp x16, __imp_CompareStringOrdinal
+    ldr x16, [x16, :lo12:__imp_CompareStringOrdinal]
+    br x16
+.global dyn_pty_job_create
+dyn_pty_job_create:
+    adrp x16, __imp_CreateJobObjectW
+    ldr x16, [x16, :lo12:__imp_CreateJobObjectW]
+    br x16
+.global dyn_pty_job_limits
+dyn_pty_job_limits:
+    adrp x16, __imp_SetInformationJobObject
+    ldr x16, [x16, :lo12:__imp_SetInformationJobObject]
+    br x16
+.global dyn_pty_job_assign
+dyn_pty_job_assign:
+    adrp x16, __imp_AssignProcessToJobObject
+    ldr x16, [x16, :lo12:__imp_AssignProcessToJobObject]
+    br x16
+.global dyn_pty_job_terminate
+dyn_pty_job_terminate:
+    adrp x16, __imp_TerminateJobObject
+    ldr x16, [x16, :lo12:__imp_TerminateJobObject]
+    br x16
+.global dyn_pty_resume
+dyn_pty_resume:
+    adrp x16, __imp_ResumeThread
+    ldr x16, [x16, :lo12:__imp_ResumeThread]
+    br x16
+.global dyn_pty_ticks
+dyn_pty_ticks:
+    adrp x16, __imp_GetTickCount64
+    ldr x16, [x16, :lo12:__imp_GetTickCount64]
+    br x16
+.global dyn_pty_sleep
+dyn_pty_sleep:
+    adrp x16, __imp_Sleep
+    ldr x16, [x16, :lo12:__imp_Sleep]
+    br x16
+.global dyn_pty_library
+dyn_pty_library:
+    adrp x16, __imp_LoadLibraryA
+    ldr x16, [x16, :lo12:__imp_LoadLibraryA]
+    br x16
+.global dyn_pty_symbol
+dyn_pty_symbol:
+    adrp x16, __imp_GetProcAddress
+    ldr x16, [x16, :lo12:__imp_GetProcAddress]
+    br x16
 .global CreateThread
 CreateThread:
     adrp x16, __imp_CreateThread
@@ -642,6 +850,72 @@ WriteFile:
     br x16
 .global dyn_win_arena_last_error
 .set dyn_win_arena_last_error, dyn_win_last_error
+// std/fs: permissions, links, locks, block cloning and environment.
+.global dyn_fs_information_ex
+dyn_fs_information_ex:
+    adrp x16, __imp_GetFileInformationByHandleEx
+    ldr x16, [x16, :lo12:__imp_GetFileInformationByHandleEx]
+    br x16
+.global dyn_fs_set_information
+dyn_fs_set_information:
+    adrp x16, __imp_SetFileInformationByHandle
+    ldr x16, [x16, :lo12:__imp_SetFileInformationByHandle]
+    br x16
+.global dyn_fs_lock
+dyn_fs_lock:
+    adrp x16, __imp_LockFileEx
+    ldr x16, [x16, :lo12:__imp_LockFileEx]
+    br x16
+.global dyn_fs_unlock
+dyn_fs_unlock:
+    adrp x16, __imp_UnlockFileEx
+    ldr x16, [x16, :lo12:__imp_UnlockFileEx]
+    br x16
+.global dyn_fs_symbolic_link
+dyn_fs_symbolic_link:
+    adrp x16, __imp_CreateSymbolicLinkW
+    ldr x16, [x16, :lo12:__imp_CreateSymbolicLinkW]
+    br x16
+.global dyn_fs_control
+dyn_fs_control:
+    adrp x16, __imp_DeviceIoControl
+    ldr x16, [x16, :lo12:__imp_DeviceIoControl]
+    br x16
+.global dyn_fs_volume
+dyn_fs_volume:
+    adrp x16, __imp_GetVolumeInformationByHandleW
+    ldr x16, [x16, :lo12:__imp_GetVolumeInformationByHandleW]
+    br x16
+.global dyn_fs_reopen
+dyn_fs_reopen:
+    adrp x16, __imp_ReOpenFile
+    ldr x16, [x16, :lo12:__imp_ReOpenFile]
+    br x16
+.global dyn_fs_local_free
+dyn_fs_local_free:
+    adrp x16, __imp_LocalFree
+    ldr x16, [x16, :lo12:__imp_LocalFree]
+    br x16
+.global dyn_fs_environment
+dyn_fs_environment:
+    adrp x16, __imp_GetEnvironmentVariableW
+    ldr x16, [x16, :lo12:__imp_GetEnvironmentVariableW]
+    br x16
+.global dyn_fs_set_error
+dyn_fs_set_error:
+    adrp x16, __imp_SetLastError
+    ldr x16, [x16, :lo12:__imp_SetLastError]
+    br x16
+.global dyn_fs_get_security
+dyn_fs_get_security:
+    adrp x16, __imp_GetSecurityInfo
+    ldr x16, [x16, :lo12:__imp_GetSecurityInfo]
+    br x16
+.global dyn_fs_set_security
+dyn_fs_set_security:
+    adrp x16, __imp_SetSecurityInfo
+    ldr x16, [x16, :lo12:__imp_SetSecurityInfo]
+    br x16
 .section .idata$2,"dw"
 .p2align 2
     .rva kernel_lookup
@@ -664,6 +938,12 @@ WriteFile:
     .long 0
     .rva crypto_name
     .rva crypto_iat
+    // std/fs: access control lists.
+    .rva advapi_lookup
+    .long 0
+    .long 0
+    .rva advapi_name
+    .rva advapi_iat
     // GNU PE linkers append the terminating descriptor. Supplying it here
     // would hide descriptors contributed by user import libraries.
 
@@ -715,6 +995,13 @@ kernel_lookup:
     thunk FreeLibrary
     thunk GetLastError
     thunk CreateThread
+    // std/process/pty
+    thunk SetNamedPipeHandleState
+    thunk CreateJobObjectW
+    thunk SetInformationJobObject
+    thunk AssignProcessToJobObject
+    thunk TerminateJobObject
+    thunk ResumeThread
     thunk CompareStringOrdinal
     thunk CreateProcessW
     thunk GetExitCodeProcess
@@ -738,6 +1025,22 @@ kernel_lookup:
     thunk GetOverlappedResult
     thunk CancelIoEx
     thunk SetLastError
+    // std/terminal: console code pages.
+    thunk GetConsoleCP
+    thunk GetConsoleOutputCP
+    thunk SetConsoleCP
+    thunk SetConsoleOutputCP
+    // std/process: process trees and nonblocking pipes.
+    // std/fs
+    thunk GetFileInformationByHandleEx
+    thunk SetFileInformationByHandle
+    thunk LockFileEx
+    thunk UnlockFileEx
+    thunk CreateSymbolicLinkW
+    thunk DeviceIoControl
+    thunk GetVolumeInformationByHandleW
+    thunk ReOpenFile
+    thunk LocalFree
     .quad 0
 winsock_lookup:
     thunk WSAStartup
@@ -769,6 +1072,12 @@ sync_lookup:
 
 crypto_lookup:
     thunk BCryptGenRandom
+    .quad 0
+
+// std/fs
+advapi_lookup:
+    thunk GetSecurityInfo
+    thunk SetSecurityInfo
     .quad 0
 
 .section .idata$5,"dw"
@@ -819,6 +1128,13 @@ iat GetProcAddress
 iat FreeLibrary
 iat GetLastError
 iat CreateThread
+// std/process/pty
+iat SetNamedPipeHandleState
+iat CreateJobObjectW
+iat SetInformationJobObject
+iat AssignProcessToJobObject
+iat TerminateJobObject
+iat ResumeThread
 iat CompareStringOrdinal
 iat CreateProcessW
 iat GetExitCodeProcess
@@ -846,6 +1162,22 @@ iat ReadDirectoryChangesW
 iat GetOverlappedResult
 iat CancelIoEx
 iat SetLastError
+// std/terminal: console code pages.
+iat GetConsoleCP
+iat GetConsoleOutputCP
+iat SetConsoleCP
+iat SetConsoleOutputCP
+// std/process: process trees and nonblocking pipes.
+// std/fs
+iat GetFileInformationByHandleEx
+iat SetFileInformationByHandle
+iat LockFileEx
+iat UnlockFileEx
+iat CreateSymbolicLinkW
+iat DeviceIoControl
+iat GetVolumeInformationByHandleW
+iat ReOpenFile
+iat LocalFree
     .quad 0
 winsock_iat:
 iat WSAStartup
@@ -877,6 +1209,12 @@ iat WakeByAddressAll
 
 crypto_iat:
 iat BCryptGenRandom
+    .quad 0
+
+// std/fs
+advapi_iat:
+iat GetSecurityInfo
+iat SetSecurityInfo
     .quad 0
 
 .section .idata$6,"dw"
@@ -924,6 +1262,13 @@ hint GetProcAddress
 hint FreeLibrary
 hint GetLastError
 hint CreateThread
+// std/process/pty
+hint SetNamedPipeHandleState
+hint CreateJobObjectW
+hint SetInformationJobObject
+hint AssignProcessToJobObject
+hint TerminateJobObject
+hint ResumeThread
 hint CompareStringOrdinal
 hint CreateProcessW
 hint GetExitCodeProcess
@@ -947,6 +1292,22 @@ hint ReadDirectoryChangesW
 hint GetOverlappedResult
 hint CancelIoEx
 hint SetLastError
+// std/terminal: console code pages.
+hint GetConsoleCP
+hint GetConsoleOutputCP
+hint SetConsoleCP
+hint SetConsoleOutputCP
+// std/process: process trees and nonblocking pipes.
+// std/fs
+hint GetFileInformationByHandleEx
+hint SetFileInformationByHandle
+hint LockFileEx
+hint UnlockFileEx
+hint CreateSymbolicLinkW
+hint DeviceIoControl
+hint GetVolumeInformationByHandleW
+hint ReOpenFile
+hint LocalFree
 hint WSAStartup
 hint socket
 hint closesocket
@@ -972,6 +1333,10 @@ hint WakeByAddressAll
 sync_name: .asciz "api-ms-win-core-synch-l1-2-0.dll"
 hint BCryptGenRandom
 crypto_name: .asciz "bcrypt.dll"
+// std/fs
+hint GetSecurityInfo
+hint SetSecurityInfo
+advapi_name: .asciz "ADVAPI32.dll"
 kernel_name: .asciz "KERNEL32.dll"
 winsock_name: .asciz "WS2_32.dll"
 

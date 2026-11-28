@@ -87,6 +87,9 @@ between the program image and the stack (see [bare metal](bare-metal.md)).
 | `std/fmt` | Formatting into a bounded caller buffer, including shortest round-trip floats |
 | `std/unicode/utf8`, `utf16`, `text` | Strict UTF-8 and UTF-16, case folding, normalization, and grapheme, word and line segmentation |
 | `std/text/scanner` | Line and field scanner with positions |
+| `std/text/position` | Line/column positions in bytes, UTF-16 units or code points and the byte offsets they name, with LSP line breaks |
+| `std/text/fuzzy` | Allocation-free fuzzy scoring with match positions, word-prefix and case-insensitive substring matching, for pickers and palettes |
+| `std/text/diff` | Exact line diffs as insert, delete and change hunks: Myers within a caller's edit bound, memory from arenas |
 | `std/text/regex` | Thompson-NFA regular expressions compiled into an arena; reusable workspace |
 | `std/html`, `std/text/template`, `std/html/template` | HTML text escaping into bounded buffers; text templates, and HTML templates that escape text and quoted attributes |
 | `std/container/list` | Intrusive stacks, queues, doubly linked lists, trees and free lists |
@@ -106,6 +109,7 @@ between the program image and the stack (see [bare metal](bare-metal.md)).
 | Package | Purpose |
 | --- | --- |
 | `std/encoding/json` | Validation, arena-backed mutable DOM parsing, queries and writing; a Writer into caller storage |
+| `std/encoding/jsonrpc` | Content-Length message framing (LSP and DAP base protocol): headers, and an incremental decoder with header and body limits |
 | `std/encoding/json/read` | [Experimental compact read-only DOM](json-read.md), with arena-owned values and text |
 | `std/encoding/csv` | RFC 4180 field scanner, stream scanner and writer |
 | `std/encoding/ini` | INI scanner and one-pass `parse` into an arena table |
@@ -126,19 +130,21 @@ between the program image and the stack (see [bare metal](bare-metal.md)).
 | --- | --- |
 | `std/io` | `Reader`/`Writer` callbacks, standard streams and `print`/`println` |
 | `std/bufio` | Buffered readers and writers over caller storage |
-| `std/fs` | Files, directories, metadata, atomic writes, locks and read-only mappings |
+| `std/fs` | Files, directories, metadata, links, permissions, private files, atomic writes, clones, locks and read-only mappings |
 | `std/fs/capability` | File access limited to a directory descriptor |
 | `std/fs/watch` | File watching: inotify, kqueue or ReadDirectoryChangesW |
 | `std/path` | Lexical slash-separated paths |
-| `std/process` | Spawn, capture, pipes, environment and arguments |
+| `std/process` | Spawn, capture, process trees, nonblocking pipes, PATH lookup, shell and Windows quoting, environment and arguments |
+| `std/process/pty` | Pseudo-terminals: a child on a terminal this program reads, types into and resizes; POSIX ptys and Windows ConPTY |
 | `std/process/signal` | Interrupt, terminate and hangup signals as queued events, read with `poll` or `wait` |
+| `std/process/signal` | Interrupt, terminate, hangup, window-change, suspend and continue signals as queued events, read with `poll` or `wait`; `stop_job` for job control |
 | `std/thread`, `std/sync` | Arena-backed thread handles, scopes that join every thread; portable synchronization and bounded channels |
 | `std/thread/pool` | Fixed worker pool over a bounded arena queue with typed `submit`, and wait groups |
 | `std/fiber` | Linux stackful fibers: `resume`/`yield_now`, guarded stacks, isolated fibers whose panics stop only the fiber |
 | `std/cache` | Per-worker copies of shared data: writers call `changed`, each worker rebuilds when `stale` says so |
 | `std/time` | Monotonic and realtime clocks, durations, deadlines, calendar dates and UTC ISO-8601 |
 | `std/time/zone` | Time zones from TZif files, POSIX rules or the Windows zone; local time, strftime-style formatting and RFC 3339 |
-| `std/terminal` | Raw mode, terminal size and key decoding |
+| `std/terminal` | Raw mode, terminal size, key decoding, virtual-terminal sequences on Windows, and full-screen sessions: alternate screen, bracketed paste, mouse and kitty keyboard modes, suspend to the shell and restore on a crash |
 | `std/dynlib` | Dynamic library loading (on Linux, link libc explicitly) |
 | `std/os/linux`, `macos`, `windows`, `wasi` | Platform services; prefer the portable packages above |
 | `std/parse` | Shared failures for parsers, decoders and stream decoders |
@@ -188,7 +194,9 @@ between the program image and the stack (see [bare metal](bare-metal.md)).
 
 Linux x86-64 has the broadest coverage, with Linux AArch64, macOS AArch64 and
 Windows x86-64 close behind. Threads, sync, processes and file watching work on
-all four, and so do `std/terminal` and `std/dynlib`. On Windows,
+all four, and so do `std/terminal` and `std/dynlib`. `std/fs` has one interface on
+Linux, macOS and Windows; where a system cannot do the same thing, the function's
+comment says what it does there. On Windows,
 `std/terminal` uses console modes and `std/dynlib` reports `GetLastError`
 codes instead of loader messages. On WASI, `std/terminal` reports
 `Unsupported` and only `key_decode` is useful. On wasm32, see

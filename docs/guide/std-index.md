@@ -805,6 +805,17 @@ Layer: core
 
 - `fn text_prefix(source: []const u8) usize`: How many bytes start source before the first one a JSON string scanner must look at: a byte below 32, at or above 128, '"' or '\\'.
 
+## std/encoding/jsonrpc
+
+Layer: core
+
+- `const HeaderLimit: usize = 40`: The longest header that header makes: "Content-Length: ", 20 digits and "\r\n\r\n".
+- `struct Header { bytes: [40]u8, length: usize }`: A message header, in bytes[..length].
+- `fn header(body_length: usize) Header`: The header for a body of body_length bytes: "Content-Length: N\r\n\r\n".
+- `struct Decoder { // The most bytes a header may take, its final empty line included. max_header: usize = 8192, // The largest Content-Length accepted. max_body: usize = 8388608, // Bytes already searched for the end of the header. scanned: usize, // Header and body sizes once the header has been read, else 0. header_length: usize, body_length: usize, failed: bool, failure: parse.ParseErr, }`: Finds frames at the start of a buffer of received bytes.
+- `struct Frame { ready: bool, body: []const u8, length: usize, needed: usize }`: The result of decode.
+- `fn decode(decoder: *Decoder, buffered: []const u8) Frame!parse.ParseErr`: The frame at the start of buffered, the bytes received and not yet consumed.
+
 ## std/encoding/mdesk
 
 Layer: heap
@@ -1043,7 +1054,7 @@ Layer: heap
 Layer: std
 
 - `struct File { descriptor: isize, active: bool, ended: bool, path: []const u8 }`: Files and directories.
-- `struct Metadata { size: u64, inode: u64, device: u64, mode: u16 }`: Size, inode, device and the POSIX mode (type and permission bits).
+- `struct Metadata { size: u64, inode: u64, device: u64, mode: u16, modified_seconds: i64, modified_nanoseconds: u32, changed_seconds: i64, changed_nanoseconds: u32, }`: Size, inode, device and the POSIX mode (type and permission bits), then when the contents were last modified and when the file last changed ...
 - `enum EntryKind { Unknown, File, Directory, Symlink, Other }`: What a directory entry names.
 - `struct DirectoryEntry { name: []const u8, kind: EntryKind }`: One directory entry.
 - `fn is_open(file: *const File) bool`
@@ -1068,35 +1079,47 @@ Layer: std
 - `fn file_metadata(file: *const File) Metadata!io.IoErr`: Metadata for an open file.
 - `fn is_directory(info: Metadata) bool`: Whether info describes a directory or a regular file.
 - `fn is_file(info: Metadata) bool`
+- `fn is_symbolic_link(info: Metadata) bool`: Whether info, from link_metadata, describes a symbolic link (on Windows, a symbolic link or a junction).
+- `fn same_file(a: Metadata, b: Metadata) bool`: Whether a and b describe the same file: the same device and inode.
+- `fn unchanged(before: Metadata, after: Metadata) bool`: Whether after describes the file before did, not replaced and not written or changed since: the same file, size, modification and change ...
 - `fn remove(path: []const u8) !io.IoErr`: Removes the file at path.
 - `fn rename(old_path: []const u8, new_path: []const u8) !io.IoErr`: Renames old_path to new_path, replacing new_path when it exists.
 - `fn make_directory(path: []const u8) !io.IoErr`: Creates the directory path, readable by everyone and writable by its owner (0o755).
 - `fn make_directory_mode(path: []const u8, mode: usize) !io.IoErr`: Like make_directory, with the permission bits mode (ignored on Windows), such as 0o700 for a directory only its owner may enter.
 - `fn make_directory_exclusive(path: []const u8, mode: usize) !io.IoErr`: Creates the directory path with mode;
 - `fn remove_directory(path: []const u8) !io.IoErr`: Removes the empty directory path.
+- `struct Directory { path: []const u8, ended: bool, storage: []u8, state: DirectoryState }`: An open directory, from open_directory.
 - `fn open_directory(path: []const u8, storage: []u8) Directory!io.IoErr`: Opens the directory path for listing with directory_next.
 - `fn directory_next(directory: *Directory) DirectoryEntry!io.IoErr`: The next entry, without "." and "..".
+- `fn close_directory(directory: *Directory)`: Closes the directory.
 - `fn list(arena: *memory.Arena, path: []const u8) []DirectoryEntry!io.IoErr`: The names in directory path, copied into arena, without "." and "..".
-- `enum AppDirectory { Home, Config, Cache, Data, Runtime }`
-- `struct Directory { file: File, storage: []u8, offset: usize, used: usize, path: []const u8, // Set by directory_next when it returns no entry. ended: bool, }`
-- `fn close_directory(directory: *Directory)`
+- `fn link_metadata(path: []const u8) Metadata!io.IoErr`: Metadata for path itself: a symbolic link is described as a link (see is_symbolic_link), not as what it points at.
+- `fn open_no_follow(path: []const u8) File!io.IoErr`: Opens path for reading, like open, but fails with InvalidInput when path itself is a symbolic link (on Windows, a symbolic link or a ...
+- `fn create_private(path: []const u8) File!io.IoErr`: Creates path for writing, readable and writable by its owner only, and fails with AlreadyExists when path exists.
+- `fn create_private_executable(path: []const u8) File!io.IoErr`: Like create_private, and the owner may execute the file: mode 0o700, or the Windows owner also holds FILE_EXECUTE.
+- `fn rename_exclusive(old_path: []const u8, new_path: []const u8) !io.IoErr`: Renames old_path to new_path like rename, but fails with AlreadyExists instead of replacing anything at new_path.
+- `fn set_permissions(file: *File, mode: usize) !io.IoErr`: Sets the permission bits of an open file to mode, at most 0o7777 (more fails with InvalidInput).
+- `fn preserve_permissions(file: *File, source_path: []const u8) !io.IoErr`: Gives file the permissions of the file at source_path (following links), as an atomic save does for the temporary that replaces source_path.
+- `fn is_executable(path: []const u8) bool`: Whether path (following links) is a regular file this process may run.
+- `fn copy_range(source: *File, offset: u64, destination: *File, length: u64, scratch: []u8) u64!io.IoErr`: Copies length bytes of source, starting at offset, to destination at its position, and advances destination's position past them.
+- `fn clone_file(source: *File, path: []const u8, scratch: []u8) File!io.IoErr`: Creates path holding a copy of source's contents and returns it open for writing, positioned at its start.
 - `fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) usize!io.IoErr`: Copies source to destination, replacing it, and returns the bytes copied.
 - `fn symbolic_link(target: []const u8, link: []const u8) !io.IoErr`: Creates the symbolic link link pointing at target.
+- `fn read_link(arena: *memory.Arena, path: []const u8) []u8!io.IoErr`: The target of the symbolic link at path, in arena.
 - `fn sync_directory(path: []const u8) !io.IoErr`: Makes a directory's entries durable, such as a rename into it.
+- `fn lock(file: *File, operation: usize) !io.IoErr`: Locks file with operation: LOCK_SH (1) shared or LOCK_EX (2) exclusive, either with LOCK_NB (4) to fail with WouldBlock instead of waiting;
+- `fn truncate(path: []const u8, length: usize) !io.IoErr`: Sets the length of the file at path.
 - `struct AtomicFile { file: File, destination: []const u8, temporary: []const u8, active: bool, }`: A file written under a temporary name and renamed onto its destination when committed, so the destination is never partly written.
 - `fn atomic_begin(destination: []const u8, temporary: []const u8) AtomicFile!io.IoErr`: Both paths are borrowed until commit or abort.
 - `fn atomic_commit(transaction: *AtomicFile) !io.IoErr`: Syncs and closes the temporary file and renames it onto the destination.
-- `fn atomic_commit_durable(transaction: *AtomicFile, parent_directory: []const u8) !io.IoErr`: Also syncs the parent directory, making the committed rename durable across power loss on Linux file systems that honor fsync for ...
+- `fn atomic_commit_durable(transaction: *AtomicFile, parent_directory: []const u8) !io.IoErr`: Also syncs the parent directory, making the committed rename durable across power loss on file systems that honor fsync for directories ...
 - `fn atomic_abort(transaction: *AtomicFile)`: Closes and removes the temporary file.
 - `fn write_atomic(destination: []const u8, temporary: []const u8, source: []const u8) !io.IoErr`: Writes source to destination through the sibling temporary file and renames it into place, so destination is either the old file or all of ...
-- `fn lock(file: *File, operation: usize) !io.IoErr`: Locks file with flock(2): operation is LOCK_SH (1), LOCK_EX (2), or either with LOCK_NB (4);
-- `fn truncate(path: []const u8, length: usize) !io.IoErr`: Sets the length of the file at path.
-- `fn read_link(arena: *mem.Arena, path: []const u8) []u8!io.IoErr`: The target of the symbolic link at path, in arena.
-- `fn app_directory(arena: *mem.Arena, kind: AppDirectory) []u8!io.IoErr`: The per-user directory of kind, in arena.
-- `struct Directory { file: File, storage: []u8, offset: usize, used: usize, base: i64, path: []const u8, ended: bool }`: Directory listing through getdirentries64, with the Linux API shape.
-- `struct RemovalFrame { directory: Directory, name: []const u8, parent: isize }`: Scratch frame storage for iterative, descriptor-relative tree removal.
+- `enum AppDirectory { Home, Config, Cache, Data, Runtime }`: A per-user directory.
+- `fn app_directory(arena: *memory.Arena, kind: AppDirectory) []u8!io.IoErr`: The per-user directory of kind, in arena.
+- `const RemovalScratch: usize = 1048`: Scratch bytes per frame that remove_tree accepts on every platform: enough for one directory read of the longest name.
+- `struct RemovalFrame { directory: Directory, name: []const u8, parent: isize }`: One directory remove_tree is inside: name borrows the parent frame's directory storage, and parent is the parent's descriptor (on Windows ...
 - `fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) !io.IoErr`: Removes path and everything under it, without following symbolic links.
-- `struct Directory { handle: rawptr, storage: []u8, data: [592]u8, pending: bool, active: bool, path: []const u8, ended: bool }`: Directory listing through FindFirstFileW, with the Linux API shape.
 
 ## std/fs/capability
 
@@ -2047,6 +2070,9 @@ Layer: std
 
 Layer: heap
 
+- `enum PathStyle { Posix, Windows }`: How a file path is written: Posix ("/home/a.txt") or Windows ("C:\a.txt", "\\server\share\a.txt").
+- `fn file_uri_from_path(arena: *mem.Arena, path: []const u8, style: PathStyle) []u8!parse.ParseErr`: The file URI (RFC 8089) of an absolute path, in arena: "/tmp/a b" is "file:///tmp/a%20b";
+- `fn path_from_file_uri(arena: *mem.Arena, uri: []const u8, style: PathStyle) []u8!parse.ParseErr`: The path a file URI names, in arena: the inverse of file_uri_from_path.
 - `struct URL { scheme: []const u8, authority: []const u8, path: []const u8, query: []const u8, fragment: []const u8, }`
 - `fn parse(text: []const u8) URL!parse.ParseErr`: Splits text into its parts (RFC 3986), borrowing text.
 - `fn percent_encode(arena: *mem.Arena, source: []const u8) []u8`: One component percent-encoded, slashes included, in arena.
@@ -2109,7 +2135,7 @@ Layer: std
 - `fn yield_thread()`
 - `struct Pipe { input: isize, output: isize }`
 - `struct Waited { process: isize, wait_status: i32 }`: wait_status is the raw status;
-- `struct SpawnOptions { input: isize, output: isize, error: isize, directory: []const u8 }`
+- `struct SpawnOptions { input: isize, output: isize, error: isize, directory: []const u8, group: bool }`: group makes the child the leader of a new process group (setpgid(0, 0) before exec), so that send_signal(-child, signal) reaches its ...
 - `fn pipe() Pipe!io.IoErr`
 - `fn close_descriptor(descriptor: isize) !io.IoErr`: Closes descriptor.
 - `fn duplicate_to(descriptor: isize, target: isize) isize!io.IoErr`
@@ -2136,6 +2162,7 @@ Layer: std
 - `const Read: u64 = 0`: Linux system call numbers for #syscall.
 - `const Write: u64 = 1`
 - `const Close: u64 = 3`
+- `const Fstat: u64 = 5`
 - `const Poll: u64 = 7`
 - `const Lseek: u64 = 8`
 - `const Mmap: u64 = 9`
@@ -2143,62 +2170,133 @@ Layer: std
 - `const Munmap: u64 = 11`
 - `const RtSigaction: u64 = 13`
 - `const RtSigprocmask: u64 = 14`
+- `const RtSigreturn: u64 = 15`
 - `const Ioctl: u64 = 16`
+- `const Pread64: u64 = 17`
+- `const Pwrite64: u64 = 18`
+- `const Readv: u64 = 19`
+- `const Writev: u64 = 20`
 - `const SchedYield: u64 = 24`
+- `const Mremap: u64 = 25`
+- `const Msync: u64 = 26`
 - `const Madvise: u64 = 28`
 - `const Dup2: u64 = 33`
 - `const Nanosleep: u64 = 35`
 - `const Getpid: u64 = 39`
+- `const Sendfile: u64 = 40`
 - `const Socket: u64 = 41`
 - `const Connect: u64 = 42`
 - `const Accept: u64 = 43`
 - `const Sendto: u64 = 44`
 - `const Recvfrom: u64 = 45`
+- `const Sendmsg: u64 = 46`
+- `const Recvmsg: u64 = 47`
 - `const Shutdown: u64 = 48`
 - `const Bind: u64 = 49`
 - `const Listen: u64 = 50`
 - `const Getsockname: u64 = 51`
 - `const Getpeername: u64 = 52`
+- `const Socketpair: u64 = 53`
 - `const Setsockopt: u64 = 54`
 - `const Getsockopt: u64 = 55`
 - `const Clone: u64 = 56`
 - `const Fork: u64 = 57`
 - `const Execve: u64 = 59`
+- `const Exit: u64 = 60`
 - `const Wait4: u64 = 61`
 - `const Kill: u64 = 62`
+- `const Uname: u64 = 63`
 - `const Fcntl: u64 = 72`
 - `const Flock: u64 = 73`
 - `const Fsync: u64 = 74`
+- `const Fdatasync: u64 = 75`
 - `const Truncate: u64 = 76`
 - `const Ftruncate: u64 = 77`
 - `const Getcwd: u64 = 79`
 - `const Chdir: u64 = 80`
+- `const Setpgid: u64 = 109`
+- `const Fchmod: u64 = 91`
+- `const Fchdir: u64 = 81`
+- `const Fchown: u64 = 93`
+- `const Umask: u64 = 95`
+- `const Getrusage: u64 = 98`
+- `const Sysinfo: u64 = 99`
+- `const Getuid: u64 = 102`
+- `const Getgid: u64 = 104`
+- `const Geteuid: u64 = 107`
+- `const Getegid: u64 = 108`
 - `const Getppid: u64 = 110`
+- `const Setsid: u64 = 112`
+- `const Getpgid: u64 = 121`
+- `const Getsid: u64 = 124`
+- `const Sigaltstack: u64 = 131`
+- `const Statfs: u64 = 137`
+- `const Fstatfs: u64 = 138`
+- `const Getpriority: u64 = 140`
+- `const Setpriority: u64 = 141`
+- `const Prctl: u64 = 157`
+- `const Sync: u64 = 162`
 - `const Gettid: u64 = 186`
 - `const Futex: u64 = 202`
+- `const SchedSetaffinity: u64 = 203`
 - `const SchedGetaffinity: u64 = 204`
 - `const Getdents64: u64 = 217`
 - `const ClockGettime: u64 = 228`
+- `const ClockGetres: u64 = 229`
+- `const ClockNanosleep: u64 = 230`
 - `const ExitGroup: u64 = 231`
 - `const EpollWait: u64 = 232`
 - `const EpollCtl: u64 = 233`
+- `const Tgkill: u64 = 234`
+- `const Waitid: u64 = 247`
 - `const InotifyAddWatch: u64 = 254`
 - `const InotifyRmWatch: u64 = 255`
 - `const Openat: u64 = 257`
 - `const Mkdirat: u64 = 258`
+- `const Fchownat: u64 = 260`
+- `const Newfstatat: u64 = 262`
 - `const Unlinkat: u64 = 263`
 - `const Renameat: u64 = 264`
+- `const Linkat: u64 = 265`
 - `const Symlinkat: u64 = 266`
 - `const Readlinkat: u64 = 267`
+- `const Faccessat: u64 = 269`
+- `const Fchmodat: u64 = 268`
+- `const Pselect6: u64 = 270`
 - `const Ppoll: u64 = 271`
+- `const SetRobustList: u64 = 273`
+- `const Utimensat: u64 = 280`
+- `const EpollPwait: u64 = 281`
+- `const TimerfdCreate: u64 = 283`
+- `const Fallocate: u64 = 285`
+- `const TimerfdSettime: u64 = 286`
 - `const Accept4: u64 = 288`
 - `const Signalfd4: u64 = 289`
+- `const Eventfd2: u64 = 290`
 - `const EpollCreate1: u64 = 291`
+- `const Dup3: u64 = 292`
 - `const Pipe2: u64 = 293`
 - `const InotifyInit1: u64 = 294`
+- `const Renameat2: u64 = 316`
+- `const Prlimit64: u64 = 302`
+- `const Syncfs: u64 = 306`
 - `const Getrandom: u64 = 318`
+- `const CopyFileRange: u64 = 326`
+- `const MemfdCreate: u64 = 319`
+- `const Preadv2: u64 = 327`
+- `const Pwritev2: u64 = 328`
 - `const Statx: u64 = 332`
+- `const PidfdSendSignal: u64 = 424`
+- `const IoUringSetup: u64 = 425`
+- `const IoUringEnter: u64 = 426`
+- `const IoUringRegister: u64 = 427`
+- `const PidfdOpen: u64 = 434`
+- `const Clone3: u64 = 435`
+- `const CloseRange: u64 = 436`
 - `const Openat2: u64 = 437`
+- `const Faccessat2: u64 = 439`
+- `const EpollPwait2: u64 = 441`
+- `const Fchmodat2: u64 = 452`
 
 ## std/os/macos
 
@@ -2222,13 +2320,19 @@ Layer: std
 - `const Write: u64 = 4`
 - `const Open: u64 = 5`
 - `const Close: u64 = 6`
+- `const Getpid: u64 = 20`
+- `const Link: u64 = 9`
+- `const Unlink: u64 = 10`
 - `const Recvmsg: u64 = 27`
 - `const Recvfrom: u64 = 29`
 - `const Accept: u64 = 30`
 - `const Getpeername: u64 = 31`
 - `const Getsockname: u64 = 32`
+- `const Access: u64 = 33`
 - `const Sigaction: u64 = 46`
+- `const Sigprocmask: u64 = 48`
 - `const Ioctl: u64 = 54`
+- `const Symlink: u64 = 57`
 - `const Readlink: u64 = 58`
 - `const Munmap: u64 = 73`
 - `const Mprotect: u64 = 74`
@@ -2240,18 +2344,29 @@ Layer: std
 - `const Setsockopt: u64 = 105`
 - `const Listen: u64 = 106`
 - `const Getsockopt: u64 = 118`
+- `const Fchmod: u64 = 124`
 - `const Rename: u64 = 128`
+- `const Flock: u64 = 131`
 - `const Sendto: u64 = 133`
 - `const Shutdown: u64 = 134`
+- `const Mkdir: u64 = 136`
+- `const Rmdir: u64 = 137`
 - `const Mmap: u64 = 197`
 - `const Lseek: u64 = 199`
+- `const Truncate: u64 = 200`
+- `const Ftruncate: u64 = 201`
 - `const Poll: u64 = 230`
 - `const Stat64: u64 = 338`
 - `const Fstat64: u64 = 339`
+- `const Lstat64: u64 = 340`
 - `const Getdirentries64: u64 = 344`
 - `const Kqueue: u64 = 362`
 - `const Kevent: u64 = 363`
 - `const ThreadSelfid: u64 = 372`
+- `const Openat: u64 = 463`
+- `const Unlinkat: u64 = 472`
+- `const RenameatxNp: u64 = 488`
+- `const Fclonefileat: u64 = 517`
 
 ## std/os/wasi
 
@@ -2331,18 +2446,29 @@ Layer: heap
 
 Layer: std
 
+- `fn shell_quote(arena: *mem.Arena, text: []const u8) []u8`: text as one POSIX shell word, in arena: wrapped in single quotes, each single quote written as '\''.
+- `fn shell_command(arena: *mem.Arena, arguments: [][]const u8) []u8`: arguments as shell words separated by spaces, in arena: the command that `sh -c` runs as exactly these arguments.
+- `fn windows_quote(arena: *mem.Arena, text: []const u8) []u8`: text as one Windows command-line argument (not the first), in arena: in double quotes, with each run of backslashes before a quote, and ...
+- `fn windows_command_line(arena: *mem.Arena, arguments: [][]const u8) []u8!io.IoErr`: The Windows command line for arguments (argv[0] first), in arena, joined with spaces: what spawn passes to CreateProcessW, and the exact ...
+- `fn windows_arguments(arena: *mem.Arena, command_line: []const u8) [][]const u8!io.IoErr`: Splits a Windows command line into arguments the way the Microsoft C runtime builds argv: spaces and tabs separate arguments outside double ...
 - `struct Redirect { handle: isize, set: bool }`: Handles are native descriptors/HANDLE values.
 - `fn redirect(handle: isize) Redirect`: Connects the child's stream to handle.
-- `struct Options { input: Redirect, output: Redirect, error: Redirect, environment: [][]const u8, directory: []const u8 }`: Zero is valid: inherit all three streams, the parent's environment and directory.
-- `struct Child { handle: isize, active: bool }`: A running child process, in the arena spawn was given;
+- `struct Options { input: Redirect, output: Redirect, error: Redirect, environment: [][]const u8, directory: []const u8, group: bool }`: Zero is valid: inherit all three streams, the parent's environment and directory.
+- `struct Child { handle: isize, active: bool, group: bool, job: isize }`: A running child process, in the arena spawn was given;
 - `struct Exit { code: u32, signal: u32, finished: bool }`: How a child ended.
 - `struct Pipe { input: isize, output: isize }`
 - `struct Captured { output: []u8, errors: []u8, exit: Exit, timed_out: bool, limit_reached: bool }`
 - `fn spawn(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) *Child!io.IoErr`: Starts path with arguments (argv[0] first).
 - `fn wait(child: *Child, nonblocking: bool) Exit!io.IoErr`: Waits for child to end;
 - `fn terminate(child: *Child) !io.IoErr`: Kills child.
+- `fn terminate_tree(child: *Child) !io.IoErr`: Kills child and every process in its tree: the process group it leads on Linux and macOS, the Job Object on Windows.
+- `fn close(child: *Child)`: Ends everything child owns, and never fails: a child spawned with Options.group has its whole tree killed (on Windows the Job Object is ...
 - `fn pipe() Pipe!io.IoErr`: A pipe: write to output, read from input.
 - `fn close_pipe(handle: isize)`
+- `struct PipeOptions { nonblocking_input: bool, nonblocking_output: bool }`: Which ends of a pipe from open_pipe never block.
+- `fn open_pipe(options: PipeOptions) Pipe!io.IoErr`: A pipe whose chosen ends do not block: write to output, read from input, and close both with close_pipe.
+- `fn read_pipe(handle: isize, destination: []u8) usize!io.IoErr`: Reads what is available from a pipe's input end into destination, waiting for data only on a blocking end.
+- `fn write_pipe(handle: isize, source: []const u8) usize!io.IoErr`: Writes as much of source as the pipe takes and returns that count, which may be less than source.len;
 - `fn environment_or(arena: *mem.Arena, name: []const u8, fallback: []const u8) []const u8`: The variable's value in arena, or fallback when it is unset or unreadable.
 - `fn environment(arena: *mem.Arena, name: []const u8) []u8!io.IoErr`: The value of environment variable name, in arena.
 - `struct CaptureOptions { timeout_milliseconds: i64, no_wait: bool, output_limit: usize, error_limit: usize }`: Zero limits are unlimited.
@@ -2350,18 +2476,37 @@ Layer: std
 - `struct Program { arena: *mem.Arena, args: [][]const u8 }`: What process.start() returns: an arena that lives for the whole program and the arguments, argv[0] first, stored in it.
 - `fn start() Program`: Call it on main's first line: `program := process.start()`.
 - `fn arguments(arena: *mem.Arena) [][]const u8!io.IoErr`: Includes argv[0].
+- `fn find_executable(arena: *mem.Arena, name: []const u8) []u8!io.IoErr`: The path of the program name would run as, looked up like `which` on PATH from the environment, in arena.
+- `fn find_executable_in(arena: *mem.Arena, name: []const u8, search: []const u8) []u8!io.IoErr`: The path of the program name, looked up in search, a list of directories in PATH syntax (':' between entries, ';' on Windows), in arena;
+
+## std/process/pty
+
+Layer: std
+
+- `struct Size { columns: u16, rows: u16, width: u16, height: u16 }`: A terminal's window: character cells, and the pixel size where the platform keeps one (Windows ignores width and height).
+- `struct Options { environment: [][]const u8, directory: []const u8, size: Size }`: Zero is valid: an empty environment, the parent's directory and an 80 by 24 window.
+- `struct Terminal { terminal: isize, input: isize, process: isize, console: isize, job: isize, open: bool, running: bool, }`: An open terminal and its child.
+- `fn spawn(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) *Terminal!io.IoErr`: Opens a terminal of configuration.size and starts path on it with arguments (argv[0] first).
+- `fn read(terminal: *Terminal, destination: []u8) usize!io.IoErr`: Reads what the child wrote so far, up to destination.len bytes, without waiting.
+- `fn write(terminal: *Terminal, source: []const u8) usize!io.IoErr`: Types source into the terminal without waiting: returns how many bytes it took, or fails with WouldBlock when it takes none now.
+- `fn readable(terminal: *Terminal, milliseconds: i32) bool!io.IoErr`: Waits up to milliseconds until read would not fail with WouldBlock, and says whether it would not.
+- `fn resize(terminal: *Terminal, size: Size) !io.IoErr`: Changes the window to size.
+- `fn wait(terminal: *Terminal, nonblocking: bool) process.Exit!io.IoErr`: Waits for the child to end, or with nonblocking returns at once with finished false while it runs.
+- `fn terminate(terminal: *Terminal) !io.IoErr`: Kills the child at once: on Linux and macOS its whole process group with SIGKILL, on Windows every process in its job.
+- `fn close(terminal: *Terminal)`: Closes the terminal, and kills and reaps a child not yet waited for, as terminate does.
 
 ## std/process/signal
 
 Layer: std
 
-- `enum Kind { None, Interrupt, Terminate, Hangup }`: Process signals as events, not handlers.
-- `struct Set { interrupt: bool, terminate: bool, hangup: bool }`: Kinds to watch.
+- `enum Kind { None, Interrupt, Terminate, Hangup, WindowChange, Suspend, Continue }`: Process signals as events, not handlers.
+- `struct Set { interrupt: bool, terminate: bool, hangup: bool, window_change: bool, suspend: bool, continue: bool, }`: Kinds to watch.
 - `struct Watch { handle: isize, set: Set, active: bool }`: An open watch.
 - `fn watch(set: Set) Watch!io.IoErr`: Fails with InvalidInput when set chooses no signal.
 - `fn poll(state: *Watch) Kind!io.IoErr`: The next pending signal without blocking;
 - `fn wait(state: *Watch) Kind!io.IoErr`: Blocks until a watched signal arrives.
 - `fn close(state: *Watch)`: Restores default signal behavior and releases the handle.
+- `fn stop_job() !io.IoErr`: Stops the process's job the way Ctrl-Z does in a cooked terminal: sends SIGTSTP with its default action to the process group, and returns ...
 
 ## std/profile
 
@@ -2655,6 +2800,13 @@ Layer: std
 - `struct Size { columns: usize, rows: usize }`
 - `fn is_attached(descriptor: isize) bool`: Descriptors 0, 1 and 2 are the standard streams on every platform.
 - `fn raw(descriptor: isize) State!io.IoErr`: Applies a small cfmakeraw equivalent: no echo, no line buffering, no signal keys, and on Windows virtual-terminal input or output.
+- `fn virtual_terminal(descriptor: isize) State!io.IoErr`: Turns on escape-sequence handling for descriptor and returns the previous settings, to pass to restore.
+- `struct Modes { // The alternate screen (mode 1049): the shell's screen and scrollback come // back at leave. alternate_screen: bool, // Hides the cursor (mode 25) until leave. hide_cursor: bool, // Bracketed paste (mode 2004): pasted text arrives between ESC [200~ and // ESC [201~. bracketed_paste: bool, // SGR mouse reports (modes 1000, 1002 and 1006): presses, releases, the // wheel and motion with a button held, as ESC [< b;x;y M or m. mouse: bool, // With mouse, motion with no button held as well (mode 1003). mouse_motion: bool, // The kitty keyboard protocol's first flag (CSI > 1 u): unambiguous escape // codes for keys such as Escape, Alt+key and Ctrl+I. Terminals without it // keep sending legacy keys. kitty_keyboard: bool, // Restore the terminal when the process dies of a panic, a fatal signal or // an unhandled exception. See crash_restore for what is guaranteed. crash_restore: bool, }`: What a session turns on at enter and off again at leave, besides raw input.
+- `struct Session { input: isize, output: isize, modes: Modes, saved_input: State, saved_output: State, active: bool, }`: A terminal taken over by enter.
+- `fn enter(session: *Session, input: isize, output: isize, modes: Modes) !io.IoErr`: Takes over a terminal for a full-screen program: raw input (as raw does), then the chosen modes on output.
+- `fn leave(session: *Session) !io.IoErr`: Gives the terminal back: writes the sequence that turns the session's modes off and resets colors and attributes, then restores the ...
+- `fn suspend(session: *Session) !io.IoErr`: Hands the terminal to the shell until the user resumes the program.
+- `fn crash_restore()`: Restores the terminal of the session that entered with modes.crash_restore: writes its leave sequence and puts back the settings enter ...
 - `enum KeyKind { Text, Escape, Up, Down, Left, Right, Home, End, Delete, Unknown, Incomplete }`
 - `struct Key { kind: KeyKind, codepoint: u32, consumed: usize }`
 - `fn key_decode(bytes: []const u8) Key`: Recognizes UTF-8 text and common CSI cursor keys.
@@ -2705,6 +2857,17 @@ Layer: std
 - `fn benchmark_elapsed(benchmark: *Benchmark) i64`: Nanoseconds since benchmark_start.
 - `fn benchmark_nanoseconds_each(benchmark: *Benchmark) i64`: Nanoseconds per iteration since benchmark_start;
 
+## std/text/diff
+
+Layer: heap
+
+- `enum HunkKind { Insert, Delete, Change }`
+- `struct Hunk { kind: HunkKind, old_start: usize, old_count: usize, new_start: usize, new_count: usize, }`: Lines old[old_start..old_start + old_count] become new[new_start..new_start + new_count], counting lines from 0.
+- `struct Diff { hunks: []Hunk, old_lines: usize, new_lines: usize, edits: usize, exact: bool, }`: hunks are in order and never overlap or touch: equal lines separate any two.
+- `fn line_count(text: []const u8) usize`: The number of lines in text.
+- `fn lines(arena: *mem.Arena, scratch: *mem.Arena, old: []const u8, new: []const u8, max_edits: usize) Diff`: The line diff from old to new, with hunks in arena.
+- `fn scratch_bytes(old: []const u8, new: []const u8, max_edits: usize) usize`: An upper bound on the scratch bytes lines needs for old, new and max_edits, for a scratch arena over a fixed buffer (add ...
+
 ## std/text/edit
 
 Layer: heap
@@ -2722,6 +2885,22 @@ Layer: heap
 - `fn invalidate(tracker: *Tracker)`: Invalidates a published identity without resetting the monotonic clock.
 - `fn apply(scratch: *mem.Arena, buffer: *Buffer, replacement: *const Replacement) !EditErr`: All validation precedes writes.
 
+## std/text/fuzzy
+
+Layer: core
+
+- `const NoMatch: i32 = -1`: What score returns when query is not a subsequence of text.
+- `const ScoreMatch: i32 = 4`: Points score adds per matched code point, and its bonuses.
+- `const BonusFirst: i32 = 24`
+- `const BonusWordStart: i32 = 12`
+- `const BonusRun: i32 = 8`
+- `const BonusCase: i32 = 1`
+- `fn word_start(text: []const u8, offset: usize) bool`: Whether a word of text starts at offset: offset 0, just after a separator (space, tab, - _ / \ .
+- `fn score(text: []const u8, query: []const u8) i32`: How well query matches text as a subsequence, or NoMatch.
+- `fn positions(text: []const u8, query: []const u8, found: []usize) i32`: score, and the byte offset in text of each matched code point of query, in order, in found.
+- `fn word_prefix_match(text: []const u8, query: []const u8) bool`: Whether every space-separated word of query is a prefix of some word of text (see word_start), ignoring ASCII case: "sw th" and "theme" ...
+- `fn substring_match(text: []const u8, query: []const u8) bool`: Whether query occurs in text as a substring, ignoring ASCII case.
+
 ## std/text/layout
 
 Layer: heap
@@ -2733,6 +2912,18 @@ Layer: heap
 - `struct Line { start: usize, end: usize, glyph_start: usize, glyph_count: usize, width: f64, y: f64 }`
 - `struct Layout { text: []const u8, glyphs: []Glyph, lines: []Line, width: f64, height: f64, line_height: i32 }`
 - `fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Options) Layout!parse.ParseErr`: Latin shaping consists of optional NFC composition, code-point advances and pair kerning.
+
+## std/text/position
+
+Layer: core
+
+- `enum Unit { Byte, Utf16, Codepoint }`: What a column counts: LSP's position encodings "utf-8", "utf-16" and "utf-32".
+- `struct Position { line: usize, column: usize }`
+- `fn position_from_offset(text: []const u8, offset: usize, unit: Unit) Position`: The position of byte offset in text.
+- `struct Cursor { text: []const u8, line: usize, start: usize }`: Resolves many positions in one forward pass when they come in ascending order;
+- `fn cursor(text: []const u8) Cursor`
+- `fn offset_from_position(text: []const u8, position: Position, unit: Unit) usize!`: The byte offset of position in text, or failure when text has no such line, or the column falls inside a code point (between the two UTF-16 ...
+- `fn cursor_offset(state: *Cursor, position: Position, unit: Unit) usize!`: offset_from_position through state, which keeps the start of the last line it found.
 
 ## std/text/regex
 
@@ -3032,3 +3223,4 @@ Layer: core
 - `struct Iterator { text: []const u8, offset: usize, // Set by the next call that finds no code point left; it returns 0. ended: bool, }`
 - `fn iterator(text: []const u8) Iterator`
 - `fn next(state: *Iterator) u32`: The next code point;
+- `fn truncate(text: []const u8, limit: usize) []const u8`: The longest prefix of text that is at most limit bytes long and does not end inside a code point: a valid multi-byte sequence that would ...

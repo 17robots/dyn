@@ -8,16 +8,24 @@ use sync "std/sync"
 // records them and signals an auto-reset event; the program reads them with
 // poll or wait. For close, logoff and shutdown, Windows ends the process
 // shortly after the handler returns, so read Terminate promptly.
+//
+// WindowChange compares the console window's size, from the screen buffer of
+// standard output, with the size last reported; wait checks it every 100
+// milliseconds while it is watched.
 extern fn console_handler "dyn_signal_console_handler"(handler: fn(u32) i32, add: i32) i32
 extern fn create_event "dyn_signal_create_event"(security: rawptr, manual: i32, initial: i32, name: *const u16) rawptr
 extern fn set_event "dyn_signal_set_event"(event: rawptr) i32
+extern fn buffer_info "dyn_signal_buffer_info"(handle: rawptr, info: *u8) i32
 
 const interrupt_bit: u32 = 1
 const terminate_bit: u32 = 2
+const window_bit: u32 = 4
 
 pending: sync.AtomicU32
 watched: sync.AtomicU32
 event_handle: sync.AtomicU64
+// Columns in the high half, rows in the low half; zero when unknown.
+window_size: u32
 
 fn last_err() io.IoErr {
   return io.windows_err(#cast(isize, native_windows.last_error_raw()))
@@ -40,6 +48,19 @@ fn console_event(event: u32) i32 {
   return 1
 }
 
+// The visible window of standard output's screen buffer, or zero.
+fn console_size() u32 {
+  info: [22]u8
+  if buffer_info(io.standard_handle(4294967285), &info[0]) == 0 { return 0 }
+  left := #cast(u32, info[10]) | #cast(u32, info[11]) << 8
+  top := #cast(u32, info[12]) | #cast(u32, info[13]) << 8
+  right := #cast(u32, info[14]) | #cast(u32, info[15]) << 8
+  bottom := #cast(u32, info[16]) | #cast(u32, info[17]) << 8
+  columns := (right - left + 1) & 65535
+  rows := (bottom - top + 1) & 65535
+  return columns << 16 | rows
+}
+
 fn platform_watch(set: Set) Watch!io.IoErr {
   bits: u32 = 0
   if set.interrupt {
@@ -48,12 +69,16 @@ fn platform_watch(set: Set) Watch!io.IoErr {
   if set.terminate {
     bits |= terminate_bit
   }
+  if set.window_change {
+    bits |= window_bit
+  }
   // Signals are already watched.
   if sync.load_u32(&watched) != 0 { fail .InvalidInput }
   event := create_event(nil, 0, 0, nil)
   if event == nil { fail last_err() }
   sync.store_u64(&event_handle, #cast(usize, event))
   sync.store_u32(&pending, 0)
+  window_size = console_size()
   sync.store_u32(&watched, bits)
   if console_handler(console_event, 1) == 0 {
     failed := last_err()
@@ -64,10 +89,21 @@ fn platform_watch(set: Set) Watch!io.IoErr {
   return Watch{ handle: #cast(isize, #cast(usize, event)), set: set, active: true }
 }
 
+fn resized() bool {
+  if (sync.load_u32(&watched) & window_bit) == 0 { return false }
+  size := console_size()
+  if size == 0 || size == window_size { return false }
+  window_size = size
+  return true
+}
+
 fn take() Kind {
   for true {
     seen := sync.load_u32(&pending)
-    if seen == 0 { return Kind.None }
+    if seen == 0 {
+      if resized() { return Kind.WindowChange }
+      return Kind.None
+    }
     bit := interrupt_bit
     if (seen & interrupt_bit) == 0 {
       bit = terminate_bit
@@ -84,8 +120,13 @@ fn platform_next(state: *Watch, block: bool) Kind!io.IoErr {
   for true {
     kind := take()
     if kind != Kind.None || !block { return kind }
-    // INFINITE; WAIT_FAILED is 0xffffffff.
-    if native_windows.wait_raw(#cast(rawptr, #cast(usize, state.handle)), 4294967295) == 4294967295 {
+    // INFINITE, or 100 ms while watching the window size; WAIT_FAILED is
+    // 0xffffffff.
+    milliseconds: u32 = 4294967295
+    if state.set.window_change {
+      milliseconds = 100
+    }
+    if native_windows.wait_raw(#cast(rawptr, #cast(usize, state.handle)), milliseconds) == 4294967295 {
       fail last_err()
     }
   }
@@ -97,4 +138,9 @@ fn platform_close(state: *Watch) bool {
   sync.store_u32(&watched, 0)
   _ = native_windows.close_handle_raw(#cast(rawptr, #cast(usize, state.handle)))
   return true
+}
+
+// Windows consoles have no job control.
+fn platform_stop() !io.IoErr {
+  fail .Unsupported
 }

@@ -1,0 +1,62 @@
+#target(family: unix)
+// Iterative, descriptor-relative tree removal for Linux and macOS. Each
+// frame's name borrows its parent frame's directory storage, so no path is
+// ever rebuilt and a renamed ancestor cannot redirect the walk.
+
+// Removes path and everything under it, without following symbolic links.
+// Requires RemovalScratch scratch bytes per frame (less on Linux and
+// Windows: see RemovalScratch); the depth is at
+// most frames.len. Depth or capacity failures may leave a partly removed
+// tree, and concurrent changes may make it fail.
+// Too little scratch fails with InvalidInput, a tree deeper than frames
+// with Capacity.
+pub fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) !io.IoErr {
+  if frames.len == 0 || scratch.len / frames.len < removal_scratch { fail .InvalidInput }
+  stride := scratch.len / frames.len
+  opened := native_open_directory_at(current_directory, path)
+  if opened < 0 {
+    // Not a directory, or a symbolic link: remove just that name.
+    if opened != -20 && opened != link_loop_error { fail native_err(opened) }
+    try check(native_unlink_at(current_directory, path, 0))
+    return
+  }
+  frames[0] = RemovalFrame{ directory: removal_directory(opened, scratch[..stride], path), name: path, parent: current_directory }
+  depth: usize = 1
+  defer {
+    for depth > 0 {
+      depth -= 1
+      close_directory(&frames[depth].directory)
+    }
+  }
+  for depth > 0 {
+    item: DirectoryEntry
+    listed := native_directory_next(&frames[depth - 1].directory, &item)
+    try check(listed)
+    if item.name.len == 0 {
+      frame := &frames[depth - 1]
+      try check(native_unlink_at(frame.parent, frame.name, remove_directory_flag))
+      close_directory(&frame.directory)
+      depth -= 1
+      continue
+    }
+    parent := directory_handle(&frames[depth - 1].directory)
+    // Try unlink first; type bytes may be DT_UNKNOWN. Unlinking a directory
+    // fails with EISDIR on Linux and EPERM on macOS: then descend.
+    removed_file := native_unlink_at(parent, item.name, 0)
+    if removed_file == 0 || removed_file == -2 { continue }
+    if removed_file != -21 && removed_file != -1 { fail native_err(removed_file) }
+    if depth == frames.len { fail .Capacity }
+    descended := native_open_directory_at(parent, item.name)
+    if descended < 0 {
+      // Not a directory after all: the unlink failure stands.
+      if descended == -20 || descended == link_loop_error { fail native_err(removed_file) }
+      fail native_err(descended)
+    }
+    frames[depth] = RemovalFrame{ directory: removal_directory(descended, scratch[depth * stride..(depth + 1) * stride], item.name), name: item.name, parent: parent }
+    depth += 1
+  }
+}
+
+fn removal_directory(descriptor: isize, storage: []u8, name: []const u8) Directory {
+  return Directory{ storage: storage, path: name, state: directory_state_at(descriptor) }
+}

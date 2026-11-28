@@ -1,0 +1,419 @@
+#target(kernel: windows)
+use io "std/io"
+use utf8 "std/unicode/utf8"
+use utf16 "std/unicode/utf16"
+
+extern fn win_lock "dyn_fs_lock"(handle: rawptr, flags: u32, reserved: u32, low: u32, high: u32, overlapped: *u64) i32
+extern fn win_unlock "dyn_fs_unlock"(handle: rawptr, reserved: u32, low: u32, high: u32, overlapped: *u64) i32
+extern fn win_symbolic_link "dyn_fs_symbolic_link"(link: *const u16, target: *const u16, flags: u32) u8
+extern fn win_control "dyn_fs_control"(handle: rawptr, code: u32, input: rawptr, input_size: u32, output: rawptr, output_size: u32, returned: *u32, overlapped: rawptr) i32
+extern fn win_volume "dyn_fs_volume"(handle: rawptr, name: rawptr, name_size: u32, serial: rawptr, component: rawptr, flags: *u32, system: rawptr, system_size: u32) i32
+extern fn win_reopen "dyn_fs_reopen"(handle: rawptr, access: u32, share: u32, flags: u32) rawptr
+extern fn win_local_free "dyn_fs_local_free"(memory: rawptr) rawptr
+extern fn win_environment "dyn_fs_environment"(name: *const u16, value: *u16, size: u32) u32
+extern fn win_set_error "dyn_fs_set_error"(code: u32)
+extern fn win_get_security "dyn_fs_get_security"(handle: rawptr, kind: u32, information: u32, owner: *rawptr, group: *rawptr, dacl: *rawptr, sacl: rawptr, descriptor: *rawptr) u32
+extern fn win_set_security "dyn_fs_set_security"(handle: rawptr, kind: u32, information: u32, owner: rawptr, group: rawptr, dacl: rawptr, sacl: rawptr) u32
+
+struct SecurityAttributes { length: u32, descriptor: rawptr, inherit: i32 }
+
+// A second handle to an open file with access, leaving the File alone.
+fn reopened(file: *const File, access: u32) isize {
+  handle := #cast(isize, #cast(usize, win_reopen(pointer(file.descriptor), access, 7, 0)))
+  if !native_valid(handle) { return last_error() }
+  return handle
+}
+
+// Whether the handle's volume keeps access control lists
+// (FILE_PERSISTENT_ACLS); 1 yes, 0 no, or a negative error.
+fn persistent_acls(handle: rawptr) isize {
+  flags: u32 = 0
+  if win_volume(handle, nil, 0, nil, nil, &flags, nil, 0) == 0 { return last_error() }
+  if (flags & 8) == 0 { return 0 }
+  return 1
+}
+
+// A self-relative security descriptor whose protected DACL holds one ACE
+// for OWNER RIGHTS (S-1-3-4): read, write, delete, WRITE_DAC and
+// WRITE_OWNER, with execute for an executable. The SDDL is
+// D:P(A;;FRFWSDWDWO;;;OW), or with FX. Owner and group stay the creator's.
+fn private_descriptor(words: *[12]u32, executable: bool) {
+  mask: u32 = 2032031
+  if executable {
+    mask = 2032063
+  }
+  // Revision 1, control SE_SELF_RELATIVE | SE_DACL_PROTECTED |
+  // SE_DACL_PRESENT, no owner, group or SACL, DACL at byte 20.
+  words.* = [2416181249, 0, 0, 0, 20, 1835010, 1, 1310720, mask, 257, 50331648, 4]
+}
+
+// Creates exclusively with the private DACL in CreateFileW itself, so no
+// handle with broader access can exist, then refuses a volume that would
+// drop it.
+fn native_create_private(path: []const u8, executable: bool) isize {
+  wide := WidePath{}
+  wide_path(path, &wide)
+  if !wide.ok { return -123 }
+  descriptor: [12]u32
+  private_descriptor(&descriptor, executable)
+  security := SecurityAttributes{ length: #cast(u32, #sizeof(SecurityAttributes)), descriptor: &descriptor[0] }
+  // GENERIC_WRITE, CREATE_NEW.
+  handle := #cast(isize, #cast(usize, win_open(&wide.units[0], 1073741824, 7, &security, 1, 128, nil)))
+  if !native_valid(handle) { return last_error() }
+  kept := persistent_acls(pointer(handle))
+  if kept == 1 { return handle }
+  _ = win_close(pointer(handle))
+  _ = win_delete(&wide.units[0])
+  // ERROR_NOT_SUPPORTED.
+  if kept == 0 { return -50 }
+  return kept
+}
+
+// FILE_BASIC_INFO with only the read-only attribute changed; zero times
+// stay as they are.
+fn set_read_only(handle: rawptr, read_only: bool) isize {
+  basic: [5]u64
+  if win_information_ex(handle, 0, &basic[0], 40) == 0 { return last_error() }
+  attributes := #cast(u32, basic[4] & 4294967295) & ~#cast(u32, 128)
+  if read_only {
+    attributes |= 1
+  } else {
+    attributes &= ~#cast(u32, 1)
+  }
+  if attributes == 0 {
+    attributes = 128
+  }
+  basic = [0, 0, 0, 0, #cast(u64, attributes)]
+  return wide_result(win_set_information(handle, 0, &basic[0], 40))
+}
+
+// Only the owner write bit maps: without it the file is read-only.
+fn native_set_permissions(file: *const File, mode: usize) isize {
+  // FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES.
+  handle := reopened(file, 384)
+  if handle < 0 { return handle }
+  code := set_read_only(pointer(handle), (mode & 0o200) == 0)
+  _ = win_close(pointer(handle))
+  return code
+}
+
+// The length of a SID: 8 bytes and 4 per subauthority.
+fn same_sid(a: rawptr, b: rawptr) bool {
+  left := #cast(*const u8, a)
+  right := #cast(*const u8, b)
+  head_left := #slice(left, 8)
+  head_right := #slice(right, 8)
+  length := 8 + 4 * #cast(usize, head_left[1])
+  if head_left[1] != head_right[1] { return false }
+  first := #slice(left, length)
+  second := #slice(right, length)
+  for i in 0..length {
+    if first[i] != second[i] { return false }
+  }
+  return true
+}
+
+// Copies the source's read-only attribute and, on volumes with access
+// control lists, its DACL with the same protection. Owner-relative entries
+// keep their meaning only when owner and group match, so a mismatch is
+// ERROR_NOT_SUPPORTED. The source is opened by path, following links.
+fn native_preserve_permissions(file: *const File, source_path: []const u8) isize {
+  // READ_CONTROL | FILE_READ_ATTRIBUTES.
+  original := attribute_handle(source_path, 131200, false)
+  if original < 0 { return original }
+  defer _ = win_close(pointer(original))
+  // WRITE_DAC | READ_CONTROL | FILE_WRITE_ATTRIBUTES | FILE_READ_ATTRIBUTES.
+  replacement := reopened(file, 393600)
+  if replacement < 0 { return replacement }
+  defer _ = win_close(pointer(replacement))
+  basic: [5]u64
+  if win_information_ex(pointer(original), 0, &basic[0], 40) == 0 { return last_error() }
+  read_only := (basic[4] & 1) != 0
+  kept := persistent_acls(pointer(original))
+  if kept < 0 { return kept }
+  if kept == 1 {
+    owner: rawptr = nil
+    group: rawptr = nil
+    acl: rawptr = nil
+    descriptor: rawptr = nil
+    // SE_FILE_OBJECT; OWNER, GROUP and DACL_SECURITY_INFORMATION.
+    code := win_get_security(pointer(original), 1, 7, &owner, &group, &acl, nil, &descriptor)
+    if code != 0 { return 0 - #cast(isize, code) }
+    defer _ = win_local_free(descriptor)
+    new_owner: rawptr = nil
+    new_group: rawptr = nil
+    new_acl: rawptr = nil
+    new_descriptor: rawptr = nil
+    code = win_get_security(pointer(replacement), 1, 7, &new_owner, &new_group, &new_acl, nil, &new_descriptor)
+    if code != 0 { return 0 - #cast(isize, code) }
+    defer _ = win_local_free(new_descriptor)
+    if owner == nil || group == nil || new_owner == nil || new_group == nil || acl == nil { return -50 }
+    if !same_sid(owner, new_owner) || !same_sid(group, new_group) { return -50 }
+    // SECURITY_DESCRIPTOR control, at byte 2 of any descriptor form.
+    header := #slice(#cast(*const u8, descriptor), 4)
+    control := #cast(u32, header[2]) | #cast(u32, header[3]) << 8
+    if (control & 4) == 0 { return -50 }
+    // DACL_SECURITY_INFORMATION, with PROTECTED_DACL_SECURITY_INFORMATION
+    // or UNPROTECTED_DACL_SECURITY_INFORMATION as the source has it.
+    information: u32 = 536870916
+    if (control & 4096) != 0 {
+      information = 2147483652
+    }
+    code = win_set_security(pointer(replacement), 1, information, nil, nil, acl, nil)
+    if code != 0 { return 0 - #cast(isize, code) }
+  }
+  return set_read_only(pointer(replacement), read_only)
+}
+
+// PATHEXT, or its default, lists the extensions Windows runs.
+fn native_executable(path: []const u8, _info: Metadata) bool {
+  dot := path.len
+  for at in 0..path.len {
+    byte := path[at]
+    if byte == '.' {
+      dot = at
+    } else if byte == '/' || byte == '\\' {
+      dot = path.len
+    }
+  }
+  if dot == path.len { return false }
+  extension := path[dot..]
+  storage: [4096]u8
+  listed: []const u8 = native_environment("PATHEXT", storage[..]) catch storage[..0]
+  if listed.len == 0 {
+    listed = ".COM;.EXE;.BAT;.CMD"
+  }
+  start: usize = 0
+  for at in 0..listed.len + 1 {
+    if at == listed.len || listed[at] == ';' {
+      if same_text_folded(listed[start..at], extension) { return true }
+      start = at + 1
+    }
+  }
+  return false
+}
+// ASCII case-insensitive equality, as Windows compares extensions.
+fn same_text_folded(a: []const u8, b: []const u8) bool {
+  if a.len != b.len { return false }
+  for i in 0..a.len {
+    x := a[i]
+    y := b[i]
+    if x >= 'a' && x <= 'z' {
+      x -= 32
+    }
+    if y >= 'a' && y <= 'z' {
+      y -= 32
+    }
+    if x != y { return false }
+  }
+  return true
+}
+
+// DUPLICATE_EXTENTS_DATA for FSCTL_DUPLICATE_EXTENTS_TO_FILE.
+struct CloneRange { source: rawptr, source_offset: i64, destination_offset: i64, length: i64 }
+// ReFS block cloning of whole 64 KiB blocks (a multiple of its cluster
+// sizes) when source offset and destination position share an alignment:
+// the head before the first block goes through scratch, then the blocks are
+// cloned. Returns 0 where that cannot apply, the head alone when the clone
+// fails (other volumes), so copy_range writes the rest.
+fn native_copy_range(source: *File, offset: u64, destination: *File, length: u64, scratch: []u8) u64!io.IoErr {
+  alignment: u64 = 65536
+  current := native_seek(destination.descriptor, 0, 1)
+  if current < 0 { fail native_err(current) }
+  position := #cast(u64, current)
+  if offset % alignment != position % alignment { return 0 }
+  head := (alignment - offset % alignment) % alignment
+  if head >= length { return 0 }
+  blocks := ((length - head) / alignment) * alignment
+  if blocks == 0 { return 0 }
+  source_info := try file_metadata(source)
+  if offset + head + blocks > source_info.size { return 0 }
+  done := try copy_through(source, offset, destination, head, scratch)
+  if done < head { return done }
+  existing := try file_metadata(destination)
+  end := position + head + blocks
+  if existing.size < end {
+    try check(native_resize(destination.descriptor, end))
+  }
+  range := CloneRange{ source: pointer(source.descriptor), source_offset: #cast(i64, offset + head), destination_offset: #cast(i64, position + head), length: #cast(i64, blocks) }
+  returned: u32 = 0
+  if win_control(pointer(destination.descriptor), 623428, &range, #cast(u32, #sizeof(CloneRange)), nil, 0, &returned, nil) == 0 {
+    if existing.size < end {
+      _ = native_resize(destination.descriptor, existing.size)
+    }
+    return head
+  }
+  moved := native_seek(destination.descriptor, #cast(isize, end), 0)
+  if moved < 0 { fail native_err(moved) }
+  return head + blocks
+}
+// A new empty file: copy_range clones its blocks where ReFS can.
+fn native_clone(_source: *const File, path: []const u8, _mode: usize, cloned: *bool) isize {
+  cloned.* = false
+  wide := WidePath{}
+  wide_path(path, &wide)
+  if !wide.ok { return -123 }
+  // GENERIC_WRITE, CREATE_NEW.
+  handle := #cast(isize, #cast(usize, win_open(&wide.units[0], 1073741824, 7, nil, 1, 128, nil)))
+  if !native_valid(handle) { return last_error() }
+  return handle
+}
+
+// A directory target makes a directory link; a relative target is looked up
+// from link's directory, as the link will resolve it.
+fn native_symbolic_link(target: []const u8, link: []const u8) isize {
+  if target.len == 0 { return -123 }
+  probe: [32768]u8
+  absolute := target[0] == '/' || target[0] == '\\' || (target.len > 1 && target[1] == ':')
+  used: usize = 0
+  if !absolute {
+    for at in 0..link.len {
+      if link[at] == '/' || link[at] == '\\' {
+        used = at + 1
+      }
+    }
+  }
+  if used + target.len >= probe.len { return -206 }
+  for at in 0..used {
+    probe[at] = link[at]
+  }
+  for at in 0..target.len {
+    probe[used + at] = target[at]
+  }
+  flags: u32 = 0
+  info: Metadata
+  if native_metadata(probe[..used + target.len], &info) == 0 && is_directory(info) {
+    flags = 1
+  }
+  // Windows resolves only '\\' in a link's target.
+  for at in 0..target.len {
+    if target[at] == '/' {
+      probe[at] = '\\'
+    } else {
+      probe[at] = target[at]
+    }
+  }
+  wide_target := WidePath{}
+  wide_link := WidePath{}
+  wide_path(probe[..target.len], &wide_target)
+  wide_path(link, &wide_link)
+  if !wide_target.ok || !wide_link.ok { return -123 }
+  // SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE works in Developer Mode;
+  // older systems reject the flag itself.
+  if win_symbolic_link(&wide_link.units[0], &wide_target.units[0], flags | 2) != 0 { return 0 }
+  error := win_error()
+  if error == 87 {
+    if win_symbolic_link(&wide_link.units[0], &wide_target.units[0], flags) != 0 { return 0 }
+    error = win_error()
+  }
+  // ERROR_PRIVILEGE_NOT_HELD reads as access denied.
+  if error == 1314 { return -5 }
+  return 0 - #cast(isize, error)
+}
+
+// UTF-16 units as UTF-8 in destination: its length, or -122 when it does
+// not fit (Capacity), -123 for unpaired surrogates.
+fn utf8_from_wide(units: []const u16, destination: []u8) isize {
+  used: usize = 0
+  at: usize = 0
+  for at < units.len {
+    decoded := utf16.decode(units, at)
+    if !decoded.valid { return -123 }
+    width := utf8.encode(destination[used..], decoded.codepoint)
+    if width == 0 { return -122 }
+    used += width
+    at += decoded.width
+  }
+  return #cast(isize, used)
+}
+
+// FSCTL_GET_REPARSE_POINT on the link itself. The substitute name of a
+// symbolic link or junction, with NT's \??\ prefix written as \\?\. Not a
+// link fails with ERROR_INVALID_PARAMETER (InvalidInput), as readlink does.
+fn native_read_link(path: []const u8, destination: []u8) isize {
+  handle := attribute_handle(path, 128, true)
+  if handle < 0 { return handle }
+  // REPARSE_DATA_BUFFER, at most 16 KiB: tag, data length, reserved, then
+  // substitute offset, length, print offset, length, flags (links only),
+  // and the names.
+  data: [4096]u32
+  returned: u32 = 0
+  ok := win_control(pointer(handle), 589992, nil, 0, &data[0], 16384, &returned, nil)
+  error := win_error()
+  _ = win_close(pointer(handle))
+  if ok == 0 {
+    // ERROR_NOT_A_REPARSE_POINT.
+    if error == 4390 { return -87 }
+    return 0 - #cast(isize, error)
+  }
+  units := #slice(#cast(*u16, &data[0]), 8192)
+  names: usize = 0
+  if data[0] == 2684354572 {
+    names = 10
+  } else if data[0] == 2684354563 {
+    names = 8
+  } else {
+    return -87
+  }
+  offset := #cast(usize, units[4]) / 2
+  length := #cast(usize, units[5]) / 2
+  if returned < 16 || names + offset + length > #cast(usize, returned) / 2 || length == 0 { return -87 }
+  name := units[names + offset..names + offset + length]
+  if length >= 4 && name[0] == '\\' && name[1] == '?' && name[2] == '?' && name[3] == '\\' {
+    name[1] = '\\'
+  }
+  return utf8_from_wide(name, destination)
+}
+
+// LockFileEx over every byte: LOCKFILE_EXCLUSIVE_LOCK (2) for LOCK_EX and
+// LOCKFILE_FAIL_IMMEDIATELY (1) for LOCK_NB. A busy lock with LOCK_NB
+// (ERROR_LOCK_VIOLATION) reads as WouldBlock; unlocking an unlocked file
+// succeeds, as flock does.
+fn native_lock(handle: isize, operation: usize) isize {
+  overlapped: [4]u64
+  if (operation & ~#cast(usize, 4)) == 8 {
+    if win_unlock(pointer(handle), 0, 4294967295, 4294967295, &overlapped[0]) != 0 { return 0 }
+    error := win_error()
+    if error == 158 { return 0 }
+    return 0 - #cast(isize, error)
+  }
+  kind := operation & ~#cast(usize, 4)
+  if kind != 1 && kind != 2 { return -87 }
+  flags: u32 = 0
+  if kind == 2 {
+    flags = 2
+  }
+  if (operation & 4) != 0 {
+    flags |= 1
+  }
+  if win_lock(pointer(handle), flags, 0, 4294967295, 4294967295, &overlapped[0]) != 0 { return 0 }
+  error := win_error()
+  if error == 33 { return -997 }
+  return 0 - #cast(isize, error)
+}
+
+fn native_environment(variable: []const u8, destination: []u8) []u8!io.IoErr {
+  name := WidePath{}
+  wide_path(variable, &name)
+  if !name.ok { fail .InvalidInput }
+  value: [32768]u16
+  win_set_error(0)
+  length := win_environment(&name.units[0], &value[0], 32768)
+  if length == 0 {
+    error := win_error()
+    if error == 203 { fail .NotFound }
+    if error != 0 { fail native_err(0 - #cast(isize, error)) }
+  }
+  if length >= 32768 { fail .Capacity }
+  used := utf8_from_wide(value[..length], destination)
+  try check(used)
+  return destination[..#cast(usize, used)]
+}
+fn native_app_directory(kind: AppDirectory, destination: []u8) []u8!io.IoErr {
+  case kind {
+    .Home => { return try environment_into("USERPROFILE", destination) }
+    .Cache => { return try environment_into("LOCALAPPDATA", destination) }
+    .Runtime => { fail .NotFound }
+    _ => { return try environment_into("APPDATA", destination) }
+  }
+}

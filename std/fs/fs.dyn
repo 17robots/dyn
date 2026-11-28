@@ -9,8 +9,25 @@ use io "std/io"
 // read finds the end of the file.
 pub struct File { descriptor: isize, active: bool, ended: bool, path: []const u8 }
 
-// Size, inode, device and the POSIX mode (type and permission bits).
-pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16 }
+// Size, inode, device and the POSIX mode (type and permission bits), then
+// when the contents were last modified and when the file last changed in any
+// way (contents, permissions, links or a rename), in seconds and nanoseconds
+// since 1970 UTC. Compare two reads with unchanged to learn whether a file
+// was replaced or rewritten in between. On Windows inode is the file index,
+// device the volume serial number, and mode is made from the attributes:
+// 0o040555 for a directory, 0o100444 for a file, 0o120000 added for a link
+// read by link_metadata, and the write bits 0o222 unless the file is
+// read-only. A time the system does not report is zero.
+pub struct Metadata {
+  size: u64,
+  inode: u64,
+  device: u64,
+  mode: u16,
+  modified_seconds: i64,
+  modified_nanoseconds: u32,
+  changed_seconds: i64,
+  changed_nanoseconds: u32,
+}
 
 // What a directory entry names. Unknown when the platform did not record it
 // (some file systems leave it to a metadata read).
@@ -44,12 +61,17 @@ fn already_exists(code: isize) bool {
   }
 }
 
-fn opened(path: []const u8, mode: u8) File!io.IoErr {
-  handle := native_open(path, mode)
+// A File for handle, a native result opened from path.
+fn opened_handle(path: []const u8, handle: isize) File!io.IoErr {
   if handle < 0 { fail native_err(handle) }
   file := owned_file(handle)
   file.path = path
   return file
+}
+// native_open modes: 0 read, 1 create or empty, 2 append, 3 create
+// exclusively, 4 write, creating but never emptying (copy_file).
+fn opened(path: []const u8, mode: u8) File!io.IoErr {
+  return try opened_handle(path, native_open(path, mode))
 }
 // Opens path for reading.
 pub fn open(path: []const u8) File!io.IoErr {
@@ -281,6 +303,26 @@ pub fn is_directory(info: Metadata) bool {
 pub fn is_file(info: Metadata) bool {
   return (info.mode & 0o170000) == 0o100000
 }
+// Whether info, from link_metadata, describes a symbolic link (on Windows, a
+// symbolic link or a junction).
+pub fn is_symbolic_link(info: Metadata) bool {
+  return (info.mode & 0o170000) == 0o120000
+}
+// Whether a and b describe the same file: the same device and inode. False
+// when either has no identity (both zero).
+pub fn same_file(a: Metadata, b: Metadata) bool {
+  if a.inode == 0 && a.device == 0 { return false }
+  return a.inode == b.inode && a.device == b.device
+}
+// Whether after describes the file before did, not replaced and not written
+// or changed since: the same file, size, modification and change times. A
+// write within the file system's time resolution of the earlier read, which
+// keeps the size, can go unseen.
+pub fn unchanged(before: Metadata, after: Metadata) bool {
+  if !same_file(before, after) || before.size != after.size { return false }
+  if before.modified_seconds != after.modified_seconds || before.modified_nanoseconds != after.modified_nanoseconds { return false }
+  return before.changed_seconds == after.changed_seconds && before.changed_nanoseconds == after.changed_nanoseconds
+}
 
 // Removes the file at path.
 pub fn remove(path: []const u8) !io.IoErr {
@@ -317,6 +359,11 @@ pub fn remove_directory(path: []const u8) !io.IoErr {
   try check(native_remove_directory(path))
 }
 
+// An open directory, from open_directory. path borrows the text it was
+// opened with, storage is the caller's entry storage, and ended is set when
+// directory_next finds no more entries. state belongs to the platform.
+pub struct Directory { path: []const u8, ended: bool, storage: []u8, state: DirectoryState }
+
 // Opens the directory path for listing with directory_next. storage holds
 // entry names and must outlive the directory; 4096 bytes is plenty.
 pub fn open_directory(path: []const u8, storage: []u8) Directory!io.IoErr {
@@ -335,6 +382,10 @@ pub fn directory_next(directory: *Directory) DirectoryEntry!io.IoErr {
     return DirectoryEntry{}
   }
   return entry
+}
+// Closes the directory. Safe on one that never opened or is closed.
+pub fn close_directory(directory: *Directory) {
+  native_close_directory(directory)
 }
 // The names in directory path, copied into arena, without "." and "..".
 // Entries are in the system's order. On a failure the arena is as it was.
@@ -365,3 +416,323 @@ pub fn list(arena: *memory.Arena, path: []const u8) []DirectoryEntry!io.IoErr {
   }
   return entries[..count]
 }
+
+// Metadata for path itself: a symbolic link is described as a link (see
+// is_symbolic_link), not as what it points at. Windows counts symbolic links
+// and junctions as links.
+pub fn link_metadata(path: []const u8) Metadata!io.IoErr {
+  info: Metadata
+  try check(native_link_metadata(path, &info))
+  return info
+}
+
+// Opens path for reading, like open, but fails with InvalidInput when path
+// itself is a symbolic link (on Windows, a symbolic link or a junction).
+// Links in the directories leading to it are still followed.
+pub fn open_no_follow(path: []const u8) File!io.IoErr {
+  return try opened_handle(path, native_open_no_follow(path))
+}
+
+// Creates path for writing, readable and writable by its owner only, and
+// fails with AlreadyExists when path exists. Linux and macOS create it with
+// mode 0o600 (the umask can clear bits, never add them). Windows creates it
+// with a protected access control list granting only its owner, so no other
+// account ever holds a handle; on a volume that keeps no access control
+// lists, such as FAT, it fails with Unsupported and removes the file.
+pub fn create_private(path: []const u8) File!io.IoErr {
+  return try opened_handle(path, native_create_private(path, false))
+}
+// Like create_private, and the owner may execute the file: mode 0o700, or
+// the Windows owner also holds FILE_EXECUTE.
+pub fn create_private_executable(path: []const u8) File!io.IoErr {
+  return try opened_handle(path, native_create_private(path, true))
+}
+
+// Renames old_path to new_path like rename, but fails with AlreadyExists
+// instead of replacing anything at new_path. The check and the rename are
+// one step (renameat2 with RENAME_NOREPLACE, renamex_np with RENAME_EXCL, or
+// MoveFileExW without MOVEFILE_REPLACE_EXISTING), except on Linux where the
+// file system or the architecture lacks that renameat2 (AArch64 and RISC-V
+// until the compiler maps it): there a file is linked under new_path, then
+// unlinked from old_path, so a crash between the two leaves both names, and
+// a directory fails with Unsupported. Windows never copies across volumes.
+pub fn rename_exclusive(old_path: []const u8, new_path: []const u8) !io.IoErr {
+  try check(native_rename_exclusive(old_path, new_path))
+}
+
+// Sets the permission bits of an open file to mode, at most 0o7777 (more
+// fails with InvalidInput). Windows keeps only the owner write bit: without
+// it the file becomes read-only, with it writable; access control lists are
+// unchanged (create_private makes a file private there). Linux AArch64 and
+// RISC-V fail with Unsupported until the compiler maps fchmod.
+pub fn set_permissions(file: *File, mode: usize) !io.IoErr {
+  try usable(file)
+  if mode > 0o7777 { fail .InvalidInput }
+  try check(native_set_permissions(file, mode))
+}
+// Gives file the permissions of the file at source_path (following links),
+// as an atomic save does for the temporary that replaces source_path. Linux
+// and macOS copy the permission bits 0o777; set-user-ID, set-group-ID and
+// sticky bits are not copied. Windows copies the read-only attribute and the
+// access control list, and fails with Unsupported when the two files have
+// different owners or groups, or the list is one it cannot copy unchanged;
+// on a volume without access control lists it copies only the attribute.
+pub fn preserve_permissions(file: *File, source_path: []const u8) !io.IoErr {
+  try usable(file)
+  try check(native_preserve_permissions(file, source_path))
+}
+
+// Whether path (following links) is a regular file this process may run.
+// Linux and macOS ask the system (access with X_OK); Linux AArch64 and
+// RISC-V, until the compiler maps faccessat, accept any execute bit. Windows
+// accepts a file whose extension PATHEXT lists (.COM;.EXE;.BAT;.CMD when it
+// is unset), compared without case. Any failure is false.
+pub fn is_executable(path: []const u8) bool {
+  info := metadata(path) catch { return false }
+  if !is_file(info) { return false }
+  return native_executable(path, info)
+}
+
+// Copies length bytes of source, starting at offset, to destination at its
+// position, and advances destination's position past them. source's position
+// is unchanged. Returns the count copied: less than length only when source
+// ends first. Linux copies inside the kernel (copy_file_range), which shares
+// storage where the file system can, such as Btrfs and XFS; Windows clones
+// whole 64 KiB blocks on ReFS when both positions are equally aligned; other
+// bytes go through scratch. An empty scratch fails with InvalidInput. On a
+// failure destination may hold part of the range, at an unknown position.
+pub fn copy_range(source: *File, offset: u64, destination: *File, length: u64, scratch: []u8) u64!io.IoErr {
+  try usable(source)
+  try usable(destination)
+  if scratch.len == 0 || offset > 9223372036854775807 { fail .InvalidInput }
+  if length == 0 { return 0 }
+  done := try native_copy_range(source, offset, destination, length, scratch)
+  if done == length { return done }
+  return done + try copy_through(source, offset + done, destination, length - done, scratch)
+}
+// Copies through scratch by reading source at offset, then puts source's
+// position and ended back.
+fn copy_through(source: *File, offset: u64, destination: *File, length: u64, scratch: []u8) u64!io.IoErr {
+  if offset > 9223372036854775807 { fail .InvalidInput }
+  start := native_seek(source.descriptor, 0, 1)
+  if start < 0 { fail native_err(start) }
+  ended := source.ended
+  defer {
+    _ = native_seek(source.descriptor, start, 0)
+    source.ended = ended
+  }
+  moved := native_seek(source.descriptor, #cast(isize, offset), 0)
+  if moved < 0 { fail native_err(moved) }
+  done: u64 = 0
+  for done < length {
+    wanted := scratch.len
+    if #cast(u64, wanted) > length - done {
+      wanted = #cast(usize, length - done)
+    }
+    count := try read(source, scratch[..wanted])
+    if count == 0 { break }
+    try write(destination, scratch[..count])
+    done += #cast(u64, count)
+  }
+  return done
+}
+
+// Creates path holding a copy of source's contents and returns it open for
+// writing, positioned at its start. Where the file system can, the copy
+// shares source's storage until either is written (FICLONE on Btrfs, XFS and
+// bcachefs, fclonefileat on APFS, block cloning on ReFS), so it is quick and
+// takes no space; otherwise copy_range copies it through scratch. The new
+// file has source's permission bits plus owner read and write (the umask
+// can clear bits where it is created rather than cloned), and on Windows
+// the access control list the directory gives new files. Fails with
+// AlreadyExists when path exists; after any other failure path is removed.
+// source's position is unchanged. An empty scratch fails with InvalidInput.
+pub fn clone_file(source: *File, path: []const u8, scratch: []u8) File!io.IoErr {
+  try usable(source)
+  if scratch.len == 0 { fail .InvalidInput }
+  info := try file_metadata(source)
+  if !is_file(info) { fail .InvalidInput }
+  mode := (#cast(usize, info.mode) & 0o777) | 0o600
+  cloned := false
+  handle := native_clone(source, path, mode, &cloned)
+  file := try opened_handle(path, handle)
+  errdefer {
+    close(&file)
+    _ = native_remove(path)
+  }
+  if !cloned {
+    _ = try copy_range(source, 0, &file, #max(u64), scratch)
+    _ = try seek(&file, 0, 0)
+  }
+  return file
+}
+
+// Copies source to destination, replacing it, and returns the bytes copied.
+// scratch is the copy buffer. A failed close is not reported: sync the
+// destination when it must be durable. An empty scratch, the same file on
+// both sides, or something other than regular files fail with InvalidInput.
+pub fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) usize!io.IoErr {
+  if scratch.len == 0 { fail .InvalidInput }
+  input := try open(source)
+  defer close(&input)
+  output := try opened(destination, 4)
+  defer close(&output)
+  source_info := try file_metadata(&input)
+  destination_info := try file_metadata(&output)
+  if source_info.device == destination_info.device && source_info.inode == destination_info.inode { fail .InvalidInput }
+  if !is_file(source_info) || !is_file(destination_info) { fail .InvalidInput }
+  try check(native_resize(output.descriptor, 0))
+  copied: usize = 0
+  for {
+    count := try read(&input, scratch)
+    if count == 0 { break }
+    try write(&output, scratch[..count])
+    copied += count
+  }
+  return copied
+}
+
+// Creates the symbolic link link pointing at target. On Windows a link to
+// a directory (target resolved from link's directory when relative) is a
+// directory link, '/' in target is written as '\\', and creating one needs
+// Developer Mode or the symbolic link privilege; without them it fails with
+// PermissionDenied.
+pub fn symbolic_link(target: []const u8, link: []const u8) !io.IoErr {
+  try check(native_symbolic_link(target, link))
+}
+
+// The target of the symbolic link at path, in arena. On Windows a junction's
+// target reads as a link's does, as an extended path (\\?\C:\...).
+pub fn read_link(arena: *memory.Arena, path: []const u8) []u8!io.IoErr {
+  mark := memory.arena_mark(arena)
+  errdefer memory.arena_rewind(arena, mark)
+  destination := memory.push_bytes(arena, 4096)
+  count := native_read_link(path, destination)
+  try check(count)
+  memory.arena_rewind(arena, mark + #cast(usize, count))
+  return destination[..#cast(usize, count)]
+}
+
+// Makes a directory's entries durable, such as a rename into it. Windows
+// has no such call and journals renames itself: there it only checks that
+// path is a directory (NotFound otherwise).
+pub fn sync_directory(path: []const u8) !io.IoErr {
+  try check(native_sync_directory(path))
+}
+
+// Locks file with operation: LOCK_SH (1) shared or LOCK_EX (2) exclusive,
+// either with LOCK_NB (4) to fail with WouldBlock instead of waiting;
+// LOCK_UN (8) unlocks. Linux and macOS use advisory flock(2) locks. Windows
+// locks the whole file with LockFileEx, which other handles cannot read or
+// write while it is locked exclusively; unlock before changing a lock's kind
+// there, and another operation fails with InvalidInput.
+pub fn lock(file: *File, operation: usize) !io.IoErr {
+  try usable(file)
+  try check(native_lock(file.descriptor, operation))
+}
+
+// Sets the length of the file at path. A length past #max(i64) fails with
+// InvalidInput.
+pub fn truncate(path: []const u8, length: usize) !io.IoErr {
+  if length > 9223372036854775807 { fail .InvalidInput }
+  try check(native_truncate(path, #cast(u64, length)))
+}
+
+// A file written under a temporary name and renamed onto its destination
+// when committed, so the destination is never partly written.
+pub struct AtomicFile {
+  file: File,
+  destination: []const u8,
+  temporary: []const u8,
+  active: bool,
+}
+
+// Both paths are borrowed until commit or abort. temporary must be a sibling
+// of destination (same directory), chosen by the caller. Empty paths fail
+// with InvalidInput.
+pub fn atomic_begin(destination: []const u8, temporary: []const u8) AtomicFile!io.IoErr {
+  if destination.len == 0 || temporary.len == 0 { fail .InvalidInput }
+  created := try create_exclusive(temporary)
+  return AtomicFile{ file: created, destination: destination, temporary: temporary, active: true }
+}
+
+// Syncs and closes the temporary file and renames it onto the destination.
+// A transaction that is not active fails with InvalidInput.
+pub fn atomic_commit(transaction: *AtomicFile) !io.IoErr {
+  if !transaction.active { fail .InvalidInput }
+  try sync(&transaction.file)
+  close(&transaction.file)
+  try rename(transaction.temporary, transaction.destination)
+  transaction.active = false
+}
+
+// Also syncs the parent directory, making the committed rename durable across
+// power loss on file systems that honor fsync for directories (see
+// sync_directory for Windows).
+pub fn atomic_commit_durable(transaction: *AtomicFile, parent_directory: []const u8) !io.IoErr {
+  try atomic_commit(transaction)
+  try sync_directory(parent_directory)
+}
+
+// Closes and removes the temporary file. Cleanup: it cannot fail and runs
+// after any failure; a file it cannot remove is left behind.
+pub fn atomic_abort(transaction: *AtomicFile) {
+  if !transaction.active { return }
+  close(&transaction.file)
+  _ = native_remove(transaction.temporary)
+  transaction.active = false
+}
+
+// Writes source to destination through the sibling temporary file and renames
+// it into place, so destination is either the old file or all of source.
+pub fn write_atomic(destination: []const u8, temporary: []const u8, source: []const u8) !io.IoErr {
+  transaction := try atomic_begin(destination, temporary)
+  defer atomic_abort(&transaction)
+  try write(&transaction.file, source)
+  try atomic_commit(&transaction)
+}
+
+// A per-user directory. Linux follows the XDG base directories: Home is
+// $HOME, Config $XDG_CONFIG_HOME or ~/.config, Cache $XDG_CACHE_HOME or
+// ~/.cache, Data $XDG_DATA_HOME or ~/.local/share, and Runtime
+// $XDG_RUNTIME_DIR. macOS: $HOME, ~/Library/Application Support for Config
+// and Data, ~/Library/Caches, and $TMPDIR, the per-user temporary directory,
+// for Runtime. Windows: %USERPROFILE%, %APPDATA% for Config and Data, and
+// %LOCALAPPDATA% for Cache; it has no Runtime directory.
+pub enum AppDirectory { Home, Config, Cache, Data, Runtime }
+
+// The per-user directory of kind, in arena. A directory whose variable is
+// unset or empty, or one the platform does not have, fails with NotFound.
+pub fn app_directory(arena: *memory.Arena, kind: AppDirectory) []u8!io.IoErr {
+  mark := memory.arena_mark(arena)
+  errdefer memory.arena_rewind(arena, mark)
+  value := try native_app_directory(kind, memory.push_bytes(arena, 4096))
+  memory.arena_rewind(arena, mark + value.len)
+  return value
+}
+
+// The environment variable's value in destination; one that is unset or
+// empty fails with NotFound.
+fn environment_into(variable: []const u8, destination: []u8) []u8!io.IoErr {
+  value := try native_environment(variable, destination)
+  if value.len == 0 { fail .NotFound }
+  return value
+}
+// The variable's value followed by suffix, in destination.
+fn environment_joined(variable: []const u8, suffix: []const u8, destination: []u8) []u8!io.IoErr {
+  base := try environment_into(variable, destination)
+  if base.len + suffix.len > destination.len { fail .Capacity }
+  for j in 0..suffix.len {
+    destination[base.len + j] = suffix[j]
+  }
+  return destination[..base.len + suffix.len]
+}
+
+// Scratch bytes per frame that remove_tree accepts on every platform:
+// enough for one directory read of the longest name. Linux needs only 280,
+// Windows 1040.
+pub const RemovalScratch: usize = 1048
+// One directory remove_tree is inside: name borrows the parent frame's
+// directory storage, and parent is the parent's descriptor (on Windows, the
+// length of this directory's path in the walk's path buffer).
+pub struct RemovalFrame { directory: Directory, name: []const u8, parent: isize }

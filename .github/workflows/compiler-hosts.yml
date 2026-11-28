@@ -44,6 +44,7 @@ jobs:
           python3 tests/standard-streams.py --host-only
           python3 tests/stdlib-host.py
           python3 tests/std-expansion-host.py
+          python3 tests/text-algorithms.py
           python3 tests/native-ui-results.py
           python3 tests/window-desktop-results.py
           python3 tests/window-events.py
@@ -53,7 +54,11 @@ jobs:
           python3 tests/sync-host.py
           python3 tests/concurrency-net-host.py
           python3 tests/dns-host.py
+          python3 tests/process-control.py
           python3 tests/watch-macos.py
+          python3 tests/terminal-session.py
+          python3 tests/fs-portable.py
+          python3 tests/process-pty.py
           python3 tools/fetch-grammar.py
           python3 tests/vendor-provider-host.py
           python3 tools/package-host-sdk.py
@@ -104,6 +109,7 @@ jobs:
           python tests/standard-streams.py --host-only
           python tests/stdlib-host.py
           python tests/std-expansion-host.py
+          python tests/text-algorithms.py
           DYN_OPENGL_DLL="$(cygpath -w /clang64/bin/opengl32.dll)" GALLIUM_DRIVER=llvmpipe python tests/native-ui-results.py
           DYN_OPENGL_DLL="$(cygpath -w /clang64/bin/opengl32.dll)" GALLIUM_DRIVER=llvmpipe python tests/window-desktop-results.py
           DYN_OPENGL_DLL="$(cygpath -w /clang64/bin/opengl32.dll)" GALLIUM_DRIVER=llvmpipe python tests/window-events.py
@@ -114,7 +120,11 @@ jobs:
           python tests/sync-host.py
           python tests/concurrency-net-host.py
           python tests/dns-host.py
+          python tests/process-control.py
           python tests/watch-windows.py
+          python tests/terminal-session.py
+          python tests/fs-portable.py
+          python tests/process-pty.py
           python tools/fetch-grammar.py
           python tests/vendor-provider-host.py
           python tests/windows-sockets.py

@@ -20,6 +20,8 @@ fn native_open(path: []const u8, mode: u8) isize {
     flags = flags | 521 // O_WRONLY | O_CREAT | O_APPEND
   } else if mode == 3 {
     flags = flags | 2561 // O_WRONLY | O_CREAT | O_EXCL
+  } else if mode == 4 {
+    flags = flags | 513 // O_WRONLY | O_CREAT
   }
   return #syscall(sys.Open, name, flags, 420)
 }

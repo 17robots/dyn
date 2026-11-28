@@ -35,3 +35,75 @@ pub fn size(descriptor: isize) Size!io.IoErr {
   columns := #cast(usize, bytes[2]) + #cast(usize, bytes[3]) * 256
   return Size{ columns: columns, rows: rows }
 }
+
+// Linux and macOS terminals interpret escape sequences in every mode.
+fn make_virtual(_descriptor: isize, _state: *State) bool {
+  return false
+}
+
+fn write_some(descriptor: isize, bytes: []const u8) usize!io.IoErr {
+  count := #syscall(sys.Write, descriptor, &bytes[0], bytes.len)
+  if count < 0 { fail io.linux_err(count) }
+  return #cast(usize, count)
+}
+
+// The fatal signals crash_restore covers; bit n - 1 of crash_installed is
+// signal n while its handler is the session's.
+const crash_signals: [14]u32 = [1, 2, 3, 4, 5, 6, 7, 8, 11, 13, 15, 24, 25, 31]
+const handler_default: usize = 0
+const handler_ignore: usize = 1
+// SA_SIGINFO, SA_ONSTACK and SA_NODEFER: the handler is not blocked while it
+// runs, so the default action it re-raises is delivered at once.
+const crash_flags: u64 = 1207959556
+crash_previous: [32]Action
+crash_installed: u64
+
+// Runs on the faulting or signalled thread, on its alternate stack when it
+// has one. Everything here is a system call or reads memory written before
+// the handler was installed.
+fn crash_signal(number: i32, information: rawptr, context: rawptr) {
+  crash_restore()
+  index := #cast(usize, number) & 31
+  previous := crash_previous[index].handler
+  if previous != handler_default && previous != handler_ignore {
+    // Return through the previous handler's restorer: crash_action copied it.
+    handler := #cast(fn(i32, rawptr, rawptr), #cast(rawptr, previous))
+    handler(number, information, context)
+    return
+  }
+  standard := Action{}
+  _ = #syscall(sys.RtSigaction, number, &standard, 0, 8)
+  // SIG_UNBLOCK, in case the signal was blocked when it was forced.
+  bit: u64 = #cast(u64, 1) << (index - 1)
+  _ = #syscall(sys.RtSigprocmask, 1, &bit, 0, 8)
+  _ = #syscall(sys.Kill, #syscall(sys.Getpid), number)
+  _ = #syscall(sys.ExitGroup, 128 + number)
+}
+
+fn crash_install() {
+  handler := #cast(usize, #cast(rawptr, crash_signal))
+  for number in crash_signals {
+    previous: Action
+    if #syscall(sys.RtSigaction, number, 0, &previous, 8) < 0 { continue }
+    if previous.handler == handler_ignore || previous.handler == handler { continue }
+    crash_previous[number] = previous
+    action := crash_action(handler, &previous)
+    if #syscall(sys.RtSigaction, number, &action, 0, 8) == 0 {
+      crash_installed |= #cast(u64, 1) << (number - 1)
+    }
+  }
+}
+
+fn crash_uninstall() {
+  handler := #cast(usize, #cast(rawptr, crash_signal))
+  for number in crash_signals {
+    bit := #cast(u64, 1) << (number - 1)
+    if (crash_installed & bit) == 0 { continue }
+    crash_installed &= ~bit
+    current: Action
+    if #syscall(sys.RtSigaction, number, 0, &current, 8) < 0 { continue }
+    if current.handler == handler {
+      _ = #syscall(sys.RtSigaction, number, &crash_previous[number], 0, 8)
+    }
+  }
+}

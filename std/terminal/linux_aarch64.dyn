@@ -1,0 +1,13 @@
+#target(kernel: linux, arch: aarch64)
+
+// The kernel's struct sigaction. Without SA_RESTORER the kernel returns
+// through the vDSO's rt_sigreturn.
+struct Action { handler: usize, flags: u64, restorer: usize, mask: u64 }
+const restorer_flag: u64 = 67108864
+
+fn crash_action(handler: usize, previous: *const Action) Action {
+  if (previous.flags & restorer_flag) != 0 {
+    return Action{ handler: handler, flags: crash_flags | restorer_flag, restorer: previous.restorer }
+  }
+  return Action{ handler: handler, flags: crash_flags }
+}

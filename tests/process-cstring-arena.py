@@ -31,6 +31,7 @@ fn native_write(descriptor: i32, source: rawptr, count: usize) isize { return 0 
 fn native_exit(code: i32) { #panic("unexpected child") }
 fn native_read(descriptor: i32, destination: *u8, count: usize) isize { return 0 }
 fn native_kill(child: i32, signal: i32) i32 { return 0 }
+fn native_group(child: i32, group: i32) i32 { return 0 }
 fn native_wait(child: i32, status: *i32, flags: i32) i32 { return 0 }
 // Whether spawn_native fails and leaves the arena at before.
 fn rejects(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, before: usize) bool {

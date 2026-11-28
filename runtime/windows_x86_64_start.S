@@ -152,6 +152,20 @@ import_jump dyn_win_free_library, FreeLibrary
 import_jump dyn_win_last_error, GetLastError
 .global dyn_win_arena_last_error
 .set dyn_win_arena_last_error, dyn_win_last_error
+// std/fs: permissions, links, locks, block cloning and environment.
+import_jump dyn_fs_information_ex, GetFileInformationByHandleEx
+import_jump dyn_fs_set_information, SetFileInformationByHandle
+import_jump dyn_fs_lock, LockFileEx
+import_jump dyn_fs_unlock, UnlockFileEx
+import_jump dyn_fs_symbolic_link, CreateSymbolicLinkW
+import_jump dyn_fs_control, DeviceIoControl
+import_jump dyn_fs_volume, GetVolumeInformationByHandleW
+import_jump dyn_fs_reopen, ReOpenFile
+import_jump dyn_fs_local_free, LocalFree
+import_jump dyn_fs_environment, GetEnvironmentVariableW
+import_jump dyn_fs_set_error, SetLastError
+import_jump dyn_fs_get_security, GetSecurityInfo
+import_jump dyn_fs_set_security, SetSecurityInfo
 import_jump dyn_win_socket_startup, WSAStartup
 import_jump dyn_win_socket, socket
 import_jump dyn_win_close_socket, closesocket
@@ -192,6 +206,14 @@ import_jump dyn_process_close, CloseHandle
 import_jump dyn_process_wait, WaitForSingleObject
 import_jump dyn_process_error, GetLastError
 import_jump dyn_process_read, ReadFile
+// std/process: process trees, nonblocking pipe writes.
+import_jump dyn_process_write, WriteFile
+import_jump dyn_process_job_create, CreateJobObjectW
+import_jump dyn_process_job_limit, SetInformationJobObject
+import_jump dyn_process_job_assign, AssignProcessToJobObject
+import_jump dyn_process_job_terminate, TerminateJobObject
+import_jump dyn_process_resume, ResumeThread
+import_jump dyn_process_pipe_mode, SetNamedPipeHandleState
 
 import_jump dyn_watch_open, CreateFileW
 import_jump dyn_watch_close, CloseHandle
@@ -218,6 +240,43 @@ import_jump dyn_stdio_handle, GetStdHandle
 import_jump dyn_stdio_read, ReadFile
 import_jump dyn_stdio_write, WriteFile
 import_jump dyn_stdio_error, GetLastError
+// std/process/pty: pseudoconsole pipes, job objects and the lazy ConPTY lookup.
+import_jump dyn_pty_pipe, CreatePipe
+import_jump dyn_pty_pipe_state, SetNamedPipeHandleState
+import_jump dyn_pty_peek, PeekNamedPipe
+import_jump dyn_pty_read, ReadFile
+import_jump dyn_pty_write, WriteFile
+import_jump dyn_pty_close, CloseHandle
+import_jump dyn_pty_error, GetLastError
+import_jump dyn_pty_wait, WaitForSingleObject
+import_jump dyn_pty_exit_code, GetExitCodeProcess
+import_jump dyn_pty_terminate_process, TerminateProcess
+import_jump dyn_pty_create_process, CreateProcessW
+import_jump dyn_pty_init_attributes, InitializeProcThreadAttributeList
+import_jump dyn_pty_update_attributes, UpdateProcThreadAttribute
+import_jump dyn_pty_delete_attributes, DeleteProcThreadAttributeList
+import_jump dyn_pty_compare, CompareStringOrdinal
+import_jump dyn_pty_job_create, CreateJobObjectW
+import_jump dyn_pty_job_limits, SetInformationJobObject
+import_jump dyn_pty_job_assign, AssignProcessToJobObject
+import_jump dyn_pty_job_terminate, TerminateJobObject
+import_jump dyn_pty_resume, ResumeThread
+import_jump dyn_pty_ticks, GetTickCount64
+import_jump dyn_pty_sleep, Sleep
+import_jump dyn_pty_library, LoadLibraryA
+import_jump dyn_pty_symbol, GetProcAddress
+
+// std/terminal sessions and std/process/signal window changes.
+import_jump dyn_terminal_write, WriteFile
+import_jump dyn_terminal_input_page, GetConsoleCP
+import_jump dyn_terminal_output_page, GetConsoleOutputCP
+import_jump dyn_terminal_set_input_page, SetConsoleCP
+import_jump dyn_terminal_set_output_page, SetConsoleOutputCP
+import_jump dyn_terminal_control_handler, SetConsoleCtrlHandler
+import_jump dyn_terminal_exception_filter, SetUnhandledExceptionFilter
+import_jump dyn_terminal_create_process, CreateProcessW
+import_jump dyn_terminal_environment, GetEnvironmentVariableW
+import_jump dyn_signal_buffer_info, GetConsoleScreenBufferInfo
 
 // Minimal PE import directory, avoiding SDK/import-library dependency while
 // retaining stable documented Win32 and Winsock entry points.
@@ -243,6 +302,12 @@ import_jump dyn_stdio_error, GetLastError
     .long 0
     .rva crypto_name
     .rva crypto_iat
+    // std/fs: access control lists.
+    .rva advapi_lookup
+    .long 0
+    .long 0
+    .rva advapi_name
+    .rva advapi_iat
     // GNU PE linkers append the terminating descriptor. Supplying it here
     // would hide descriptors contributed by user import libraries.
 
@@ -294,6 +359,13 @@ kernel_lookup:
     thunk FreeLibrary
     thunk GetLastError
     thunk CreateThread
+    // std/process/pty
+    thunk SetNamedPipeHandleState
+    thunk CreateJobObjectW
+    thunk SetInformationJobObject
+    thunk AssignProcessToJobObject
+    thunk TerminateJobObject
+    thunk ResumeThread
     thunk CompareStringOrdinal
     thunk CreateProcessW
     thunk GetExitCodeProcess
@@ -317,6 +389,22 @@ kernel_lookup:
     thunk GetOverlappedResult
     thunk CancelIoEx
     thunk SetLastError
+    // std/terminal: console code pages.
+    thunk GetConsoleCP
+    thunk GetConsoleOutputCP
+    thunk SetConsoleCP
+    thunk SetConsoleOutputCP
+    // std/process: process trees and nonblocking pipes.
+    // std/fs
+    thunk GetFileInformationByHandleEx
+    thunk SetFileInformationByHandle
+    thunk LockFileEx
+    thunk UnlockFileEx
+    thunk CreateSymbolicLinkW
+    thunk DeviceIoControl
+    thunk GetVolumeInformationByHandleW
+    thunk ReOpenFile
+    thunk LocalFree
     .quad 0
 winsock_lookup:
     thunk WSAStartup
@@ -348,6 +436,12 @@ sync_lookup:
 
 crypto_lookup:
     thunk BCryptGenRandom
+    .quad 0
+
+// std/fs
+advapi_lookup:
+    thunk GetSecurityInfo
+    thunk SetSecurityInfo
     .quad 0
 
 .section .idata$5,"dw"
@@ -398,6 +492,13 @@ iat GetProcAddress
 iat FreeLibrary
 iat GetLastError
 iat CreateThread
+// std/process/pty
+iat SetNamedPipeHandleState
+iat CreateJobObjectW
+iat SetInformationJobObject
+iat AssignProcessToJobObject
+iat TerminateJobObject
+iat ResumeThread
 iat CompareStringOrdinal
 iat CreateProcessW
 iat GetExitCodeProcess
@@ -425,6 +526,22 @@ iat ReadDirectoryChangesW
 iat GetOverlappedResult
 iat CancelIoEx
 iat SetLastError
+// std/terminal: console code pages.
+iat GetConsoleCP
+iat GetConsoleOutputCP
+iat SetConsoleCP
+iat SetConsoleOutputCP
+// std/process: process trees and nonblocking pipes.
+// std/fs
+iat GetFileInformationByHandleEx
+iat SetFileInformationByHandle
+iat LockFileEx
+iat UnlockFileEx
+iat CreateSymbolicLinkW
+iat DeviceIoControl
+iat GetVolumeInformationByHandleW
+iat ReOpenFile
+iat LocalFree
     .quad 0
 winsock_iat:
 iat WSAStartup
@@ -456,6 +573,12 @@ iat WakeByAddressAll
 
 crypto_iat:
 iat BCryptGenRandom
+    .quad 0
+
+// std/fs
+advapi_iat:
+iat GetSecurityInfo
+iat SetSecurityInfo
     .quad 0
 
 .section .idata$6,"dw"
@@ -503,6 +626,13 @@ hint GetProcAddress
 hint FreeLibrary
 hint GetLastError
 hint CreateThread
+// std/process/pty
+hint SetNamedPipeHandleState
+hint CreateJobObjectW
+hint SetInformationJobObject
+hint AssignProcessToJobObject
+hint TerminateJobObject
+hint ResumeThread
 hint CompareStringOrdinal
 hint CreateProcessW
 hint GetExitCodeProcess
@@ -526,6 +656,22 @@ hint ReadDirectoryChangesW
 hint GetOverlappedResult
 hint CancelIoEx
 hint SetLastError
+// std/terminal: console code pages.
+hint GetConsoleCP
+hint GetConsoleOutputCP
+hint SetConsoleCP
+hint SetConsoleOutputCP
+// std/process: process trees and nonblocking pipes.
+// std/fs
+hint GetFileInformationByHandleEx
+hint SetFileInformationByHandle
+hint LockFileEx
+hint UnlockFileEx
+hint CreateSymbolicLinkW
+hint DeviceIoControl
+hint GetVolumeInformationByHandleW
+hint ReOpenFile
+hint LocalFree
 hint WSAStartup
 hint socket
 hint closesocket
@@ -551,6 +697,10 @@ hint WakeByAddressAll
 sync_name: .asciz "api-ms-win-core-synch-l1-2-0.dll"
 hint BCryptGenRandom
 crypto_name: .asciz "bcrypt.dll"
+// std/fs
+hint GetSecurityInfo
+hint SetSecurityInfo
+advapi_name: .asciz "ADVAPI32.dll"
 kernel_name: .asciz "KERNEL32.dll"
 winsock_name: .asciz "WS2_32.dll"
 

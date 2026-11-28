@@ -1,0 +1,47 @@
+use io "std/io"
+use signal "std/process/signal"
+use sync "std/sync"
+#target(family: unix)
+
+extern fn swap_panic_hook "dyn_swap_panic_hook"(hook: fn(*const u8, u64)) fn(*const u8, u64)
+
+crash_claimed: sync.AtomicU32
+crash_armed: sync.AtomicU32
+
+fn crash_claim() bool {
+  return sync.compare_exchange_u32(&crash_claimed, 0, 1)
+}
+
+fn crash_release() {
+  sync.store_u32(&crash_claimed, 0)
+}
+
+fn crash_set_armed(armed: bool) {
+  if armed { sync.store_u32(&crash_armed, 1) } else { sync.store_u32(&crash_armed, 0) }
+}
+
+// Lock-free, so a signal handler may take it.
+fn crash_take() bool {
+  return sync.exchange_u32(&crash_armed, 0) != 0
+}
+
+// termios lives on the terminal device, so input's settings cover output
+// too; reading output's checks that it is a terminal.
+fn session_save(session: *Session) !io.IoErr {
+  session.saved_input = try read_state(session.input)
+  session.saved_output = try read_state(session.output)
+}
+
+fn session_raw(session: *Session) !io.IoErr {
+  changed := session.saved_input
+  make_raw(session.input, &changed)
+  try restore(session.input, &changed)
+}
+
+fn session_restore(session: *const Session) !io.IoErr {
+  try restore(session.input, &session.saved_input)
+}
+
+fn pause() !io.IoErr {
+  try signal.stop_job()
+}
