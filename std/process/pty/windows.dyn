@@ -1,0 +1,427 @@
+#target(kernel: windows)
+use mem "std/mem"
+use io "std/io"
+use sync "std/sync"
+use process "std/process"
+use utf8 "std/unicode/utf8"
+use utf16 "std/unicode/utf16"
+
+// Windows pseudoconsoles (ConPTY). The child runs suspended until it is in a
+// job object that kills every process in it when the job closes, so
+// terminate and close reach its descendants. The pseudoconsole functions
+// (Windows 10 1809 and later) are looked up when first needed rather than
+// imported, so programs that never open a terminal still load on older
+// Windows.
+// The command line and environment block follow std/process; they are
+// private copies until std/process shares them.
+extern fn win_pipe "dyn_pty_pipe"(read: *rawptr, write: *rawptr, security: rawptr, size: u32) i32
+extern fn win_pipe_state "dyn_pty_pipe_state"(pipe: rawptr, mode: *u32, collection: rawptr, timeout: rawptr) i32
+extern fn win_peek "dyn_pty_peek"(pipe: rawptr, buffer: rawptr, size: u32, read: rawptr, available: *u32, left: rawptr) i32
+extern fn win_read "dyn_pty_read"(file: rawptr, buffer: *u8, size: u32, read: *u32, overlapped: rawptr) i32
+extern fn win_write "dyn_pty_write"(file: rawptr, buffer: *const u8, size: u32, written: *u32, overlapped: rawptr) i32
+extern fn win_close "dyn_pty_close"(handle: rawptr) i32
+extern fn win_error "dyn_pty_error"() u32
+extern fn win_wait "dyn_pty_wait"(handle: rawptr, milliseconds: u32) u32
+extern fn win_exit_code "dyn_pty_exit_code"(process: rawptr, code: *u32) i32
+extern fn win_terminate_process "dyn_pty_terminate_process"(process: rawptr, code: u32) i32
+extern fn win_create "dyn_pty_create_process"(application: *const u16, command: *u16, process_security: rawptr, thread_security: rawptr, inherit: i32, flags: u32, environment: *u16, directory: rawptr, startup: *Startup, result: *ProcessInformation) i32
+extern fn win_init_attributes "dyn_pty_init_attributes"(list: rawptr, count: u32, flags: u32, size: *usize) i32
+extern fn win_update_attributes "dyn_pty_update_attributes"(list: rawptr, flags: u32, attribute: usize, value: rawptr, size: usize, previous: rawptr, returned: rawptr) i32
+extern fn win_delete_attributes "dyn_pty_delete_attributes"(list: rawptr)
+extern fn win_compare "dyn_pty_compare"(left: *const u16, left_count: i32, right: *const u16, right_count: i32, ignore_case: i32) i32
+extern fn win_job_create "dyn_pty_job_create"(security: rawptr, name: rawptr) rawptr
+extern fn win_job_limits "dyn_pty_job_limits"(job: rawptr, class: u32, information: rawptr, size: u32) i32
+extern fn win_job_assign "dyn_pty_job_assign"(job: rawptr, process: rawptr) i32
+extern fn win_job_terminate "dyn_pty_job_terminate"(job: rawptr, code: u32) i32
+extern fn win_resume "dyn_pty_resume"(thread: rawptr) u32
+extern fn win_ticks "dyn_pty_ticks"() u64
+extern fn win_sleep "dyn_pty_sleep"(milliseconds: u32)
+extern fn win_library "dyn_pty_library"(name: *const u8) rawptr
+extern fn win_symbol "dyn_pty_symbol"(library: rawptr, name: *const u8) rawptr
+
+// STARTUPINFOEXW.
+struct Startup {
+  size: u32, reserved: rawptr, desktop: rawptr, title: rawptr,
+  x: u32, y: u32, width: u32, height: u32, columns: u32, rows: u32,
+  fill: u32, flags: u32, show: u16, reserved_size: u16, reserved_bytes: rawptr,
+  input: rawptr, output: rawptr, error: rawptr, attributes: rawptr,
+}
+struct ProcessInformation { process: rawptr, thread: rawptr, process_id: u32, thread_id: u32 }
+// JOBOBJECT_EXTENDED_LIMIT_INFORMATION.
+struct BasicLimits {
+  process_time: i64, job_time: i64, flags: u32,
+  minimum_working_set: usize, maximum_working_set: usize, active_processes: u32,
+  affinity: usize, priority: u32, scheduling: u32,
+}
+struct JobLimits { basic: BasicLimits, counters: [6]u64, process_memory: usize, job_memory: usize, peak_process: usize, peak_job: usize }
+struct Wide { data: []u16, ok: bool }
+struct ConsoleApi {
+  create: fn(u32, rawptr, rawptr, u32, *rawptr) i32,
+  resize: fn(rawptr, u32) i32,
+  close: fn(rawptr),
+  ready: bool,
+}
+
+const WaitForever: u32 = 4294967295
+const WaitTimeout: u32 = 258
+const ErrorBrokenPipe: u32 = 109
+const ErrorNoData: u32 = 232
+const PipeNoWait: u32 = 1
+const OutputPipeSize: u32 = 65536
+const UseStandardHandles: u32 = 256
+// EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED.
+const CreateFlags: u32 = 525316
+const PseudoconsoleAttribute: usize = 131094
+const KillOnJobClose: u32 = 8192
+const ExtendedLimitInformation: u32 = 9
+
+console_api: ConsoleApi
+console_once: sync.Once
+
+fn console_prepare() bool {
+  if sync.once_begin(&console_once) {
+    library_name: str = "kernel32.dll\0"
+    library := win_library(&library_name[0])
+    if library != nil {
+      create_name: str = "CreatePseudoConsole\0"
+      resize_name: str = "ResizePseudoConsole\0"
+      close_name: str = "ClosePseudoConsole\0"
+      create := win_symbol(library, &create_name[0])
+      resize := win_symbol(library, &resize_name[0])
+      close := win_symbol(library, &close_name[0])
+      if create != nil && resize != nil && close != nil {
+        console_api.create = #cast(fn(u32, rawptr, rawptr, u32, *rawptr) i32, create)
+        console_api.resize = #cast(fn(rawptr, u32) i32, resize)
+        console_api.close = #cast(fn(rawptr), close)
+        console_api.ready = true
+      }
+    }
+    sync.once_complete(&console_once)
+  }
+  return console_api.ready
+}
+
+fn handle(value: isize) rawptr {
+  return #cast(rawptr, #cast(usize, value))
+}
+fn handle_value(value: rawptr) isize {
+  return #cast(isize, #cast(usize, value))
+}
+fn win_failure() io.IoErr {
+  return io.windows_err(0 - #cast(isize, win_error()))
+}
+// An HRESULT: HRESULT_FROM_WIN32 codes become their Windows error.
+fn result_err(result: i32) io.IoErr {
+  code := #cast(u32, result)
+  if (code & 4294901760) == 2147942400 { return io.windows_err(0 - #cast(isize, (code & 65535))) }
+  return io.IoErr.System(0 - #cast(isize, code))
+}
+fn close_handle(value: rawptr) {
+  if value != nil {
+    _ = win_close(value)
+  }
+}
+
+fn check_size(size: Size) !io.IoErr {
+  if size.columns > 32767 || size.rows > 32767 { fail .InvalidInput }
+}
+// COORD by value: X (columns) in the low half, Y (rows) in the high half.
+fn packed_size(size: Size) u32 {
+  return #cast(u32, size.columns) | (#cast(u32, size.rows) << 16)
+}
+
+fn encode_wide(destination: []u16, source: []const u8) usize {
+  used: usize = 0
+  at: usize = 0
+  for at < source.len {
+    decoded := utf8.decode(source, at)
+    if !decoded.valid { return 0 }
+    width := utf16.encode(destination[used..], decoded.codepoint)
+    if width == 0 { return 0 }
+    used += width
+    at += decoded.width
+  }
+  if used == destination.len { return 0 }
+  destination[used] = 0
+  return used + 1
+}
+fn wide(arena: *mem.Arena, source: []const u8) Wide {
+  if source.len > 32766 { return Wide{} }
+  destination := mem.push_array<u16>(arena, source.len + 1)
+  length := encode_wide(destination, source)
+  if length == 0 { return Wide{} }
+  return Wide{ data: destination[..length], ok: true }
+}
+
+// The Microsoft C runtime's argv quoting; argv[0] cannot hold a quote.
+fn command_line(arena: *mem.Arena, arguments: [][]const u8) *u16!io.IoErr {
+  capacity: usize = 1
+  for argument in arguments {
+    if argument.len > 16380 || capacity > 32767 - (argument.len * 2 + 3) { fail .Capacity }
+    capacity += argument.len * 2 + 3
+  }
+  command := mem.push_array<u16>(arena, capacity)
+  used: usize = 0
+  argument_index: usize = 0
+  for argument_text in arguments {
+    if argument_index > 0 {
+      command[used] = 32
+      used += 1
+    }
+    if argument_index == 0 {
+      for first_byte in argument_text {
+        if first_byte == 34 { fail .InvalidInput }
+      }
+    }
+    command[used] = 34
+    used += 1
+    at: usize = 0
+    slashes: usize = 0
+    for at < argument_text.len {
+      byte := argument_text[at]
+      if byte == 92 && argument_index > 0 {
+        slashes += 1
+        at += 1
+        continue
+      }
+      if byte == 34 {
+        slashes = slashes * 2 + 1
+      }
+      for slashes > 0 {
+        command[used] = 92
+        used += 1
+        slashes -= 1
+      }
+      decoded := utf8.decode(argument_text, at)
+      if !decoded.valid { fail .InvalidInput }
+      width := utf16.encode(command[used..], decoded.codepoint)
+      used += width
+      at += decoded.width
+    }
+    slashes *= 2
+    for slashes > 0 {
+      command[used] = 92
+      used += 1
+      slashes -= 1
+    }
+    command[used] = 34
+    used += 1
+    argument_index += 1
+  }
+  command[used] = 0
+  return &command[0]
+}
+
+// A sorted UTF-16 block, as CreateProcessW requires; empty is two NULs.
+fn environment_block(arena: *mem.Arena, environment: [][]const u8) *u16!io.IoErr {
+  capacity: usize = 2
+  for item in environment {
+    if item.len > 32766 || capacity > 32767 - item.len - 1 { fail .Capacity }
+    capacity += item.len + 1
+  }
+  block := mem.push_array<u16>(arena, capacity)
+  used: usize = 0
+  storage := mem.push_array<Wide>(arena, environment.len + 1)
+  entries := storage[..environment.len]
+  index: usize = 0
+  for entry in environment {
+    converted := wide(arena, entry)
+    if !converted.ok { fail .InvalidInput }
+    position := index
+    for position > 0 && win_compare(&entries[position - 1].data[0], #cast(i32, entries[position - 1].data.len) - 1, &converted.data[0], #cast(i32, converted.data.len) - 1, 1) == 3 {
+      entries[position] = entries[position - 1]
+      position -= 1
+    }
+    entries[position] = converted
+    index += 1
+  }
+  for sorted in entries {
+    for unit in sorted.data {
+      block[used] = unit
+      used += 1
+    }
+  }
+  return &block[0]
+}
+
+// Releases whatever part of a terminal exists, in the order that cannot
+// block: the job's processes end first, then this side's pipe ends close, so
+// ClosePseudoConsole never waits on output that no one reads.
+fn release(terminal: *Terminal) {
+  if terminal.job != 0 {
+    if terminal.running {
+      _ = win_job_terminate(handle(terminal.job), 1)
+    }
+    close_handle(handle(terminal.job))
+    terminal.job = 0
+  }
+  if terminal.process != 0 {
+    if terminal.running {
+      _ = win_wait(handle(terminal.process), WaitForever)
+    }
+    close_handle(handle(terminal.process))
+    terminal.process = 0
+  }
+  close_handle(handle(terminal.input))
+  close_handle(handle(terminal.terminal))
+  terminal.input = 0
+  terminal.terminal = 0
+  if terminal.console != 0 {
+    console_api.close(handle(terminal.console))
+    terminal.console = 0
+  }
+}
+
+fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options, size: Size) Terminal!io.IoErr {
+  if !console_prepare() { fail .Unsupported }
+  application := wide(arena, path)
+  if !application.ok { fail .Capacity }
+  directory: rawptr = nil
+  if configuration.directory.len > 0 {
+    converted := wide(arena, configuration.directory)
+    if !converted.ok { fail .Capacity }
+    directory = &converted.data[0]
+  }
+  command := try command_line(arena, arguments)
+  environment := try environment_block(arena, configuration.environment)
+  attribute_size: usize = 0
+  _ = win_init_attributes(nil, 1, 0, &attribute_size)
+  // The attribute list holds pointers: keep it 8-byte aligned.
+  attributes := mem.push_array<u64>(arena, (attribute_size + 7) / 8 + 1)
+  terminal := Terminal{}
+  errdefer release(&terminal)
+  console_input: rawptr = nil
+  console_output: rawptr = nil
+  // The pseudoconsole duplicates its ends; this process's copies close on
+  // every path.
+  defer {
+    close_handle(console_input)
+    close_handle(console_output)
+  }
+  input: rawptr = nil
+  if win_pipe(&console_input, &input, nil, 0) == 0 { fail win_failure() }
+  terminal.input = handle_value(input)
+  output: rawptr = nil
+  if win_pipe(&output, &console_output, nil, OutputPipeSize) == 0 { fail win_failure() }
+  terminal.terminal = handle_value(output)
+  // write never waits: a full pipe takes fewer bytes, or none.
+  mode := PipeNoWait
+  if win_pipe_state(input, &mode, nil, nil) == 0 { fail win_failure() }
+  console: rawptr = nil
+  created := console_api.create(packed_size(size), console_input, console_output, 0, &console)
+  if created < 0 { fail result_err(created) }
+  terminal.console = handle_value(console)
+  if win_init_attributes(&attributes[0], 1, 0, &attribute_size) == 0 { fail win_failure() }
+  defer win_delete_attributes(&attributes[0])
+  if win_update_attributes(&attributes[0], 0, PseudoconsoleAttribute, console, #sizeof(rawptr), nil, nil) == 0 { fail win_failure() }
+  job := win_job_create(nil, nil)
+  if job == nil { fail win_failure() }
+  terminal.job = handle_value(job)
+  limits := JobLimits{}
+  limits.basic.flags = KillOnJobClose
+  if win_job_limits(job, ExtendedLimitInformation, #cast(rawptr, &limits), #cast(u32, #sizeof(JobLimits))) == 0 { fail win_failure() }
+  // Null standard handles with STARTF_USESTDHANDLES keep this process's own
+  // redirected streams out: the pseudoconsole supplies the child's.
+  startup := Startup{ size: #cast(u32, #sizeof(Startup)), flags: UseStandardHandles, attributes: &attributes[0] }
+  information := ProcessInformation{}
+  if win_create(&application.data[0], command, nil, nil, 0, CreateFlags, environment, directory, &startup, &information) == 0 { fail win_failure() }
+  terminal.process = handle_value(information.process)
+  terminal.running = true
+  if win_job_assign(job, information.process) == 0 {
+    failure := win_failure()
+    // Still suspended and outside the job: end it directly.
+    _ = win_terminate_process(information.process, 1)
+    close_handle(information.thread)
+    fail failure
+  }
+  if win_resume(information.thread) == WaitForever {
+    failure := win_failure()
+    close_handle(information.thread)
+    fail failure
+  }
+  close_handle(information.thread)
+  terminal.open = true
+  return terminal
+}
+
+fn read_native(terminal: *Terminal, destination: []u8) usize!io.IoErr {
+  available: u32 = 0
+  if win_peek(handle(terminal.terminal), nil, 0, nil, &available, nil) == 0 {
+    error := win_error()
+    if error == ErrorBrokenPipe { return 0 }
+    fail io.windows_err(0 - #cast(isize, error))
+  }
+  if available == 0 { fail .WouldBlock }
+  amount := #cast(usize, available)
+  if amount > destination.len {
+    amount = destination.len
+  }
+  read: u32 = 0
+  if win_read(handle(terminal.terminal), &destination[0], #cast(u32, amount), &read, nil) == 0 {
+    error := win_error()
+    if error == ErrorBrokenPipe { return 0 }
+    fail io.windows_err(0 - #cast(isize, error))
+  }
+  return #cast(usize, read)
+}
+
+fn write_native(terminal: *Terminal, source: []const u8) usize!io.IoErr {
+  amount := source.len
+  if amount > 1073741824 {
+    amount = 1073741824
+  }
+  written: u32 = 0
+  if win_write(handle(terminal.input), &source[0], #cast(u32, amount), &written, nil) == 0 {
+    error := win_error()
+    // On a write, these mean the pseudoconsole closed its end.
+    if error == ErrorNoData || error == ErrorBrokenPipe { fail io.IoErr.System(0 - #cast(isize, error)) }
+    fail io.windows_err(0 - #cast(isize, error))
+  }
+  if written == 0 { fail .WouldBlock }
+  return #cast(usize, written)
+}
+
+fn readable_native(terminal: *Terminal, milliseconds: i32) bool!io.IoErr {
+  started := win_ticks()
+  for {
+    available: u32 = 0
+    if win_peek(handle(terminal.terminal), nil, 0, nil, &available, nil) == 0 {
+      error := win_error()
+      if error == ErrorBrokenPipe { return true }
+      fail io.windows_err(0 - #cast(isize, error))
+    }
+    if available > 0 { return true }
+    if milliseconds == 0 { return false }
+    if milliseconds > 0 && win_ticks() - started >= #cast(u64, milliseconds) { return false }
+    win_sleep(1)
+  }
+}
+
+fn resize_native(terminal: *Terminal, size: Size) !io.IoErr {
+  resized := console_api.resize(handle(terminal.console), packed_size(size))
+  if resized < 0 { fail result_err(resized) }
+}
+
+fn wait_native(terminal: *Terminal, nonblocking: bool) process.Exit!io.IoErr {
+  timeout := WaitForever
+  if nonblocking {
+    timeout = 0
+  }
+  value := win_wait(handle(terminal.process), timeout)
+  if value == WaitTimeout { return process.Exit{} }
+  if value != 0 { fail win_failure() }
+  code: u32 = 0
+  if win_exit_code(handle(terminal.process), &code) == 0 { fail win_failure() }
+  close_handle(handle(terminal.process))
+  terminal.process = 0
+  terminal.running = false
+  return process.Exit{ code: code, finished: true }
+}
+
+fn terminate_native(terminal: *Terminal) !io.IoErr {
+  if win_job_terminate(handle(terminal.job), 1) == 0 { fail win_failure() }
+}
+
+fn close_native(terminal: *Terminal) {
+  release(terminal)
+}

@@ -1,0 +1,182 @@
+#target(kernel: darwin)
+#link("System")
+use io "std/io"
+use "std/os/macos/sys"
+
+// macOS pseudo-terminals through /dev/ptmx. Every call is a raw XNU system
+// call returning a negative errno, except fork, which returns twice and so
+// comes from libSystem.
+extern fn native_libc_fork "fork"() i32
+extern fn native_libc_pipe "pipe"(descriptors: *i32) i32
+extern fn native_libc_errno "__error"() *i32
+
+const SessionSupported: bool = true
+// XNU numbers not yet in std/os/macos/sys.
+const Exit: u64 = 1
+const Wait4: u64 = 7
+const Chdir: u64 = 12
+const Kill: u64 = 37
+const Sigprocmask: u64 = 48
+const Execve: u64 = 59
+const Dup2: u64 = 90
+const Setsid: u64 = 147
+// O_RDWR | O_NOCTTY | O_CLOEXEC, and O_NONBLOCK for the master.
+const PeerFlags: usize = 16908290
+const MasterFlags: usize = 16908294
+const DuplicateCloseOnExec: usize = 67
+const SetSize: usize = 2148037735
+const SetControllingTerminal: usize = 536900705
+const Grant: usize = 536900692
+const Unlock: usize = 536900690
+const GetName: usize = 1082160211
+const WaitNoHang: usize = 1
+const SignalStop: usize = 17
+
+fn native_err(code: isize) io.IoErr {
+  return io.darwin_err(code)
+}
+
+fn libc_failure() isize {
+  return 0 - #cast(isize, native_libc_errno().*)
+}
+
+// The master, granted, unlocked, nonblocking and close-on-exec.
+fn native_open_master() isize {
+  path: str = "/dev/ptmx\0"
+  master := #syscall(sys.Open, &path[0], MasterFlags, 0)
+  if master < 0 { return master }
+  value := #syscall(sys.Ioctl, master, Grant, 0)
+  if value >= 0 {
+    value = #syscall(sys.Ioctl, master, Unlock, 0)
+  }
+  if value < 0 {
+    _ = #syscall(sys.Close, master)
+    return value
+  }
+  return master
+}
+
+// The terminal side, close-on-exec and not yet anyone's controlling terminal.
+fn native_open_peer(master: isize) isize {
+  name: [128]u8
+  value := #syscall(sys.Ioctl, master, GetName, &name[0])
+  if value < 0 { return value }
+  name[127] = 0
+  return #syscall(sys.Open, &name[0], PeerFlags, 0)
+}
+
+fn native_set_size(descriptor: isize, window: *WindowSize) isize {
+  return #syscall(sys.Ioctl, descriptor, SetSize, window)
+}
+
+fn native_duplicate_above(descriptor: isize, lowest: isize) isize {
+  return #syscall(sys.Fcntl, descriptor, DuplicateCloseOnExec, lowest)
+}
+
+// A close-on-exec pipe: macOS has no pipe2, so both ends are copied to
+// close-on-exec descriptors at 3 or above.
+fn native_report_pipe(channel: *[2]isize) isize {
+  descriptors: [2]i32
+  if native_libc_pipe(&descriptors[0]) != 0 { return libc_failure() }
+  reader := #syscall(sys.Fcntl, descriptors[0], DuplicateCloseOnExec, 3)
+  writer := #syscall(sys.Fcntl, descriptors[1], DuplicateCloseOnExec, 3)
+  _ = #syscall(sys.Close, descriptors[0])
+  _ = #syscall(sys.Close, descriptors[1])
+  if reader < 0 || writer < 0 {
+    failure := reader
+    if reader >= 0 {
+      _ = #syscall(sys.Close, reader)
+      failure = writer
+    }
+    if writer >= 0 {
+      _ = #syscall(sys.Close, writer)
+    }
+    return failure
+  }
+  channel.*[0] = reader
+  channel.*[1] = writer
+  return 0
+}
+
+fn native_fork() isize {
+  child := native_libc_fork()
+  if child < 0 { return libc_failure() }
+  return child
+}
+
+// Clears the signal mask and sets every catchable signal to its default
+// action: handlers reset on exec anyway, but ignored signals and the mask
+// would carry over into the terminal's programs.
+fn native_reset_signals() isize {
+  empty: u32 = 0
+  value := #syscall(Sigprocmask, 3, &empty, 0)
+  if value < 0 { return value }
+  // struct __sigaction: handler, trampoline, mask and flags, all zero.
+  action: [3]u64
+  for number in 1..32 {
+    if number != 9 && number != SignalStop {
+      _ = #syscall(sys.Sigaction, number, &action[0], 0)
+    }
+  }
+  return 0
+}
+
+fn native_setsid() isize {
+  return #syscall(Setsid)
+}
+
+fn native_control_terminal(descriptor: isize) isize {
+  return #syscall(sys.Ioctl, descriptor, SetControllingTerminal, 0)
+}
+
+fn native_duplicate_to(descriptor: isize, target: isize) isize {
+  value := #syscall(Dup2, descriptor, target)
+  for value == -4 {
+    value = #syscall(Dup2, descriptor, target)
+  }
+  return value
+}
+
+fn native_chdir(directory: *const u8) isize {
+  return #syscall(Chdir, directory)
+}
+
+fn native_execve(path: *const u8, argv: *CString, environment: *CString) isize {
+  return #syscall(Execve, path, argv, environment)
+}
+
+fn native_exit(code: isize) {
+  _ = #syscall(Exit, code)
+  #panic("exit returned")
+}
+
+fn native_read(descriptor: isize, destination: *u8, count: usize) isize {
+  return #syscall(sys.Read, descriptor, destination, count)
+}
+
+fn native_write(descriptor: isize, source: *const u8, count: usize) isize {
+  return #syscall(sys.Write, descriptor, source, count)
+}
+
+fn native_close(descriptor: isize) isize {
+  return #syscall(sys.Close, descriptor)
+}
+
+// XNU's kill takes a third argument: 1 asks for POSIX semantics, as libc does.
+fn native_kill(target: isize, signal: isize) isize {
+  return #syscall(Kill, target, signal, 1)
+}
+
+// The pid when the child ended, 0 when nonblocking finds it running.
+fn native_wait(child: isize, status: *i32, nonblocking: bool) isize {
+  options: usize = 0
+  if nonblocking {
+    options = WaitNoHang
+  }
+  return #syscall(Wait4, child, status, options, 0)
+}
+
+// Negative milliseconds wait without limit.
+fn native_poll(entry: *PollDescriptor, milliseconds: i32) isize {
+  return #syscall(sys.Poll, entry, 1, milliseconds)
+}

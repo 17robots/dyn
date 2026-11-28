@@ -2463,6 +2463,22 @@ Layer: std
 - `fn find_executable(arena: *mem.Arena, name: []const u8) []u8!io.IoErr`: The path of the program name would run as, looked up like `which` on PATH from the environment, in arena.
 - `fn find_executable_in(arena: *mem.Arena, name: []const u8, search: []const u8) []u8!io.IoErr`: The path of the program name, looked up in search, a list of directories in PATH syntax (':' between entries, ';' on Windows), in arena;
 
+## std/process/pty
+
+Layer: std
+
+- `struct Size { columns: u16, rows: u16, width: u16, height: u16 }`: A terminal's window: character cells, and the pixel size where the platform keeps one (Windows ignores width and height).
+- `struct Options { environment: [][]const u8, directory: []const u8, size: Size }`: Zero is valid: an empty environment, the parent's directory and an 80 by 24 window.
+- `struct Terminal { terminal: isize, input: isize, process: isize, console: isize, job: isize, open: bool, running: bool, }`: An open terminal and its child.
+- `fn spawn(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) *Terminal!io.IoErr`: Opens a terminal of configuration.size and starts path on it with arguments (argv[0] first).
+- `fn read(terminal: *Terminal, destination: []u8) usize!io.IoErr`: Reads what the child wrote so far, up to destination.len bytes, without waiting.
+- `fn write(terminal: *Terminal, source: []const u8) usize!io.IoErr`: Types source into the terminal without waiting: returns how many bytes it took, or fails with WouldBlock when it takes none now.
+- `fn readable(terminal: *Terminal, milliseconds: i32) bool!io.IoErr`: Waits up to milliseconds until read would not fail with WouldBlock, and says whether it would not.
+- `fn resize(terminal: *Terminal, size: Size) !io.IoErr`: Changes the window to size.
+- `fn wait(terminal: *Terminal, nonblocking: bool) process.Exit!io.IoErr`: Waits for the child to end, or with nonblocking returns at once with finished false while it runs.
+- `fn terminate(terminal: *Terminal) !io.IoErr`: Kills the child at once: on Linux and macOS its whole process group with SIGKILL, on Windows every process in its job.
+- `fn close(terminal: *Terminal)`: Closes the terminal, and kills and reaps a child not yet waited for, as terminate does.
+
 ## std/process/signal
 
 Layer: std

@@ -1,0 +1,10 @@
+#target(kernel: linux, arch: riscv64)
+
+// The compiler does not map setsid (x86-64 112) for this architecture yet,
+// and without a new session the child cannot take the terminal as its
+// controlling terminal, so spawn fails with Unsupported.
+const SessionSupported: bool = false
+
+fn native_setsid() isize {
+  return -38
+}

@@ -131,6 +131,7 @@ between the program image and the stack (see [bare metal](bare-metal.md)).
 | `std/fs/watch` | File watching: inotify, kqueue or ReadDirectoryChangesW |
 | `std/path` | Lexical slash-separated paths |
 | `std/process` | Spawn, capture, process trees, nonblocking pipes, PATH lookup, shell and Windows quoting, environment and arguments |
+| `std/process/pty` | Pseudo-terminals: a child on a terminal this program reads, types into and resizes; POSIX ptys and Windows ConPTY |
 | `std/process/signal` | Interrupt, terminate and hangup signals as queued events, read with `poll` or `wait` |
 | `std/thread`, `std/sync` | Arena-backed thread handles, scopes that join every thread; portable synchronization and bounded channels |
 | `std/thread/pool` | Fixed worker pool over a bounded arena queue with typed `submit`, and wait groups |

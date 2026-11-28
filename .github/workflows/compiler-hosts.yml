@@ -56,6 +56,7 @@ jobs:
           python3 tests/process-control.py
           python3 tests/watch-macos.py
           python3 tests/fs-portable.py
+          python3 tests/process-pty.py
           python3 tools/fetch-grammar.py
           python3 tests/vendor-provider-host.py
           python3 tools/package-host-sdk.py
@@ -119,6 +120,7 @@ jobs:
           python tests/process-control.py
           python tests/watch-windows.py
           python tests/fs-portable.py
+          python tests/process-pty.py
           python tools/fetch-grammar.py
           python tests/vendor-provider-host.py
           python tests/windows-sockets.py

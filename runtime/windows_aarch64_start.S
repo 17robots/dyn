@@ -641,6 +641,127 @@ dyn_stdio_error:
     adrp x16, __imp_GetLastError
     ldr x16, [x16, :lo12:__imp_GetLastError]
     br x16
+// std/process/pty: pseudoconsole pipes, job objects and the lazy ConPTY lookup.
+.global dyn_pty_pipe
+dyn_pty_pipe:
+    adrp x16, __imp_CreatePipe
+    ldr x16, [x16, :lo12:__imp_CreatePipe]
+    br x16
+.global dyn_pty_pipe_state
+dyn_pty_pipe_state:
+    adrp x16, __imp_SetNamedPipeHandleState
+    ldr x16, [x16, :lo12:__imp_SetNamedPipeHandleState]
+    br x16
+.global dyn_pty_peek
+dyn_pty_peek:
+    adrp x16, __imp_PeekNamedPipe
+    ldr x16, [x16, :lo12:__imp_PeekNamedPipe]
+    br x16
+.global dyn_pty_read
+dyn_pty_read:
+    adrp x16, __imp_ReadFile
+    ldr x16, [x16, :lo12:__imp_ReadFile]
+    br x16
+.global dyn_pty_write
+dyn_pty_write:
+    adrp x16, __imp_WriteFile
+    ldr x16, [x16, :lo12:__imp_WriteFile]
+    br x16
+.global dyn_pty_close
+dyn_pty_close:
+    adrp x16, __imp_CloseHandle
+    ldr x16, [x16, :lo12:__imp_CloseHandle]
+    br x16
+.global dyn_pty_error
+dyn_pty_error:
+    adrp x16, __imp_GetLastError
+    ldr x16, [x16, :lo12:__imp_GetLastError]
+    br x16
+.global dyn_pty_wait
+dyn_pty_wait:
+    adrp x16, __imp_WaitForSingleObject
+    ldr x16, [x16, :lo12:__imp_WaitForSingleObject]
+    br x16
+.global dyn_pty_exit_code
+dyn_pty_exit_code:
+    adrp x16, __imp_GetExitCodeProcess
+    ldr x16, [x16, :lo12:__imp_GetExitCodeProcess]
+    br x16
+.global dyn_pty_terminate_process
+dyn_pty_terminate_process:
+    adrp x16, __imp_TerminateProcess
+    ldr x16, [x16, :lo12:__imp_TerminateProcess]
+    br x16
+.global dyn_pty_create_process
+dyn_pty_create_process:
+    adrp x16, __imp_CreateProcessW
+    ldr x16, [x16, :lo12:__imp_CreateProcessW]
+    br x16
+.global dyn_pty_init_attributes
+dyn_pty_init_attributes:
+    adrp x16, __imp_InitializeProcThreadAttributeList
+    ldr x16, [x16, :lo12:__imp_InitializeProcThreadAttributeList]
+    br x16
+.global dyn_pty_update_attributes
+dyn_pty_update_attributes:
+    adrp x16, __imp_UpdateProcThreadAttribute
+    ldr x16, [x16, :lo12:__imp_UpdateProcThreadAttribute]
+    br x16
+.global dyn_pty_delete_attributes
+dyn_pty_delete_attributes:
+    adrp x16, __imp_DeleteProcThreadAttributeList
+    ldr x16, [x16, :lo12:__imp_DeleteProcThreadAttributeList]
+    br x16
+.global dyn_pty_compare
+dyn_pty_compare:
+    adrp x16, __imp_CompareStringOrdinal
+    ldr x16, [x16, :lo12:__imp_CompareStringOrdinal]
+    br x16
+.global dyn_pty_job_create
+dyn_pty_job_create:
+    adrp x16, __imp_CreateJobObjectW
+    ldr x16, [x16, :lo12:__imp_CreateJobObjectW]
+    br x16
+.global dyn_pty_job_limits
+dyn_pty_job_limits:
+    adrp x16, __imp_SetInformationJobObject
+    ldr x16, [x16, :lo12:__imp_SetInformationJobObject]
+    br x16
+.global dyn_pty_job_assign
+dyn_pty_job_assign:
+    adrp x16, __imp_AssignProcessToJobObject
+    ldr x16, [x16, :lo12:__imp_AssignProcessToJobObject]
+    br x16
+.global dyn_pty_job_terminate
+dyn_pty_job_terminate:
+    adrp x16, __imp_TerminateJobObject
+    ldr x16, [x16, :lo12:__imp_TerminateJobObject]
+    br x16
+.global dyn_pty_resume
+dyn_pty_resume:
+    adrp x16, __imp_ResumeThread
+    ldr x16, [x16, :lo12:__imp_ResumeThread]
+    br x16
+.global dyn_pty_ticks
+dyn_pty_ticks:
+    adrp x16, __imp_GetTickCount64
+    ldr x16, [x16, :lo12:__imp_GetTickCount64]
+    br x16
+.global dyn_pty_sleep
+dyn_pty_sleep:
+    adrp x16, __imp_Sleep
+    ldr x16, [x16, :lo12:__imp_Sleep]
+    br x16
+.global dyn_pty_library
+dyn_pty_library:
+    adrp x16, __imp_LoadLibraryA
+    ldr x16, [x16, :lo12:__imp_LoadLibraryA]
+    br x16
+.global dyn_pty_symbol
+dyn_pty_symbol:
+    adrp x16, __imp_GetProcAddress
+    ldr x16, [x16, :lo12:__imp_GetProcAddress]
+    br x16
 .global CreateThread
 CreateThread:
     adrp x16, __imp_CreateThread
@@ -823,6 +944,13 @@ kernel_lookup:
     thunk FreeLibrary
     thunk GetLastError
     thunk CreateThread
+    // std/process/pty
+    thunk SetNamedPipeHandleState
+    thunk CreateJobObjectW
+    thunk SetInformationJobObject
+    thunk AssignProcessToJobObject
+    thunk TerminateJobObject
+    thunk ResumeThread
     thunk CompareStringOrdinal
     thunk CreateProcessW
     thunk GetExitCodeProcess
@@ -847,12 +975,6 @@ kernel_lookup:
     thunk CancelIoEx
     thunk SetLastError
     // std/process: process trees and nonblocking pipes.
-    thunk CreateJobObjectW
-    thunk SetInformationJobObject
-    thunk AssignProcessToJobObject
-    thunk TerminateJobObject
-    thunk ResumeThread
-    thunk SetNamedPipeHandleState
     // std/fs
     thunk GetFileInformationByHandleEx
     thunk SetFileInformationByHandle
@@ -950,6 +1072,13 @@ iat GetProcAddress
 iat FreeLibrary
 iat GetLastError
 iat CreateThread
+// std/process/pty
+iat SetNamedPipeHandleState
+iat CreateJobObjectW
+iat SetInformationJobObject
+iat AssignProcessToJobObject
+iat TerminateJobObject
+iat ResumeThread
 iat CompareStringOrdinal
 iat CreateProcessW
 iat GetExitCodeProcess
@@ -978,12 +1107,6 @@ iat GetOverlappedResult
 iat CancelIoEx
 iat SetLastError
 // std/process: process trees and nonblocking pipes.
-iat CreateJobObjectW
-iat SetInformationJobObject
-iat AssignProcessToJobObject
-iat TerminateJobObject
-iat ResumeThread
-iat SetNamedPipeHandleState
 // std/fs
 iat GetFileInformationByHandleEx
 iat SetFileInformationByHandle
@@ -1078,6 +1201,13 @@ hint GetProcAddress
 hint FreeLibrary
 hint GetLastError
 hint CreateThread
+// std/process/pty
+hint SetNamedPipeHandleState
+hint CreateJobObjectW
+hint SetInformationJobObject
+hint AssignProcessToJobObject
+hint TerminateJobObject
+hint ResumeThread
 hint CompareStringOrdinal
 hint CreateProcessW
 hint GetExitCodeProcess
@@ -1102,12 +1232,6 @@ hint GetOverlappedResult
 hint CancelIoEx
 hint SetLastError
 // std/process: process trees and nonblocking pipes.
-hint CreateJobObjectW
-hint SetInformationJobObject
-hint AssignProcessToJobObject
-hint TerminateJobObject
-hint ResumeThread
-hint SetNamedPipeHandleState
 // std/fs
 hint GetFileInformationByHandleEx
 hint SetFileInformationByHandle

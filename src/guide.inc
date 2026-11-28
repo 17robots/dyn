@@ -2062,6 +2062,7 @@ static const char *const guide_page_6[] = {
     "| `std/fs/watch` | File watching: inotify, kqueue or ReadDirectoryChangesW |\n",
     "| `std/path` | Lexical slash-separated paths |\n",
     "| `std/process` | Spawn, capture, process trees, nonblocking pipes, PATH lookup, shell and Windows quoting, environment and arguments |\n",
+    "| `std/process/pty` | Pseudo-terminals: a child on a terminal this program reads, types into and resizes; POSIX ptys and Windows ConPTY |\n",
     "| `std/process/signal` | Interrupt, terminate and hangup signals as queued events, read with `poll` or `wait` |\n",
     "| `std/thread`, `std/sync` | Arena-backed thread handles, scopes that join every thread; portable synchronization and bounded channels |\n",
     "| `std/thread/pool` | Fixed worker pool over a bounded arena queue with typed `submit`, and wait groups |\n",

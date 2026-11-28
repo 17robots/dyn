@@ -14,6 +14,19 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+New: `std/process/pty`. No breaking changes.
+
+- `pty.spawn(arena, path, arguments, options)` starts a child on a pseudo-terminal of
+  `options.size`, with an explicit environment and directory. `read` and `write` never
+  wait (`WouldBlock` when nothing is ready), `readable` waits with a timeout, `resize`
+  changes the window (SIGWINCH on Linux and macOS), `wait` and `terminate` match
+  `std/process`, and `close` kills and reaps a child still running. On Linux and macOS
+  `terminal.terminal` is a descriptor for `std/event`. Windows uses ConPTY (Windows 10
+  1809 or later) with a job object. Linux on AArch64 and RISC-V reports `Unsupported`
+  until the compiler maps `setsid`.
+
+## Unreleased
+
 Additive: `std/process`. Existing code builds unchanged.
 
 - `Options.group` starts a child at the root of its own process tree: a new process

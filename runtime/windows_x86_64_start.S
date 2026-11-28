@@ -240,6 +240,31 @@ import_jump dyn_stdio_handle, GetStdHandle
 import_jump dyn_stdio_read, ReadFile
 import_jump dyn_stdio_write, WriteFile
 import_jump dyn_stdio_error, GetLastError
+// std/process/pty: pseudoconsole pipes, job objects and the lazy ConPTY lookup.
+import_jump dyn_pty_pipe, CreatePipe
+import_jump dyn_pty_pipe_state, SetNamedPipeHandleState
+import_jump dyn_pty_peek, PeekNamedPipe
+import_jump dyn_pty_read, ReadFile
+import_jump dyn_pty_write, WriteFile
+import_jump dyn_pty_close, CloseHandle
+import_jump dyn_pty_error, GetLastError
+import_jump dyn_pty_wait, WaitForSingleObject
+import_jump dyn_pty_exit_code, GetExitCodeProcess
+import_jump dyn_pty_terminate_process, TerminateProcess
+import_jump dyn_pty_create_process, CreateProcessW
+import_jump dyn_pty_init_attributes, InitializeProcThreadAttributeList
+import_jump dyn_pty_update_attributes, UpdateProcThreadAttribute
+import_jump dyn_pty_delete_attributes, DeleteProcThreadAttributeList
+import_jump dyn_pty_compare, CompareStringOrdinal
+import_jump dyn_pty_job_create, CreateJobObjectW
+import_jump dyn_pty_job_limits, SetInformationJobObject
+import_jump dyn_pty_job_assign, AssignProcessToJobObject
+import_jump dyn_pty_job_terminate, TerminateJobObject
+import_jump dyn_pty_resume, ResumeThread
+import_jump dyn_pty_ticks, GetTickCount64
+import_jump dyn_pty_sleep, Sleep
+import_jump dyn_pty_library, LoadLibraryA
+import_jump dyn_pty_symbol, GetProcAddress
 
 // Minimal PE import directory, avoiding SDK/import-library dependency while
 // retaining stable documented Win32 and Winsock entry points.
@@ -322,6 +347,13 @@ kernel_lookup:
     thunk FreeLibrary
     thunk GetLastError
     thunk CreateThread
+    // std/process/pty
+    thunk SetNamedPipeHandleState
+    thunk CreateJobObjectW
+    thunk SetInformationJobObject
+    thunk AssignProcessToJobObject
+    thunk TerminateJobObject
+    thunk ResumeThread
     thunk CompareStringOrdinal
     thunk CreateProcessW
     thunk GetExitCodeProcess
@@ -346,12 +378,6 @@ kernel_lookup:
     thunk CancelIoEx
     thunk SetLastError
     // std/process: process trees and nonblocking pipes.
-    thunk CreateJobObjectW
-    thunk SetInformationJobObject
-    thunk AssignProcessToJobObject
-    thunk TerminateJobObject
-    thunk ResumeThread
-    thunk SetNamedPipeHandleState
     // std/fs
     thunk GetFileInformationByHandleEx
     thunk SetFileInformationByHandle
@@ -449,6 +475,13 @@ iat GetProcAddress
 iat FreeLibrary
 iat GetLastError
 iat CreateThread
+// std/process/pty
+iat SetNamedPipeHandleState
+iat CreateJobObjectW
+iat SetInformationJobObject
+iat AssignProcessToJobObject
+iat TerminateJobObject
+iat ResumeThread
 iat CompareStringOrdinal
 iat CreateProcessW
 iat GetExitCodeProcess
@@ -477,12 +510,6 @@ iat GetOverlappedResult
 iat CancelIoEx
 iat SetLastError
 // std/process: process trees and nonblocking pipes.
-iat CreateJobObjectW
-iat SetInformationJobObject
-iat AssignProcessToJobObject
-iat TerminateJobObject
-iat ResumeThread
-iat SetNamedPipeHandleState
 // std/fs
 iat GetFileInformationByHandleEx
 iat SetFileInformationByHandle
@@ -577,6 +604,13 @@ hint GetProcAddress
 hint FreeLibrary
 hint GetLastError
 hint CreateThread
+// std/process/pty
+hint SetNamedPipeHandleState
+hint CreateJobObjectW
+hint SetInformationJobObject
+hint AssignProcessToJobObject
+hint TerminateJobObject
+hint ResumeThread
 hint CompareStringOrdinal
 hint CreateProcessW
 hint GetExitCodeProcess
@@ -601,12 +635,6 @@ hint GetOverlappedResult
 hint CancelIoEx
 hint SetLastError
 // std/process: process trees and nonblocking pipes.
-hint CreateJobObjectW
-hint SetInformationJobObject
-hint AssignProcessToJobObject
-hint TerminateJobObject
-hint ResumeThread
-hint SetNamedPipeHandleState
 // std/fs
 hint GetFileInformationByHandleEx
 hint SetFileInformationByHandle

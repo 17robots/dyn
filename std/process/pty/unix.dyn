@@ -1,0 +1,236 @@
+#target(family: unix)
+use mem "std/mem"
+use io "std/io"
+use c "std/c"
+use time "std/time"
+use process "std/process"
+
+// POSIX pseudo-terminals, shared by Linux and macOS. The kernel files supply
+// raw system calls that return a value or a negative errno; the forked child
+// makes only those calls before exec, with nothing locked or allocated.
+struct CString { value: *const u8 }
+struct WindowSize { rows: u16, columns: u16, width: u16, height: u16 }
+struct PollDescriptor { descriptor: i32, events: i16, returned: i16 }
+
+const SignalKill: isize = 9
+const ErrorInterrupted: isize = -4
+const ErrorInputOutput: isize = -5
+const ErrorNoProcess: isize = -3
+// POLLIN, and POLLIN | POLLERR | POLLHUP | POLLNVAL: the same on Linux and
+// macOS.
+const PollIn: i16 = 1
+const PollDone: i16 = 57
+
+fn check_size(_size: Size) !io.IoErr {}
+
+// nil for text that does not fit or holds NUL (already rejected by spawn).
+fn c_string(arena: *mem.Arena, value: []const u8) *const u8 {
+  return c.string_from_bytes(arena, value) catch nil
+}
+fn c_vector(arena: *mem.Arena, values: [][]const u8) *CString {
+  slots := mem.push_array<CString>(arena, values.len + 1)
+  for at in 0..values.len {
+    slots[at].value = c_string(arena, values[at])
+    if slots[at].value == nil { return nil }
+  }
+  return &slots[0]
+}
+
+// Never retry a failed close: the descriptor may already be reused.
+fn close_raw(descriptor: isize) {
+  if descriptor >= 0 {
+    _ = native_close(descriptor)
+  }
+}
+
+// descriptor, or a close-on-exec copy of it at 3 or above when it took one of
+// the standard stream numbers, which the child is about to replace.
+fn above_streams(descriptor: isize) isize!io.IoErr {
+  if descriptor > 2 { return descriptor }
+  copied := native_duplicate_above(descriptor, 3)
+  close_raw(descriptor)
+  if copied < 0 { fail native_err(copied) }
+  return copied
+}
+
+// The forked child: becomes a session leader with peer as its controlling
+// terminal and standard streams, then execs. Any failure goes back to the
+// parent through report as a negative errno.
+fn child_start(peer: isize, report: isize, directory: *const u8, path: *const u8, argv: *CString, environment: *CString) {
+  failure := native_reset_signals()
+  if failure >= 0 {
+    failure = native_setsid()
+  }
+  if failure >= 0 {
+    failure = native_control_terminal(peer)
+  }
+  for stream in 0..3 {
+    if failure >= 0 {
+      failure = native_duplicate_to(peer, #cast(isize, stream))
+    }
+  }
+  if failure >= 0 {
+    _ = native_close(peer)
+    if directory != nil {
+      failure = native_chdir(directory)
+    }
+  }
+  if failure >= 0 {
+    failure = native_execve(path, argv, environment)
+  }
+  if failure >= 0 {
+    failure = ErrorInputOutput
+  }
+  _ = native_write(report, #cast(*const u8, &failure), #sizeof(isize))
+  native_exit(127)
+}
+
+fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options, size: Size) Terminal!io.IoErr {
+  if !SessionSupported { fail .Unsupported }
+  executable := c_string(arena, path)
+  argv := c_vector(arena, arguments)
+  environment := c_vector(arena, configuration.environment)
+  if executable == nil || argv == nil || environment == nil { fail .InvalidInput }
+  directory: *const u8 = nil
+  if configuration.directory.len > 0 {
+    directory = c_string(arena, configuration.directory)
+    if directory == nil { fail .InvalidInput }
+  }
+  master := native_open_master()
+  if master < 0 { fail native_err(master) }
+  errdefer close_raw(master)
+  opened_peer := native_open_peer(master)
+  if opened_peer < 0 { fail native_err(opened_peer) }
+  peer := try above_streams(opened_peer)
+  // The parent's copy closes on every path, so the master hangs up when the
+  // child and its descendants close theirs.
+  defer close_raw(peer)
+  // Sized through the terminal side: macOS refuses TIOCSWINSZ on a master
+  // whose terminal side has never been opened.
+  window := WindowSize{ rows: size.rows, columns: size.columns, width: size.width, height: size.height }
+  sized := native_set_size(peer, &window)
+  if sized < 0 { fail native_err(sized) }
+  channel: [2]isize = [-1, -1]
+  piped := native_report_pipe(&channel)
+  if piped < 0 { fail native_err(piped) }
+  defer close_raw(channel[0])
+  writer := try above_streams(channel[1])
+  child := native_fork()
+  if child < 0 {
+    close_raw(writer)
+    fail native_err(child)
+  }
+  if child == 0 {
+    child_start(peer, writer, directory, executable, argv, environment)
+  }
+  close_raw(writer)
+  // The pipe closes on exec: no bytes means the child started.
+  reported: isize = 0
+  received := native_read(channel[0], #cast(*u8, &reported), #sizeof(isize))
+  for received == ErrorInterrupted {
+    received = native_read(channel[0], #cast(*u8, &reported), #sizeof(isize))
+  }
+  if received != 0 {
+    _ = native_kill(child, SignalKill)
+    reap(child)
+    if received < 0 {
+      reported = received
+    } else if received != #cast(isize, #sizeof(isize)) {
+      reported = ErrorInputOutput
+    }
+    fail native_err(reported)
+  }
+  return Terminal{ terminal: master, input: master, process: child, open: true, running: true }
+}
+
+// Waits for a child that is ending anyway; its failure changes nothing.
+fn reap(child: isize) {
+  status: i32 = 0
+  value := native_wait(child, &status, false)
+  for value == ErrorInterrupted {
+    value = native_wait(child, &status, false)
+  }
+}
+
+fn read_native(terminal: *Terminal, destination: []u8) usize!io.IoErr {
+  amount := native_read(terminal.terminal, &destination[0], destination.len)
+  for amount == ErrorInterrupted {
+    amount = native_read(terminal.terminal, &destination[0], destination.len)
+  }
+  // Linux reports a hung-up terminal as EIO, after its last bytes.
+  if amount == ErrorInputOutput { return 0 }
+  if amount < 0 { fail native_err(amount) }
+  return #cast(usize, amount)
+}
+
+fn write_native(terminal: *Terminal, source: []const u8) usize!io.IoErr {
+  amount := native_write(terminal.input, &source[0], source.len)
+  for amount == ErrorInterrupted {
+    amount = native_write(terminal.input, &source[0], source.len)
+  }
+  if amount < 0 { fail native_err(amount) }
+  return #cast(usize, amount)
+}
+
+fn readable_native(terminal: *Terminal, milliseconds: i32) bool!io.IoErr {
+  deadline := time.deadline_after(#cast(i64, milliseconds) * time.Millisecond)
+  remaining := milliseconds
+  for {
+    entry := PollDescriptor{ descriptor: #cast(i32, terminal.terminal), events: PollIn }
+    value := native_poll(&entry, remaining)
+    if value > 0 { return (entry.returned & PollDone) != 0 }
+    if value == 0 { return false }
+    if value != ErrorInterrupted { fail native_err(value) }
+    // A signal cut the wait short: keep the original deadline.
+    if milliseconds > 0 {
+      left := time.deadline_remaining(&deadline) / time.Millisecond
+      if left <= 0 { return false }
+      remaining = #cast(i32, left)
+    }
+  }
+}
+
+fn resize_native(terminal: *Terminal, size: Size) !io.IoErr {
+  window := WindowSize{ rows: size.rows, columns: size.columns, width: size.width, height: size.height }
+  value := native_set_size(terminal.terminal, &window)
+  if value < 0 { fail native_err(value) }
+}
+
+fn wait_native(terminal: *Terminal, nonblocking: bool) process.Exit!io.IoErr {
+  status: i32 = 0
+  value := native_wait(terminal.process, &status, nonblocking)
+  for value == ErrorInterrupted {
+    value = native_wait(terminal.process, &status, nonblocking)
+  }
+  if value < 0 { fail native_err(value) }
+  if value == 0 { return process.Exit{} }
+  terminal.running = false
+  if (status & 127) == 0 {
+    return process.Exit{ code: #cast(u32, ((status >> 8) & 255)), finished: true }
+  }
+  return process.Exit{ signal: #cast(u32, (status & 127)), finished: true }
+}
+
+// The child leads its own session, so its process group id is its pid. Until
+// it is reaped, the pid cannot be reused.
+fn terminate_native(terminal: *Terminal) !io.IoErr {
+  value := native_kill(0 - terminal.process, SignalKill)
+  if value == ErrorNoProcess {
+    value = native_kill(terminal.process, SignalKill)
+  }
+  if value < 0 && value != ErrorNoProcess { fail native_err(value) }
+}
+
+fn close_native(terminal: *Terminal) {
+  if terminal.open {
+    // The last close of the master hangs the terminal up for its session.
+    close_raw(terminal.terminal)
+  }
+  terminal.terminal = -1
+  terminal.input = -1
+  if terminal.running {
+    _ = native_kill(0 - terminal.process, SignalKill)
+    _ = native_kill(terminal.process, SignalKill)
+    reap(terminal.process)
+  }
+}

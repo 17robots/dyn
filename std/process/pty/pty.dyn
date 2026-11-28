@@ -1,0 +1,182 @@
+use mem "std/mem"
+use io "std/io"
+use process "std/process"
+
+// Pseudo-terminals: a child process whose standard streams are a terminal
+// that this program drives. spawn opens the terminal and starts the child on
+// it; read takes what the child printed (with the terminal's echo and line
+// discipline applied), write types into it, resize changes its window, and
+// wait collects the child's exit. close releases everything and leaves no
+// descriptor, handle or unreaped child behind.
+//
+// Linux and macOS use a POSIX pseudo-terminal: the child starts a new session
+// with the terminal as its controlling terminal, its signal mask cleared and
+// every signal at its default action, so job control, Ctrl-C and SIGWINCH work.
+// Windows uses a pseudoconsole (ConPTY, Windows 10 1809 or later) and puts
+// the child in a job object, so terminate and close end its descendants too.
+// Linux on AArch64 and RISC-V fails with Unsupported until the compiler maps
+// the setsid system call.
+//
+// Ownership: the Terminal lives in the arena given to spawn; pass the pointer
+// around rather than copying it. It owns its descriptors and child until
+// close, which must run once before the arena is reset or released.
+// Thread safety: one owner at a time; nothing here locks.
+
+// A terminal's window: character cells, and the pixel size where the
+// platform keeps one (Windows ignores width and height).
+pub struct Size { columns: u16, rows: u16, width: u16, height: u16 }
+
+// Zero is valid: an empty environment, the parent's directory and an
+// 80 by 24 window.
+// environment holds explicit NAME=value entries; empty means the child gets
+// none, as with std/process. A size with zero columns or rows means 80 by 24.
+pub struct Options { environment: [][]const u8, directory: []const u8, size: Size }
+
+// An open terminal and its child. terminal is the descriptor or handle that
+// read uses and input the one write uses; on Linux and macOS they are the same
+// nonblocking pseudo-terminal descriptor, which may be registered with
+// std/event for Readable and Writable. On Windows they are the two pipe
+// handles of the pseudoconsole: std/event accepts only sockets there, so use
+// readable to wait. process is the child's pid or process handle, console the
+// Windows pseudoconsole and job its job object (0 elsewhere).
+pub struct Terminal {
+  terminal: isize, input: isize, process: isize, console: isize, job: isize,
+  open: bool, running: bool,
+}
+
+const DefaultColumns: u16 = 80
+const DefaultRows: u16 = 24
+
+fn has_nul(text: []const u8) bool {
+  for byte in text {
+    if byte == 0 { return true }
+  }
+  return false
+}
+
+// Whether any input lies in the arena's free space, where spawn's own
+// allocations would overwrite it.
+fn input_overlap(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) bool {
+  if mem.arena_overlaps_unallocated(arena, path) || mem.arena_overlaps_unallocated(arena, configuration.directory) {
+    return true
+  }
+  if arguments.len > 0 {
+    slots := #slice(#cast(*const u8, &arguments[0]), arguments.len * #sizeof([]const u8))
+    if mem.arena_overlaps_unallocated(arena, slots) { return true }
+  }
+  if configuration.environment.len > 0 {
+    slots := #slice(#cast(*const u8, &configuration.environment[0]), configuration.environment.len * #sizeof([]const u8))
+    if mem.arena_overlaps_unallocated(arena, slots) { return true }
+  }
+  for argument in arguments {
+    if mem.arena_overlaps_unallocated(arena, argument) { return true }
+  }
+  for entry in configuration.environment {
+    if mem.arena_overlaps_unallocated(arena, entry) { return true }
+  }
+  return false
+}
+
+// Opens a terminal of configuration.size and starts path on it with
+// arguments (argv[0] first). No shell parsing or PATH search is performed.
+// Ownership: the Terminal lives in arena; close it once.
+// Allocation: the Terminal, plus scratch that spawn rewinds before it returns.
+// Failure: an empty path or argv, NUL in any text, an environment entry
+// without '=' (or starting with it), or an input in the arena's free space
+// fails with InvalidInput. A child that cannot start (a missing program or
+// directory) fails here, with nothing left open and the child reaped.
+pub fn spawn(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) *Terminal!io.IoErr {
+  if path.len == 0 || arguments.len == 0 { fail .InvalidInput }
+  if has_nul(path) || has_nul(configuration.directory) { fail .InvalidInput }
+  for argument in arguments {
+    if has_nul(argument) { fail .InvalidInput }
+  }
+  for entry in configuration.environment {
+    if entry.len == 0 || entry[0] == '=' || has_nul(entry) { fail .InvalidInput }
+    equal: bool = false
+    for environment_byte in entry {
+      if environment_byte == '=' {
+        equal = true
+      }
+    }
+    if !equal { fail .InvalidInput }
+  }
+  if input_overlap(arena, path, arguments, configuration) { fail .InvalidInput }
+  size := configuration.size
+  if size.columns == 0 || size.rows == 0 {
+    size = Size{ columns: DefaultColumns, rows: DefaultRows }
+  }
+  try check_size(size)
+  terminal := mem.push<Terminal>(arena)
+  mark := mem.arena_mark(arena)
+  defer mem.arena_rewind(arena, mark)
+  terminal.* = try spawn_native(arena, path, arguments, configuration, size)
+  return terminal
+}
+
+// Reads what the child wrote so far, up to destination.len bytes, without
+// waiting. Fails with WouldBlock when nothing is ready, and returns 0 once
+// the terminal has ended: every process holding it closed it (on Windows,
+// only after close). A closed terminal fails with InvalidInput.
+pub fn read(terminal: *Terminal, destination: []u8) usize!io.IoErr {
+  if !terminal.open { fail .InvalidInput }
+  if destination.len == 0 { return 0 }
+  return try read_native(terminal, destination)
+}
+
+// Types source into the terminal without waiting: returns how many bytes it
+// took, or fails with WouldBlock when it takes none now. A closed terminal
+// fails with InvalidInput.
+pub fn write(terminal: *Terminal, source: []const u8) usize!io.IoErr {
+  if !terminal.open { fail .InvalidInput }
+  if source.len == 0 { return 0 }
+  return try write_native(terminal, source)
+}
+
+// Waits up to milliseconds until read would not fail with WouldBlock, and
+// says whether it would not. Negative milliseconds wait without limit and 0
+// only checks. On Windows the wait checks the pipe every millisecond. A
+// closed terminal fails with InvalidInput.
+pub fn readable(terminal: *Terminal, milliseconds: i32) bool!io.IoErr {
+  if !terminal.open { fail .InvalidInput }
+  return try readable_native(terminal, milliseconds)
+}
+
+// Changes the window to size. On Linux and macOS the child's foreground
+// process group gets SIGWINCH. Zero columns or rows, or (on Windows) more
+// than 32767, fail with InvalidInput, as does a closed terminal.
+pub fn resize(terminal: *Terminal, size: Size) !io.IoErr {
+  if !terminal.open { fail .InvalidInput }
+  if size.columns == 0 || size.rows == 0 { fail .InvalidInput }
+  try check_size(size)
+  try resize_native(terminal, size)
+}
+
+// Waits for the child to end, or with nonblocking returns at once with
+// finished false while it runs. The child's output stays readable after it
+// ends.
+// Keep reading while waiting: a child blocks once the terminal's buffer is
+// full. Waiting on a child already waited for fails with InvalidInput.
+pub fn wait(terminal: *Terminal, nonblocking: bool) process.Exit!io.IoErr {
+  if !terminal.running { fail .InvalidInput }
+  return try wait_native(terminal, nonblocking)
+}
+
+// Kills the child at once: on Linux and macOS its whole process group with
+// SIGKILL, on Windows every process in its job. It still needs a wait (or
+// close) to be reaped. A child already waited for fails with InvalidInput.
+pub fn terminate(terminal: *Terminal) !io.IoErr {
+  if !terminal.running { fail .InvalidInput }
+  try terminate_native(terminal)
+}
+
+// Closes the terminal, and kills and reaps a child not yet waited for, as
+// terminate does. To let the child finish on its own, wait first.
+// Descendants that left the child's process group (Linux, macOS) see the
+// terminal hang up instead. Closing twice does nothing.
+pub fn close(terminal: *Terminal) {
+  if !terminal.open && !terminal.running { return }
+  close_native(terminal)
+  terminal.open = false
+  terminal.running = false
+}
