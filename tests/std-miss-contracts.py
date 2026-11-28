@@ -44,7 +44,7 @@ fn main() {
   if json_offset(arena,"{broken") != 1 || mem.arena_mark(arena)!=jsonmark { #panic("JSON syntax offset/rollback") }
   if json_offset(arena,"null garbage") != 5 || mem.arena_mark(arena)!=jsonmark { #panic("JSON trailing offset") }
   validjson:=json.parse(arena,"null") catch { #panic("JSON success") }
-  if validjson.kind!=json.KindNull { #panic("JSON success fields") }
+  if validjson.kind!=json.Kind.Null { #panic("JSON success fields") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-std-misses-') as directory:

@@ -7,19 +7,19 @@ def quote(x):return '"'+''.join('\\x%02x'%b for b in x)+'"'
 def check(node,v,label):
  out=[]
  def req(s):out.append('require('+s+','+quote(label.encode())+')')
- if v is None:req('json.kind('+node+')==json.KindNull')
- elif isinstance(v,bool):req('json.kind('+node+')==json.KindBool && json.as_bool('+node+')=='+str(v).lower())
- elif isinstance(v,str):req('json.kind('+node+')==json.KindString && mem.equal(json.as_text('+node+'),'+quote(v.encode())+')')
+ if v is None:req('json.kind('+node+')==json.Kind.Null')
+ elif isinstance(v,bool):req('json.kind('+node+')==json.Kind.Bool && json.as_bool('+node+')=='+str(v).lower())
+ elif isinstance(v,str):req('json.kind('+node+')==json.Kind.String && mem.equal(json.as_text('+node+'),'+quote(v.encode())+')')
  elif isinstance(v,(int,float)):
-  bits=struct.unpack('<Q',struct.pack('<d',float(v)))[0];req('json.kind('+node+')==json.KindNumber && #bitcast(u64,json.as_f64('+node+'))=='+str(bits))
+  bits=struct.unpack('<Q',struct.pack('<d',float(v)))[0];req('json.kind('+node+')==json.Kind.Number && #bitcast(u64,json.as_f64('+node+'))=='+str(bits))
  elif isinstance(v,list):
-  req('json.kind('+node+')==json.KindArray && json.length('+node+')=='+str(len(v)))
+  req('json.kind('+node+')==json.Kind.Array && json.length('+node+')=='+str(len(v)))
   for i,x in enumerate(v):out+=check('json.at('+node+','+str(i)+')',x,label)
-  req('json.kind(json.at('+node+','+str(len(v))+'))==json.KindMissing')
+  req('json.kind(json.at('+node+','+str(len(v))+'))==json.Kind.Missing')
  else:
-  req('json.kind('+node+')==json.KindObject && json.length('+node+')=='+str(len(v)))
+  req('json.kind('+node+')==json.Kind.Object && json.length('+node+')=='+str(len(v)))
   for k,x in v.items():out+=check('json.get('+node+','+quote(k.encode())+')',x,label)
-  req('json.kind(json.get('+node+',"not_present_zzz"))==json.KindMissing')
+  req('json.kind(json.get('+node+',"not_present_zzz"))==json.Kind.Missing')
  return out
 values=[None,True,False,0,-0.0,1,-1,2**64-1,-2**63,2**53-1,1.25,1e300,1e-300,'','ascii','é😀','a\0b\n\\"',{'é😀':'café','a\0b':[True,None]},[],{},[1,2,{'x':'y'}]]
 values.append({'é😀':'café','a\0b':[True,None]})
@@ -54,9 +54,9 @@ for i,v in enumerate(values):
  lines+=check('result.root',v,'value '+str(i));lines+=['mem.arena_rewind(arena,mark)','mem.arena_rewind(arena,prefix_mark)','}']
 invalid=[b'',b' ',b'01',b'1.',b'1e',b'-',b'true false',b'"x" trailing',b'{"a":}',b'[1,]',b'{"a" 1}',b'"unterminated',b'"bad\\q"',b'"bad\\"',b'"\\u12"',b'"\\u00xz"',b'"\\ud800"',b'"\\udc00"',b'"\\ud800\\u0041"',b'"\xc0\xaf"',b'"\xed\xa0\x80"',b'"\xf4\x90\x80\x80"',b'"\xe2\x82"',b'"\x80"',b'['*257+b'0'+b']'*257,b'1e9999']+[b'"a'+bytes([x])+b'b"' for x in range(32)]
 invalid += [b'['*n for n in range(1,258)] + [b'{\"x\":'*n for n in range(1,65)]
-for i,raw in enumerate(invalid):lines+=['if true {',f'result:=parse(arena,{quote(raw)})','require(result.code!=0 && json.kind(result.root)==json.KindMissing && mem.arena_mark(arena)==prefix_mark,"invalid rollback")','}']
+for i,raw in enumerate(invalid):lines+=['if true {',f'result:=parse(arena,{quote(raw)})','require(result.code!=0 && json.kind(result.root)==json.Kind.Missing && mem.arena_mark(arena)==prefix_mark,"invalid rollback")','}']
 large=json.dumps(list(range(1000)),separators=(',',':')).encode();deep=b'['*256+b'0'+b']'*256
-lines += ['if true {',f'result:=parse(arena,{quote(large)})','require(result.code==0 && json.length(result.root)==1000,"growth array")','for i in 0..1000 { require(json.as_f64(json.at(result.root,i))==#cast(f64,i),"contiguous growth") }','require(result.root.bits==1001,"subtree span")','mem.arena_rewind(arena,prefix_mark)','}',f'require(parse(arena,{quote(deep)}).code==0,"depth 256")','mem.arena_rewind(arena,prefix_mark)','if true {','backing:[512]u8\nfixed:=mem.arena_from_buffer(backing[..])','result:=parse(fixed,"{\\"x\\":1}")','require(result.code==0 && json.as_f64(json.get(result.root,"x"))==1.0,"fixed buffer")','}', 'require(json.kind(nil)==json.KindMissing && json.kind(json.get(nil,"x"))==json.KindMissing,"nil navigation")','}']
+lines += ['if true {',f'result:=parse(arena,{quote(large)})','require(result.code==0 && json.length(result.root)==1000,"growth array")','for i in 0..1000 { require(json.as_f64(json.at(result.root,i))==#cast(f64,i),"contiguous growth") }','require(result.root.bits==1001,"subtree span")','mem.arena_rewind(arena,prefix_mark)','}',f'require(parse(arena,{quote(deep)}).code==0,"depth 256")','mem.arena_rewind(arena,prefix_mark)','if true {','backing:[512]u8\nfixed:=mem.arena_from_buffer(backing[..])','result:=parse(fixed,"{\\"x\\":1}")','require(result.code==0 && json.as_f64(json.get(result.root,"x"))==1.0,"fixed buffer")','}', 'require(json.kind(nil)==json.Kind.Missing && json.kind(json.get(nil,"x"))==json.Kind.Missing,"nil navigation")','}']
 edge_source = r'''
 if true {
   value:=parse(arena,"-0")
@@ -106,7 +106,7 @@ if true {
 key_edges=[]
 for scalar,kind in [(b'""','String'),(b'"value"','String'),(b'null','Null'),(b'true','Bool'),(b'42','Number')]:
  raw=b'['*255+b'{"\\u006b":'+scalar+b'}'+b']'*255
- key_edges += ['if true {',f'raw:={quote(raw)}','result:=parse(arena,raw)','require(result.code==0,"maximum-depth object key and scalar")','node:=result.root','for depth in 0..255 { node=json.at(node,0) }',f'require(json.kind(json.get(node,"k"))==json.Kind{kind},"maximum-depth scalar kind")','mem.arena_rewind(arena,prefix_mark)','other:=parse_mutable(arena,raw)','require(other.code==0,"mutable maximum-depth control")','mem.arena_rewind(arena,prefix_mark)','}']
+ key_edges += ['if true {',f'raw:={quote(raw)}','result:=parse(arena,raw)','require(result.code==0,"maximum-depth object key and scalar")','node:=result.root','for depth in 0..255 { node=json.at(node,0) }',f'require(json.kind(json.get(node,"k"))==json.Kind.{kind},"maximum-depth scalar kind")','mem.arena_rewind(arena,prefix_mark)','other:=parse_mutable(arena,raw)','require(other.code==0,"mutable maximum-depth control")','mem.arena_rewind(arena,prefix_mark)','}']
 for raw in [b'{"\\q":0}',b'{"\\ud800":0}',b'{"\\u006b" 0}',b'['*255+b'{"\\q":0}'+b']'*255,b'['*256+b'{"k":0}'+b']'*256]:
  key_edges += ['if true {',f'raw:={quote(raw)}','result:=parse(arena,raw)','require(result.code!=0 && json.is_missing(result.root) && mem.arena_mark(arena)==prefix_mark,"key failure rollback")','other:=parse_mutable(arena,raw)','require(other.code!=0 && result.offset==other.offset && result.code==other.code,"key failure diagnostics")','require(mem.arena_mark(arena)==prefix_mark,"mutable key rollback")','}']
 # Small blocks exercise tape relocation and virtual marks, including arenas
@@ -206,7 +206,7 @@ fn blocks(arena:*const mem.Arena) usize {
 fn main() {
  backing:[8192]u8
  arena:=mem.arena_from_buffer(backing[..])
- require(#sizeof(json.Value)==16 && json_read_selected_kind(nil)==json.KindMissing)
+ require(#sizeof(json.Value)==16 && json_read_selected_kind(nil)==json.Kind.Missing)
  document:=parse(arena,"{\"\":[0,true,\"a\\u0000b\"],\"utf\":\"caf\\u00e9\",\"i\":-9223372036854775808,\"u\":18446744073709551615,\"real\":1.25}")
  require(document.code==0)
  root:=document.root

@@ -13,13 +13,8 @@ use utf8 "std/unicode/utf8"
 use "std/bytes"
 use "std/encoding/json/scan"
 
-pub const KindMissing: u8 = 0
-pub const KindNull: u8 = 1
-pub const KindBool: u8 = 2
-pub const KindNumber: u8 = 3
-pub const KindString: u8 = 4
-pub const KindArray: u8 = 5
-pub const KindObject: u8 = 6
+// A value's kind; Missing (zero) is what a lookup finds on a miss.
+pub enum Kind { Missing, Null, Bool, Number, String, Array, Object }
 // failed: the input is malformed or, with too_large, holds a number past binary64.
 struct Cursor { source: []const u8, at: usize, failed: bool, too_large: bool }
 const MaximumDepth: usize = 256
@@ -37,7 +32,7 @@ fn tape(arena: *memory.Arena, capacity: usize) []Value {
   return memory.push_array<Value>(arena, capacity)
 }
 
-fn read_append(state: *ReadParser, kind: u8, bits: u64) usize {
+fn read_append(state: *ReadParser, kind: Kind, bits: u64) usize {
   if state.used == state.values.len {
     old := state.values.len
     capacity := old * 2
@@ -64,7 +59,7 @@ fn read_append(state: *ReadParser, kind: u8, bits: u64) usize {
     }
   }
   index := state.used
-  state.values[index] = Value{ tag: kind, bits: bits }
+  state.values[index] = Value{ tag: #cast(u64, kind), bits: bits }
   state.used += 1
   return index
 }
@@ -142,13 +137,13 @@ fn read_number(state: *ReadParser) bool {
   }
   state.cursor.at = at
   if exact && !negative {
-    index := read_append(state, KindNumber, integer)
+    index := read_append(state, Kind.Number, integer)
     state.values[index].tag |= ReadUnsigned
     return true
   }
   if exact && negative && integer != 0 && integer <= 9223372036854775808 {
     magnitude := #wrapping(0 - integer)
-    index := read_append(state, KindNumber, magnitude)
+    index := read_append(state, Kind.Number, magnitude)
     state.values[index].tag |= ReadSigned
     return true
   }
@@ -158,7 +153,7 @@ fn read_number(state: *ReadParser) bool {
     state.cursor.too_large = true
     return false
   }
-  index := read_append(state, KindNumber, #bitcast(u64, value))
+  index := read_append(state, Kind.Number, #bitcast(u64, value))
   state.values[index].tag |= ReadFloat
   return true
 }
@@ -172,7 +167,7 @@ fn read_string_value(state: *ReadParser) bool {
   if value.len != 0 {
     pointer = #cast(usize, &value[0])
   }
-  index := read_append(state, KindString, pointer)
+  index := read_append(state, Kind.String, pointer)
   state.values[index].tag |= #cast(u64, value.len) << 8
   return true
 }
@@ -184,7 +179,7 @@ fn read_value(state: *ReadParser, depth: usize) bool {
   if byte == '"' { return read_string_value(state) }
   if byte == 'n' {
     if !literal(&state.cursor, "null") { return false }
-    _ = read_append(state, KindNull, 0)
+    _ = read_append(state, Kind.Null, 0)
     return true
   }
   if byte == 't' || byte == 'f' {
@@ -198,16 +193,16 @@ fn read_value(state: *ReadParser, depth: usize) bool {
     if truth {
       bits = 1
     }
-    _ = read_append(state, KindBool, bits)
+    _ = read_append(state, Kind.Bool, bits)
     return true
   }
   if byte != '[' && byte != '{' { return read_number(state) }
   if depth >= MaximumDepth { return false }
   object := byte == '{'
-  kind := KindArray
+  kind := Kind.Array
   close: u8 = ']'
   if object {
-    kind = KindObject
+    kind = Kind.Object
     close = '}'
   }
   index := read_append(state, kind, 0)
@@ -296,44 +291,47 @@ pub fn parse(arena: *memory.Arena, source: []const u8) *const Value!parse.ParseE
   return &state.values[0]
 }
 
-pub fn kind(value: *const Value) u8 {
-  if value == nil { return KindMissing }
-  return value.tag & 255
+// A node keeps its kind in the tag's low byte, its length above it.
+fn tagged(value: *const Value, wanted: Kind) bool {
+  return value != nil && (value.tag & 255) == #cast(u64, wanted)
+}
+read_kinds: [7]Kind = [Kind.Missing, Kind.Null, Kind.Bool, Kind.Number, Kind.String, Kind.Array, Kind.Object]
+pub fn kind(value: *const Value) Kind {
+  if value == nil || (value.tag & 255) >= 7 { return .Missing }
+  return read_kinds[value.tag & 255]
 }
 pub fn length(value: *const Value) usize {
   if value == nil { return 0 }
-  value_kind := #cast(u8, value.tag & 255)
-  if value_kind == KindString || value_kind == KindArray || value_kind == KindObject {
+  if tagged(value, .String) || tagged(value, .Array) || tagged(value, .Object) {
     return #cast(usize, value.tag >> 8)
   }
   return 0
 }
 pub fn as_text(value: *const Value) []const u8 {
-  if value == nil || (value.tag & 255) != KindString { return "" }
+  if !tagged(value, .String) { return "" }
   length := #cast(usize, value.tag >> 8)
   if length == 0 { return "" }
   return #slice(#cast(*const u8, #cast(usize, value.bits)), length)
 }
 pub fn as_f64(value: *const Value) f64 {
-  if value == nil || (value.tag & 255) != KindNumber { return 0.0 }
+  if !tagged(value, .Number) { return 0.0 }
   number_type := value.tag & 65280
   if number_type == ReadUnsigned { return #cast(f64, value.bits) }
   if number_type == ReadSigned { return #cast(f64, #bitcast(i64, value.bits)) }
   return #bitcast(f64, value.bits)
 }
 pub fn as_bool(value: *const Value) bool {
-  return value != nil && (value.tag & 255) == KindBool && value.bits != 0
+  return tagged(value, .Bool) && value.bits != 0
 }
 fn read_after(value: *const Value) *const Value {
   span: usize = 1
-  value_kind := #cast(u8, value.tag & 255)
-  if value_kind == KindArray || value_kind == KindObject {
+  if tagged(value, .Array) || tagged(value, .Object) {
     span = #cast(usize, value.bits)
   }
   return #cast(*const Value, #cast(usize, value) + span * 16)
 }
 pub fn get(object: *const Value, key: []const u8) *const Value {
-  if object == nil || (object.tag & 255) != KindObject { return &nil_value }
+  if !tagged(object, .Object) { return &nil_value }
   at := #cast(*const Value, #cast(usize, object) + 16)
   for i in 0..#cast(usize, object.tag >> 8) {
     value := #cast(*const Value, #cast(usize, at) + 16)
@@ -348,9 +346,7 @@ pub fn get(object: *const Value, key: []const u8) *const Value {
   return &nil_value
 }
 pub fn at(array: *const Value, index: usize) *const Value {
-  if array == nil || (array.tag & 255) != KindArray || index >= #cast(usize, array.tag >> 8) {
-    return &nil_value
-  }
+  if !tagged(array, .Array) || index >= #cast(usize, array.tag >> 8) { return &nil_value }
   at := #cast(*const Value, #cast(usize, array) + 16)
   for i in 0..index {
     at = read_after(at)
@@ -510,7 +506,7 @@ fn failed_string(cursor: *Cursor) []const u8 {
 
 // Zero is returned for a wrong kind, a fractional real or an out-of-range value.
 pub fn as_u64(value: *const Value) u64 {
-  if value == nil || (value.tag & 255) != KindNumber { return 0 }
+  if !tagged(value, .Number) { return 0 }
   number_type := value.tag & 65280
   if number_type == ReadUnsigned { return value.bits }
   if number_type == ReadSigned {
@@ -525,7 +521,7 @@ pub fn as_u64(value: *const Value) u64 {
   return integer
 }
 pub fn as_i64(value: *const Value) i64 {
-  if value == nil || (value.tag & 255) != KindNumber { return 0 }
+  if !tagged(value, .Number) { return 0 }
   number_type := value.tag & 65280
   if number_type == ReadSigned { return #bitcast(i64, value.bits) }
   if number_type == ReadUnsigned {
@@ -539,7 +535,7 @@ pub fn as_i64(value: *const Value) i64 {
   return integer
 }
 pub fn is_missing(value: *const Value) bool {
-  return value == nil || (value.tag & 255) == 0
+  return value == nil || tagged(value, .Missing)
 }
 
 // ended turns true when next finds no entry left; that entry's value is
@@ -551,8 +547,8 @@ pub struct Entry { value: *const Value, key: []const u8 }
 // Iteration is linear; repeated at(array, index) traversal can be quadratic.
 pub fn iterator(container: *const Value) Iterator {
   value_kind := kind(container)
-  if value_kind != KindArray && value_kind != KindObject { return Iterator{} }
-  return Iterator{ cursor: #cast(*const Value, #cast(usize, container) + 16), remaining: length(container), object: value_kind == KindObject }
+  if value_kind != Kind.Array && value_kind != Kind.Object { return Iterator{} }
+  return Iterator{ cursor: #cast(*const Value, #cast(usize, container) + 16), remaining: length(container), object: value_kind == Kind.Object }
 }
 pub fn next(state: *Iterator) Entry {
   if state == nil { return Entry{ value: &nil_value } }

@@ -722,17 +722,11 @@ Layer: heap
 
 Layer: heap
 
-- `const KindMissing: u8 = 0`: Kind zero is a missing value: the nil_value stub that lookups return on a miss.
-- `const KindNull: u8 = 1`
-- `const KindBool: u8 = 2`
-- `const KindNumber: u8 = 3`
-- `const KindString: u8 = 4`
-- `const KindArray: u8 = 5`
-- `const KindObject: u8 = 6`
+- `enum Kind { Missing, Null, Bool, Number, String, Array, Object }`: A value's kind.
 - `enum TokenKind { End, Invalid, Null, Bool, Number, String, ArrayBegin, ArrayEnd, ObjectBegin, ObjectEnd, Colon, Comma, }`
 - `struct Tokenizer { source: []const u8, offset: usize }`
 - `struct Token { kind: TokenKind, text: []const u8, offset: usize }`
-- `struct Value { kind: u8, boolean: bool, text: []const u8, key: []const u8, first: *Value, last: *Value, next: *Value, // Intrusive membership; mutate tree links only through add/add_member. parent: *Value, }`
+- `struct Value { kind: Kind, boolean: bool, text: []const u8, key: []const u8, first: *Value, last: *Value, next: *Value, // Intrusive membership; mutate tree links only through add/add_member. parent: *Value, }`
 - `const nil_value: Value = Value{}`: Returned for every miss: a missing key, an index past the end, a lookup on the wrong kind, and the root of a failed parse.
 - `fn tokenizer(source: []const u8) Tokenizer`
 - `fn token_next(state: *Tokenizer) Token`
@@ -786,17 +780,11 @@ Layer: heap
 
 Layer: heap
 
-- `const KindMissing: u8 = 0`
-- `const KindNull: u8 = 1`
-- `const KindBool: u8 = 2`
-- `const KindNumber: u8 = 3`
-- `const KindString: u8 = 4`
-- `const KindArray: u8 = 5`
-- `const KindObject: u8 = 6`
+- `enum Kind { Missing, Null, Bool, Number, String, Array, Object }`: A value's kind;
 - `struct Value { tag: u64, bits: u64 }`: Experimental read-only DOM.
 - `const nil_value: Value = Value{}`
 - `fn parse(arena: *memory.Arena, source: []const u8) *const Value!parse.ParseErr`: @ownership All values and text live in arena;
-- `fn kind(value: *const Value) u8`
+- `fn kind(value: *const Value) Kind`
 - `fn length(value: *const Value) usize`
 - `fn as_text(value: *const Value) []const u8`
 - `fn as_f64(value: *const Value) f64`

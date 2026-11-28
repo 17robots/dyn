@@ -34,7 +34,7 @@ for index, raw in enumerate(valid):
     checks.append('''if true {
       raw := %s
       result := parse(arena, raw)
-      require(result.code == 0 && result.root.kind == json.KindNumber, "numeric kind %d")
+      require(result.code == 0 && result.root.kind == json.Kind.Number, "numeric kind %d")
       require(mem.equal(result.root.text, raw), "numeric exact token %d")
       state := json.tokenizer(raw)
       token := json.token_next(&state)
@@ -85,7 +85,7 @@ fn main() {
     state := json.tokenizer(data[..])
     token := json.token_next(&state)
     if accepted {
-      require(result.root.kind == json.KindNull && token.kind == json.TokenKind.Null && token.offset == 1 && state.offset == 5, "whitespace token advancement")
+      require(result.root.kind == json.Kind.Null && token.kind == json.TokenKind.Null && token.offset == 1 && state.offset == 5, "whitespace token advancement")
       ending := json.token_next(&state)
       require(ending.kind == json.TokenKind.End && ending.offset == 5 && state.offset == 5, "whitespace EOF advancement")
     } else {

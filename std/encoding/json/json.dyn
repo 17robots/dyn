@@ -8,15 +8,9 @@ use "std/encoding/json/scan"
 
 struct Cursor { source: []const u8, at: usize, failed: bool }
 
-// Kind zero is a missing value: the nil_value stub that lookups return on a
-// miss. It is not a JSON null.
-pub const KindMissing: u8 = 0
-pub const KindNull: u8 = 1
-pub const KindBool: u8 = 2
-pub const KindNumber: u8 = 3
-pub const KindString: u8 = 4
-pub const KindArray: u8 = 5
-pub const KindObject: u8 = 6
+// A value's kind. Missing comes first, so a zeroed Value (the nil_value stub
+// lookups return on a miss) is Missing; it is not a JSON null.
+pub enum Kind { Missing, Null, Bool, Number, String, Array, Object }
 
 pub enum TokenKind {
   End, Invalid, Null, Bool, Number, String,
@@ -28,7 +22,7 @@ pub struct Tokenizer { source: []const u8, offset: usize }
 pub struct Token { kind: TokenKind, text: []const u8, offset: usize }
 
 pub struct Value {
-  kind: u8,
+  kind: Kind,
   boolean: bool,
   text: []const u8,
   key: []const u8,
@@ -41,7 +35,7 @@ pub struct Value {
 
 // Returned for every miss: a missing key, an index past the end, a lookup on
 // the wrong kind, and the root of a failed parse. Read-only; reading it gives
-// an empty value of kind KindMissing.
+// an empty value of kind Kind.Missing.
 pub const nil_value: Value = Value{}
 
 // root is the stub when parsing fails, so lookups work before ok is checked.
@@ -96,7 +90,7 @@ pub fn token_next(state: *Tokenizer) Token {
   return Token{ kind: kind, text: state.source[start..cursor.at], offset: start }
 }
 
-fn node(arena: *memory.Arena, kind: u8) *Value {
+fn node(arena: *memory.Arena, kind: Kind) *Value {
   result := memory.push<Value>(arena)
   result.kind = kind
   return result
@@ -472,7 +466,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
   byte := cursor.source[cursor.at]
   if byte == 'n' {
     if !literal(cursor, "null") { return nil }
-    return node(arena, KindNull)
+    return node(arena, Kind.Null)
   }
   if byte == 't' || byte == 'f' {
     truth := byte == 't'
@@ -481,14 +475,14 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
     } else {
       if !literal(cursor, "false") { return nil }
     }
-    bool_node := node(arena, KindBool)
+    bool_node := node(arena, Kind.Bool)
     bool_node.boolean = truth
     return bool_node
   }
   if byte == '"' {
     content := decoded_string(arena, cursor)
     if cursor.failed { return nil }
-    string_node := node(arena, KindString)
+    string_node := node(arena, Kind.String)
     string_node.text = content
     return string_node
   }
@@ -496,9 +490,9 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
     if depth >= MaximumDepth { return nil }
     object := byte == '{'
     cursor.at += 1
-    container := node(arena, KindArray)
+    container := node(arena, Kind.Array)
     if object {
-      container.kind = KindObject
+      container.kind = Kind.Object
     }
     skip(cursor)
     closing: u8 = ']'
@@ -535,7 +529,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
   }
   start := cursor.at
   if !number(cursor) { return nil }
-  number_node := node(arena, KindNumber)
+  number_node := node(arena, Kind.Number)
   number_node.text = cursor.source[start..cursor.at]
   return number_node
 }
@@ -557,10 +551,10 @@ pub fn parse(arena: *memory.Arena, source: []const u8) *const Value!parse.ParseE
 }
 
 pub fn push_null(arena: *memory.Arena) *Value {
-  return node(arena, KindNull)
+  return node(arena, Kind.Null)
 }
 pub fn push_bool(arena: *memory.Arena, value: bool) *Value {
-  result := node(arena, KindBool)
+  result := node(arena, Kind.Bool)
   result.boolean = value
   return result
 }
@@ -568,27 +562,27 @@ pub fn push_bool(arena: *memory.Arena, value: bool) *Value {
 pub fn push_number(arena: *memory.Arena, content: []const u8) *Value {
   cursor := Cursor{ source: content, at: 0 }
   if !number(&cursor) || cursor.at != content.len { return nil }
-  result := node(arena, KindNumber)
+  result := node(arena, Kind.Number)
   result.text = content
   return result
 }
 // Retains text as a borrowed view; caller keeps it alive.
 pub fn push_string(arena: *memory.Arena, content: []const u8) *Value {
-  result := node(arena, KindString)
+  result := node(arena, Kind.String)
   result.text = content
   return result
 }
 pub fn push_array(arena: *memory.Arena) *Value {
-  return node(arena, KindArray)
+  return node(arena, Kind.Array)
 }
 pub fn push_object(arena: *memory.Arena) *Value {
-  return node(arena, KindObject)
+  return node(arena, Kind.Object)
 }
 // A node has one parent. Reject duplicate attachment, reparenting and cycles
 // before touching links or borrowed keys; no allocation or arena rewind occurs.
 fn can_append(parent: *Value, child: *Value) bool {
   if parent == nil || child == nil || child.parent != nil || child.next != nil { return false }
-  if parent.kind != KindArray && parent.kind != KindObject { return false }
+  if parent.kind != Kind.Array && parent.kind != Kind.Object { return false }
   ancestor := parent
   depth: usize = 0
   for ancestor != nil {
@@ -604,7 +598,7 @@ pub fn add(parent: *Value, child: *Value) bool {
   return true
 }
 pub fn add_member(parent: *Value, key: []const u8, child: *Value) bool {
-  if !can_append(parent, child) || parent.kind != KindObject { return false }
+  if !can_append(parent, child) || parent.kind != Kind.Object { return false }
   child.key = key
   append(parent, child)
   return true
@@ -612,7 +606,7 @@ pub fn add_member(parent: *Value, key: []const u8, child: *Value) bool {
 
 // The member named key, or &nil_value.
 pub fn object_get(object: *const Value, key: []const u8) *const Value {
-  if object == nil || object.kind != KindObject { return &nil_value }
+  if object == nil || object.kind != Kind.Object { return &nil_value }
   child := object.first
   for child != nil {
     if bytes.equal(child.key, key) { return child }
@@ -637,7 +631,7 @@ pub fn as<T>(value: *const Value) T!stream.IoErr {
 
 fn read<T>(value: *const Value) T!stream.IoErr {
   result: T
-  if value == nil || value.kind == KindMissing || value.kind == KindNull { fail .NotFound }
+  if value == nil || value.kind == Kind.Missing || value.kind == Kind.Null { fail .NotFound }
   problem := read_into(value, &result)
   if problem.len != 0 { fail .InvalidInput }
   return result
@@ -658,11 +652,11 @@ fn put_text(storage: []u8, used: usize, text: []const u8) usize {
 fn read_into(value: *const Value, target: any) []const u8 {
   case target {
     *[]const u8(p) => {
-      if value.kind != KindString { return "is not a string" }
+      if value.kind != Kind.String { return "is not a string" }
       p.* = value.text
     }
     *bool(p) => {
-      if value.kind != KindBool { return "is not true or false" }
+      if value.kind != Kind.Bool { return "is not true or false" }
       p.* = value.boolean
     }
     **const Value(p) => {
@@ -688,14 +682,14 @@ fn read_into(value: *const Value, target: any) []const u8 {
 }
 
 fn read_number<T>(value: *const Value, target: *T) []const u8 {
-  if value.kind != KindNumber { return "is not a number" }
+  if value.kind != Kind.Number { return "is not a number" }
   if !strings.valid<T>(value.text) { return "does not fit the type, or is not a whole number" }
   target.* = strings.parse<T>(value.text)
   return ""
 }
 
 pub fn array_length(array: *const Value) usize {
-  if array == nil || array.kind != KindArray { return 0 }
+  if array == nil || array.kind != Kind.Array { return 0 }
   count: usize = 0
   child := array.first
   for child != nil {
@@ -707,7 +701,7 @@ pub fn array_length(array: *const Value) usize {
 
 // Element number index, or &nil_value.
 pub fn array_get(array: *const Value, index: usize) *const Value {
-  if array == nil || array.kind != KindArray { return &nil_value }
+  if array == nil || array.kind != Kind.Array { return &nil_value }
   child := array.first
   at: usize = 0
   for child != nil {
@@ -719,25 +713,25 @@ pub fn array_get(array: *const Value, index: usize) *const Value {
 }
 
 pub fn is_missing(value: *const Value) bool {
-  return value == nil || value.kind == KindMissing
+  return value == nil || value.kind == Kind.Missing
 }
 pub fn is_null(value: *const Value) bool {
-  return value != nil && value.kind == KindNull
+  return value != nil && value.kind == Kind.Null
 }
 pub fn is_bool(value: *const Value) bool {
-  return value != nil && value.kind == KindBool
+  return value != nil && value.kind == Kind.Bool
 }
 pub fn is_number(value: *const Value) bool {
-  return value != nil && value.kind == KindNumber
+  return value != nil && value.kind == Kind.Number
 }
 pub fn is_string(value: *const Value) bool {
-  return value != nil && value.kind == KindString
+  return value != nil && value.kind == Kind.String
 }
 pub fn is_array(value: *const Value) bool {
-  return value != nil && value.kind == KindArray
+  return value != nil && value.kind == Kind.Array
 }
 pub fn is_object(value: *const Value) bool {
-  return value != nil && value.kind == KindObject
+  return value != nil && value.kind == Kind.Object
 }
 
 fn copy(destination: []u8, at: *usize, data: []const u8) bool {
@@ -751,13 +745,13 @@ fn copy(destination: []u8, at: *usize, data: []const u8) bool {
 
 fn encode_value(destination: []u8, at: *usize, value: *const Value, depth: usize) bool {
   if depth > MaximumDepth || value == nil { return false }
-  if value.kind == KindNull { return copy(destination, at, "null") }
-  if value.kind == KindBool {
+  if value.kind == Kind.Null { return copy(destination, at, "null") }
+  if value.kind == Kind.Bool {
     if value.boolean { return copy(destination, at, "true") }
     return copy(destination, at, "false")
   }
-  if value.kind == KindNumber { return copy(destination, at, value.text) }
-  if value.kind == KindString {
+  if value.kind == Kind.Number { return copy(destination, at, value.text) }
+  if value.kind == Kind.String {
     string_encoded := write_string_into(destination[at.*..], value.text)
     if string_encoded.len == 0 { return false }
     at.* += string_encoded.len
@@ -765,7 +759,7 @@ fn encode_value(destination: []u8, at: *usize, value: *const Value, depth: usize
   }
   opening: u8 = '['
   closing: u8 = ']'
-  if value.kind == KindObject {
+  if value.kind == Kind.Object {
     opening = '{'
     closing = '}'
   }
@@ -778,7 +772,7 @@ fn encode_value(destination: []u8, at: *usize, value: *const Value, depth: usize
     if !first {
       if !copy(destination, at, ",") { return false }
     }
-    if value.kind == KindObject {
+    if value.kind == Kind.Object {
       key_encoded := write_string_into(destination[at.*..], child.key)
       if key_encoded.len == 0 { return false }
       at.* += key_encoded.len
@@ -812,12 +806,12 @@ fn pretty_indent(destination: []u8, at: *usize, depth: usize, width: usize) bool
 fn encode_pretty_value(destination: []u8, at: *usize, value: *const Value,
   depth: usize, width: usize) bool {
   if value == nil || depth > MaximumDepth { return false }
-  if value.kind != KindArray && value.kind != KindObject {
+  if value.kind != Kind.Array && value.kind != Kind.Object {
     return encode_value(destination, at, value, depth)
   }
   opening: []const u8 = "["
   closing: []const u8 = "]"
-  if value.kind == KindObject {
+  if value.kind == Kind.Object {
     opening = "{"
     closing = "}"
   }
@@ -829,7 +823,7 @@ fn encode_pretty_value(destination: []u8, at: *usize, value: *const Value,
   for child != nil {
     if !first && !copy(destination, at, ",\n") { return false }
     if !pretty_indent(destination, at, depth + 1, width) { return false }
-    if value.kind == KindObject {
+    if value.kind == Kind.Object {
       encoded := write_string_into(destination[at.*..], child.key)
       if encoded.len == 0 { return false }
       at.* += encoded.len
@@ -897,22 +891,22 @@ fn stream_string(destination: stream.Writer, source: []const u8) !stream.IoErr {
 fn stream_value(destination: stream.Writer, value: *const Value, depth: usize) !stream.IoErr {
   // A nil value, or one nested too deep, has no JSON form.
   if value == nil || depth > MaximumDepth { fail .InvalidInput }
-  if value.kind == KindNull {
+  if value.kind == Kind.Null {
     try stream.write(destination, "null")
-  } else if value.kind == KindBool {
+  } else if value.kind == Kind.Bool {
     if value.boolean {
       try stream.write(destination, "true")
     } else {
       try stream.write(destination, "false")
     }
-  } else if value.kind == KindNumber {
+  } else if value.kind == Kind.Number {
     try stream.write(destination, value.text)
-  } else if value.kind == KindString {
+  } else if value.kind == Kind.String {
     try stream_string(destination, value.text)
   } else {
     opening: []const u8 = "["
     closing: []const u8 = "]"
-    if value.kind == KindObject {
+    if value.kind == Kind.Object {
       opening = "{"
       closing = "}"
     }
@@ -922,7 +916,7 @@ fn stream_value(destination: stream.Writer, value: *const Value, depth: usize) !
       if child != value.first {
         try stream.write(destination, ",")
       }
-      if value.kind == KindObject {
+      if value.kind == Kind.Object {
         try stream_string(destination, child.key)
         try stream.write(destination, ":")
       }
@@ -979,10 +973,8 @@ fn encode_arena(arena: *memory.Arena, value: *const Value, indent: usize, string
 // Whether every string and key is UTF-8 and nesting stays within
 // MaximumDepth, the only reasons other than space that encoding fails.
 fn encodable(value: *const Value, depth: usize) bool {
-  if value == nil || value.kind == KindMissing || value.kind > KindObject || depth > MaximumDepth {
-    return false
-  }
-  if (value.kind == KindString && !utf8.valid(value.text)) || !utf8.valid(value.key) {
+  if value == nil || value.kind == Kind.Missing || depth > MaximumDepth { return false }
+  if (value.kind == Kind.String && !utf8.valid(value.text)) || !utf8.valid(value.key) {
     return false
   }
   child := value.first
