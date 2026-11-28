@@ -1,6 +1,7 @@
 #target(kernel: darwin)
 #link("System")
 // Native Darwin adapter. libSystem handles OS calls; buffers use the caller arena.
+use "std/os/macos/sys"
 use io "std/io"
 use c "std/c"
 use fs "std/fs"
@@ -97,8 +98,10 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
   }
   if child == 0 {
     _ = native_close(reader)
-    failed: bool = false
-    if configuration.group && native_group(0, 0) < 0 {
+    // The child starts with no blocked signals (SIG_SETMASK is 3).
+    unblocked: u32 = 0
+    failed := #syscall(sys.Sigprocmask, 3, &unblocked, 0) < 0
+    if !failed && configuration.group && native_group(0, 0) < 0 {
       failed = true
     }
     if !failed && copies[0] >= 0 && native_dup(copies[0], 0) < 0 {

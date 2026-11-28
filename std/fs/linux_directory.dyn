@@ -303,3 +303,21 @@ fn directory_handle(directory: *const Directory) isize {
 fn directory_state_at(descriptor: isize) DirectoryState {
   return DirectoryState{ file: adopt_handle(descriptor) }
 }
+
+// renameat2, fchmod, faccessat and copy_file_range: the compiler maps each to
+// the target's own number on x86-64, AArch64 and RISC-V.
+// renameat2 with RENAME_NOREPLACE.
+fn rename_no_replace(old_path: *const u8, new_path: *const u8) isize {
+  return #syscall(sys.Renameat2, -100, old_path, -100, new_path, 1)
+}
+fn change_mode(handle: isize, mode: usize) isize {
+  return #syscall(sys.Fchmod, handle, mode)
+}
+// faccessat(AT_FDCWD, path, X_OK) with the real user and group, as access.
+fn access_execute(path: *const u8, _info: Metadata) bool {
+  return #syscall(sys.Faccessat, -100, path, 1) == 0
+}
+// The source offset advances in offset; the destination position moves.
+fn copy_file_range(source: isize, offset: *i64, destination: isize, length: usize) isize {
+  return #syscall(sys.CopyFileRange, source, offset, destination, 0, length, 0)
+}
