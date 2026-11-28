@@ -209,7 +209,7 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
     mark := mem.arena_mark(scratch)
     parts: [2][]const u8 = [directory, item.name]
     path := strings.join(scratch, parts[..], "/")
-    if item.kind == 4 {
+    if item.kind == .Directory {
       // Directories recurse with their own scratch path, then release it.
       visit(arena, scratch, walk, path, depth + 1)
     } else if font_file(item.name) && walk.count < walk.entries.len {

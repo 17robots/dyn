@@ -2,7 +2,7 @@ use "std/os/macos/sys"
 #target(kernel: darwin)
 
 // Directory listing through getdirentries64, with the Linux API shape.
-// Entry kinds use dirent values: 4 directory, 8 regular file, 10 link.
+// Entry kinds come from d_type, translated by entry_kind.
 // ended is set by directory_next when it returns no entry.
 pub struct Directory { file: File, storage: []u8, offset: usize, used: usize, base: i64, path: []const u8, ended: bool }
 
@@ -43,7 +43,7 @@ fn native_directory_next(directory: *Directory, entry: *DirectoryEntry) isize {
     dot := name.len == 1 && name[0] == '.'
     dot_dot := name.len == 2 && name[0] == '.' && name[1] == '.'
     if !dot && !dot_dot {
-      entry.* = DirectoryEntry{ name: name, kind: kind }
+      entry.* = DirectoryEntry{ name: name, kind: entry_kind(kind) }
       return 0
     }
   }

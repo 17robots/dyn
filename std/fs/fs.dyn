@@ -12,9 +12,12 @@ pub struct File { descriptor: isize, active: bool, ended: bool, path: []const u8
 // Size, inode, device and the POSIX mode (type and permission bits).
 pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16 }
 
+// What a directory entry names. Unknown when the platform did not record it
+// (some file systems leave it to a metadata read).
+pub enum EntryKind { Unknown, File, Directory, Symlink, Other }
 // One directory entry. name borrows the directory's storage until the next
-// call; kind uses dirent values: 4 directory, 8 regular file, 10 link.
-pub struct DirectoryEntry { name: []const u8, kind: u8 }
+// call.
+pub struct DirectoryEntry { name: []const u8, kind: EntryKind }
 
 fn owned_file(handle: isize) File {
   return File{ descriptor: handle, active: true }

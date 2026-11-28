@@ -14,8 +14,12 @@ servers so they pick up the new `dyn`.
 
 ## 0.1.0-preview.44
 
-No language changes.
+Breaking: `std/fs`. No language changes.
 
+- `DirectoryEntry.kind` is an `EntryKind` (`Unknown`, `File`, `Directory`, `Symlink`,
+  `Other`) instead of the platform's `d_type` number. Replace `entry.kind == 4` with
+  `entry.kind == .Directory`, `== 8` with `.File` and `== 10` with `.Symlink`. Windows
+  reports the same names.
 - `dyn fmt` spaces binary operators, assignments and `:=` (`a != b`, `total += 1`, `x := y`)
   and puts a space after a declared name's colon (`name: type`, `field: value`). Unary
   operators, pointer types, generics, strings and comments keep their text. Like the rest of

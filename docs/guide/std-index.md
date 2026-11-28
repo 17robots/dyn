@@ -1056,7 +1056,8 @@ Layer: std
 
 - `struct File { descriptor: isize, active: bool, ended: bool, path: []const u8 }`: Files and directories.
 - `struct Metadata { size: u64, inode: u64, device: u64, mode: u16 }`: Size, inode, device and the POSIX mode (type and permission bits).
-- `struct DirectoryEntry { name: []const u8, kind: u8 }`: One directory entry.
+- `enum EntryKind { Unknown, File, Directory, Symlink, Other }`: What a directory entry names.
+- `struct DirectoryEntry { name: []const u8, kind: EntryKind }`: One directory entry.
 - `fn is_open(file: *const File) bool`
 - `fn adopt_handle(handle: isize) File`: A File for a native handle opened elsewhere;
 - `fn open(path: []const u8) File!io.IoErr`: Opens path for reading.
