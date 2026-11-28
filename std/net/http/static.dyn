@@ -210,11 +210,11 @@ fn load_tree(arena: *memory.Arena, root: []const u8, relative: []const u8, asset
     if directory.ended { return }
     if entry.name.len == 0 || entry.name[0] == '.' { continue }
     child := join_path(arena, relative, entry.name)
-    if entry.kind == 4 {
+    if entry.kind == .Directory {
       try load_tree(arena, root, child, assets, maximum, depth + 1)
       continue
     }
-    if entry.kind != 8 { continue }
+    if entry.kind != .File { continue }
     // More files than asset storage.
     if assets.count == assets.items.len { fail .Capacity }
     path := join_path(arena, root, child)

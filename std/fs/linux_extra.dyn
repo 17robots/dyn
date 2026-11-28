@@ -59,7 +59,7 @@ fn native_directory_next(directory: *Directory, entry: *DirectoryEntry) isize {
     dot := name.len == 1 && name[0] == '.'
     dot_dot := name.len == 2 && name[0] == '.' && name[1] == '.'
     if !dot && !dot_dot {
-      entry.* = DirectoryEntry{ name: name, kind: kind }
+      entry.* = DirectoryEntry{ name: name, kind: entry_kind(kind) }
       return 0
     }
   }

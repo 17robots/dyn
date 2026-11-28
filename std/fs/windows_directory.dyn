@@ -78,11 +78,12 @@ fn native_directory_next(directory: *Directory, entry: *DirectoryEntry) isize {
     dot := name.len == 1 && name[0] == '.'
     dot_dot := name.len == 2 && name[0] == '.' && name[1] == '.'
     if !dot && !dot_dot {
-      kind: u8 = 8
+      // A reparse point (a symlink or junction) before a directory.
+      kind := EntryKind.File
       if (attributes & 1024) != 0 {
-        kind = 10
+        kind = .Symlink
       } else if (attributes & 16) != 0 {
-        kind = 4
+        kind = .Directory
       }
       entry.* = DirectoryEntry{ name: name, kind: kind }
       return 0

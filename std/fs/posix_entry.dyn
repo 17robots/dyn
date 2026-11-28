@@ -1,0 +1,11 @@
+#target(family: unix)
+// Linux and macOS report an entry's type as the same d_type numbers.
+fn entry_kind(d_type: u8) EntryKind {
+  case d_type {
+    0 => { return .Unknown }
+    4 => { return .Directory }
+    8 => { return .File }
+    10 => { return .Symlink }
+    _ => { return .Other }
+  }
+}
