@@ -94,13 +94,13 @@ pub fn close(renderer: *Renderer) {
 }
 fn quad(renderer: *Renderer, x, y, right, bottom: f32, tint: ui.Color) {
   vertices: [24]f32 = [x, y, 0.0, 0.0, right, y, 1.0, 0.0, right, bottom, 1.0, 1.0, x, y, 0.0, 0.0, right, bottom, 1.0, 1.0, x, bottom, 0.0, 1.0]
-  renderer.api.uniform_4f(renderer.tint, #cast(f32, tint.r)/255.0, #cast(f32, tint.g)/255.0, #cast(f32, tint.b)/255.0, #cast(f32, tint.a)/255.0)
+  renderer.api.uniform_4f(renderer.tint, #cast(f32, tint.r) / 255.0, #cast(f32, tint.g) / 255.0, #cast(f32, tint.b) / 255.0, #cast(f32, tint.a) / 255.0)
   renderer.api.buffer_data(gl.ArrayBuffer, #cast(isize, #sizeof(vertices)), &vertices[0], gl.DynamicDraw)
   renderer.api.draw_arrays(gl.Triangles, 0, 6)
 }
 fn glyph(renderer: *Renderer, clip: ui.Rect, tint: ui.Color, font: software.Font, codepoint: u32, x, y: i64) i64 {
   if font.glyph == nil || font.line_height <= 0 { return -1 }
-  if x < #cast(i64, clip.x)-4294967296 || x > #cast(i64, clip.x)+#cast(i64, clip.width)+4294967296 || y < #cast(i64, clip.y)-4294967296 || y > #cast(i64, clip.y)+#cast(i64, clip.height)+4294967296 {
+  if x < #cast(i64, clip.x) - 4294967296 || x > #cast(i64, clip.x) + #cast(i64, clip.width) + 4294967296 || y < #cast(i64, clip.y) - 4294967296 || y > #cast(i64, clip.y) + #cast(i64, clip.height) + 4294967296 {
     return 0
   }
   bitmap := font.glyph(font.data, codepoint)
@@ -109,37 +109,37 @@ fn glyph(renderer: *Renderer, clip: ui.Rect, tint: ui.Color, font: software.Font
   if bitmap.stride < #cast(usize, bitmap.width) || bitmap.stride > 2147483647 || #cast(usize, bitmap.width) > bitmap.pixels.len {
     return -1
   }
-  if #cast(usize, bitmap.height-1) > (bitmap.pixels.len-#cast(usize, bitmap.width))/bitmap.stride {
+  if #cast(usize, bitmap.height - 1) > (bitmap.pixels.len - #cast(usize, bitmap.width)) / bitmap.stride {
     return -1
   }
-  left := x+bitmap.x_offset
-  top := y+bitmap.y_offset
-  if left >= #cast(i64, clip.x)+#cast(i64, clip.width) || top >= #cast(i64, clip.y)+#cast(i64, clip.height) || left+bitmap.width <= clip.x || top+bitmap.height <= clip.y {
+  left := x + bitmap.x_offset
+  top := y + bitmap.y_offset
+  if left >= #cast(i64, clip.x) + #cast(i64, clip.width) || top >= #cast(i64, clip.y) + #cast(i64, clip.height) || left + bitmap.width <= clip.x || top + bitmap.height <= clip.y {
     return bitmap.advance
   }
   gx := left
   gy := top
-  right := left+bitmap.width
-  bottom := top+bitmap.height
+  right := left + bitmap.width
+  bottom := top + bitmap.height
   if gx < clip.x {
     gx = clip.x
   }
   if gy < clip.y {
     gy = clip.y
   }
-  if right > #cast(i64, clip.x)+#cast(i64, clip.width) {
-    right = #cast(i64, clip.x)+#cast(i64, clip.width)
+  if right > #cast(i64, clip.x) + #cast(i64, clip.width) {
+    right = #cast(i64, clip.x) + #cast(i64, clip.width)
   }
-  if bottom > #cast(i64, clip.y)+#cast(i64, clip.height) {
-    bottom = #cast(i64, clip.y)+#cast(i64, clip.height)
+  if bottom > #cast(i64, clip.y) + #cast(i64, clip.height) {
+    bottom = #cast(i64, clip.y) + #cast(i64, clip.height)
   }
-  cropped_width := #cast(i32, right-gx)
-  cropped_height := #cast(i32, bottom-gy)
+  cropped_width := #cast(i32, right - gx)
+  cropped_height := #cast(i32, bottom - gy)
   if cropped_width > renderer.max_texture || cropped_height > renderer.max_texture { return -2 }
   // Upload only visible rows, without requiring final-row atlas padding.
   renderer.api.tex_image_2d(gl.Texture2d, 0, #cast(i32, gl.R8), cropped_width, cropped_height, 0, gl.Red, gl.UnsignedByte, nil)
   for row in 0..cropped_height {
-    offset := #cast(usize, gy-top+row)*bitmap.stride+#cast(usize, gx-left)
+    offset := #cast(usize, gy - top + row) * bitmap.stride + #cast(usize, gx - left)
     renderer.api.tex_sub_image_2d(gl.Texture2d, 0, 0, row, cropped_width, 1, gl.Red, gl.UnsignedByte, #cast(rawptr, &bitmap.pixels[offset]))
   }
   quad(renderer, #cast(f32, gx), #cast(f32, gy), #cast(f32, right), #cast(f32, bottom), tint)
@@ -183,7 +183,7 @@ pub fn render(renderer: *Renderer, commands: *const ui.Command, width, height: i
   distances: i32 = 0
   api.get_integer(gl.MaxClipDistances, &distances)
   for i in 0..distances {
-    api.disable(gl.ClipDistance0+#cast(u32, i))
+    api.disable(gl.ClipDistance0 + #cast(u32, i))
   }
   api.disable(gl.DepthTest)
   api.disable(gl.CullFace)
@@ -196,16 +196,16 @@ pub fn render(renderer: *Renderer, commands: *const ui.Command, width, height: i
   api.uniform_1i(renderer.sampler, 0)
   command := commands
   for command != nil && command.kind != ui.Kind.None {
-    clip := ui.intersect(command.clip, ui.Rect{width:width, height:height})
+    clip := ui.intersect(command.clip, ui.Rect{width: width, height: height})
     clip = ui.intersect(clip, command.bounds)
     if clip.width > 0 && clip.height > 0 && command.color.a != 0 {
-      api.scissor(clip.x, height-clip.y-clip.height, clip.width, clip.height)
+      api.scissor(clip.x, height - clip.y - clip.height, clip.width, clip.height)
       if command.kind == ui.Kind.Rectangle {
         bounds := ui.intersect(command.bounds, clip)
         if bounds.width > 0 && bounds.height > 0 {
           solid: u8 = 255
           api.tex_image_2d(gl.Texture2d, 0, #cast(i32, gl.R8), 1, 1, 0, gl.Red, gl.UnsignedByte, &solid)
-          quad(renderer, #cast(f32, bounds.x), #cast(f32, bounds.y), #cast(f32, #cast(i64, bounds.x)+#cast(i64, bounds.width)), #cast(f32, #cast(i64, bounds.y)+#cast(i64, bounds.height)), command.color)
+          quad(renderer, #cast(f32, bounds.x), #cast(f32, bounds.y), #cast(f32, #cast(i64, bounds.x) + #cast(i64, bounds.width)), #cast(f32, #cast(i64, bounds.y) + #cast(i64, bounds.height)), command.color)
         }
       } else if command.kind == ui.Kind.Glyph {
         advance := glyph(renderer, clip, command.color, font, command.codepoint, command.glyph_x, command.glyph_y)

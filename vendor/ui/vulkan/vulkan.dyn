@@ -21,13 +21,13 @@ pub fn open(renderer: *Renderer, limits: Limits) !io.IoErr {
   handle := native_open()
   if handle == nil { fail io.IoErr.System(#cast(isize, 0)) }
   chosen := limits
-  if chosen.draws==0 {
+  if chosen.draws == 0 {
     chosen.draws = 65536
   }
-  if chosen.coverage_bytes==0 {
+  if chosen.coverage_bytes == 0 {
     chosen.coverage_bytes = 67108864
   }
-  renderer.* = Renderer{handle:handle, limits:chosen}
+  renderer.* = Renderer{handle: handle, limits: chosen}
 }
 pub fn close(renderer: *Renderer) {
   if renderer.handle != nil {
@@ -45,21 +45,21 @@ fn append(build: *Build, bounds: ui.Rect, tint: ui.Color, glyph: *const software
   if glyph != nil {
     width := #cast(usize, bounds.width)
     height := #cast(usize, bounds.height)
-    if width > (build.limits.coverage_bytes-build.coverage_bytes)/height {
+    if width > (build.limits.coverage_bytes - build.coverage_bytes) / height {
       build.kind = Problem.Capacity
       return
     }
-    count := width*height
+    count := width * height
     pixels = mem.push_array<u8>(build.arena, count)
     for row in 0..height {
       for x in 0..width {
-        pixels[row*width+x] = glyph.pixels[(source_y+row)*glyph.stride+source_x+x]
+        pixels[row * width + x] = glyph.pixels[(source_y + row) * glyph.stride + source_x + x]
       }
     }
     build.coverage_bytes += count
   }
   draw := mem.push<Draw>(build.arena)
-  draw.* = Draw{bounds:bounds, tint:tint, coverage:pixels}
+  draw.* = Draw{bounds: bounds, tint: tint, coverage: pixels}
   if build.last == nil { build.first = draw } else { build.last.next = draw }
   build.last = draw
   build.count += 1
@@ -69,7 +69,7 @@ fn glyph(build: *Build, clip: ui.Rect, tint: ui.Color, font: software.Font, code
     build.kind = Problem.InvalidInput
     return 0
   }
-  if x < #cast(i64, clip.x)-4294967296 || x > #cast(i64, clip.x)+#cast(i64, clip.width)+4294967296 || y < #cast(i64, clip.y)-4294967296 || y > #cast(i64, clip.y)+#cast(i64, clip.height)+4294967296 {
+  if x < #cast(i64, clip.x) - 4294967296 || x > #cast(i64, clip.x) + #cast(i64, clip.width) + 4294967296 || y < #cast(i64, clip.y) - 4294967296 || y > #cast(i64, clip.y) + #cast(i64, clip.height) + 4294967296 {
     return 0
   }
   bitmap := font.glyph(font.data, codepoint)
@@ -82,30 +82,30 @@ fn glyph(build: *Build, clip: ui.Rect, tint: ui.Color, font: software.Font, code
     build.kind = Problem.InvalidInput
     return 0
   }
-  if #cast(usize, bitmap.height-1) > (bitmap.pixels.len-#cast(usize, bitmap.width))/bitmap.stride {
+  if #cast(usize, bitmap.height - 1) > (bitmap.pixels.len - #cast(usize, bitmap.width)) / bitmap.stride {
     build.kind = Problem.InvalidInput
     return 0
   }
-  left := x+bitmap.x_offset
-  top := y+bitmap.y_offset
+  left := x + bitmap.x_offset
+  top := y + bitmap.y_offset
   gx := left
   gy := top
-  right := left+bitmap.width
-  bottom := top+bitmap.height
+  right := left + bitmap.width
+  bottom := top + bitmap.height
   if gx < clip.x {
     gx = clip.x
   }
   if gy < clip.y {
     gy = clip.y
   }
-  if right > #cast(i64, clip.x)+#cast(i64, clip.width) {
-    right = #cast(i64, clip.x)+#cast(i64, clip.width)
+  if right > #cast(i64, clip.x) + #cast(i64, clip.width) {
+    right = #cast(i64, clip.x) + #cast(i64, clip.width)
   }
-  if bottom > #cast(i64, clip.y)+#cast(i64, clip.height) {
-    bottom = #cast(i64, clip.y)+#cast(i64, clip.height)
+  if bottom > #cast(i64, clip.y) + #cast(i64, clip.height) {
+    bottom = #cast(i64, clip.y) + #cast(i64, clip.height)
   }
   if right > gx && bottom > gy {
-    append(build, ui.Rect{x:#cast(i32, gx), y:#cast(i32, gy), width:#cast(i32, right-gx), height:#cast(i32, bottom-gy)}, tint, &bitmap, #cast(usize, gx-left), #cast(usize, gy-top))
+    append(build, ui.Rect{x: #cast(i32, gx), y: #cast(i32, gy), width: #cast(i32, right - gx), height: #cast(i32, bottom - gy)}, tint, &bitmap, #cast(usize, gx - left), #cast(usize, gy - top))
   }
   return bitmap.advance
 }
@@ -118,11 +118,11 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
   if surface.width == 0 || surface.height == 0 { return }
   width := #cast(usize, surface.width)
   height := #cast(usize, surface.height)
-  if width > surface.pixels.len/4 || surface.stride < width*4 || height > surface.pixels.len/surface.stride {
+  if width > surface.pixels.len / 4 || surface.stride < width * 4 || height > surface.pixels.len / surface.stride {
     fail .InvalidInput
   }
-  build := Build{arena:scratch, limits:renderer.limits}
-  viewport := ui.Rect{width:surface.width, height:surface.height}
+  build := Build{arena: scratch, limits: renderer.limits}
+  viewport := ui.Rect{width: surface.width, height: surface.height}
   command := commands
   for command != nil && command.kind != ui.Kind.None {
     clip := ui.intersect(viewport, ui.intersect(command.clip, command.bounds))
@@ -146,10 +146,10 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
           if codepoint == 10 {
             x = command.bounds.x
             y += font.line_height
-            if y >= #cast(i64, command.bounds.y)+#cast(i64, command.bounds.height)+2147483648 {
+            if y >= #cast(i64, command.bounds.y) + #cast(i64, command.bounds.height) + 2147483648 {
               break
             }
-          } else if codepoint != 13 && x < #cast(i64, command.bounds.x)+#cast(i64, command.bounds.width)+2147483648 {
+          } else if codepoint != 13 && x < #cast(i64, command.bounds.x) + #cast(i64, command.bounds.width) + 2147483648 {
             x += glyph(&build, clip, command.color, font, codepoint, x, y)
           }
           if build.kind != Problem.None { fail problem_err(build.kind) }
@@ -162,18 +162,18 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
     command = command.next
   }
   if build.count == 0 { return }
-  max_words := #max(usize)/4
+  max_words := #max(usize) / 4
   if max_words > 0xffffffff {
     max_words = 0xffffffff
   }
-  if build.count > (max_words-8)/8 { fail .Capacity }
-  draw_words := 8+build.count*8
-  coverage_words := build.coverage_bytes/4
-  if build.coverage_bytes%4 != 0 {
+  if build.count > (max_words - 8) / 8 { fail .Capacity }
+  draw_words := 8 + build.count * 8
+  coverage_words := build.coverage_bytes / 4
+  if build.coverage_bytes % 4 != 0 {
     coverage_words += 1
   }
-  if coverage_words > max_words-draw_words { fail .Capacity }
-  words := mem.push_array<u32>(scratch, draw_words+coverage_words)
+  if coverage_words > max_words - draw_words { fail .Capacity }
+  words := mem.push_array<u32>(scratch, draw_words + coverage_words)
   words[2] = #cast(u32, build.count)
   words[3] = #cast(u32, draw_words)
   draw := build.first
@@ -181,16 +181,16 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
   coverage_at: usize = 0
   for draw != nil {
     words[index] = #cast(u32, draw.bounds.x)
-    words[index+1] = #cast(u32, draw.bounds.y)
-    words[index+2] = #cast(u32, draw.bounds.x+draw.bounds.width)
-    words[index+3] = #cast(u32, draw.bounds.y+draw.bounds.height)
-    words[index+4] = #cast(u32, draw.tint.r)|(#cast(u32, draw.tint.g)<<8)|(#cast(u32, draw.tint.b)<<16)|(#cast(u32, draw.tint.a)<<24)
+    words[index + 1] = #cast(u32, draw.bounds.y)
+    words[index + 2] = #cast(u32, draw.bounds.x + draw.bounds.width)
+    words[index + 3] = #cast(u32, draw.bounds.y + draw.bounds.height)
+    words[index + 4] = #cast(u32, draw.tint.r) | (#cast(u32, draw.tint.g) << 8) | (#cast(u32, draw.tint.b) << 16) | (#cast(u32, draw.tint.a) << 24)
     if draw.coverage.len != 0 {
-      words[index+5] = 1
-      if coverage_at > 0xffffffff || draw.coverage.len > 0xffffffff-coverage_at { fail .Capacity }
-      words[index+6] = #cast(u32, coverage_at)
+      words[index + 5] = 1
+      if coverage_at > 0xffffffff || draw.coverage.len > 0xffffffff - coverage_at { fail .Capacity }
+      words[index + 6] = #cast(u32, coverage_at)
       for byte in draw.coverage {
-        words[draw_words+coverage_at/4] |= #cast(u32, byte)<<#cast(u32, (coverage_at%4)*8)
+        words[draw_words + coverage_at / 4] |= #cast(u32, byte) << #cast(u32, (coverage_at % 4) * 8)
         coverage_at += 1
       }
     }
@@ -198,18 +198,18 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
     draw = draw.next
   }
   output := surface.pixels
-  if surface.stride != width*4 {
-    output = mem.push_array<u8>(scratch, width*height*4)
+  if surface.stride != width * 4 {
+    output = mem.push_array<u8>(scratch, width * height * 4)
     for row in 0..height {
-      _ = mem.copy(output[row*width*4..(row+1)*width*4], surface.pixels[row*surface.stride..row*surface.stride+width*4])
+      _ = mem.copy(output[row * width * 4..(row + 1) * width * 4], surface.pixels[row * surface.stride..row * surface.stride + width * 4])
     }
   }
   code := native_render(renderer.handle, &words[0], #cast(u32, words.len), &output[0], #cast(u32, surface.width), #cast(u32, surface.height))
   if code == 2 { fail .Capacity }
   if code != 1 { fail io.IoErr.System(#cast(isize, 0)) }
-  if surface.stride != width*4 {
+  if surface.stride != width * 4 {
     for row in 0..height {
-      _ = mem.copy(surface.pixels[row*surface.stride..row*surface.stride+width*4], output[row*width*4..(row+1)*width*4])
+      _ = mem.copy(surface.pixels[row * surface.stride..row * surface.stride + width * 4], output[row * width * 4..(row + 1) * width * 4])
     }
   }
 }

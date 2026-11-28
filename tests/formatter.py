@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""dyn fmt: canonical indentation, } else { joining, idempotence, comment
-preservation, clean std."""
+"""dyn fmt: canonical indentation, } else { joining, operator and colon spacing,
+idempotence, comment preservation, clean std."""
 import os
 from pathlib import Path
 import re
@@ -70,6 +70,35 @@ fn pick(wide: bool) i64 {
 }
 '''
 
+SPACING = '''struct Point { x:i32, y:i32 = 3 }
+const Limit:i32 = 10
+fn add(a, b:i32, c:*const u8, rest:...any) i32 {
+  total:i32=a+b*2
+  other:=total-1 // a-b stays in comments
+  if total!=other&&a<=b { total+=1 }
+  p := Point{x:1, y:total%-4}
+  q := &p
+  _ = "x:=y+1"
+  _ = q.x>>1
+  return total*-other+p.x
+}
+fn main() { _ = add(1, 2, nil) }
+'''
+SPACED = '''struct Point { x: i32, y: i32 = 3 }
+const Limit: i32 = 10
+fn add(a, b: i32, c: *const u8, rest: ...any) i32 {
+  total: i32 = a + b * 2
+  other := total - 1 // a-b stays in comments
+  if total != other && a <= b { total += 1 }
+  p := Point{x: 1, y: total % -4}
+  q := &p
+  _ = "x:=y+1"
+  _ = q.x >> 1
+  return total * -other + p.x
+}
+fn main() { _ = add(1, 2, nil) }
+'''
+
 with tempfile.TemporaryDirectory(prefix='dyn-formatter-') as temporary:
     work = Path(temporary)
     project = work / 'messy'
@@ -84,6 +113,17 @@ with tempfile.TemporaryDirectory(prefix='dyn-formatter-') as temporary:
                            capture_output=True, text=True, timeout=120)
     assert built.returncode == 0, built.stderr
     assert subprocess.run([str(work / 'program')], timeout=10).returncode == 0
+
+    # Binary operators, assignments and := get a space on each side, a declared
+    # name one after its colon. Unary operators, pointer types, generics,
+    # strings and comments keep their text.
+    spacing = work / 'spacing'
+    spacing.mkdir()
+    (spacing / 'main.dyn').write_text(SPACING)
+    assert fmt(spacing).returncode == 0
+    assert (spacing / 'main.dyn').read_text() == SPACED, (spacing / 'main.dyn').read_text()
+    assert fmt(spacing, '--check').returncode == 0
+    assert subprocess.run([DYN, 'check', str(spacing), '--quiet'], capture_output=True).returncode == 0
 
     # Every std, runtime and vendor module stays formatted. Flattening their
     # indentation and reformatting reproduces them exactly, keeping comments.

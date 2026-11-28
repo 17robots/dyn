@@ -9,7 +9,7 @@
 | `dyn vet DIR` | Check, then report suspicious but valid code; exits 1 on findings |
 | `dyn build DIR` | Build an executable (`--debug` default, or `--release`) |
 | `dyn run DIR` | Build and run; `dyn run DIR -- a b` passes `a b` to the program and returns its exit code |
-| `dyn fmt DIR` | Format every file in the module: one statement per line, `} else {` on one line, two-space indentation, a space after commas, and a guard (`if` whose block is one return, break or continue, no else) on one line when it fits in 100 columns; `--check` only reports |
+| `dyn fmt DIR` | Format every file in the module: one statement per line, `} else {` on one line, two-space indentation, a space after commas, one on each side of a binary operator, assignment and `:=`, one after a declared name's colon (`name: type`, `field: value`), and a guard (`if` whose block is one return, break or continue, no else) on one line when it fits in 100 columns; `--check` only reports |
 | `dyn docs DIR` | Print public declarations and their contracts; `--json` for tools |
 | `dyn guide` | Print the guide built into this compiler: `--brief` for one page, or a topic such as `rules` |
 | `dyn query DIR` | Export a semantic program index as JSON |

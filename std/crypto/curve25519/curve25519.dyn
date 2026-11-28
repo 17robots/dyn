@@ -28,7 +28,7 @@ fn carry(a: *Field) {
     a.limbs[i] += 65536
     c := a.limbs[i] >> 16
     a.limbs[i] -= c * 65536
-    if i < 15 { a.limbs[i+1] += c - 1 } else { a.limbs[0] += 38 * (c - 1) }
+    if i < 15 { a.limbs[i + 1] += c - 1 } else { a.limbs[0] += 38 * (c - 1) }
   }
 }
 pub fn select(a: *Field, b: *Field, bit: i64) {
@@ -43,11 +43,11 @@ pub fn multiply(a: Field, b: Field) Field {
   t: [31]i64
   for i in 0..16 {
     for j in 0..16 {
-      t[i+j] += a.limbs[i] * b.limbs[j]
+      t[i + j] += a.limbs[i] * b.limbs[j]
     }
   }
   for i in 0..15 {
-    t[i] += 38 * t[i+16]
+    t[i] += 38 * t[i + 16]
   }
   result: Field
   for i in 0..16 {
@@ -63,7 +63,7 @@ pub fn square(a: Field) Field {
 pub fn decode(input: []const u8) Field {
   result: Field
   for i in 0..16 {
-    result.limbs[i] = #cast(i64, input[2*i]) + #cast(i64, input[2*i+1])*256
+    result.limbs[i] = #cast(i64, input[2 * i]) + #cast(i64, input[2 * i + 1]) * 256
   }
   result.limbs[15] &= 32767
   return result
@@ -77,23 +77,23 @@ pub fn encode(output: []u8, value: Field) {
     m: Field
     m.limbs[0] = t.limbs[0] - 65517
     for i in 1..15 {
-      m.limbs[i] = t.limbs[i] - 65535 - ((m.limbs[i-1] >> 16) & 1)
-      m.limbs[i-1] &= 65535
+      m.limbs[i] = t.limbs[i] - 65535 - ((m.limbs[i - 1] >> 16) & 1)
+      m.limbs[i - 1] &= 65535
     }
     m.limbs[15] = t.limbs[15] - 32767 - ((m.limbs[14] >> 16) & 1)
     bit := (m.limbs[15] >> 16) & 1
     m.limbs[14] &= 65535
-    select(&t, &m, 1-bit)
+    select(&t, &m, 1 - bit)
   }
   for i in 0..16 {
-    output[2*i] = t.limbs[i] & 255
-    output[2*i+1] = (t.limbs[i] >> 8) & 255
+    output[2 * i] = t.limbs[i] & 255
+    output[2 * i + 1] = (t.limbs[i] >> 8) & 255
   }
 }
 pub fn inverse(value: Field) Field {
   result := value
   for step in 0..254 {
-    exponent := 253-step
+    exponent := 253 - step
     result = square(result)
     if exponent != 2 && exponent != 4 {
       result = multiply(result, value)
@@ -104,7 +104,7 @@ pub fn inverse(value: Field) Field {
 pub fn power2523(value: Field) Field {
   result := value
   for step in 0..251 {
-    exponent := 250-step
+    exponent := 250 - step
     result = square(result)
     if exponent != 1 {
       result = multiply(result, value)
@@ -119,12 +119,12 @@ pub fn equal(a: Field, b: Field) bool {
   encode(right[..], b)
   difference: u32
   for i in 0..32 {
-    difference |= left[i]^right[i]
+    difference |= left[i] ^ right[i]
   }
   return difference == 0
 }
 pub fn parity(a: Field) i64 {
   encoded: [32]u8
   encode(encoded[..], a)
-  return encoded[0]&1
+  return encoded[0] & 1
 }

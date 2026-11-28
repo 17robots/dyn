@@ -31,7 +31,7 @@ fn c_string(arena: *mem.Arena, value: []const u8) *const u8 {
 }
 fn c_vector(arena: *mem.Arena, values: [][]const u8) *CString {
   if values.len > 2305843009213693950 { return nil }
-  slots := mem.push_array<CString>(arena, values.len+1)
+  slots := mem.push_array<CString>(arena, values.len + 1)
   for at in 0..values.len {
     slots[at].value = c_string(arena, values[at])
     if slots[at].value == nil { return nil }
@@ -184,7 +184,7 @@ fn read_native(handle: isize, destination: []u8) Read!io.IoErr {
 fn milliseconds_native() u64 {
   time := Timespec{}
   _ = native_clock(6, &time)
-  return #cast(u64, time.seconds)*1000 + #cast(u64, (time.nanoseconds/1000000))
+  return #cast(u64, time.seconds) * 1000 + #cast(u64, (time.nanoseconds / 1000000))
 }
 fn sleep_native() {
   delay := Timespec{ nanoseconds: 1000000 }
@@ -196,7 +196,7 @@ fn environment_native(name: []const u8, destination: []u8) []u8!io.IoErr {
   key := c.string_into(buffer[..], name) catch { fail .InvalidInput }
   value := native_environment(key)
   if value == nil { fail .NotFound }
-  parsed := c.bytes_from_string(value, destination.len+1) catch { fail .Capacity }
+  parsed := c.bytes_from_string(value, destination.len + 1) catch { fail .Capacity }
   if parsed.len > destination.len { fail .Capacity }
   i: usize = 0
   for i < parsed.len {

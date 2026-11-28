@@ -7,7 +7,7 @@ use binary "std/encoding/binary"
 pub struct State { r: [5]u64, h: [5]u64, pad: [4]u32, buffer: [16]u8, used: usize, keyed: bool }
 const Mask: u64 = 0x3ffffff
 fn load(source: []const u8, at: usize) u64 {
-  return binary.load_u32_le(source[at..at+4])
+  return binary.load_u32_le(source[at..at + 4])
 }
 // A key that is not 32 bytes fails with InvalidInput.
 pub fn init(key: []const u8) State! {
@@ -19,7 +19,7 @@ pub fn init(key: []const u8) State! {
   state.r[3] = (load(key, 9) >> 6) & 0x3f03fff
   state.r[4] = (load(key, 12) >> 8) & 0x00fffff
   for i in 0..4 {
-    state.pad[i] = binary.load_u32_le(key[16+i*4..20+i*4])
+    state.pad[i] = binary.load_u32_le(key[16 + i * 4..20 + i * 4])
   }
   return state
 }
@@ -34,9 +34,9 @@ fn block(state: *State, input: []const u8, high: u64) {
     for j in 0..5 {
       // i/j are public, so this branch and these indexes reveal no key bits.
       if j <= i {
-        d[i] = #wrapping(d[i] + (state.h[j] * state.r[i-j]))
+        d[i] = #wrapping(d[i] + (state.h[j] * state.r[i - j]))
       } else {
-        d[i] = #wrapping(d[i] + (state.h[j] * state.r[5+i-j] * 5))
+        d[i] = #wrapping(d[i] + (state.h[j] * state.r[5 + i - j] * 5))
       }
     }
   }
@@ -66,7 +66,7 @@ pub fn update(state: *State, input: []const u8) {
     }
   }
   for input.len - at >= 16 {
-    block(state, input[at..at+16], 1 << 24)
+    block(state, input[at..at + 16], 1 << 24)
     at += 16
   }
   for at < input.len {
@@ -82,14 +82,14 @@ pub fn finish(state: *State) [16]u8! {
   if !state.keyed { fail }
   if state.used != 0 {
     state.buffer[state.used] = 1
-    for i in state.used+1..16 {
+    for i in state.used + 1..16 {
       state.buffer[i] = 0
     }
     block(state, state.buffer[..], 0)
   }
   h := state.h
   for i in 1..4 {
-    h[i+1] += h[i] >> 26
+    h[i + 1] += h[i] >> 26
     h[i] &= Mask
   }
   h[0] += (h[4] >> 26) * 5
@@ -112,7 +112,7 @@ pub fn finish(state: *State) [16]u8! {
   carry = 0
   for i in 0..4 {
     word := words[i] + state.pad[i] + carry
-    binary.store_u32_le(tag[i*4..i*4+4], #cast(u32, word))
+    binary.store_u32_le(tag[i * 4..i * 4 + 4], #cast(u32, word))
     carry = word >> 32
   }
   state.* = State{}

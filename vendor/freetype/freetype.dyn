@@ -36,14 +36,14 @@ pub struct BitmapView { pixels: []const u8, width: i32, height: i32, stride: usi
 // remain caller-owned; variation changes can change these values.
 pub struct FaceMetrics { units_per_em: u16, ascent: i16, descent: i16, height: i16, glyph_count: u32, face_count: u32, face_index: u32 }
 pub fn face_metrics(face: rawptr) FaceMetrics!io.IoErr {
-  if face==nil { fail .InvalidInput }
-  prefix:=#cast(*FacePrefix, face)
-  if (prefix.face_flags&1)==0 || prefix.units_per_em==0 { fail .Unsupported }
-  if prefix.num_glyphs<0 || prefix.num_faces<=0 || prefix.face_index<0 { fail .InvalidInput }
-  if #cast(u64, prefix.num_glyphs)>4294967295 || #cast(u64, prefix.num_faces)>4294967295 || #cast(u64, prefix.face_index)>4294967295 {
+  if face == nil { fail .InvalidInput }
+  prefix := #cast(*FacePrefix, face)
+  if (prefix.face_flags & 1) == 0 || prefix.units_per_em == 0 { fail .Unsupported }
+  if prefix.num_glyphs < 0 || prefix.num_faces <= 0 || prefix.face_index < 0 { fail .InvalidInput }
+  if #cast(u64, prefix.num_glyphs) > 4294967295 || #cast(u64, prefix.num_faces) > 4294967295 || #cast(u64, prefix.face_index) > 4294967295 {
     fail .Capacity
   }
-  return FaceMetrics{units_per_em:prefix.units_per_em, ascent:prefix.ascender, descent:prefix.descender, height:prefix.height, glyph_count:#cast(u32, prefix.num_glyphs), face_count:#cast(u32, prefix.num_faces), face_index:#cast(u32, prefix.face_index)}
+  return FaceMetrics{units_per_em: prefix.units_per_em, ascent: prefix.ascender, descent: prefix.descender, height: prefix.height, glyph_count: #cast(u32, prefix.num_glyphs), face_count: #cast(u32, prefix.num_faces), face_index: #cast(u32, prefix.face_index)}
 }
 
 // ABI accessor for the public FreeType face/glyph records. Returned coverage is
@@ -56,21 +56,21 @@ pub fn bitmap(face: rawptr) BitmapView!io.IoErr {
   slot := #cast(*SlotPrefix, prefix.glyph)
   value := slot.bitmap
   if value.width > 2147483647 || value.rows > 2147483647 { fail .Capacity }
-  result := BitmapView{width:#cast(i32, value.width), height:#cast(i32, value.rows), left:slot.bitmap_left, top:slot.bitmap_top, advance_x:slot.advance.x, advance_y:slot.advance.y}
+  result := BitmapView{width: #cast(i32, value.width), height: #cast(i32, value.rows), left: slot.bitmap_left, top: slot.bitmap_top, advance_x: slot.advance.x, advance_y: slot.advance.y}
   if value.width == 0 || value.rows == 0 { return result }
   if slot.format != 0x62697473 || value.pixel_mode != 2 || value.num_grays != 256 || value.pitch < 0 || #cast(u32, value.pitch) < value.width || value.buffer == nil {
     fail .Unsupported
   }
   stride := #cast(usize, value.pitch)
   width := #cast(usize, value.width)
-  if (value.rows-1) > (#max(usize)-width)/stride { fail .Capacity }
+  if (value.rows - 1) > (#max(usize) - width) / stride { fail .Capacity }
   result.stride = stride
-  result.pixels = #slice(value.buffer, (value.rows-1)*stride+width)
+  result.pixels = #slice(value.buffer, (value.rows - 1) * stride + width)
   return result
 }
 pub fn open(font: *Font, api: Api, bytes: []const u8, index: u32, pixels: u32) !io.IoErr {
   if font.library != nil || font.face != nil { fail .InvalidInput }
-  if bytes.len == 0 || #cast(u64, bytes.len) > #cast(u64, (~#cast(ULong, 0))>>1) || pixels == 0 || #cast(u64, index) > #cast(u64, (~#cast(ULong, 0))>>1) {
+  if bytes.len == 0 || #cast(u64, bytes.len) > #cast(u64, (~#cast(ULong, 0)) >> 1) || pixels == 0 || #cast(u64, index) > #cast(u64, (~#cast(ULong, 0)) >> 1) {
     fail .InvalidInput
   }
   library: rawptr
@@ -88,7 +88,7 @@ pub fn open(font: *Font, api: Api, bytes: []const u8, index: u32, pixels: u32) !
     _ = api.done(library)
     fail io.IoErr.System(#cast(isize, error))
   }
-  font.* = Font{api:api, library:library, face:face, bytes:bytes}
+  font.* = Font{api: api, library: library, face: face, bytes: bytes}
 }
 pub fn close(font: *Font) {
   if font.face != nil {
@@ -110,7 +110,7 @@ fn adapter_failed(adapter: *Adapter, err: io.IoErr) software.Glyph {
     adapter.failed = true
     adapter.failure = err
   }
-  return software.Glyph{width:-1}
+  return software.Glyph{width: -1}
 }
 fn glyph(data: rawptr, codepoint: u32) software.Glyph {
   adapter := #cast(*Adapter, data)
@@ -122,19 +122,19 @@ fn glyph(data: rawptr, codepoint: u32) software.Glyph {
   error := adapter.font.api.load_glyph(adapter.font.face, index, LoadRender)
   if error != 0 { return adapter_failed(adapter, io.IoErr.System(#cast(isize, error))) }
   value := bitmap(adapter.font.face) catch err { return adapter_failed(adapter, err) }
-  advance := value.advance_x/64
-  offset := #cast(i64, adapter.baseline)-#cast(i64, value.top)
+  advance := value.advance_x / 64
+  offset := #cast(i64, adapter.baseline) - #cast(i64, value.top)
   if advance < 0 || advance > 2147483647 || offset < -2147483648 || offset > 2147483647 {
     return adapter_failed(adapter, io.IoErr.Capacity)
   }
-  return software.Glyph{pixels:value.pixels, width:value.width, height:value.height, stride:value.stride, x_offset:value.left, y_offset:#cast(i32, offset), advance:#cast(i32, advance)}
+  return software.Glyph{pixels: value.pixels, width: value.width, height: value.height, stride: value.stride, x_offset: value.left, y_offset: #cast(i32, offset), advance: #cast(i32, advance)}
 }
 pub fn renderer(adapter: *Adapter) software.Font {
   if adapter.font == nil || adapter.font.face == nil || adapter.line_height <= 0 {
     _ = adapter_failed(adapter, io.IoErr.InvalidInput)
     return software.Font{}
   }
-  return software.Font{data:adapter, glyph:glyph, line_height:adapter.line_height}
+  return software.Font{data: adapter, glyph: glyph, line_height: adapter.line_height}
 }
 
 fn missing(name: []const u8) Api!io.IoErr {

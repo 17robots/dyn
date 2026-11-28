@@ -67,7 +67,7 @@ pub fn resolve(arena: *mem.Arena, api: *const Api, text: []const u8, base: u32) 
     count += 1
     offset += decoded.width
   }
-  if count == 0 { return Paragraph{base:base} }
+  if count == 0 { return Paragraph{base: base} }
   if api.log2vis == nil || api.get_bidi_types == nil { fail .InvalidInput }
   mark := mem.arena_mark(arena)
   logical := mem.push_array<u32>(arena, count)
@@ -110,7 +110,7 @@ pub fn resolve(arena: *mem.Arena, api: *const Api, text: []const u8, base: u32) 
       fail .InvalidInput
     }
   }
-  return Paragraph{logical:logical, visual:visual, starts:starts, ends:ends, logical_to_visual:logical_to_visual, visual_to_logical:visual_to_logical, levels:levels, types:types, base:resolved}
+  return Paragraph{logical: logical, visual: visual, starts: starts, ends: ends, logical_to_visual: logical_to_visual, visual_to_logical: visual_to_logical, levels: levels, types: types, base: resolved}
 }
 // Reorders a wrapped line with native L1/L2 handling. Does not mutate paragraph
 // levels/maps. Flags zero leave shaping, mirroring and mark placement to HB.
@@ -125,13 +125,13 @@ pub fn reorder(arena: *mem.Arena, api: *const Api, paragraph: *const Paragraph, 
     if paragraph.levels[i] < 0 { fail .InvalidInput }
   }
   mark := mem.arena_mark(arena)
-  levels := mem.push_array<i8>(arena, end-start)
-  map := mem.push_array<i32>(arena, end-start)
-  for i in 0..end-start {
-    levels[i] = paragraph.levels[start+i]
-    map[i] = #cast(i32, start+i)
+  levels := mem.push_array<i8>(arena, end - start)
+  map := mem.push_array<i32>(arena, end - start)
+  for i in 0..end - start {
+    levels[i] = paragraph.levels[start + i]
+    map[i] = #cast(i32, start + i)
   }
-  if api.reorder_line(0, &paragraph.types[start], #cast(i32, end-start), 0, paragraph.base, &levels[0], nil, &map[0]) == 0 {
+  if api.reorder_line(0, &paragraph.types[start], #cast(i32, end - start), 0, paragraph.base, &levels[0], nil, &map[0]) == 0 {
     mem.arena_rewind(arena, mark)
     fail io.IoErr.System(#cast(isize, 0))
   }
@@ -150,7 +150,7 @@ pub fn reorder(arena: *mem.Arena, api: *const Api, paragraph: *const Paragraph, 
     seen[index] = 1
   }
   mem.arena_rewind(arena, scratch)
-  return Line{visual_to_logical:map, levels:levels}
+  return Line{visual_to_logical: map, levels: levels}
 }
 
 // Records a FriBidi failure of kind for operation.

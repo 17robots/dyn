@@ -53,7 +53,7 @@ fn encode_wide(destination: []u16, source: []const u8) usize {
 }
 fn wide(arena: *mem.Arena, source: []const u8) Wide {
   if source.len > 32766 { return Wide{} }
-  destination := mem.push_array<u16>(arena, source.len+1)
+  destination := mem.push_array<u16>(arena, source.len + 1)
   length := encode_wide(destination, source)
   if length == 0 { return Wide{} }
   return Wide{ data: destination[..length], ok: true }
@@ -77,11 +77,11 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
   }
   capacity: usize = 1
   for argument in arguments {
-    if argument.len > 16380 || capacity > 32767 - (argument.len*2+3) {
+    if argument.len > 16380 || capacity > 32767 - (argument.len * 2 + 3) {
       // The command line is too long.
       fail .Capacity
     }
-    capacity += argument.len*2+3
+    capacity += argument.len * 2 + 3
   }
   command := mem.push_array<u16>(arena, capacity)
   used: usize = 0
@@ -112,7 +112,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
         continue
       }
       if byte == 34 {
-        slashes = slashes*2+1
+        slashes = slashes * 2 + 1
       }
       for slashes > 0 {
         command[used] = 92
@@ -145,12 +145,12 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
       // The command line is too long.
       fail .Capacity
     }
-    environment_capacity += item.len+1
+    environment_capacity += item.len + 1
   }
   environment := mem.push_array<u16>(arena, environment_capacity)
   environment_used: usize = 0
   // Keep a valid backing pointer even for the supported empty environment.
-  entries_storage := mem.push_array<Wide>(arena, configuration.environment.len+1)
+  entries_storage := mem.push_array<Wide>(arena, configuration.environment.len + 1)
   entries := entries_storage[..configuration.environment.len]
   entry_index: usize = 0
   for entry in configuration.environment {
@@ -160,8 +160,8 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
       fail .Capacity
     }
     position := entry_index
-    for position > 0 && win_compare(&entries[position-1].data[0], #cast(i32, entries[position-1].data.len)-1, &converted.data[0], #cast(i32, converted.data.len)-1, 1) == 3 {
-      entries[position] = entries[position-1]
+    for position > 0 && win_compare(&entries[position - 1].data[0], #cast(i32, entries[position - 1].data.len) - 1, &converted.data[0], #cast(i32, converted.data.len) - 1, 1) == 3 {
+      entries[position] = entries[position - 1]
       position -= 1
     }
     entries[position] = converted
@@ -218,7 +218,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     fail io.windows_err(initialize_error)
   }
   defer win_delete_attributes(startup.attributes)
-  if inherited_count > 0 && win_update_attributes(startup.attributes, 0, 131074, &handles[0], inherited_count*#sizeof(rawptr), nil, nil) == 0 {
+  if inherited_count > 0 && win_update_attributes(startup.attributes, 0, 131074, &handles[0], inherited_count * #sizeof(rawptr), nil, nil) == 0 {
     attribute_error := win_failure()
     fail io.windows_err(attribute_error)
   }

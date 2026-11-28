@@ -1065,7 +1065,7 @@ pub fn box_input(window: *const Window) box.Input {
 // GUI-thread window metadata changes. Dimensions remain bounded before Xlib.
 pub fn set_title(window: *Window, title: []const u8) !io.IoErr {
   if window.display == nil || window.handle == 0 { fail .InvalidInput }
-  if title.len>4095 { fail .Capacity }
+  if title.len > 4095 { fail .Capacity }
   if !utf8.valid(title) { fail .InvalidInput }
   storage: [4096]u8
   name := try c.string_into(storage[..], title)
@@ -1074,10 +1074,10 @@ pub fn set_title(window: *Window, title: []const u8) !io.IoErr {
   unicode := atom(window.display, "UTF8_STRING\x00")
   _ = change_property(window.display, window.handle, modern, unicode, 8, 0, name, #cast(i32, title.len))
 }
-extern fn resize_window "XResizeWindow"(display:rawptr, window:usize, width, height:u32) i32
-pub fn set_size(window:*Window, width, height:i32) !io.IoErr {
-  if window.display==nil || window.handle==0 { fail .InvalidInput }
-  if width<=0 || height<=0 || width>16384 || height>16384 { fail .InvalidInput }
+extern fn resize_window "XResizeWindow"(display: rawptr, window: usize, width, height: u32) i32
+pub fn set_size(window: *Window, width, height: i32) !io.IoErr {
+  if window.display == nil || window.handle == 0 { fail .InvalidInput }
+  if width <= 0 || height <= 0 || width > 16384 || height > 16384 { fail .InvalidInput }
   _ = resize_window(window.display, window.handle, #cast(u32, width), #cast(u32, height))
   _ = sync(window.display, 0)
   try poll(window)
