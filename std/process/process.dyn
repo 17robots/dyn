@@ -1,10 +1,13 @@
 use mem "std/mem"
 use io "std/io"
 use builder "std/bytes/builder"
+use fs "std/fs"
 
 // Handles are native descriptors/HANDLE values. -1 inherits that standard stream.
 // Arguments include argv[0]. Environment is explicit NAME=value entries; empty
-// means an empty child environment. Empty directory inherits the parent directory. No shell parsing or PATH search is performed.
+// means an empty child environment. Empty directory inherits the parent directory.
+// spawn does no shell parsing and no PATH search: find_executable searches,
+// and shell_command or windows_command_line quote (command_line.dyn).
 // A standard stream for the child. The zero value inherits the parent's.
 pub struct Redirect { handle: isize, set: bool }
 // Connects the child's stream to handle.
@@ -17,10 +20,22 @@ fn native_stream(stream: Redirect) isize {
   return -1
 }
 // Zero is valid: inherit all three streams, the parent's environment and directory.
-pub struct Options { input: Redirect, output: Redirect, error: Redirect, environment: [][]const u8, directory: []const u8 }
+//
+// group starts the child at the root of its own process tree, so that
+// terminate_tree and close end it together with every descendant. On Linux
+// and macOS the child leads a new process group (setpgid before exec); a
+// descendant that moves itself to another group or session leaves the tree.
+// On Windows the child starts suspended, joins a new kill-on-close Job Object
+// and then runs, so even its first instruction runs inside the job; every
+// process it creates joins the job too. A child in its own group is outside
+// the terminal's foreground group: Ctrl-C at the terminal does not reach it,
+// and on Linux and macOS reading the terminal stops it, so redirect its input.
+pub struct Options { input: Redirect, output: Redirect, error: Redirect, environment: [][]const u8, directory: []const u8, group: bool }
 // A running child process, in the arena spawn was given; pass the pointer
-// around rather than copying the Child.
-pub struct Child { handle: isize, active: bool }
+// around rather than copying the Child. active is true until a wait or close
+// reaps it. group is true from a spawn with Options.group until close; job is
+// the Windows Job Object handle (0 elsewhere).
+pub struct Child { handle: isize, active: bool, group: bool, job: isize }
 // How a child ended. finished is false when a nonblocking wait found it
 // still running. A child killed by a signal has signal set and code 0.
 pub struct Exit { code: u32, signal: u32, finished: bool }
@@ -68,17 +83,103 @@ pub fn wait(child: *Child, nonblocking: bool) Exit!io.IoErr {
   return try wait_native(child, nonblocking)
 }
 // Kills child. It still needs a wait to be reaped. A child that already
-// ended fails with InvalidInput.
+// ended fails with InvalidInput. Only the child itself is killed; use
+// terminate_tree for a child spawned with Options.group.
 pub fn terminate(child: *Child) !io.IoErr {
   if !child.active { fail .InvalidInput }
   try terminate_native(child)
 }
+// Kills child and every process in its tree: the process group it leads on
+// Linux and macOS, the Job Object on Windows. The child itself still needs a
+// wait or close to be reaped; the tree stays owned until close. A child not
+// spawned with Options.group, or already closed, fails with InvalidInput.
+// A tree whose processes have all ended is no failure.
+//
+// On Linux and macOS the group is named by the child's id. While the child is
+// unreaped, or any process remains in the group, that id cannot be reused;
+// once wait has reaped the child and the group has emptied, the system may
+// give the id to an unrelated new group. Kill the tree (terminate_tree or
+// close) before the wait that reaps the child when descendants must not
+// outlive it, and observe the child's end through its pipes.
+pub fn terminate_tree(child: *Child) !io.IoErr {
+  if !child.group { fail .InvalidInput }
+  try terminate_tree_native(child)
+}
+// Ends everything child owns, and never fails: a child spawned with
+// Options.group has its whole tree killed (on Windows the Job Object is
+// closed, which kills what is left in it); a child still running is killed;
+// then the child is reaped, waiting through interruptions. A child that
+// already ended is only released. After close the Child is inactive and has
+// no group; closing it again does nothing. Close every Child spawned with
+// Options.group, even after wait, to free its tree.
+pub fn close(child: *Child) {
+  if child.group {
+    close_tree_native(child)
+    child.group = false
+    child.job = 0
+  }
+  if !child.active { return }
+  terminate_native(child) catch {}
+  for {
+    exited := wait_native(child, false) catch {
+      // Someone else reaped it, or the system refused: give the handle back.
+      forget_native(child)
+      child.active = false
+      return
+    }
+    if exited.finished { return }
+  }
+}
 // A pipe: write to output, read from input. Close both with close_pipe.
+// On Linux and macOS the input end does not block; on Windows both block.
+// Use open_pipe to choose.
 pub fn pipe() Pipe!io.IoErr {
   return try pipe_native()
 }
 pub fn close_pipe(handle: isize) {
   close_native(handle)
+}
+
+// Which ends of a pipe from open_pipe never block. The zero value blocks on
+// both ends. Keep the end a child gets blocking: most programs do not expect
+// a nonblocking standard stream.
+pub struct PipeOptions { nonblocking_input: bool, nonblocking_output: bool }
+
+// A pipe whose chosen ends do not block: write to output, read from input,
+// and close both with close_pipe. Neither end is inherited by children except
+// through a Redirect. Read and write a nonblocking end with read_pipe and
+// write_pipe, which fail with WouldBlock instead of waiting.
+//
+// On Linux and macOS each end is a descriptor that std/event accepts:
+// add pipe.input with event.Readable, or pipe.output with event.Writable, and
+// call read_pipe or write_pipe when the queue reports it ready (O_NONBLOCK,
+// so EAGAIN is WouldBlock). On Windows a nonblocking end is in PIPE_NOWAIT
+// mode (an empty read is ERROR_NO_DATA, a full write takes nothing; both are
+// WouldBlock); Windows event queues take only sockets, so poll such an end by
+// calling read_pipe or write_pipe.
+pub fn open_pipe(options: PipeOptions) Pipe!io.IoErr {
+  return try pipe_open_native(options)
+}
+
+// Reads what is available from a pipe's input end into destination, waiting
+// for data only on a blocking end. Returns the count, 0 at the end of the
+// stream (every writer closed). A nonblocking end with nothing to read fails
+// with WouldBlock. Interrupted reads are retried.
+pub fn read_pipe(handle: isize, destination: []u8) usize!io.IoErr {
+  file := fs.adopt_handle(handle)
+  return try fs.read(&file, destination)
+}
+
+// Writes as much of source as the pipe takes and returns that count, which
+// may be less than source.len; on a blocking end it waits for room for at
+// least some of it. A nonblocking end with no room fails with WouldBlock.
+// When every reader has closed, the write fails with System: EPIPE (-32) on
+// Linux and macOS, ERROR_BROKEN_PIPE (-109) on Windows; on Linux and macOS no
+// SIGPIPE is raised for it, so the program is not killed. Interrupted writes
+// are retried.
+pub fn write_pipe(handle: isize, source: []const u8) usize!io.IoErr {
+  if source.len == 0 { return 0 }
+  return try pipe_write_native(handle, source)
 }
 // The variable's value in arena, or fallback when it is unset or unreadable.
 pub fn environment_or(arena: *mem.Arena, name: []const u8, fallback: []const u8) []const u8 {
@@ -153,7 +254,9 @@ fn capture_input_overlap(arena: *mem.Arena, path: []const u8, arguments: [][]con
 // rewind/reset/release. Exhaustion panics and deferred cleanup reaps the child.
 // A timeout or limit is not a failure: the capture stops, keeps the output so
 // far, and sets timed_out or limit_reached. Limits terminate and reap the
-// direct child; descendants are not killed. A nonzero exit code is a
+// direct child; descendants are not killed unless configuration.group is
+// set, in which case the whole tree is killed when the capture ends, whether
+// it stopped early or not. A nonzero exit code is a
 // successful capture. Other failures keep nothing and rewind the capture's
 // allocations. An input in the arena's free space fails with InvalidInput.
 pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
@@ -188,7 +291,7 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
   }
   close_native(stdout.output)
   close_native(stderr.output)
-  defer reap(child)
+  defer close(child)
   has_deadline := policy.no_wait || policy.timeout_milliseconds > 0
   wait_limit: u64 = 0
   if !policy.no_wait && has_deadline {
@@ -253,13 +356,6 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
   result.output = output.storage[..output.length]
   result.errors = errors.storage[..errors.length]
   return result
-}
-
-// Cleanup for capture: kills and waits for a child still running.
-fn reap(child: *Child) {
-  if !child.active { return }
-  terminate(child) catch {}
-  _ = wait(child, false) catch { return }
 }
 
 // What process.start() returns: an arena that lives for the

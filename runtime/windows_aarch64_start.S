@@ -485,6 +485,42 @@ dyn_process_read:
     adrp x16, __imp_ReadFile
     ldr x16, [x16, :lo12:__imp_ReadFile]
     br x16
+// std/process: process trees, nonblocking pipe writes.
+.global dyn_process_write
+dyn_process_write:
+    adrp x16, __imp_WriteFile
+    ldr x16, [x16, :lo12:__imp_WriteFile]
+    br x16
+.global dyn_process_job_create
+dyn_process_job_create:
+    adrp x16, __imp_CreateJobObjectW
+    ldr x16, [x16, :lo12:__imp_CreateJobObjectW]
+    br x16
+.global dyn_process_job_limit
+dyn_process_job_limit:
+    adrp x16, __imp_SetInformationJobObject
+    ldr x16, [x16, :lo12:__imp_SetInformationJobObject]
+    br x16
+.global dyn_process_job_assign
+dyn_process_job_assign:
+    adrp x16, __imp_AssignProcessToJobObject
+    ldr x16, [x16, :lo12:__imp_AssignProcessToJobObject]
+    br x16
+.global dyn_process_job_terminate
+dyn_process_job_terminate:
+    adrp x16, __imp_TerminateJobObject
+    ldr x16, [x16, :lo12:__imp_TerminateJobObject]
+    br x16
+.global dyn_process_resume
+dyn_process_resume:
+    adrp x16, __imp_ResumeThread
+    ldr x16, [x16, :lo12:__imp_ResumeThread]
+    br x16
+.global dyn_process_pipe_mode
+dyn_process_pipe_mode:
+    adrp x16, __imp_SetNamedPipeHandleState
+    ldr x16, [x16, :lo12:__imp_SetNamedPipeHandleState]
+    br x16
 .global dyn_watch_open
 dyn_watch_open:
     adrp x16, __imp_CreateFileW
@@ -810,6 +846,13 @@ kernel_lookup:
     thunk GetOverlappedResult
     thunk CancelIoEx
     thunk SetLastError
+    // std/process: process trees and nonblocking pipes.
+    thunk CreateJobObjectW
+    thunk SetInformationJobObject
+    thunk AssignProcessToJobObject
+    thunk TerminateJobObject
+    thunk ResumeThread
+    thunk SetNamedPipeHandleState
     // std/fs
     thunk GetFileInformationByHandleEx
     thunk SetFileInformationByHandle
@@ -934,6 +977,13 @@ iat ReadDirectoryChangesW
 iat GetOverlappedResult
 iat CancelIoEx
 iat SetLastError
+// std/process: process trees and nonblocking pipes.
+iat CreateJobObjectW
+iat SetInformationJobObject
+iat AssignProcessToJobObject
+iat TerminateJobObject
+iat ResumeThread
+iat SetNamedPipeHandleState
 // std/fs
 iat GetFileInformationByHandleEx
 iat SetFileInformationByHandle
@@ -1051,6 +1101,13 @@ hint ReadDirectoryChangesW
 hint GetOverlappedResult
 hint CancelIoEx
 hint SetLastError
+// std/process: process trees and nonblocking pipes.
+hint CreateJobObjectW
+hint SetInformationJobObject
+hint AssignProcessToJobObject
+hint TerminateJobObject
+hint ResumeThread
+hint SetNamedPipeHandleState
 // std/fs
 hint GetFileInformationByHandleEx
 hint SetFileInformationByHandle

@@ -6,8 +6,8 @@ use time "std/time"
 use "std/os/linux/sys"
 fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) Child!io.IoErr {
   process := try os.spawn_environment(arena, path, arguments, configuration.environment,
-    os.SpawnOptions{ input: native_stream(configuration.input), output: native_stream(configuration.output), error: native_stream(configuration.error), directory: configuration.directory })
-  return Child{ handle: process, active: true }
+    os.SpawnOptions{ input: native_stream(configuration.input), output: native_stream(configuration.output), error: native_stream(configuration.error), directory: configuration.directory, group: configuration.group })
+  return Child{ handle: process, active: true, group: configuration.group }
 }
 fn wait_native(child: *Child, nonblocking: bool) Exit!io.IoErr {
   value := try os.wait(child.handle, nonblocking)
@@ -20,6 +20,22 @@ fn wait_native(child: *Child, nonblocking: bool) Exit!io.IoErr {
 }
 fn terminate_native(child: *Child) !io.IoErr {
   try os.send_signal(child.handle, 9)
+}
+// SIGKILL to the group the child leads, and to the child itself in case it
+// left the group. ESRCH: nothing is left.
+fn terminate_tree_native(child: *Child) !io.IoErr {
+  group := #syscall(sys.Kill, 0 - child.handle, 9)
+  if child.active {
+    leader := #syscall(sys.Kill, child.handle, 9)
+    if leader < 0 && leader != -3 { fail io.linux_err(leader) }
+  }
+  if group < 0 && group != -3 { fail io.linux_err(group) }
+}
+fn close_tree_native(child: *Child) {
+  _ = #syscall(sys.Kill, 0 - child.handle, 9)
+}
+// A child that cannot be waited for holds nothing else.
+fn forget_native(_child: *Child) {
 }
 fn close_native(handle: isize) {
   // Never retry a failed close: the descriptor may already be reused.
@@ -37,6 +53,64 @@ fn pipe_native() Pipe!io.IoErr {
     fail io.linux_err(changed)
   }
   return Pipe{ input: descriptors[0], output: descriptors[1] }
+}
+fn pipe_open_native(options: PipeOptions) Pipe!io.IoErr {
+  descriptors: [2]i32
+  result := #syscall(sys.Pipe2, &descriptors[0], 524288)
+  if result < 0 { fail io.linux_err(result) }
+  chosen: [2]bool = [options.nonblocking_input, options.nonblocking_output]
+  for index in 0..2 {
+    if chosen[index] {
+      flags := #syscall(sys.Fcntl, descriptors[index], 3, 0)
+      if flags >= 0 {
+        flags = #syscall(sys.Fcntl, descriptors[index], 4, flags | 2048)
+      }
+      if flags < 0 {
+        close_native(descriptors[0])
+        close_native(descriptors[1])
+        fail io.linux_err(flags)
+      }
+    }
+  }
+  return Pipe{ input: descriptors[0], output: descriptors[1] }
+}
+// SIGPIPE is blocked for this thread while it writes. If the write found no
+// reader, the SIGPIPE it raised is still pending on this thread; a signalfd
+// read takes it before the mask is restored. A thread that already blocked
+// SIGPIPE keeps its mask and its pending signal.
+fn pipe_write_native(handle: isize, source: []const u8) usize!io.IoErr {
+  mask: u64 = 4096
+  previous: u64 = 0
+  blocked := #syscall(sys.RtSigprocmask, 0, &mask, &previous, 8)
+  if blocked < 0 { fail io.linux_err(blocked) }
+  value := #syscall(sys.Write, handle, &source[0], source.len)
+  for value == -4 {
+    value = #syscall(sys.Write, handle, &source[0], source.len)
+  }
+  if (previous & mask) == 0 {
+    if value == -32 {
+      taken := #syscall(sys.Signalfd4, -1, &mask, 8, 526336)
+      if taken >= 0 {
+        information: [128]u8
+        _ = #syscall(sys.Read, taken, &information[0], information.len)
+        _ = #syscall(sys.Close, taken)
+      }
+    }
+    _ = #syscall(sys.RtSigprocmask, 2, &previous, 0, 8)
+  }
+  if value < 0 { fail io.linux_err(value) }
+  return #cast(usize, value)
+}
+const PathListSeparator: u8 = 58
+const DirectorySeparator: u8 = 47
+const WindowsPaths: bool = false
+// A regular file with an execute bit, symlinks followed. path is followed by
+// NUL in memory. statx, not open: opening a FIFO would block.
+fn executable_native(path: []const u8) bool {
+  information: [256]u8
+  if #syscall(sys.Statx, -100, &path[0], 0, 2, &information[0]) < 0 { return false }
+  mode := #cast(u16, information[28]) | (#cast(u16, information[29]) << 8)
+  return (mode & 0o170000) == 0o100000 && (mode & 0o111) != 0
 }
 // A pipe with nothing to read yet is no failure: count 0, not ended.
 fn read_native(handle: isize, destination: []u8) Read!io.IoErr {

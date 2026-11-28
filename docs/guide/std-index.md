@@ -2121,7 +2121,7 @@ Layer: std
 - `fn yield_thread()`
 - `struct Pipe { input: isize, output: isize }`
 - `struct Waited { process: isize, wait_status: i32 }`: wait_status is the raw status;
-- `struct SpawnOptions { input: isize, output: isize, error: isize, directory: []const u8 }`
+- `struct SpawnOptions { input: isize, output: isize, error: isize, directory: []const u8, group: bool }`: group makes the child the leader of a new process group (setpgid(0, 0) before exec), so that send_signal(-child, signal) reaches its ...
 - `fn pipe() Pipe!io.IoErr`
 - `fn close_descriptor(descriptor: isize) !io.IoErr`: Closes descriptor.
 - `fn duplicate_to(descriptor: isize, target: isize) isize!io.IoErr`
@@ -2200,6 +2200,7 @@ Layer: std
 - `const Ftruncate: u64 = 77`
 - `const Getcwd: u64 = 79`
 - `const Chdir: u64 = 80`
+- `const Setpgid: u64 = 109`
 - `const Fchmod: u64 = 91`
 - `const Fchdir: u64 = 81`
 - `const Fchown: u64 = 93`
@@ -2210,7 +2211,6 @@ Layer: std
 - `const Getgid: u64 = 104`
 - `const Geteuid: u64 = 107`
 - `const Getegid: u64 = 108`
-- `const Setpgid: u64 = 109`
 - `const Getppid: u64 = 110`
 - `const Setsid: u64 = 112`
 - `const Getpgid: u64 = 121`
@@ -2430,18 +2430,29 @@ Layer: heap
 
 Layer: std
 
+- `fn shell_quote(arena: *mem.Arena, text: []const u8) []u8`: text as one POSIX shell word, in arena: wrapped in single quotes, each single quote written as '\''.
+- `fn shell_command(arena: *mem.Arena, arguments: [][]const u8) []u8`: arguments as shell words separated by spaces, in arena: the command that `sh -c` runs as exactly these arguments.
+- `fn windows_quote(arena: *mem.Arena, text: []const u8) []u8`: text as one Windows command-line argument (not the first), in arena: in double quotes, with each run of backslashes before a quote, and ...
+- `fn windows_command_line(arena: *mem.Arena, arguments: [][]const u8) []u8!io.IoErr`: The Windows command line for arguments (argv[0] first), in arena, joined with spaces: what spawn passes to CreateProcessW, and the exact ...
+- `fn windows_arguments(arena: *mem.Arena, command_line: []const u8) [][]const u8!io.IoErr`: Splits a Windows command line into arguments the way the Microsoft C runtime builds argv: spaces and tabs separate arguments outside double ...
 - `struct Redirect { handle: isize, set: bool }`: Handles are native descriptors/HANDLE values.
 - `fn redirect(handle: isize) Redirect`: Connects the child's stream to handle.
-- `struct Options { input: Redirect, output: Redirect, error: Redirect, environment: [][]const u8, directory: []const u8 }`: Zero is valid: inherit all three streams, the parent's environment and directory.
-- `struct Child { handle: isize, active: bool }`: A running child process, in the arena spawn was given;
+- `struct Options { input: Redirect, output: Redirect, error: Redirect, environment: [][]const u8, directory: []const u8, group: bool }`: Zero is valid: inherit all three streams, the parent's environment and directory.
+- `struct Child { handle: isize, active: bool, group: bool, job: isize }`: A running child process, in the arena spawn was given;
 - `struct Exit { code: u32, signal: u32, finished: bool }`: How a child ended.
 - `struct Pipe { input: isize, output: isize }`
 - `struct Captured { output: []u8, errors: []u8, exit: Exit, timed_out: bool, limit_reached: bool }`
 - `fn spawn(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) *Child!io.IoErr`: Starts path with arguments (argv[0] first).
 - `fn wait(child: *Child, nonblocking: bool) Exit!io.IoErr`: Waits for child to end;
 - `fn terminate(child: *Child) !io.IoErr`: Kills child.
+- `fn terminate_tree(child: *Child) !io.IoErr`: Kills child and every process in its tree: the process group it leads on Linux and macOS, the Job Object on Windows.
+- `fn close(child: *Child)`: Ends everything child owns, and never fails: a child spawned with Options.group has its whole tree killed (on Windows the Job Object is ...
 - `fn pipe() Pipe!io.IoErr`: A pipe: write to output, read from input.
 - `fn close_pipe(handle: isize)`
+- `struct PipeOptions { nonblocking_input: bool, nonblocking_output: bool }`: Which ends of a pipe from open_pipe never block.
+- `fn open_pipe(options: PipeOptions) Pipe!io.IoErr`: A pipe whose chosen ends do not block: write to output, read from input, and close both with close_pipe.
+- `fn read_pipe(handle: isize, destination: []u8) usize!io.IoErr`: Reads what is available from a pipe's input end into destination, waiting for data only on a blocking end.
+- `fn write_pipe(handle: isize, source: []const u8) usize!io.IoErr`: Writes as much of source as the pipe takes and returns that count, which may be less than source.len;
 - `fn environment_or(arena: *mem.Arena, name: []const u8, fallback: []const u8) []const u8`: The variable's value in arena, or fallback when it is unset or unreadable.
 - `fn environment(arena: *mem.Arena, name: []const u8) []u8!io.IoErr`: The value of environment variable name, in arena.
 - `struct CaptureOptions { timeout_milliseconds: i64, no_wait: bool, output_limit: usize, error_limit: usize }`: Zero limits are unlimited.
@@ -2449,6 +2460,8 @@ Layer: std
 - `struct Program { arena: *mem.Arena, args: [][]const u8 }`: What process.start() returns: an arena that lives for the whole program and the arguments, argv[0] first, stored in it.
 - `fn start() Program`: Call it on main's first line: `program := process.start()`.
 - `fn arguments(arena: *mem.Arena) [][]const u8!io.IoErr`: Includes argv[0].
+- `fn find_executable(arena: *mem.Arena, name: []const u8) []u8!io.IoErr`: The path of the program name would run as, looked up like `which` on PATH from the environment, in arena.
+- `fn find_executable_in(arena: *mem.Arena, name: []const u8, search: []const u8) []u8!io.IoErr`: The path of the program name, looked up in search, a list of directories in PATH syntax (':' between entries, ';' on Windows), in arena;
 
 ## std/process/signal
 

@@ -2,6 +2,7 @@
 use io "std/io"
 use utf8 "std/unicode/utf8"
 use utf16 "std/unicode/utf16"
+use fs "std/fs"
 extern fn win_create "dyn_process_create"(application: *const u16, command: *u16, process_security: rawptr, thread_security: rawptr, inherit: i32, flags: u32, environment: *u16, directory: rawptr, startup: *Startup, result: *ProcessInformation) i32
 extern fn win_close "dyn_process_close"(handle: rawptr) i32
 extern fn win_wait "dyn_process_wait"(handle: rawptr, milliseconds: u32) u32
@@ -22,6 +23,13 @@ extern fn win_delete_attributes "dyn_process_delete_attributes"(list: rawptr)
 extern fn win_environment "dyn_process_environment"(name: *const u16, value: *u16, size: u32) u32
 extern fn win_set_error "dyn_process_set_error"(code: u32)
 extern fn win_compare "dyn_process_compare"(left: *const u16, left_count: i32, right: *const u16, right_count: i32, ignore_case: i32) i32
+extern fn win_write "dyn_process_write"(handle: rawptr, buffer: *const u8, size: u32, written: *u32, overlapped: rawptr) i32
+extern fn win_job_create "dyn_process_job_create"(security: rawptr, name: rawptr) rawptr
+extern fn win_job_limit "dyn_process_job_limit"(job: rawptr, kind: i32, information: rawptr, size: u32) i32
+extern fn win_job_assign "dyn_process_job_assign"(job: rawptr, process: rawptr) i32
+extern fn win_job_terminate "dyn_process_job_terminate"(job: rawptr, code: u32) i32
+extern fn win_resume "dyn_process_resume"(thread: rawptr) u32
+extern fn win_pipe_mode "dyn_process_pipe_mode"(pipe: rawptr, mode: *u32, count: rawptr, timeout: rawptr) i32
 struct Startup {
   size: u32, reserved: rawptr, desktop: rawptr, title: rawptr,
   x: u32, y: u32, width: u32, height: u32, columns: u32, rows: u32,
@@ -29,6 +37,13 @@ struct Startup {
   input: rawptr, output: rawptr, error: rawptr, attributes: rawptr,
 }
 struct ProcessInformation { process: rawptr, thread: rawptr, process_id: u32, thread_id: u32 }
+// JOBOBJECT_EXTENDED_LIMIT_INFORMATION.
+struct BasicLimits {
+  process_time: i64, job_time: i64, flags: u32,
+  minimum_working: usize, maximum_working: usize, active_processes: u32,
+  affinity: usize, priority: u32, scheduling: u32,
+}
+struct JobLimits { basic: BasicLimits, counters: [6]u64, process_memory: usize, job_memory: usize, peak_process: usize, peak_job: usize }
 struct Wide { data: []u16, ok: bool }
 fn win_failure() isize {
   return 0 - #cast(isize, win_error())
@@ -75,70 +90,17 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     }
     directory = &converted_directory.data[0]
   }
-  capacity: usize = 1
-  for argument in arguments {
-    if argument.len > 16380 || capacity > 32767 - (argument.len * 2 + 3) {
-      // The command line is too long.
-      fail .Capacity
-    }
-    capacity += argument.len * 2 + 3
+  // The command line spawn passes is the one windows_command_line documents.
+  line := try windows_command_line(arena, arguments)
+  if line.len > 32766 {
+    // The command line is too long.
+    fail .Capacity
   }
-  command := mem.push_array<u16>(arena, capacity)
-  used: usize = 0
-  argument_index: usize = 0
-  for argument_text in arguments {
-    if argument_index > 0 {
-      command[used] = 32
-      used += 1
-    }
-    // Microsoft CRT argv convention; argv[0] has special quote processing.
-    if argument_index == 0 {
-      for first_byte in argument_text {
-        if first_byte == 34 {
-          // An argument cannot be passed on a Windows command line.
-          fail .InvalidInput
-        }
-      }
-    }
-    command[used] = 34
-    used += 1
-    at: usize = 0
-    slashes: usize = 0
-    for at < argument_text.len {
-      byte := argument_text[at]
-      if byte == 92 && argument_index > 0 {
-        slashes += 1
-        at += 1
-        continue
-      }
-      if byte == 34 {
-        slashes = slashes * 2 + 1
-      }
-      for slashes > 0 {
-        command[used] = 92
-        used += 1
-        slashes -= 1
-      }
-      decoded := utf8.decode(argument_text, at)
-      if !decoded.valid {
-        // An argument cannot be passed on a Windows command line.
-        fail .InvalidInput
-      }
-      width := utf16.encode(command[used..], decoded.codepoint)
-      used += width
-      at += decoded.width
-    }
-    slashes *= 2
-    for slashes > 0 {
-      command[used] = 92
-      used += 1
-      slashes -= 1
-    }
-    command[used] = 34
-    used += 1
-    argument_index += 1
+  command := wide(arena, line)
+  if !command.ok {
+    // An argument cannot be passed on a Windows command line.
+    fail .InvalidInput
   }
-  command[used] = 0
   environment_capacity: usize = 2
   for item in configuration.environment {
     if item.len > 32766 || environment_capacity > 32767 - item.len - 1 {
@@ -227,12 +189,44 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
   if inherited_count > 0 {
     inherit = 1
   }
-  if win_create(&application.data[0], &command[0], nil, nil, inherit, 525312, &environment[0], directory, &startup, &information) == 0 {
+  // CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT.
+  flags: u32 = 525312
+  job: rawptr = nil
+  if configuration.group {
+    job = win_job_create(nil, nil)
+    if job == nil {
+      job_error := win_failure()
+      fail io.windows_err(job_error)
+    }
+    limits := JobLimits{}
+    // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: closing the last handle kills the job.
+    limits.basic.flags = 8192
+    if win_job_limit(job, 9, &limits, #cast(u32, #sizeof(JobLimits))) == 0 {
+      limit_error := win_failure()
+      _ = win_close(job)
+      fail io.windows_err(limit_error)
+    }
+    // CREATE_SUSPENDED: nothing runs before the process is in the job.
+    flags = flags | 4
+  }
+  if win_create(&application.data[0], &command.data[0], nil, nil, inherit, flags, &environment[0], directory, &startup, &information) == 0 {
     create_error := win_failure()
+    if job != nil {
+      _ = win_close(job)
+    }
     fail io.windows_err(create_error)
   }
+  if job != nil && (win_job_assign(job, information.process) == 0 || win_resume(information.thread) == 4294967295) {
+    join_error := win_failure()
+    _ = win_terminate(information.process, 1)
+    _ = win_wait(information.process, 4294967295)
+    _ = win_close(information.thread)
+    _ = win_close(information.process)
+    _ = win_close(job)
+    fail io.windows_err(join_error)
+  }
   _ = win_close(information.thread)
-  return Child{ handle: #cast(isize, #cast(usize, information.process)), active: true }
+  return Child{ handle: #cast(isize, #cast(usize, information.process)), active: true, group: configuration.group, job: #cast(isize, #cast(usize, job)) }
 }
 fn wait_native(child: *Child, nonblocking: bool) Exit!io.IoErr {
   timeout: u32 = 4294967295
@@ -251,6 +245,19 @@ fn wait_native(child: *Child, nonblocking: bool) Exit!io.IoErr {
 fn terminate_native(child: *Child) !io.IoErr {
   if win_terminate(handle(child.handle), 1) == 0 { fail io.windows_err(win_failure()) }
 }
+// Every process in the job, the child included, ends with code 1.
+fn terminate_tree_native(child: *Child) !io.IoErr {
+  if win_job_terminate(handle(child.job), 1) == 0 { fail io.windows_err(win_failure()) }
+}
+// Kills what is left in the job, then closes it; kill-on-close would end
+// the processes anyway once the last handle is gone.
+fn close_tree_native(child: *Child) {
+  _ = win_job_terminate(handle(child.job), 1)
+  _ = win_close(handle(child.job))
+}
+fn forget_native(child: *Child) {
+  _ = win_close(handle(child.handle))
+}
 fn close_native(value: isize) {
   _ = win_close(handle(value))
 }
@@ -259,6 +266,49 @@ fn pipe_native() Pipe!io.IoErr {
   output: rawptr = nil
   if win_pipe(&input, &output, nil, 0) == 0 { fail io.windows_err(win_failure()) }
   return Pipe{ input: #cast(isize, #cast(usize, input)), output: #cast(isize, #cast(usize, output)) }
+}
+// PIPE_NOWAIT on the chosen ends of an anonymous pipe: an empty read fails
+// with ERROR_NO_DATA and a full write takes nothing.
+fn pipe_open_native(options: PipeOptions) Pipe!io.IoErr {
+  made := try pipe_native()
+  chosen: [2]bool = [options.nonblocking_input, options.nonblocking_output]
+  ends: [2]isize = [made.input, made.output]
+  for index in 0..2 {
+    if chosen[index] {
+      mode: u32 = 1
+      if win_pipe_mode(handle(ends[index]), &mode, nil, nil) == 0 {
+        mode_error := win_failure()
+        close_native(made.input)
+        close_native(made.output)
+        fail io.windows_err(mode_error)
+      }
+    }
+  }
+  return made
+}
+// A write that takes nothing has no room: WouldBlock. ERROR_NO_DATA and
+// ERROR_BROKEN_PIPE on a write mean the reader is gone.
+fn pipe_write_native(value: isize, source: []const u8) usize!io.IoErr {
+  amount := source.len
+  if amount > 2147483647 {
+    amount = 2147483647
+  }
+  written: u32 = 0
+  if win_write(handle(value), &source[0], #cast(u32, amount), &written, nil) == 0 {
+    error := win_error()
+    if error == 232 || error == 109 { fail io.IoErr.System(-109) }
+    fail io.windows_err(0 - #cast(isize, error))
+  }
+  if written == 0 { fail .WouldBlock }
+  return written
+}
+const PathListSeparator: u8 = 59
+const DirectorySeparator: u8 = 92
+const WindowsPaths: bool = true
+// Any file that is not a directory; the extension decides executability.
+fn executable_native(path: []const u8) bool {
+  information := fs.metadata(path) catch { return false }
+  return (information.mode & 0o170000) == 0o100000
 }
 // A pipe with nothing to read yet is no failure: count 0, not ended.
 fn read_native(value: isize, destination: []u8) Read!io.IoErr {

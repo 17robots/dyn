@@ -14,6 +14,26 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+Additive: `std/process`. Existing code builds unchanged.
+
+- `Options.group` starts a child at the root of its own process tree: a new process
+  group on Linux and macOS, a kill-on-close Job Object on Windows (the child starts
+  suspended and joins the job before it runs). `process.terminate_tree(child)` kills the
+  whole tree; `process.close(child)` kills the tree (or a still-running child), reaps
+  it through interruptions and frees the job. Close every group child, even after
+  `wait`. `capture` with `Options.group` kills the tree when it stops.
+- `process.open_pipe(process.PipeOptions{ nonblocking_input: true })` chooses which
+  pipe ends never block; `read_pipe` and `write_pipe` fail with `WouldBlock` instead of
+  waiting, and a write without a reader fails with `System` instead of raising SIGPIPE.
+  On Linux and macOS the ends go straight into `std/event`.
+- `process.find_executable(arena, "rg")` and `find_executable_in(arena, name, search)`
+  look a program up on PATH like `which` (PATHEXT and `;` on Windows).
+- `process.shell_quote`, `shell_command`, `windows_quote` and `windows_command_line`
+  quote arguments for `sh -c` and for the Microsoft C runtime;
+  `windows_arguments` splits a Windows command line on any target.
+
+## Unreleased
+
 - `#syscall` on aarch64-linux and riscv64-linux maps every x86-64 Linux call that
   the target has, by name, from the kernel 7.3 tables (`tools/linux-syscalls.tsv`).
   `renameat2`, `copy_file_range`, `fchmod`, `pidfd_open` and the rest now compile

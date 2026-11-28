@@ -81,7 +81,9 @@ pub struct Pipe { input: isize, output: isize }
 // wait_status is the raw status; read it with exited, exit_status, signaled
 // and termination_signal.
 pub struct Waited { process: isize, wait_status: i32 }
-pub struct SpawnOptions { input: isize, output: isize, error: isize, directory: []const u8 }
+// group makes the child the leader of a new process group (setpgid(0, 0)
+// before exec), so that send_signal(-child, signal) reaches its descendants.
+pub struct SpawnOptions { input: isize, output: isize, error: isize, directory: []const u8, group: bool }
 struct CStringPointer { value: *u8 }
 
 pub fn pipe() Pipe!io.IoErr {
@@ -234,6 +236,9 @@ pub fn spawn_environment(
     // In the child only raw system calls: the failure goes back to the parent.
     _ = #syscall(sys.Close, input)
     failure: isize = 0
+    if options.group {
+      failure = #syscall(sys.Setpgid, 0, 0)
+    }
     for stream in 0..3 {
       if failure == 0 && redirected_sources[stream] >= 0 {
         failure = raw_duplicate(redirected_sources[stream], #cast(isize, stream))

@@ -53,6 +53,7 @@ jobs:
           python3 tests/sync-host.py
           python3 tests/concurrency-net-host.py
           python3 tests/dns-host.py
+          python3 tests/process-control.py
           python3 tests/watch-macos.py
           python3 tests/fs-portable.py
           python3 tools/fetch-grammar.py
@@ -115,6 +116,7 @@ jobs:
           python tests/sync-host.py
           python tests/concurrency-net-host.py
           python tests/dns-host.py
+          python tests/process-control.py
           python tests/watch-windows.py
           python tests/fs-portable.py
           python tools/fetch-grammar.py

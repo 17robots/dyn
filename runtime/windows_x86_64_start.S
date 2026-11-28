@@ -206,6 +206,14 @@ import_jump dyn_process_close, CloseHandle
 import_jump dyn_process_wait, WaitForSingleObject
 import_jump dyn_process_error, GetLastError
 import_jump dyn_process_read, ReadFile
+// std/process: process trees, nonblocking pipe writes.
+import_jump dyn_process_write, WriteFile
+import_jump dyn_process_job_create, CreateJobObjectW
+import_jump dyn_process_job_limit, SetInformationJobObject
+import_jump dyn_process_job_assign, AssignProcessToJobObject
+import_jump dyn_process_job_terminate, TerminateJobObject
+import_jump dyn_process_resume, ResumeThread
+import_jump dyn_process_pipe_mode, SetNamedPipeHandleState
 
 import_jump dyn_watch_open, CreateFileW
 import_jump dyn_watch_close, CloseHandle
@@ -337,6 +345,13 @@ kernel_lookup:
     thunk GetOverlappedResult
     thunk CancelIoEx
     thunk SetLastError
+    // std/process: process trees and nonblocking pipes.
+    thunk CreateJobObjectW
+    thunk SetInformationJobObject
+    thunk AssignProcessToJobObject
+    thunk TerminateJobObject
+    thunk ResumeThread
+    thunk SetNamedPipeHandleState
     // std/fs
     thunk GetFileInformationByHandleEx
     thunk SetFileInformationByHandle
@@ -461,6 +476,13 @@ iat ReadDirectoryChangesW
 iat GetOverlappedResult
 iat CancelIoEx
 iat SetLastError
+// std/process: process trees and nonblocking pipes.
+iat CreateJobObjectW
+iat SetInformationJobObject
+iat AssignProcessToJobObject
+iat TerminateJobObject
+iat ResumeThread
+iat SetNamedPipeHandleState
 // std/fs
 iat GetFileInformationByHandleEx
 iat SetFileInformationByHandle
@@ -578,6 +600,13 @@ hint ReadDirectoryChangesW
 hint GetOverlappedResult
 hint CancelIoEx
 hint SetLastError
+// std/process: process trees and nonblocking pipes.
+hint CreateJobObjectW
+hint SetInformationJobObject
+hint AssignProcessToJobObject
+hint TerminateJobObject
+hint ResumeThread
+hint SetNamedPipeHandleState
 // std/fs
 hint GetFileInformationByHandleEx
 hint SetFileInformationByHandle

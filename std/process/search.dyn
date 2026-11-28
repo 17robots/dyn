@@ -1,0 +1,205 @@
+use mem "std/mem"
+use io "std/io"
+// Finding a program on the search path, as `which` does.
+
+// What Windows tries when PATHEXT is unset or empty.
+const DefaultExtensions: []const u8 = ".COM;.EXE;.BAT;.CMD"
+
+// The path of the program name would run as, looked up like `which` on PATH
+// from the environment, in arena. See find_executable_in for the rules.
+// Fails with NotFound when PATH is unset or holds no match.
+pub fn find_executable(arena: *mem.Arena, name: []const u8) []u8!io.IoErr {
+  empty: []const u8
+  return try find_program(arena, name, empty, true)
+}
+
+// The path of the program name, looked up in search, a list of directories
+// in PATH syntax (':' between entries, ';' on Windows), in arena; nothing
+// else stays in arena. Entries are tried in order and empty ones are skipped
+// (they do not mean the current directory). The result is the entry, a
+// separator unless the entry ends with one, and name, so it is relative when
+// the entry is. A name holding a directory separator is not searched for: it
+// is the result itself when it is executable.
+//
+// On Linux and macOS a match is a regular file (symlinks followed) with an
+// execute permission bit set; whether this user may execute it is the
+// system's to decide when spawn runs it. On Windows an entry may be in double
+// quotes; '/', '\' and ':' count as separators in name; a match is a file
+// whose name ends with an extension from PATHEXT (".COM;.EXE;.BAT;.CMD" when
+// unset), compared ignoring ASCII case, so name is tried as it is when it has
+// such an extension and with each PATHEXT extension appended otherwise.
+//
+// Fails with InvalidInput for an empty name, NUL in name, or name or search
+// in the arena's unallocated space, and NotFound when nothing matches.
+pub fn find_executable_in(arena: *mem.Arena, name: []const u8, search: []const u8) []u8!io.IoErr {
+  if mem.arena_overlaps_unallocated(arena, search) { fail .InvalidInput }
+  return try find_program(arena, name, search, false)
+}
+
+fn find_program(arena: *mem.Arena, name: []const u8, given: []const u8, from_environment: bool) []u8!io.IoErr {
+  if name.len == 0 || has_nul(name) || mem.arena_overlaps_unallocated(arena, name) { fail .InvalidInput }
+  mark := mem.arena_mark(arena)
+  errdefer mem.arena_rewind(arena, mark)
+  search_size := given.len
+  if from_environment {
+    search_size = variable_size(arena, "PATH")
+  }
+  extension_size: usize = 0
+  if WindowsPaths {
+    extension_size = variable_size(arena, "PATHEXT")
+    if extension_size < DefaultExtensions.len {
+      extension_size = DefaultExtensions.len
+    }
+  }
+  // The longest candidate: an entry, a separator, name, an extension, NUL.
+  bound := search_size + name.len + extension_size + 2
+  result := mem.push_bytes(arena, bound)
+  end := mem.arena_mark(arena)
+  search := given
+  if from_environment {
+    search = environment(arena, "PATH") catch err {
+      case err {
+        .NotFound => { fail .NotFound }
+        _ => { fail err }
+      }
+    }
+  }
+  extensions: []const u8 = DefaultExtensions
+  if WindowsPaths {
+    extensions = environment_or(arena, "PATHEXT", DefaultExtensions)
+    if extensions.len == 0 {
+      extensions = DefaultExtensions
+    }
+  }
+  found := search_entries(result, name, search, extensions)
+  if found == 0 { fail .NotFound }
+  // Keep only the result: it starts bound bytes before end.
+  mem.arena_rewind(arena, end - (bound - found))
+  return result[..found]
+}
+
+// How long the variable's value is now; 0 when it is unset or unreadable.
+// Nothing stays in arena.
+fn variable_size(arena: *mem.Arena, name: []const u8) usize {
+  mark := mem.arena_mark(arena)
+  defer mem.arena_rewind(arena, mark)
+  value := environment(arena, name) catch { return 0 }
+  return value.len
+}
+
+// The length of the first match, built in result; 0 when there is none.
+fn search_entries(result: []u8, name: []const u8, search: []const u8, extensions: []const u8) usize {
+  empty: []const u8
+  if has_directory(name) { return candidate(result, empty, name, extensions) }
+  at: usize = 0
+  for at < search.len {
+    end := at
+    for end < search.len && search[end] != PathListSeparator {
+      end += 1
+    }
+    entry := search[at..end]
+    if WindowsPaths && entry.len >= 2 && entry[0] == 34 && entry[entry.len - 1] == 34 {
+      entry = entry[1..entry.len - 1]
+    }
+    if entry.len > 0 {
+      found := candidate(result, entry, name, extensions)
+      if found > 0 { return found }
+    }
+    at = end + 1
+  }
+  return 0
+}
+
+fn is_separator(byte: u8) bool {
+  if byte == 47 { return true }
+  return WindowsPaths && (byte == 92 || byte == 58)
+}
+fn has_directory(name: []const u8) bool {
+  for byte in name {
+    if is_separator(byte) { return true }
+  }
+  return false
+}
+
+// directory joined with name (and on Windows an extension) in result, when
+// that names an executable file: its length, else 0.
+fn candidate(result: []u8, directory: []const u8, name: []const u8, extensions: []const u8) usize {
+  if directory.len + name.len + 2 > result.len { return 0 }
+  used := mem.copy(result, directory)
+  if used > 0 && !is_separator(result[used - 1]) {
+    result[used] = DirectorySeparator
+    used += 1
+  }
+  used += mem.copy(result[used..], name)
+  if !WindowsPaths || listed_extension(name, extensions) { return executable_at(result, used) }
+  at: usize = 0
+  for at < extensions.len {
+    end := at
+    for end < extensions.len && extensions[end] != 59 {
+      end += 1
+    }
+    extension := extensions[at..end]
+    at = end + 1
+    if extension.len < 2 || extension[0] != 46 || has_directory(extension) || used + extension.len + 1 > result.len { continue }
+    quoted := false
+    for byte in extension {
+      if byte == 34 {
+        quoted = true
+      }
+    }
+    if quoted { continue }
+    _ = mem.copy(result[used..], extension)
+    found := executable_at(result, used + extension.len)
+    if found > 0 { return found }
+  }
+  return 0
+}
+
+// NUL-terminates result[..length] for the system and checks it.
+fn executable_at(result: []u8, length: usize) usize {
+  result[length] = 0
+  if executable_native(result[..length]) { return length }
+  return 0
+}
+
+// Whether name ends with one of the ;-separated extensions, ignoring ASCII
+// case.
+fn listed_extension(name: []const u8, extensions: []const u8) bool {
+  dot := name.len
+  at := name.len
+  for at > 0 {
+    at -= 1
+    if is_separator(name[at]) { break }
+    if name[at] == 46 {
+      dot = at
+      break
+    }
+  }
+  if dot == name.len { return false }
+  suffix := name[dot..]
+  start: usize = 0
+  for start < extensions.len {
+    end := start
+    for end < extensions.len && extensions[end] != 59 {
+      end += 1
+    }
+    if ascii_equal_folded(extensions[start..end], suffix) { return true }
+    start = end + 1
+  }
+  return false
+}
+fn ascii_equal_folded(left: []const u8, right: []const u8) bool {
+  if left.len != right.len { return false }
+  for index in 0..left.len {
+    a := left[index]
+    b := right[index]
+    if a >= 65 && a <= 90 {
+      a += 32
+    }
+    if b >= 65 && b <= 90 {
+      b += 32
+    }
+    if a != b { return false }
+  }
+  return true
+}
