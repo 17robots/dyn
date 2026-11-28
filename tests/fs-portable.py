@@ -439,10 +439,6 @@ def execute(executable, label, system, emulator=()):
         assert 'set_permissions' not in found and 'preserve_permissions' not in found, (label, found)
         return
     expect(found, {'private_mode': str(0o600), 'executable_mode': str(0o700), 'is_executable private': 'false'}, label)
-    if label == 'aarch64-linux':
-        # No fchmod or faccessat mapping yet: Unsupported, and any x bit.
-        expect(found, {'set_permissions': 'Unsupported', 'preserve_permissions': 'Unsupported', 'is_executable tool': 'true'}, label)
-        return
     assert 'set_permissions' not in found and 'preserve_permissions' not in found, (label, found)
     expect(found, {
         'shared_mode': str(0o640), 'read_only_mode': str(0o444), 'preserved_mode': str(0o751),

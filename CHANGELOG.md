@@ -12,6 +12,17 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- Fix: a child started by `std/process` no longer inherits the signals a
+  `std/process/signal` watch blocks in its parent; it starts with an empty signal
+  mask on Linux and macOS. (On macOS a watch ignores its signals, and an ignored
+  signal still carries over exec, as POSIX requires.)
+- `std/fs` on aarch64-linux and riscv64-linux uses `renameat2`, `fchmod`,
+  `faccessat` and `copy_file_range` like x86-64: `set_permissions`,
+  `preserve_permissions`, `rename_exclusive` on directories and kernel-side
+  `copy_range` now work there, and `is_executable` asks `access(X_OK)`.
+
 ## 0.1.0-preview.46
 
 Breaking: `std/fs` code that read `fs.Directory`'s fields. Everything else is additive.

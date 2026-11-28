@@ -235,8 +235,11 @@ pub fn spawn_environment(
   if child == 0 {
     // In the child only raw system calls: the failure goes back to the parent.
     _ = #syscall(sys.Close, input)
-    failure: isize = 0
-    if options.group {
+    // The child starts with no blocked signals: std/process/signal blocks
+    // the signals it watches, and a new program must not inherit that.
+    unblocked: u64 = 0
+    failure := #syscall(sys.RtSigprocmask, 2, &unblocked, 0, 8)
+    if failure == 0 && options.group {
       failure = #syscall(sys.Setpgid, 0, 0)
     }
     for stream in 0..3 {
