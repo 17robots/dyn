@@ -14,7 +14,25 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
-Additions only: `std/terminal` and `std/process/signal`.
+Breaking: `std/fs` code that read `fs.Directory`'s fields. Everything else is additive.
+
+New platform-neutral text modules, all building for bare metal:
+
+- `std/text/fuzzy` (core): `score`, `positions` (byte offsets of each matched code point, for
+  highlighting), `word_start`, `word_prefix_match` and `substring_match` for pickers and command
+  palettes. Subsequence matching by code point with word-start, run and case bonuses; nothing allocates.
+- `std/text/diff` (heap): `diff.lines(arena, scratch, old, new, max_edits)` returns exact line hunks
+  (`Insert`, `Delete`, `Change`) from Myers' algorithm, or one `Change` marked not `exact` past the
+  edit bound. `scratch_bytes` sizes a fixed scratch buffer; `line_count` counts lines.
+- `std/text/position` (core): `position_from_offset`, `offset_from_position` and a `Cursor` for
+  ascending batches, with columns in bytes, UTF-16 units or code points and LSP's `\n`, `\r\n` and
+  `\r` line breaks.
+- `std/encoding/jsonrpc` (core): Content-Length framing. `header(length)` and an incremental
+  `Decoder` with `max_header` and `max_body` that reports `needed` bytes and fails with
+  `parse.ParseErr`.
+- `std/net/url`: `file_uri_from_path` and `path_from_file_uri` for Posix and Windows paths
+  (`PathStyle`), including drive letters, `%3A`, UNC and `\\?\` prefixes.
+- `std/unicode/utf8`: `truncate(text, limit)`, the longest prefix that does not split a code point.
 
 - `terminal.enter(&session, 0, 1, terminal.Modes{ ... })` takes over a terminal for a
   full-screen program: raw input, then any of `alternate_screen`, `hide_cursor`,
@@ -30,22 +48,13 @@ Additions only: `std/terminal` and `std/process/signal`.
   `window_change`, `suspend` and `continue` that default to false. Existing kinds keep
   their values. `signal.stop_job()` stops the process group as Ctrl-Z does.
 
-## Unreleased
-
-New: `std/process/pty`. No breaking changes.
-
 - `pty.spawn(arena, path, arguments, options)` starts a child on a pseudo-terminal of
   `options.size`, with an explicit environment and directory. `read` and `write` never
   wait (`WouldBlock` when nothing is ready), `readable` waits with a timeout, `resize`
   changes the window (SIGWINCH on Linux and macOS), `wait` and `terminate` match
   `std/process`, and `close` kills and reaps a child still running. On Linux and macOS
   `terminal.terminal` is a descriptor for `std/event`. Windows uses ConPTY (Windows 10
-  1809 or later) with a job object. Linux on AArch64 and RISC-V reports `Unsupported`
-  until the compiler maps `setsid`.
-
-## Unreleased
-
-Additive: `std/process`. Existing code builds unchanged.
+  1809 or later) with a job object.
 
 - `Options.group` starts a child at the root of its own process tree: a new process
   group on Linux and macOS, a kill-on-close Job Object on Windows (the child starts
@@ -63,8 +72,6 @@ Additive: `std/process`. Existing code builds unchanged.
   quote arguments for `sh -c` and for the Microsoft C runtime;
   `windows_arguments` splits a Windows command line on any target.
 
-## Unreleased
-
 - `#syscall` on aarch64-linux and riscv64-linux maps every x86-64 Linux call that
   the target has, by name, from the kernel 7.3 tables (`tools/linux-syscalls.tsv`).
   `renameat2`, `copy_file_range`, `fchmod`, `pidfd_open` and the rest now compile
@@ -78,10 +85,6 @@ Additive: `std/process`. Existing code builds unchanged.
   `Fchmodat`, `Fchmodat2`, `PidfdOpen`, `PidfdSendSignal`, `Clone3`, `CloseRange`,
   `MemfdCreate`, `Pread64`, `Pwrite64`, `Readv`, `Writev`, `Faccessat2`, `Dup3`,
   `EpollPwait2`, `IoUringSetup` and others.
-
-## Unreleased
-
-Breaking for code that read `fs.Directory`'s fields: `std/fs`. No language changes.
 
 - `std/fs` is the same on Linux, macOS and Windows. `app_directory`, the
   atomic-file functions, `lock`, `truncate`, `read_link`, `copy_file`,

@@ -1,0 +1,273 @@
+// Line diffs: which lines of an old text become which lines of a new one,
+// as hunks of inserted, deleted and changed lines, for diff gutters, patch
+// previews and change summaries.
+//
+// A line is the bytes up to and including a "\n", or the bytes after the
+// last "\n" when the text does not end with one; an empty text has no lines.
+// So "a\nb" and "a\nb\n" differ in their last line, as in git, and "\r\n"
+// line ends differ from "\n". Lines compare by hash, then by bytes, so the
+// result is exact.
+//
+// Common leading and trailing lines are set aside, then Myers' O(ND)
+// algorithm finds a shortest edit script for the rest, within a caller's
+// bound on edits. Memory comes only from the caller's arenas.
+use bytes "std/bytes"
+use hash "std/hash"
+use mem "std/mem"
+
+pub enum HunkKind { Insert, Delete, Change }
+
+// Lines old[old_start..old_start + old_count] become new[new_start..new_start
+// + new_count], counting lines from 0. An Insert has old_count 0 and
+// old_start the old line it goes before; a Delete has new_count 0 and
+// new_start the new line the deleted lines were before; a Change has both.
+pub struct Hunk {
+  kind: HunkKind,
+  old_start: usize,
+  old_count: usize,
+  new_start: usize,
+  new_count: usize,
+}
+
+// hunks are in order and never overlap or touch: equal lines separate any
+// two. edits is the number of lines deleted plus inserted. exact is false
+// when the shortest script needs more than the bound's edits: then hunks
+// hold one Change from the first line that differs to the last.
+pub struct Diff {
+  hunks: []Hunk,
+  old_lines: usize,
+  new_lines: usize,
+  edits: usize,
+  exact: bool,
+}
+
+struct Line { hash: u64, end: usize }
+struct Side { text: []const u8, lines: []Line }
+// One row of the Myers trace: the furthest x on each diagonal k = x - y,
+// for k = -d, -d + 2, ..., d.
+struct Row { previous: *Row, values: []u32 }
+
+// The number of lines in text.
+pub fn line_count(text: []const u8) usize {
+  count: usize = 0
+  at: usize = 0
+  for at < text.len {
+    at += bytes.find_byte(text[at..], '\n') + 1
+    count += 1
+  }
+  return count
+}
+
+fn split(scratch: *mem.Arena, text: []const u8) Side {
+  table := mem.push_array<Line>(scratch, line_count(text))
+  start: usize = 0
+  for index in 0..table.len {
+    end := start + bytes.find_byte(text[start..], '\n') + 1
+    if end > text.len {
+      end = text.len
+    }
+    table[index] = Line{ hash: hash.wyhash(text[start..end], 0), end: end }
+    start = end
+  }
+  return Side{ text: text, lines: table }
+}
+fn line_text(side: *const Side, index: usize) []const u8 {
+  start: usize = 0
+  if index > 0 {
+    start = side.lines[index - 1].end
+  }
+  return side.text[start..side.lines[index].end]
+}
+fn same(old: *const Side, old_index: usize, new: *const Side, new_index: usize) bool {
+  return old.lines[old_index].hash == new.lines[new_index].hash && bytes.equal(line_text(old, old_index), line_text(new, new_index))
+}
+fn hunk(old_start: usize, old_end: usize, new_start: usize, new_end: usize) Hunk {
+  kind := HunkKind.Change
+  if old_end == old_start {
+    kind = .Insert
+  } else if new_end == new_start {
+    kind = .Delete
+  }
+  return Hunk{ kind: kind, old_start: old_start, old_count: old_end - old_start, new_start: new_start, new_count: new_end - new_start }
+}
+
+// The line diff from old to new, with hunks in arena. A script of more than
+// max_edits line edits is not searched for: the Diff is then not exact.
+// Temporary work goes in scratch, which is rewound before returning; when
+// scratch is arena, the work stays in it instead.
+// Ownership: hunks borrow arena; old and new are not retained.
+// Allocation: in arena, the hunks; in scratch, 16 bytes per line of each
+// text plus, for a script of D edits (at most max_edits), about 2(D + 1)(D +
+// 2) + 32(D + 1) bytes. scratch_bytes is an upper bound for a fixed buffer.
+// Time is linear in the texts plus O((lines) * D) for the middle part.
+// Failure: panics only when an arena is exhausted.
+pub fn lines(arena: *mem.Arena, scratch: *mem.Arena, old: []const u8, new: []const u8, max_edits: usize) Diff {
+  mark := mem.arena_mark(scratch)
+  before := split(scratch, old)
+  after := split(scratch, new)
+  n := before.lines.len
+  m := after.lines.len
+  result := Diff{ old_lines: n, new_lines: m, exact: true }
+  prefix: usize = 0
+  for prefix < n && prefix < m && same(&before, prefix, &after, prefix) {
+    prefix += 1
+  }
+  suffix: usize = 0
+  for suffix < n - prefix && suffix < m - prefix && same(&before, n - 1 - suffix, &after, m - 1 - suffix) {
+    suffix += 1
+  }
+  old_end := n - suffix
+  new_end := m - suffix
+  found: []Hunk
+  if prefix == old_end && prefix == new_end {
+    // Equal texts.
+  } else if prefix == old_end || prefix == new_end || old_end - prefix > 0x7fffffff || new_end - prefix > 0x7fffffff {
+    // Only insertions or only deletions: one hunk, and it is the shortest
+    // script. (A middle too long for the trace also lands here.)
+    single := mem.push_array<Hunk>(scratch, 1)
+    single[0] = hunk(prefix, old_end, prefix, new_end)
+    found = single
+    result.edits = old_end - prefix + new_end - prefix
+    result.exact = prefix == old_end || prefix == new_end
+  } else {
+    found = myers(scratch, &before, &after, prefix, old_end, new_end, max_edits, &result)
+  }
+  if scratch == arena {
+    result.hunks = found
+    return result
+  }
+  result.hunks = mem.push_array<Hunk>(arena, found.len)
+  _ = mem.copy(result.hunks, found)
+  mem.arena_rewind(scratch, mark)
+  return result
+}
+
+// Myers' greedy forward search on old[low..old_end] against
+// new[low..new_end], keeping one trace row per edit count, then a walk back
+// that groups the edits into hunks.
+fn myers(scratch: *mem.Arena, old: *const Side, new: *const Side, low: usize, old_end: usize, new_end: usize, max_edits: usize, result: *Diff) []Hunk {
+  width := #cast(isize, old_end - low)
+  height := #cast(isize, new_end - low)
+  limit := max_edits
+  if limit > old_end - low + new_end - low {
+    limit = old_end - low + new_end - low
+  }
+  row: *Row = nil
+  found := false
+  edits: usize = 0
+  for d in 0..limit + 1 {
+    next := mem.push<Row>(scratch)
+    next.previous = row
+    next.values = mem.push_array<u32>(scratch, d + 1)
+    span := #cast(isize, d)
+    k := -span
+    for k <= span {
+      x: isize = 0
+      if d > 0 {
+        // Row d - 1 holds diagonal j at index (j + d - 1) / 2.
+        above := row.values
+        if k == -span || (k != span && above[#cast(usize, k - 1 + span - 1) / 2] < above[#cast(usize, k + 1 + span - 1) / 2]) {
+          x = #cast(isize, above[#cast(usize, k + 1 + span - 1) / 2])
+        } else {
+          x = #cast(isize, above[#cast(usize, k - 1 + span - 1) / 2]) + 1
+        }
+      }
+      y := x - k
+      for x < width && y < height && y >= 0 && same(old, low + #cast(usize, x), new, low + #cast(usize, y)) {
+        x += 1
+        y += 1
+      }
+      next.values[#cast(usize, k + span) / 2] = #cast(u32, x)
+      if x >= width && y >= height {
+        found = true
+        break
+      }
+      k += 2
+    }
+    row = next
+    if found {
+      edits = d
+      break
+    }
+  }
+  if !found {
+    single := mem.push_array<Hunk>(scratch, 1)
+    single[0] = hunk(low, old_end, low, new_end)
+    result.edits = old_end - low + new_end - low
+    result.exact = false
+    return single
+  }
+  result.edits = edits
+  // Walk back from the end. Each step undoes one edit and the run of equal
+  // lines after it; edits with no equal line between them share a hunk,
+  // filled from the back of the table.
+  table := mem.push_array<Hunk>(scratch, edits)
+  top := edits
+  x := width
+  y := height
+  open := false
+  // The open hunk, in middle coordinates.
+  first_x: isize = 0
+  first_y: isize = 0
+  last_x: isize = 0
+  last_y: isize = 0
+  d := edits
+  for d > 0 {
+    above := row.previous.values
+    span := #cast(isize, d)
+    k := x - y
+    previous := k - 1
+    if k == -span || (k != span && above[#cast(usize, k - 1 + span - 1) / 2] < above[#cast(usize, k + 1 + span - 1) / 2]) {
+      previous = k + 1
+    }
+    start_x := #cast(isize, above[#cast(usize, previous + span - 1) / 2])
+    start_y := start_x - previous
+    end_x := start_x
+    end_y := start_y
+    if previous == k + 1 {
+      end_y += 1
+    } else {
+      end_x += 1
+    }
+    if open && end_x == first_x && end_y == first_y {
+      first_x = start_x
+      first_y = start_y
+    } else {
+      if open {
+        top -= 1
+        table[top] = hunk(low + #cast(usize, first_x), low + #cast(usize, last_x), low + #cast(usize, first_y), low + #cast(usize, last_y))
+      }
+      open = true
+      first_x = start_x
+      first_y = start_y
+      last_x = end_x
+      last_y = end_y
+    }
+    x = start_x
+    y = start_y
+    row = row.previous
+    d -= 1
+  }
+  if open {
+    top -= 1
+    table[top] = hunk(low + #cast(usize, first_x), low + #cast(usize, last_x), low + #cast(usize, first_y), low + #cast(usize, last_y))
+  }
+  return table[top..]
+}
+
+// An upper bound on the scratch bytes lines needs for old, new and
+// max_edits, for a scratch arena over a fixed buffer (add
+// mem.ArenaBufferOverhead for its header). An owned arena grows as needed.
+pub fn scratch_bytes(old: []const u8, new: []const u8, max_edits: usize) usize {
+  old_lines := line_count(old)
+  new_lines := line_count(new)
+  limit := max_edits
+  if limit > old_lines + new_lines {
+    limit = old_lines + new_lines
+  }
+  rows := limit + 1
+  total := (old_lines + new_lines) * #sizeof(Line) + 64
+  total += rows * (#sizeof(Row) + 32) + 2 * rows * (rows + 1)
+  total += (limit + 1) * #sizeof(Hunk) + 32
+  return total
+}

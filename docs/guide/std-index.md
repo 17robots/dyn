@@ -805,6 +805,17 @@ Layer: core
 
 - `fn text_prefix(source: []const u8) usize`: How many bytes start source before the first one a JSON string scanner must look at: a byte below 32, at or above 128, '"' or '\\'.
 
+## std/encoding/jsonrpc
+
+Layer: core
+
+- `const HeaderLimit: usize = 40`: The longest header that header makes: "Content-Length: ", 20 digits and "\r\n\r\n".
+- `struct Header { bytes: [40]u8, length: usize }`: A message header, in bytes[..length].
+- `fn header(body_length: usize) Header`: The header for a body of body_length bytes: "Content-Length: N\r\n\r\n".
+- `struct Decoder { // The most bytes a header may take, its final empty line included. max_header: usize = 8192, // The largest Content-Length accepted. max_body: usize = 8388608, // Bytes already searched for the end of the header. scanned: usize, // Header and body sizes once the header has been read, else 0. header_length: usize, body_length: usize, failed: bool, failure: parse.ParseErr, }`: Finds frames at the start of a buffer of received bytes.
+- `struct Frame { ready: bool, body: []const u8, length: usize, needed: usize }`: The result of decode.
+- `fn decode(decoder: *Decoder, buffered: []const u8) Frame!parse.ParseErr`: The frame at the start of buffered, the bytes received and not yet consumed.
+
 ## std/encoding/mdesk
 
 Layer: heap
@@ -2059,6 +2070,9 @@ Layer: std
 
 Layer: heap
 
+- `enum PathStyle { Posix, Windows }`: How a file path is written: Posix ("/home/a.txt") or Windows ("C:\a.txt", "\\server\share\a.txt").
+- `fn file_uri_from_path(arena: *mem.Arena, path: []const u8, style: PathStyle) []u8!parse.ParseErr`: The file URI (RFC 8089) of an absolute path, in arena: "/tmp/a b" is "file:///tmp/a%20b";
+- `fn path_from_file_uri(arena: *mem.Arena, uri: []const u8, style: PathStyle) []u8!parse.ParseErr`: The path a file URI names, in arena: the inverse of file_uri_from_path.
 - `struct URL { scheme: []const u8, authority: []const u8, path: []const u8, query: []const u8, fragment: []const u8, }`
 - `fn parse(text: []const u8) URL!parse.ParseErr`: Splits text into its parts (RFC 3986), borrowing text.
 - `fn percent_encode(arena: *mem.Arena, source: []const u8) []u8`: One component percent-encoded, slashes included, in arena.
@@ -2843,6 +2857,17 @@ Layer: std
 - `fn benchmark_elapsed(benchmark: *Benchmark) i64`: Nanoseconds since benchmark_start.
 - `fn benchmark_nanoseconds_each(benchmark: *Benchmark) i64`: Nanoseconds per iteration since benchmark_start;
 
+## std/text/diff
+
+Layer: heap
+
+- `enum HunkKind { Insert, Delete, Change }`
+- `struct Hunk { kind: HunkKind, old_start: usize, old_count: usize, new_start: usize, new_count: usize, }`: Lines old[old_start..old_start + old_count] become new[new_start..new_start + new_count], counting lines from 0.
+- `struct Diff { hunks: []Hunk, old_lines: usize, new_lines: usize, edits: usize, exact: bool, }`: hunks are in order and never overlap or touch: equal lines separate any two.
+- `fn line_count(text: []const u8) usize`: The number of lines in text.
+- `fn lines(arena: *mem.Arena, scratch: *mem.Arena, old: []const u8, new: []const u8, max_edits: usize) Diff`: The line diff from old to new, with hunks in arena.
+- `fn scratch_bytes(old: []const u8, new: []const u8, max_edits: usize) usize`: An upper bound on the scratch bytes lines needs for old, new and max_edits, for a scratch arena over a fixed buffer (add ...
+
 ## std/text/edit
 
 Layer: heap
@@ -2860,6 +2885,22 @@ Layer: heap
 - `fn invalidate(tracker: *Tracker)`: Invalidates a published identity without resetting the monotonic clock.
 - `fn apply(scratch: *mem.Arena, buffer: *Buffer, replacement: *const Replacement) !EditErr`: All validation precedes writes.
 
+## std/text/fuzzy
+
+Layer: core
+
+- `const NoMatch: i32 = -1`: What score returns when query is not a subsequence of text.
+- `const ScoreMatch: i32 = 4`: Points score adds per matched code point, and its bonuses.
+- `const BonusFirst: i32 = 24`
+- `const BonusWordStart: i32 = 12`
+- `const BonusRun: i32 = 8`
+- `const BonusCase: i32 = 1`
+- `fn word_start(text: []const u8, offset: usize) bool`: Whether a word of text starts at offset: offset 0, just after a separator (space, tab, - _ / \ .
+- `fn score(text: []const u8, query: []const u8) i32`: How well query matches text as a subsequence, or NoMatch.
+- `fn positions(text: []const u8, query: []const u8, found: []usize) i32`: score, and the byte offset in text of each matched code point of query, in order, in found.
+- `fn word_prefix_match(text: []const u8, query: []const u8) bool`: Whether every space-separated word of query is a prefix of some word of text (see word_start), ignoring ASCII case: "sw th" and "theme" ...
+- `fn substring_match(text: []const u8, query: []const u8) bool`: Whether query occurs in text as a substring, ignoring ASCII case.
+
 ## std/text/layout
 
 Layer: heap
@@ -2871,6 +2912,18 @@ Layer: heap
 - `struct Line { start: usize, end: usize, glyph_start: usize, glyph_count: usize, width: f64, y: f64 }`
 - `struct Layout { text: []const u8, glyphs: []Glyph, lines: []Line, width: f64, height: f64, line_height: i32 }`
 - `fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Options) Layout!parse.ParseErr`: Latin shaping consists of optional NFC composition, code-point advances and pair kerning.
+
+## std/text/position
+
+Layer: core
+
+- `enum Unit { Byte, Utf16, Codepoint }`: What a column counts: LSP's position encodings "utf-8", "utf-16" and "utf-32".
+- `struct Position { line: usize, column: usize }`
+- `fn position_from_offset(text: []const u8, offset: usize, unit: Unit) Position`: The position of byte offset in text.
+- `struct Cursor { text: []const u8, line: usize, start: usize }`: Resolves many positions in one forward pass when they come in ascending order;
+- `fn cursor(text: []const u8) Cursor`
+- `fn offset_from_position(text: []const u8, position: Position, unit: Unit) usize!`: The byte offset of position in text, or failure when text has no such line, or the column falls inside a code point (between the two UTF-16 ...
+- `fn cursor_offset(state: *Cursor, position: Position, unit: Unit) usize!`: offset_from_position through state, which keeps the start of the last line it found.
 
 ## std/text/regex
 
@@ -3170,3 +3223,4 @@ Layer: core
 - `struct Iterator { text: []const u8, offset: usize, // Set by the next call that finds no code point left; it returns 0. ended: bool, }`
 - `fn iterator(text: []const u8) Iterator`
 - `fn next(state: *Iterator) u32`: The next code point;
+- `fn truncate(text: []const u8, limit: usize) []const u8`: The longest prefix of text that is at most limit bytes long and does not end inside a code point: a valid multi-byte sequence that would ...

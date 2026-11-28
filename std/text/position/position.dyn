@@ -1,0 +1,113 @@
+// Line and column positions in UTF-8 text, and the byte offsets they name:
+// what the Language Server Protocol and other editor tooling exchange. A
+// column counts bytes, UTF-16 code units (the LSP default) or code points,
+// as Unit says.
+//
+// Lines end at "\n", "\r\n" or a lone "\r", as LSP specifies; the line
+// break belongs to the line it ends. Line and column count from 0. A byte of
+// invalid UTF-8 counts as one code point of one UTF-16 unit, the U+FFFD it
+// decodes to. Nothing allocates.
+use utf8 "std/unicode/utf8"
+
+// What a column counts: LSP's position encodings "utf-8", "utf-16" and
+// "utf-32".
+pub enum Unit { Byte, Utf16, Codepoint }
+
+pub struct Position { line: usize, column: usize }
+
+struct Step { width: usize, units: usize }
+
+fn step(text: []const u8, offset: usize, unit: Unit) Step {
+  if text[offset] < 128 { return Step{ width: 1, units: 1 } }
+  decoded := utf8.decode(text, offset)
+  if !decoded.valid { return Step{ width: 1, units: 1 } }
+  case unit {
+    .Byte => { return Step{ width: decoded.width, units: decoded.width } }
+    .Utf16 => {
+      if decoded.codepoint > 65535 { return Step{ width: decoded.width, units: 2 } }
+      return Step{ width: decoded.width, units: 1 }
+    }
+    .Codepoint => { return Step{ width: decoded.width, units: 1 } }
+  }
+}
+
+// The position of byte offset in text. An offset past the end is the end; an
+// offset inside a code point is the position of that code point; an offset
+// between "\r" and "\n" is the end of that line.
+pub fn position_from_offset(text: []const u8, offset: usize, unit: Unit) Position {
+  limit := offset
+  if limit > text.len {
+    limit = text.len
+  }
+  result := Position{}
+  at: usize = 0
+  for at < limit {
+    byte := text[at]
+    if byte == '\n' || byte == '\r' {
+      width: usize = 1
+      if byte == '\r' && at + 1 < text.len && text[at + 1] == '\n' {
+        width = 2
+      }
+      if at + width > limit { return result }
+      result.line += 1
+      result.column = 0
+      at += width
+      continue
+    }
+    next := step(text, at, unit)
+    if at + next.width > limit { return result }
+    result.column += next.units
+    at += next.width
+  }
+  return result
+}
+
+// Resolves many positions in one forward pass when they come in ascending
+// order; a position on an earlier line starts again from the top, so any
+// order is still correct. Zero with text set is a fresh cursor.
+pub struct Cursor { text: []const u8, line: usize, start: usize }
+
+pub fn cursor(text: []const u8) Cursor {
+  return Cursor{ text: text }
+}
+
+// The byte offset of position in text, or failure when text has no such
+// line, or the column falls inside a code point (between the two UTF-16
+// units of a surrogate pair, say). A column past the end of its line is the
+// end of the line, before its line break, as LSP specifies. The last line
+// of "a\n" is line 1, which is empty.
+pub fn offset_from_position(text: []const u8, position: Position, unit: Unit) usize! {
+  state := cursor(text)
+  return try cursor_offset(&state, position, unit)
+}
+
+// offset_from_position through state, which keeps the start of the last line
+// it found.
+pub fn cursor_offset(state: *Cursor, position: Position, unit: Unit) usize! {
+  text := state.text
+  if position.line < state.line || state.start > text.len {
+    state.line = 0
+    state.start = 0
+  }
+  for state.line < position.line {
+    at := state.start
+    for at < text.len && text[at] != '\n' && text[at] != '\r' {
+      at += 1
+    }
+    if at == text.len { fail }
+    if text[at] == '\r' && at + 1 < text.len && text[at + 1] == '\n' {
+      at += 1
+    }
+    state.line += 1
+    state.start = at + 1
+  }
+  at := state.start
+  units: usize = 0
+  for at < text.len && text[at] != '\n' && text[at] != '\r' && units < position.column {
+    next := step(text, at, unit)
+    if units + next.units > position.column { fail }
+    units += next.units
+    at += next.width
+  }
+  return at
+}

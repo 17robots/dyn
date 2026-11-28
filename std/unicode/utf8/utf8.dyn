@@ -151,3 +151,25 @@ pub fn next(state: *Iterator) u32 {
   state.offset += decoded.width
   return decoded.codepoint
 }
+
+// The longest prefix of text that is at most limit bytes long and does not
+// end inside a code point: a valid multi-byte sequence that would cross limit
+// is left out whole. Bytes of invalid UTF-8 count as one-byte code points, so
+// the result is never shorter than limit - 3 when text is longer than limit.
+// Ownership: the result borrows text.
+pub fn truncate(text: []const u8, limit: usize) []const u8 {
+  if text.len <= limit { return text }
+  // A sequence crossing limit starts at most three bytes before it.
+  back: usize = 1
+  for back <= 3 && back <= limit {
+    start := limit - back
+    lead := text[start]
+    if lead < 128 || lead >= 192 {
+      decoded := decode(text, start)
+      if decoded.valid && decoded.width > back { return text[..start] }
+      return text[..limit]
+    }
+    back += 1
+  }
+  return text[..limit]
+}

@@ -41,6 +41,7 @@ core std/embedded/timer
 core std/embedded/uart
 core std/encoding/binary
 core std/encoding/json/scan
+core std/encoding/jsonrpc
 core std/enums
 core std/hash
 core std/image
@@ -57,6 +58,8 @@ core std/rand
 core std/reflect
 core std/simd
 core std/slice
+core std/text/fuzzy
+core std/text/position
 core std/text/scanner
 core std/unicode/utf16
 core std/unicode/utf8
@@ -114,6 +117,7 @@ heap std/path
 heap std/semver
 heap std/sort
 heap std/strings
+heap std/text/diff
 heap std/text/edit
 heap std/text/layout
 heap std/text/regex

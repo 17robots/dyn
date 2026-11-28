@@ -44,6 +44,7 @@ jobs:
           python3 tests/standard-streams.py --host-only
           python3 tests/stdlib-host.py
           python3 tests/std-expansion-host.py
+          python3 tests/text-algorithms.py
           python3 tests/native-ui-results.py
           python3 tests/window-desktop-results.py
           python3 tests/window-events.py
@@ -108,6 +109,7 @@ jobs:
           python tests/standard-streams.py --host-only
           python tests/stdlib-host.py
           python tests/std-expansion-host.py
+          python tests/text-algorithms.py
           DYN_OPENGL_DLL="$(cygpath -w /clang64/bin/opengl32.dll)" GALLIUM_DRIVER=llvmpipe python tests/native-ui-results.py
           DYN_OPENGL_DLL="$(cygpath -w /clang64/bin/opengl32.dll)" GALLIUM_DRIVER=llvmpipe python tests/window-desktop-results.py
           DYN_OPENGL_DLL="$(cygpath -w /clang64/bin/opengl32.dll)" GALLIUM_DRIVER=llvmpipe python tests/window-events.py

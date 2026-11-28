@@ -87,6 +87,9 @@ between the program image and the stack (see [bare metal](bare-metal.md)).
 | `std/fmt` | Formatting into a bounded caller buffer, including shortest round-trip floats |
 | `std/unicode/utf8`, `utf16`, `text` | Strict UTF-8 and UTF-16, case folding, normalization, and grapheme, word and line segmentation |
 | `std/text/scanner` | Line and field scanner with positions |
+| `std/text/position` | Line/column positions in bytes, UTF-16 units or code points and the byte offsets they name, with LSP line breaks |
+| `std/text/fuzzy` | Allocation-free fuzzy scoring with match positions, word-prefix and case-insensitive substring matching, for pickers and palettes |
+| `std/text/diff` | Exact line diffs as insert, delete and change hunks: Myers within a caller's edit bound, memory from arenas |
 | `std/text/regex` | Thompson-NFA regular expressions compiled into an arena; reusable workspace |
 | `std/html`, `std/text/template`, `std/html/template` | HTML text escaping into bounded buffers; text templates, and HTML templates that escape text and quoted attributes |
 | `std/container/list` | Intrusive stacks, queues, doubly linked lists, trees and free lists |
@@ -106,6 +109,7 @@ between the program image and the stack (see [bare metal](bare-metal.md)).
 | Package | Purpose |
 | --- | --- |
 | `std/encoding/json` | Validation, arena-backed mutable DOM parsing, queries and writing; a Writer into caller storage |
+| `std/encoding/jsonrpc` | Content-Length message framing (LSP and DAP base protocol): headers, and an incremental decoder with header and body limits |
 | `std/encoding/json/read` | [Experimental compact read-only DOM](json-read.md), with arena-owned values and text |
 | `std/encoding/csv` | RFC 4180 field scanner, stream scanner and writer |
 | `std/encoding/ini` | INI scanner and one-pass `parse` into an arena table |

@@ -1,0 +1,204 @@
+// Fuzzy matching for pickers, command palettes and completion: does a typed
+// query match a candidate, and how well. Nothing allocates.
+//
+// Text and query are UTF-8 and compare one code point at a time. ASCII
+// letters match either case; other code points match only themselves (fold
+// both with unicode/text.case_fold first for full case-insensitivity). A
+// byte of invalid UTF-8 is one code point that matches only the same byte.
+use utf8 "std/unicode/utf8"
+
+// What score returns when query is not a subsequence of text.
+pub const NoMatch: i32 = -1
+
+// Points score adds per matched code point, and its bonuses.
+pub const ScoreMatch: i32 = 4
+pub const BonusFirst: i32 = 24
+pub const BonusWordStart: i32 = 12
+pub const BonusRun: i32 = 8
+pub const BonusCase: i32 = 1
+
+struct Unit { codepoint: u32, width: usize }
+
+fn unit_at(text: []const u8, offset: usize) Unit {
+  if text[offset] < 128 { return Unit{ codepoint: text[offset], width: 1 } }
+  decoded := utf8.decode(text, offset)
+  if decoded.valid { return Unit{ codepoint: decoded.codepoint, width: decoded.width } }
+  // Invalid bytes live above the code point range so they never meet a
+  // real one.
+  return Unit{ codepoint: 0x110000 + text[offset], width: 1 }
+}
+fn fold(codepoint: u32) u32 {
+  if codepoint >= 'A' && codepoint <= 'Z' { return codepoint + 32 }
+  return codepoint
+}
+fn separator(codepoint: u32) bool {
+  return codepoint == ' ' || codepoint == '-' || codepoint == '_' || codepoint == '/' || codepoint == '.' ||
+    codepoint == ':' || codepoint == '(' || codepoint == '<' || codepoint == '\\' || codepoint == '\t'
+}
+// The start of the code point that ends at offset.
+fn previous_start(text: []const u8, offset: usize) usize {
+  start := offset - 1
+  for start > 0 && offset - start < 4 && (text[start] & 0xc0) == 0x80 {
+    start -= 1
+  }
+  if unit_at(text, start).width == offset - start { return start }
+  return offset - 1
+}
+
+fn subsequence(text: []const u8, query: []const u8) bool {
+  at: usize = 0
+  wanted: usize = 0
+  for at < text.len && wanted < query.len {
+    unit := unit_at(text, at)
+    goal := unit_at(query, wanted)
+    if fold(unit.codepoint) == fold(goal.codepoint) {
+      wanted += goal.width
+    }
+    at += unit.width
+  }
+  return wanted == query.len
+}
+
+// Whether a word of text starts at offset: offset 0, just after a separator
+// (space, tab, - _ / \ . : ( <), or an ASCII capital just after an ASCII
+// lowercase letter ("camelCase"). An offset past the end, or inside a code
+// point, is no word start.
+pub fn word_start(text: []const u8, offset: usize) bool {
+  if offset >= text.len || (text[offset] & 0xc0) == 0x80 { return false }
+  if offset == 0 { return true }
+  before := unit_at(text, previous_start(text, offset)).codepoint
+  if separator(before) { return true }
+  current := text[offset]
+  return current >= 'A' && current <= 'Z' && before >= 'a' && before <= 'z'
+}
+
+// How well query matches text as a subsequence, or NoMatch.
+//
+// Each code point of query matches the first matching code point of text
+// after the previous match (greedy, left to right). Each match scores
+// ScoreMatch, plus BonusFirst at the start of text or BonusWordStart at
+// another word start (see word_start), plus BonusRun when it directly follows
+// the previous match, plus BonusCase when the case is the same. Then the
+// offset of the first match, at most 16, and a quarter of the bytes text has
+// beyond query, at most 8, are subtracted, and the score is raised to at
+// least 1. An empty query scores 0 against any text. Higher is better;
+// scores compare only for the same query.
+pub fn score(text: []const u8, query: []const u8) i32 {
+  empty: []usize
+  return positions(text, query, empty)
+}
+
+// score, and the byte offset in text of each matched code point of query, in
+// order, in found. Offsets for code points of query past found.len are not
+// recorded: utf8.codepoint_count(query) entries hold them all. found is left
+// as it was on NoMatch.
+pub fn positions(text: []const u8, query: []const u8, found: []usize) i32 {
+  if query.len == 0 { return 0 }
+  total: i32 = 0
+  wanted: usize = 0
+  matched: usize = 0
+  at: usize = 0
+  run := false
+  first := text.len
+  before: u32 = 0
+  // Decide the match first, so found stays untouched on NoMatch.
+  if found.len > 0 && !subsequence(text, query) { return NoMatch }
+  for at < text.len && wanted < query.len {
+    unit := unit_at(text, at)
+    goal := unit_at(query, wanted)
+    if fold(unit.codepoint) == fold(goal.codepoint) {
+      if first == text.len {
+        first = at
+      }
+      total += ScoreMatch
+      if at == 0 {
+        total += BonusFirst
+      } else if separator(before) || (unit.codepoint >= 'A' && unit.codepoint <= 'Z' && before >= 'a' && before <= 'z') {
+        total += BonusWordStart
+      }
+      if run {
+        total += BonusRun
+      }
+      if unit.codepoint == goal.codepoint {
+        total += BonusCase
+      }
+      if matched < found.len {
+        found[matched] = at
+      }
+      matched += 1
+      run = true
+      wanted += goal.width
+    } else {
+      run = false
+    }
+    before = unit.codepoint
+    at += unit.width
+  }
+  if wanted < query.len { return NoMatch }
+  penalty := first
+  if penalty > 16 {
+    penalty = 16
+  }
+  extra: usize = 0
+  if text.len > query.len {
+    extra = text.len - query.len
+  }
+  if extra > 32 {
+    extra = 32
+  }
+  total -= #cast(i32, penalty)
+  total -= #cast(i32, extra) / 4
+  if total < 1 {
+    total = 1
+  }
+  return total
+}
+
+// Whether every space-separated word of query is a prefix of some word of
+// text (see word_start), ignoring ASCII case: "sw th" and "theme" match
+// "Switch theme"; "wrtie" does not. A query with no words matches nothing.
+// Use it to decide which fuzzy-ranked rows are safe to act on directly, so a
+// typo never runs the nearest subsequence match.
+pub fn word_prefix_match(text: []const u8, query: []const u8) bool {
+  start: usize = 0
+  matched := false
+  for start < query.len {
+    for start < query.len && query[start] == ' ' {
+      start += 1
+    }
+    end := start
+    for end < query.len && query[end] != ' ' {
+      end += 1
+    }
+    if end > start {
+      if !word_with_prefix(text, query[start..end]) { return false }
+      matched = true
+    }
+    start = end
+  }
+  return matched
+}
+fn word_with_prefix(text: []const u8, word: []const u8) bool {
+  for at in 0..text.len {
+    if text.len - at < word.len { return false }
+    if word_start(text, at) && equal_fold(text[at..at + word.len], word) { return true }
+  }
+  return false
+}
+fn equal_fold(left: []const u8, right: []const u8) bool {
+  if left.len != right.len { return false }
+  for index in 0..left.len {
+    if fold(left[index]) != fold(right[index]) { return false }
+  }
+  return true
+}
+
+// Whether query occurs in text as a substring, ignoring ASCII case. An empty
+// query occurs in every text.
+pub fn substring_match(text: []const u8, query: []const u8) bool {
+  if query.len > text.len { return false }
+  for at in 0..text.len - query.len + 1 {
+    if equal_fold(text[at..at + query.len], query) { return true }
+  }
+  return false
+}

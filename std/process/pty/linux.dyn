@@ -5,6 +5,11 @@ use "std/os/linux/sys"
 // Linux pseudo-terminals through /dev/ptmx and devpts. ioctl numbers and open
 // flags are the same on x86-64, AArch64 and RISC-V.
 const AtWorkingDirectory: isize = -100
+const SessionSupported: bool = true
+
+fn native_setsid() isize {
+  return #syscall(sys.Setsid)
+}
 // O_RDWR | O_NOCTTY | O_CLOEXEC, and O_NONBLOCK for the master.
 const PeerFlags: usize = 524546
 const MasterFlags: usize = 526594
