@@ -20,7 +20,7 @@ struct Search { files: u64, bytes: u64, lines: u64, matching_lines: u64, matchin
 struct Number { value: u64, ok: bool }
 fn numeric(root: *const json.Value, key: []const u8) Number {
   node := json.object_get(root, key)
-  if node.kind != json.KindNumber { return Number{} }
+  if node.kind != json.Kind.Number { return Number{} }
   // Integer fields normally use the integer reader. Fraction/exponent spellings
   // retain the same binary64 validation semantics as the other DOM ports.
   if strings.valid<u64>(node.text) {
@@ -33,9 +33,9 @@ fn numeric(root: *const json.Value, key: []const u8) Number {
   return Number{ value: integer, ok: #cast(f64, integer) == value }
 }
 fn add_record(summary: *Summary, root: *const json.Value) bool {
-  if root.kind != json.KindObject { return false }
+  if root.kind != json.Kind.Object { return false }
   service := json.object_get(root, "service")
-  if service.kind != json.KindString { return false }
+  if service.kind != json.Kind.String { return false }
   index: usize = 16
   for i in 0..16 {
     if bytes.equal(service.text, Services[i]) {
@@ -126,14 +126,14 @@ fn search_walk(directory: []const u8, result: *Search) !io.IoErr {
   for {
     entry := try fs.directory_next(&state)
     if state.ended { break }
-    // Linux directory entry types: DT_DIR=4, DT_REG=8
+    // Directories and regular files only.
     // Symlinks are skipped.
-    if entry.kind == 0 {
+    if entry.kind == .Unknown {
       #panic("filesystem does not report entry types")
     }
-    if entry.kind != 4 && entry.kind != 8 { continue }
+    if entry.kind != .Directory && entry.kind != .File { continue }
     joined := path.join(scratch, directory, entry.name)
-    if entry.kind == 4 {
+    if entry.kind == .Directory {
       try search_walk(joined, result)
     } else if bytes.ends_with(entry.name, ".txt") {
       read := try fs.read_all(scratch, joined, 1024 * mem.MiB)
@@ -203,7 +203,7 @@ fn handle(response: *http.Response, request: *const http.Request) !io.IoErr {
     try http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
     return
   }
-  if root.kind != json.KindArray {
+  if root.kind != json.Kind.Array {
     try http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
     return
   }

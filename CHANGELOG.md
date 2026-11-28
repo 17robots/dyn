@@ -12,6 +12,14 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## 0.1.0-preview.45
+
+Breaking: `std/encoding/json` and `std/encoding/json/read`.
+
+- A JSON value's kind is an enum, `json.Kind` (`Missing`, `Null`, `Bool`, `Number`,
+  `String`, `Array`, `Object`), instead of `u8` constants. Replace `json.KindString` with
+  `json.Kind.String` (and so on); `value.kind` and `read.kind(value)` return a `Kind`.
+
 ## 0.1.0-preview.44
 
 Breaking: `std/fs`. No language changes.
