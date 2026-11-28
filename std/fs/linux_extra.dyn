@@ -145,7 +145,8 @@ fn native_rename(old_path: []const u8, new_path: []const u8) isize {
   old_raw := terminated(old_path, old_storage[..])
   new_raw := terminated(new_path, new_storage[..])
   if old_raw == nil || new_raw == nil { return -36 }
-  return #syscall(sys.Renameat, -100, old_raw, -100, new_raw)
+  // renameat2 with no flags: riscv64 has no renameat.
+  return #syscall(sys.Renameat2, -100, old_raw, -100, new_raw, 0)
 }
 
 // Creates the symbolic link link pointing at target.

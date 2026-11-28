@@ -12,6 +12,22 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- `#syscall` on aarch64-linux and riscv64-linux maps every x86-64 Linux call that
+  the target has, by name, from the kernel 7.3 tables (`tools/linux-syscalls.tsv`).
+  `renameat2`, `copy_file_range`, `fchmod`, `pidfd_open` and the rest now compile
+  there. A call the target lacks names its replacement:
+  `syscall 2 (open) does not exist on aarch64-linux; use openat with AT_FDCWD`.
+- Fix: x86-64 `chmod` (90) and `setrlimit` (160) mapped to `fchmod` and `prlimit64`
+  on aarch64. `chmod` is now an error (use `fchmodat`); `setrlimit` maps to
+  `setrlimit`. `renameat` (264) is an error on riscv64, which lacks it (use
+  `renameat2`); `std/fs` renames with `renameat2`.
+- `std/os/linux/sys` names more calls: `Renameat2`, `CopyFileRange`, `Fchmod`,
+  `Fchmodat`, `Fchmodat2`, `PidfdOpen`, `PidfdSendSignal`, `Clone3`, `CloseRange`,
+  `MemfdCreate`, `Pread64`, `Pwrite64`, `Readv`, `Writev`, `Faccessat2`, `Dup3`,
+  `EpollPwait2`, `IoUringSetup` and others.
+
 ## 0.1.0-preview.45
 
 Breaking: `std/encoding/json` and `std/encoding/json/read`.

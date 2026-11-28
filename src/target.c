@@ -1,4 +1,5 @@
 #include "dyn.h"
+#include <stdint.h>
 #include <string.h>
 
 static const DynTarget targets[] = {
@@ -76,6 +77,34 @@ const char *dyn_target_property(const DynTarget *target, const char *key) {
   return NULL;
 }
 
+/* Dyn's portable Linux syscall numbers are the x86-64 ones. Each maps to the
+   target's call of the same name; a call the target lacks stays an error that
+   names its replacement. Two calls map to a superset whose extra trailing
+   argument is zero: dup2 to dup3 and epoll_wait to epoll_pwait. Number
+   translation does not change argument order or structure layout: clone takes
+   tls before child_tid on aarch64 and riscv64, and struct stat, struct
+   epoll_event and riscv64's struct sigaction differ from x86-64's. */
+enum { NONE = 0xFFFF };
+static const struct {
+  uint16_t portable, aarch64, riscv64;
+  const char *name, *replacement;
+} linux_syscalls[] = {
+#include "linux_syscalls.inc"
+};
+
+static size_t linux_syscall_row(uint64_t source) {
+  size_t low = 0, high = sizeof(linux_syscalls) / sizeof(linux_syscalls[0]);
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (linux_syscalls[middle].portable < source) low = middle + 1;
+    else high = middle;
+  }
+  return low < sizeof(linux_syscalls) / sizeof(linux_syscalls[0]) &&
+                 linux_syscalls[low].portable == source
+             ? low
+             : SIZE_MAX;
+}
+
 bool dyn_target_syscall_number(const DynTarget *target, uint64_t source,
                                uint64_t *native) {
   if (strcmp(target->kernel, "linux"))
@@ -84,27 +113,22 @@ bool dyn_target_syscall_number(const DynTarget *target, uint64_t source,
     *native = source;
     return true;
   }
-  /* Dyn's portable Linux syscall IDs are the x86-64 IDs. Only calls with the
-     same argument ABI are mapped; architecture-specific calls stay errors. */
-  static const struct {
-    uint16_t portable, aarch64;
-  } map[] = {
-      {0, 63},    {1, 64},    {3, 57},   {8, 62},   {9, 222},   {10, 226},  {11, 215},
-      {13, 134},  {14, 135},  {16, 29},   {28, 233},   {24, 124}, {32, 23},  {33, 24},   {35, 101},
-      {39, 172},  {41, 198},  {42, 203}, {43, 202}, {44, 206},  {45, 207},
-      {48, 210},  {49, 200},  {50, 201}, {51, 204}, {52, 205},  {54, 208}, {55, 209}, {56, 220},
-      {59, 221},  {60, 93},   {61, 260}, {62, 129}, {72, 25},   {73, 32}, {74, 82},
-      {76, 45},   {77, 46},   {79, 17},   {80, 49},  {90, 52},  {109, 154}, {110, 173},
-      {160, 261}, {186, 178}, {202, 98}, {204, 123}, {217, 61}, {228, 113}, {231, 94}, {232, 22},
-      {233, 21},  {254, 27},  {288, 242}, {289, 74},  {255, 28}, {257, 56}, {258, 34},  {263, 35},
-      {264, 38},  {265, 37},  {266, 36}, {267, 78}, {271, 73},  {291, 20},
-      {293, 59},  {294, 26},  {318, 278}, {332, 291}, {437, 437}};
-  for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); ++i)
-    if (map[i].portable == source) {
-      *native = map[i].aarch64;
-      return true;
-    }
-  return false;
+  size_t row = linux_syscall_row(source);
+  if (row == SIZE_MAX) return false;
+  uint16_t number = !strcmp(target->arch, "aarch64")   ? linux_syscalls[row].aarch64
+                    : !strcmp(target->arch, "riscv64") ? linux_syscalls[row].riscv64
+                                                       : NONE;
+  if (number == NONE) return false;
+  *native = number;
+  return true;
+}
+
+bool dyn_target_syscall_name(uint64_t source, const char **name, const char **replacement) {
+  size_t row = linux_syscall_row(source);
+  if (row == SIZE_MAX) return false;
+  *name = linux_syscalls[row].name;
+  *replacement = linux_syscalls[row].replacement;
+  return true;
 }
 
 unsigned dyn_target_pointer_bytes(const DynTarget *target) {
