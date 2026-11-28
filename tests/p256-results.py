@@ -3,6 +3,7 @@
 import hashlib,hmac,os,random,shutil,subprocess,tempfile,time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+import private_display  # hides the desktop display; see tests/private_display.py
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 P=2**256-2**224+2**192+2**96-1

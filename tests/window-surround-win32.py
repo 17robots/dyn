@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import private_display  # hides the desktop display; see tests/private_display.py
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE = ROOT / 'vendor/window/native'
 SOURCE = r'''#define WIN32_LEAN_AND_MEAN
@@ -112,10 +113,12 @@ with tempfile.TemporaryDirectory(prefix='dyn-surround-win32-') as directory:
     if sys.platform.startswith('linux') and shutil.which('zig'):
         for target in ('x86_64-windows-gnu','aarch64-windows-gnu'):
             subprocess.run(['zig','cc','-target',target,'-std=c11','-Wall','-Wextra','-Werror','-I'+str(NATIVE),'-c',str(source),'-o',str(work/(target+'.o'))],check=True,timeout=180)
-        if shutil.which('wine'):
+        # The probe opens a real Win32 window, which Wine needs a display for.
+        if shutil.which('wine') and os.environ.get('DISPLAY'):
             output=work/'probe.exe'
             subprocess.run(['zig','cc','-target','x86_64-windows-gnu','-I'+str(NATIVE),str(source),'-luser32','-lgdi32','-lopengl32','-limm32','-o',str(output)],check=True,timeout=180)
             subprocess.run(['wine',str(output)],check=True,timeout=90)
+        else: print('SKIP Win32 surrounding oracle under Wine: DISPLAY unavailable; cross-compiles passed')
     elif os.name=='nt' and shutil.which('cc'):
         output=work/'probe.exe'
         subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-I'+str(NATIVE),str(source),'-luser32','-lgdi32','-lopengl32','-limm32','-o',str(output)],check=True,timeout=180)

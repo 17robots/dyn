@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 import tempfile
+import private_display  # hides the desktop display; see tests/private_display.py
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())

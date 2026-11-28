@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import private_display  # hides the desktop display; see tests/private_display.py
 ROOT=Path(__file__).resolve().parents[1]
 BUILD=Path(os.environ.get('BUILD',ROOT/'build')).resolve()
 TIMES=os.environ.get('DYN_TEST_TIMES')
