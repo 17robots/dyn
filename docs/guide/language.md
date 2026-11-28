@@ -616,9 +616,10 @@ with FMA3) and a correctly rounded software routine elsewhere. The software come
 compiler, so these need no import; `std/math` wraps them for generic code.
 
 `#target(key: value)` at the top of a file keeps that file only for matching targets. The keys
-are `arch`, `kernel` (`linux`, `darwin`, `windows`, `wasi`, `none`, `browser`), `abi`, `libc`,
-`endian`, `pointer_bits` and `streams` (`yes` on every target with standard input, output and
-error, which is every target but the browser).
+are `arch`, `kernel` (`linux`, `darwin`, `windows`, `wasi`, `none`, `browser`), `family` (`unix`
+on Linux and macOS, so one file can hold POSIX code both share; the kernel name everywhere else),
+`abi`, `libc`, `endian`, `pointer_bits` and `streams` (`yes` on every target with standard input,
+output and error, which is every target but the browser).
 
 Conversions require exactly two arguments, with the type first. The value may be
 any expression and is evaluated exactly once. The closing parenthesis delimits
