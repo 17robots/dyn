@@ -12,6 +12,15 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## 0.1.0-preview.43
+
+No breaking changes.
+
+- `#target(family: unix)` keeps a file for both Linux and macOS, so POSIX code the two share
+  needs one file instead of a `kernel: linux` and a `kernel: darwin` copy. `family` is `unix` on
+  Linux and macOS and the kernel name on every other target (`windows`, `wasi`, `none`,
+  `browser`). Older compilers reject the key, so code that uses it needs this release.
+
 ## 0.1.0-preview.42
 
 Editor fixes only; no language or std changes. Restart editor language servers after

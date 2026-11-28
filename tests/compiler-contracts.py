@@ -320,6 +320,24 @@ class Contracts(unittest.TestCase):
                                             capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_target_family_selects_one_file_for_linux_and_macos(self):
+        with tempfile.TemporaryDirectory(prefix='dyn-target-family-') as directory:
+            root = Path(directory)
+            (root / 'main.dyn').write_text('fn main() { if platform_name().len == 0 { #panic("family") } }\n')
+            (root / 'unix.dyn').write_text('#target(family: unix)\nfn platform_name() str { return "unix" }\n')
+            (root / 'windows.dyn').write_text('#target(family: windows)\nfn platform_name() str { return "windows" }\n')
+            for target in ['x86_64-linux', 'x86_64-macos', 'aarch64-macos', 'x86_64-windows', 'aarch64-windows']:
+                with self.subTest(target=target):
+                    result = subprocess.run([DYN, 'check', directory, '--quiet', '--target', target], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+            output = root / 'program'
+            built = subprocess.run([DYN, 'build', directory, '--quiet', '--no-cache', '--output', str(output)], capture_output=True, text=True)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            self.assertEqual(subprocess.run([str(output)]).returncode, 0)
+            # wasi is its own family: neither file applies there.
+            wasi = subprocess.run([DYN, 'check', directory, '--quiet', '--target', 'wasm32-wasi'], capture_output=True, text=True)
+            self.assertNotEqual(wasi.returncode, 0)
+
     def test_module_global_does_not_shadow_imported_local(self):
         with tempfile.TemporaryDirectory(prefix='dyn-module-scope-') as directory:
             root = Path(directory)

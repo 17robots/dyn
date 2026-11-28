@@ -66,6 +66,10 @@ const char *dyn_target_property(const DynTarget *target, const char *key) {
      dyn_soft_* helpers. Everything else has a hardware FPU. */
   if (!strcmp(key, "float"))
     return !strcmp(target->abi, "ilp32") || !strcmp(target->abi, "aapcs-soft") ? "soft" : "hard";
+  /* Linux and macOS share POSIX code: one #target(family: unix) file serves
+     both. Every other kernel is its own family. */
+  if (!strcmp(key, "family"))
+    return !strcmp(target->kernel, "linux") || !strcmp(target->kernel, "darwin") ? "unix" : target->kernel;
   /* Standard input, output and error: every target but the browser. */
   if (!strcmp(key, "streams"))
     return strcmp(target->kernel, "browser") ? "yes" : "no";
