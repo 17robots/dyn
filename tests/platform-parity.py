@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import termios
+import private_display  # hides the desktop display; see tests/private_display.py
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve()

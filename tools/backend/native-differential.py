@@ -23,6 +23,11 @@ import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+# Wine must not reach the desktop display (see tests/private_display.py). The
+# check is inline: native-targets CI runs a standalone copy of this script.
+if os.environ.get('DYN_TEST_DISPLAY') != 'private':
+    for name in ('DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'NIRI_SOCKET'):
+        os.environ.pop(name, None)
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent

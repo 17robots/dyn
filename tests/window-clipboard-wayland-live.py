@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import private_display  # hides the desktop display; see tests/private_display.py
 ROOT=Path(__file__).resolve().parents[1]
 NATIVE=ROOT/'vendor/window/native'
 XML='''<protocol name="virtual_keyboard_unstable_v1">
@@ -152,6 +153,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-wayland-live-') as directory:
         if not marker.exists():
             log.seek(0);raise RuntimeError('isolated compositor failed: '+log.read())
         child_env=dict(env);child_env['WAYLAND_DISPLAY']=marker.read_text().strip();child_env.pop('DISPLAY',None)
+        child_env['DYN_TEST_DISPLAY']='private'  # the nested compositor is private
         if command:
             child_env['DNA_TEST_WAYLAND_INPUT']='1'
             sockets=list(runtime.glob('niri.*.sock'))

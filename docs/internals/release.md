@@ -36,6 +36,16 @@ publishing.
 | `just test-vendors` | Vendor ABI bindings and the Tree-sitter provider binding |
 | `just artifact dyn-sanitize` | A compiler built with ASan and UBSan; run tests with `DYN=build/dyn-sanitize` |
 
+Tests never see your desktop display. `tests/private_display.py` removes
+`DISPLAY`, `WAYLAND_DISPLAY`, `WAYLAND_SOCKET` and `NIRI_SOCKET` before a test
+starts, so window, clipboard and Wine checks print SKIP instead of opening
+windows on your session. Test windows and Wine clipboard traffic on a live
+Wayland session have crashed `xwayland-satellite` and closed every X
+application with it. To run those checks, start private servers (for example
+Xvfb and `weston --backend=headless`), point the variables at them and set
+`DYN_TEST_DISPLAY=private`. `tests/window-clipboard-large.py` starts its own
+Xvfb when one is installed.
+
 Syntax changes land in the compiler's parser and in `tree-sitter-dyn` (editor
 highlighting) together. `grammar.lock.json` pins only the grammar that
 `just test-vendors` parses with to qualify the `vendor/tree_sitter` binding;

@@ -5,6 +5,7 @@ import shutil
 import sys
 from pathlib import Path
 import subprocess,tempfile
+import private_display  # hides the desktop display; see tests/private_display.py
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 if not sys.platform.startswith('linux') or not os.environ.get('DISPLAY') or not shutil.which('cc'):
