@@ -68,6 +68,7 @@ fn main() i32 {
 
 PROGRAM = r'''use pty "std/process/pty"
 use process "std/process"
+use time "std/time"
 use event "std/event"
 use mem "std/mem"
 use io "std/io"
@@ -275,9 +276,15 @@ fn child(arena: *mem.Arena, executable: []const u8, directory: []const u8) {
   }
   type_line(terminal, "hello\r")
   expect(terminal, &output, "got:hello")
-  for round in 0..400 {
+  for round in 0..2000 {
     drain(terminal, &output)
     exit := pty.wait(terminal, true) catch { #panic("wait child") }
+    if !exit.finished {
+      // drain returns at once after the terminal hangs up; give the child
+      // time to finish exiting (about ten seconds in all).
+      time.sleep(5 * time.Millisecond)
+      continue
+    }
     if exit.finished {
       if exit.code != 7 { #panic("child exit status") }
       _ = pty.wait(terminal, false) catch err {
