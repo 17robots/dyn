@@ -74,30 +74,30 @@ pub fn font_owned(api: *const Api, bytes: []const u8, face_index: u32) rawptr!io
 // Clusters are byte offsets into UTF-8 input. Invalid sequences use HB recovery.
 // Feature ranges are input cluster offsets; feature tags are big-endian ASCII.
 pub fn shape(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const u8, direction: u32, features: []const Feature) []Glyph!io.IoErr {
-  return try shape_run(arena, api, font, text, Options{direction:direction}, features)
+  return try shape_run(arena, api, font, text, Options{direction: direction}, features)
 }
 // Shapes a single run. Text recovery follows HarfBuzz as in shape; layout
 // clients that preserve editor offsets must validate UTF-8 before calling.
 pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const u8, options: Options, features: []const Feature) []Glyph!io.IoErr {
   empty: []Glyph
-  direction:=options.direction
-  if options.cluster_level>2 || (options.flags&~#cast(u32, 255))!=0 || options.language.len>2147483647 {
+  direction := options.direction
+  if options.cluster_level > 2 || (options.flags & ~#cast(u32, 255)) != 0 || options.language.len > 2147483647 {
     fail .InvalidInput
   }
   for byte in options.language {
-    if byte==0 { fail .InvalidInput }
+    if byte == 0 { fail .InvalidInput }
   }
   if font == nil || text.len > 2147483647 || #cast(u64, features.len) > 0xffffffff || (direction != 0 && (direction < 4 || direction > 7)) {
     fail .InvalidInput
   }
-  if #cast(usize, options.item_offset)>text.len || (options.has_item_length && options.item_length<0) {
+  if #cast(usize, options.item_offset) > text.len || (options.has_item_length && options.item_length < 0) {
     fail .InvalidInput
   }
-  item_length:=options.item_length
+  item_length := options.item_length
   if !options.has_item_length {
-    item_length=#cast(i32, text.len-#cast(usize, options.item_offset))
+    item_length = #cast(i32, text.len - #cast(usize, options.item_offset))
   }
-  if #cast(usize, item_length)>text.len-#cast(usize, options.item_offset) { fail .InvalidInput }
+  if #cast(usize, item_length) > text.len - #cast(usize, options.item_offset) { fail .InvalidInput }
   buffer := api.buffer_create()
   if buffer == nil { fail io.IoErr.System(0) }
   defer {
@@ -109,12 +109,12 @@ pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const
   if direction != 0 {
     api.buffer_set_direction(buffer, direction)
   }
-  if options.script!=0 {
+  if options.script != 0 {
     api.buffer_set_script(buffer, options.script)
   }
-  if options.language.len!=0 {
-    language:=api.language_from_string(&options.language[0], #cast(i32, options.language.len))
-    if language==nil { fail .InvalidInput }
+  if options.language.len != 0 {
+    language := api.language_from_string(&options.language[0], #cast(i32, options.language.len))
+    if language == nil { fail .InvalidInput }
     api.buffer_set_language(buffer, language)
   }
   api.buffer_set_cluster_level(buffer, options.cluster_level)
@@ -133,14 +133,14 @@ pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const
   if count != positions_count || (count != 0 && (infos == nil || positions == nil)) {
     fail io.IoErr.System(0)
   }
-  if #cast(u64, count) > #cast(u64, #max(usize)/#sizeof(Glyph)) { fail .Capacity }
+  if #cast(u64, count) > #cast(u64, #max(usize) / #sizeof(Glyph)) { fail .Capacity }
   glyphs := mem.push_array<Glyph>(arena, #cast(usize, count))
   info_view := #slice(infos, count)
   position_view := #slice(positions, count)
   for i in 0..glyphs.len {
     info := info_view[i]
     position := position_view[i]
-    glyphs[i] = Glyph{index:info.codepoint, cluster:info.cluster, x_advance:position.x_advance, y_advance:position.y_advance, x_offset:position.x_offset, y_offset:position.y_offset}
+    glyphs[i] = Glyph{index: info.codepoint, cluster: info.cluster, x_advance: position.x_advance, y_advance: position.y_advance, x_offset: position.x_offset, y_offset: position.y_offset}
   }
   return glyphs
 }
@@ -206,18 +206,18 @@ pub fn load(handle: dynlib.Handle) Api!io.IoErr {
   if api.glyph_infos == nil { return try missing("hb_buffer_get_glyph_infos") }
   api.glyph_positions = #cast(fn(rawptr, *u32)*const GlyphPosition, symbol(handle, "hb_buffer_get_glyph_positions"))
   if api.glyph_positions == nil { return try missing("hb_buffer_get_glyph_positions") }
-  api.unicode_get_default=#cast(fn()rawptr, symbol(handle, "hb_unicode_funcs_get_default"))
-  if api.unicode_get_default==nil { return try missing("hb_unicode_funcs_get_default") }
-  api.unicode_script=#cast(fn(rawptr, u32)u32, symbol(handle, "hb_unicode_script"))
-  if api.unicode_script==nil { return try missing("hb_unicode_script") }
-  api.script_horizontal_direction=#cast(fn(u32)u32, symbol(handle, "hb_script_get_horizontal_direction"))
-  if api.script_horizontal_direction==nil {
+  api.unicode_get_default = #cast(fn()rawptr, symbol(handle, "hb_unicode_funcs_get_default"))
+  if api.unicode_get_default == nil { return try missing("hb_unicode_funcs_get_default") }
+  api.unicode_script = #cast(fn(rawptr, u32)u32, symbol(handle, "hb_unicode_script"))
+  if api.unicode_script == nil { return try missing("hb_unicode_script") }
+  api.script_horizontal_direction = #cast(fn(u32)u32, symbol(handle, "hb_script_get_horizontal_direction"))
+  if api.script_horizontal_direction == nil {
     return try missing("hb_script_get_horizontal_direction")
   }
-  api.buffer_set_cluster_level=#cast(fn(rawptr, u32), symbol(handle, "hb_buffer_set_cluster_level"))
-  if api.buffer_set_cluster_level==nil { return try missing("hb_buffer_set_cluster_level") }
-  api.buffer_set_flags=#cast(fn(rawptr, u32), symbol(handle, "hb_buffer_set_flags"))
-  if api.buffer_set_flags==nil { return try missing("hb_buffer_set_flags") }
+  api.buffer_set_cluster_level = #cast(fn(rawptr, u32), symbol(handle, "hb_buffer_set_cluster_level"))
+  if api.buffer_set_cluster_level == nil { return try missing("hb_buffer_set_cluster_level") }
+  api.buffer_set_flags = #cast(fn(rawptr, u32), symbol(handle, "hb_buffer_set_flags"))
+  if api.buffer_set_flags == nil { return try missing("hb_buffer_set_flags") }
   return api
 }
 

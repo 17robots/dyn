@@ -208,6 +208,67 @@ static void format_commas(FormatEdits *edits, size_t length) {
   }
 }
 
+static bool format_space_at(const char *text, size_t at) {
+  return strchr(" \t\r\n", text[at]) != NULL;
+}
+
+/* Ensures whitespace before offset at, unless the line starts there. */
+static void format_space_before(FormatEdits *edits, size_t at, size_t floor) {
+  if (at > floor && !format_space_at(edits->text, at - 1)) format_insert(edits, at, UINT_MAX);
+}
+
+static void format_space_after(FormatEdits *edits, size_t at, size_t ceiling) {
+  if (at < ceiling && !format_space_at(edits->text, at)) format_insert(edits, at, UINT_MAX);
+}
+
+/* One space around a binary operator or an assignment, one after a declared
+   name's colon (name: type, field: value) and around := and a declaration's
+   =. Declaration punctuation lies between a node's children: names, types and
+   values are children, so a gap holds only the punctuation (and whitespace).
+   A parameter's or member's type is a qualifier node that starts at its colon.
+   Gaps holding a comment are left as written. */
+static void format_spacing(FormatEdits *edits, const ExpNode *nodes, uint32_t id) {
+  const ExpNode *node = &nodes[id];
+  const char *text = edits->text;
+  if ((node->kind == EXP_BINARY || node->kind == (uint16_t)SRC_ASSIGNMENT) && node->operator_length) {
+    size_t op = node->operator_start, end = op + node->operator_length;
+    format_space_before(edits, op, node->start);
+    format_space_after(edits, end, node->end);
+  }
+  switch (node->kind) {
+  case SRC_FN_PARAM: case SRC_VARIADIC_PARAM: case SRC_STRUCT_MEMBER: case SRC_VARIABLE:
+  case SRC_CONST: case SRC_EXTERN_VARIABLE: case EXP_MEMBER: case SRC_TARGET_CONDITION:
+  case SRC_QUALIFIER: {
+    size_t from = node->start;
+    for (uint32_t child = node->first;; child = nodes[child].next) {
+      size_t to = child == UINT32_MAX ? node->end : nodes[child].start;
+      bool comment = false;
+      for (size_t i = from; i < to; ++i) comment = comment || text[i] == '/';
+      for (size_t i = from; i < to && !comment; ++i) {
+        if (text[i] == ':' && i + 1 < to && text[i + 1] == '=') {
+          format_space_before(edits, i, node->start);
+          format_space_after(edits, i + 2, node->end);
+          ++i;
+        } else if (text[i] == ':') {
+          format_space_after(edits, i + 1, node->end);
+        } else if (text[i] == '=' && node->kind != EXP_MEMBER && node->kind != (uint16_t)SRC_TARGET_CONDITION &&
+                   node->kind != (uint16_t)SRC_QUALIFIER) {
+          format_space_before(edits, i, node->start);
+          format_space_after(edits, i + 1, node->end);
+        }
+      }
+      if (child == UINT32_MAX) break;
+      from = nodes[child].end;
+    }
+    break;
+  }
+  default:
+    break;
+  }
+  for (uint32_t child = node->first; child != UINT32_MAX; child = nodes[child].next)
+    format_spacing(edits, nodes, child);
+}
+
 static void format_compact(FormatEdits *edits, const DynSource *s) {
   ExpSnapshot *snapshot = exp_snapshot_create(s->text, s->length, NULL, NULL);
   const ExpSnapshotTree *tree = exp_snapshot_tree(snapshot);
@@ -221,6 +282,7 @@ static void format_compact(FormatEdits *edits, const DynSource *s) {
     if (s->text[i] == '\n') lines[at++] = i + 1;
   FormatTree t = {tree, lines, count};
   format_commas(edits, s->length);
+  format_spacing(edits, tree->nodes, tree->root);
   format_layout_compact(edits, &t, tree->root, UINT32_MAX, 0);
   free(lines);
   exp_snapshot_release(snapshot);

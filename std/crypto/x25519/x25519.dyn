@@ -5,13 +5,13 @@ use field "std/crypto/curve25519"
 // The shared secret of private_key and peer. Bad sizes, or a peer key that
 // gives an all-zero secret (a low-order point), fail with InvalidInput.
 pub fn shared(destination: []u8, private_key: []const u8, peer: []const u8) ! {
-  if destination.len<32 || private_key.len!=32 || peer.len!=32 { fail }
+  if destination.len < 32 || private_key.len != 32 || peer.len != 32 { fail }
   scalar: [32]u8
   for i in 0..32 {
-    scalar[i]=private_key[i]
+    scalar[i] = private_key[i]
   }
   scalar[0] &= 248
-  scalar[31] = (scalar[31]&127)|64
+  scalar[31] = (scalar[31] & 127) | 64
   x := field.decode(peer)
   a := field.number(1)
   b := x
@@ -19,32 +19,32 @@ pub fn shared(destination: []u8, private_key: []const u8, peer: []const u8) ! {
   d := field.number(1)
   constant := field.number(121665)
   for step in 0..255 {
-    i := 254-step
-    bit := #cast(i64, (scalar[i/8] >> #cast(u8, i&7)) & 1)
+    i := 254 - step
+    bit := #cast(i64, (scalar[i / 8] >> #cast(u8, i & 7)) & 1)
     field.select(&a, &b, bit)
     field.select(&c, &d, bit)
     e := field.add(a, c)
-    a=field.sub(a, c)
-    c=field.add(b, d)
-    b=field.sub(b, d)
-    d=field.square(e)
-    f:=field.square(a)
-    a=field.multiply(c, a)
-    c=field.multiply(b, e)
-    e=field.add(a, c)
-    a=field.sub(a, c)
-    b=field.square(a)
-    c=field.sub(d, f)
-    a=field.multiply(c, constant)
-    a=field.add(a, d)
-    c=field.multiply(c, a)
-    a=field.multiply(d, f)
-    d=field.multiply(b, x)
-    b=field.square(e)
+    a = field.sub(a, c)
+    c = field.add(b, d)
+    b = field.sub(b, d)
+    d = field.square(e)
+    f := field.square(a)
+    a = field.multiply(c, a)
+    c = field.multiply(b, e)
+    e = field.add(a, c)
+    a = field.sub(a, c)
+    b = field.square(a)
+    c = field.sub(d, f)
+    a = field.multiply(c, constant)
+    a = field.add(a, d)
+    c = field.multiply(c, a)
+    a = field.multiply(d, f)
+    d = field.multiply(b, x)
+    b = field.square(e)
     field.select(&a, &b, bit)
     field.select(&c, &d, bit)
   }
-  a=field.multiply(a, field.inverse(c))
+  a = field.multiply(a, field.inverse(c))
   field.encode(destination[..32], a)
   nonzero: u32
   for i in 0..32 {
@@ -54,6 +54,6 @@ pub fn shared(destination: []u8, private_key: []const u8, peer: []const u8) ! {
 }
 pub fn public_key(destination: []u8, private_key: []const u8) ! {
   base: [32]u8
-  base[0]=9
+  base[0] = 9
   try shared(destination, private_key, base[..])
 }

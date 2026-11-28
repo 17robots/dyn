@@ -356,7 +356,7 @@ pub fn next(watcher: *Watcher) Event!io.IoErr {
     read := sync.load_u32(&state.read)
     if read == sync.load_u32(&state.write) { return idle(watcher) }
     record := state.records[read]
-    sync.store_u32(&state.read, (read+1)%64)
+    sync.store_u32(&state.read, (read + 1) % 64)
     live := false
     for i in 0..16 {
       if state.slots[i].stream != nil && state.slots[i].id == record.watch {

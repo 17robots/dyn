@@ -69,7 +69,7 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) !io.IoErr {
   name := try c.string_into(storage[..], title)
   display := display_open(nil)
   if display == nil { fail io.IoErr.System(#cast(isize, 0)) }
-  window.* = Window{display:display, width:width, height:height}
+  window.* = Window{display: display, width: width, height: height}
   context_error_display = display
   context_error_seen = false
   context_previous_handler = set_error_handler(context_error)
@@ -96,8 +96,8 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) !io.IoErr {
     fail io.IoErr.System(#cast(isize, 0))
   }
   window.colormap = create_colormap(display, root(display, info.screen), info.visual, 0)
-  attrs := Attributes{colormap:window.colormap, event_mask:1|2|4|8|64|32768|131072|2097152|4194304}
-  window.handle = create_window(display, root(display, info.screen), 0, 0, #cast(u32, width), #cast(u32, height), 0, info.depth, 1, info.visual, 8192|2048, &attrs)
+  attrs := Attributes{colormap: window.colormap, event_mask: 1 | 2 | 4 | 8 | 64 | 32768 | 131072 | 2097152 | 4194304}
+  window.handle = create_window(display, root(display, info.screen), 0, 0, #cast(u32, width), #cast(u32, height), 0, info.depth, 1, info.visual, 8192 | 2048, &attrs)
   create_name := "glXCreateContextAttribsARB\x00"
   create := #cast(fn(rawptr, rawptr, rawptr, i32, *const i32)rawptr, gl_proc(&create_name[0]))
   if create != nil {
@@ -211,22 +211,22 @@ pub fn poll(window: *Window) !io.IoErr {
         }
       }
     } else if event.kind == 9 {
-      ordered_push(window, ordered.Event{kind:ordered.Kind.FocusGained})
+      ordered_push(window, ordered.Event{kind: ordered.Kind.FocusGained})
     } else if event.kind == 10 {
       window.ordered_pressed = []
-      ordered_push(window, ordered.Event{kind:ordered.Kind.FocusLost})
+      ordered_push(window, ordered.Event{kind: ordered.Kind.FocusLost})
       window.input.released = window.input.released || window.input.down
       window.input.down = false
     } else if event.kind == 22 {
       resized := #cast(*Configure, &event)
       window.width = resized.width
       window.height = resized.height
-      ordered_push(window, ordered.Event{kind:ordered.Kind.Resize, width:resized.width, height:resized.height})
+      ordered_push(window, ordered.Event{kind: ordered.Kind.Resize, width: resized.width, height: resized.height})
     } else if event.kind == 33 {
       message := #cast(*Client, &event)
       if message.message == window.protocol_atom && message.format == 32 && #cast(usize, message.data[0]) == window.close_atom {
         window.close_requested = true
-        ordered_push(window, ordered.Event{kind:ordered.Kind.Close})
+        ordered_push(window, ordered.Event{kind: ordered.Kind.Close})
       }
     } else {
       desktop_selection(window, &event)

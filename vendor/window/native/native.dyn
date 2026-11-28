@@ -54,7 +54,7 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) !io.IoErr {
   }
   handle := native_open(name, width, height)
   if handle == nil { fail io.IoErr.System(#cast(isize, 0)) }
-  window.* = Window{handle:handle, width:width, height:height}
+  window.* = Window{handle: handle, width: width, height: height}
   errdefer close(window)
   try poll(window)
 }
@@ -72,7 +72,7 @@ pub fn poll(window: *Window) !io.IoErr {
   window.width = frame.width
   window.height = frame.height
   window.close_requested = (frame.flags & 128) != 0
-  window.input = ui.Input{x:frame.x, y:frame.y, down:(frame.flags&1)!=0, pressed:(frame.flags&2)!=0, released:(frame.flags&4)!=0, tab:(frame.flags&8)!=0, activate:(frame.flags&16)!=0, left:(frame.flags&32)!=0, right:(frame.flags&64)!=0}
+  window.input = ui.Input{x: frame.x, y: frame.y, down: (frame.flags & 1) != 0, pressed: (frame.flags & 2) != 0, released: (frame.flags & 4) != 0, tab: (frame.flags & 8) != 0, activate: (frame.flags & 16) != 0, left: (frame.flags & 32) != 0, right: (frame.flags & 64) != 0}
   native_desktop(window.handle, &window.desktop)
   native_composition(window.handle, &window.composition)
   if previous_composition || window.composition.active != 0 {

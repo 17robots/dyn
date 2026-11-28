@@ -6,20 +6,20 @@
 extern fn swap_extensions "glXQueryExtensionsString"(display: rawptr, screen: i32) *const u8
 
 fn swap_extension(list: []const u8, wanted: []const u8) bool {
-  at:usize=0
-  for at<list.len {
-    for at<list.len && list[at]==32 {
-      at+=1
+  at: usize = 0
+  for at < list.len {
+    for at < list.len && list[at] == 32 {
+      at += 1
     }
-    first:=at
-    for at<list.len && list[at]!=32 {
-      at+=1
+    first := at
+    for at < list.len && list[at] != 32 {
+      at += 1
     }
-    if at-first==wanted.len {
-      equal:=true
+    if at - first == wanted.len {
+      equal := true
       for i in 0..wanted.len {
-        if list[first+i]!=wanted[i] {
-          equal=false
+        if list[first + i] != wanted[i] {
+          equal = false
           break
         }
       }
@@ -33,68 +33,68 @@ fn swap_extension(list: []const u8, wanted: []const u8) bool {
 // install process-global error handlers. Missing extensions return Unsupported;
 // a non-nil GLX procedure address alone does not establish driver support.
 // Only immediate (0) and one-refresh (1) intervals are part of this contract.
-pub fn set_swap_interval(window:*Window, interval:i32) !io.IoErr {
-  if window==nil || window.display==nil || window.context==nil || window.handle==0 {
+pub fn set_swap_interval(window: *Window, interval: i32) !io.IoErr {
+  if window == nil || window.display == nil || window.context == nil || window.handle == 0 {
     fail .InvalidInput
   }
-  if interval!=0 && interval!=1 { fail .InvalidInput }
-  saved_display:=context_error_display
-  saved_seen:=context_error_seen
-  saved_previous:=context_previous_handler
-  context_error_display=window.display
-  context_error_seen=false
-  context_previous_handler=set_error_handler(context_error)
+  if interval != 0 && interval != 1 { fail .InvalidInput }
+  saved_display := context_error_display
+  saved_seen := context_error_seen
+  saved_previous := context_previous_handler
+  context_error_display = window.display
+  context_error_seen = false
+  context_previous_handler = set_error_handler(context_error)
   defer {
-    _=set_error_handler(context_previous_handler)
-    context_error_display=saved_display
-    context_error_seen=saved_seen
-    context_previous_handler=saved_previous
+    _ = set_error_handler(context_previous_handler)
+    context_error_display = saved_display
+    context_error_seen = saved_seen
+    context_previous_handler = saved_previous
   }
   // Drain old requests before attributing errors to the interval operation.
-  _=sync(window.display, 0)
-  context_error_seen=false
+  _ = sync(window.display, 0)
+  context_error_seen = false
   make_current(window) catch {
-    _=sync(window.display, 0)
+    _ = sync(window.display, 0)
     fail io.IoErr.System(#cast(isize, 0))
   }
-  pointer:=swap_extensions(window.display, screen(window.display))
-  _=sync(window.display, 0)
+  pointer := swap_extensions(window.display, screen(window.display))
+  _ = sync(window.display, 0)
   if context_error_seen { fail io.IoErr.System(#cast(isize, 0)) }
-  if pointer==nil { fail .Unsupported }
-  length:=c.string_length(pointer, 65536)
-  if length==65536 { fail .Capacity }
-  extensions:=#slice(pointer, length)
+  if pointer == nil { fail .Unsupported }
+  length := c.string_length(pointer, 65536)
+  if length == 65536 { fail .Capacity }
+  extensions := #slice(pointer, length)
   if swap_extension(extensions, "GLX_EXT_swap_control") {
-    name:="glXSwapIntervalEXT\x00"
-    apply:=#cast(fn(rawptr, usize, i32), gl_proc(&name[0]))
-    if apply!=nil {
+    name := "glXSwapIntervalEXT\x00"
+    apply := #cast(fn(rawptr, usize, i32), gl_proc(&name[0]))
+    if apply != nil {
       apply(window.display, window.handle, interval)
-      _=sync(window.display, 0)
+      _ = sync(window.display, 0)
       if context_error_seen { fail io.IoErr.System(#cast(isize, 0)) }
       return
     }
   }
   if swap_extension(extensions, "GLX_MESA_swap_control") {
-    name:="glXSwapIntervalMESA\x00"
-    apply:=#cast(fn(u32)i32, gl_proc(&name[0]))
-    if apply!=nil {
-      code:=apply(#cast(u32, interval))
-      _=sync(window.display, 0)
-      if code!=0 || context_error_seen { fail io.IoErr.System(#cast(isize, 0)) }
+    name := "glXSwapIntervalMESA\x00"
+    apply := #cast(fn(u32)i32, gl_proc(&name[0]))
+    if apply != nil {
+      code := apply(#cast(u32, interval))
+      _ = sync(window.display, 0)
+      if code != 0 || context_error_seen { fail io.IoErr.System(#cast(isize, 0)) }
       return
     }
   }
-  if interval==1 && swap_extension(extensions, "GLX_SGI_swap_control") {
-    name:="glXSwapIntervalSGI\x00"
-    apply:=#cast(fn(i32)i32, gl_proc(&name[0]))
-    if apply!=nil {
-      code:=apply(interval)
-      _=sync(window.display, 0)
-      if code!=0 || context_error_seen { fail io.IoErr.System(#cast(isize, 0)) }
+  if interval == 1 && swap_extension(extensions, "GLX_SGI_swap_control") {
+    name := "glXSwapIntervalSGI\x00"
+    apply := #cast(fn(i32)i32, gl_proc(&name[0]))
+    if apply != nil {
+      code := apply(interval)
+      _ = sync(window.display, 0)
+      if code != 0 || context_error_seen { fail io.IoErr.System(#cast(isize, 0)) }
       return
     }
   }
-  _=sync(window.display, 0)
+  _ = sync(window.display, 0)
   if context_error_seen { fail io.IoErr.System(#cast(isize, 0)) }
   fail .Unsupported
 }

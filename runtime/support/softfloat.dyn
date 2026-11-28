@@ -17,9 +17,9 @@ struct SoftParts { sign: u64, exponent: i64, significand: u64, kind: u64 }
 // kind: 0 finite (including zero), 1 infinity, 2 NaN.
 fn soft_format(wide: bool) SoftFormat {
   if wide {
-    return SoftFormat{fraction:52, bias:1023, sign:0x8000000000000000, infinity:0x7ff0000000000000}
+    return SoftFormat{fraction: 52, bias: 1023, sign: 0x8000000000000000, infinity: 0x7ff0000000000000}
   }
-  return SoftFormat{fraction:23, bias:127, sign:0x80000000, infinity:0x7f800000}
+  return SoftFormat{fraction: 23, bias: 127, sign: 0x80000000, infinity: 0x7f800000}
 }
 fn soft_nan(f: SoftFormat) u64 {
   return f.infinity | (1 << (f.fraction - 1))
@@ -28,7 +28,7 @@ fn soft_unpack(bits: u64, f: SoftFormat) SoftParts {
   hidden: u64 = 1 << f.fraction
   fraction := bits & (hidden - 1)
   field := (bits & f.infinity) >> f.fraction
-  result := SoftParts{sign:bits & f.sign, exponent:1-f.bias, significand:fraction}
+  result := SoftParts{sign: bits & f.sign, exponent: 1 - f.bias, significand: fraction}
   if (bits & f.infinity) == f.infinity {
     result.kind = 1
     if fraction != 0 {
@@ -78,7 +78,7 @@ fn soft_pack(sign: u64, exponent: i64, sig: u64, f: SoftFormat) u64 {
   }
   minimum := 1 - f.bias
   if e < minimum {
-    s = soft_jam(s, #cast(u64, minimum-e))
+    s = soft_jam(s, #cast(u64, minimum - e))
     e = minimum
   }
   tail := s & 7
@@ -95,7 +95,7 @@ fn soft_pack(sign: u64, exponent: i64, sig: u64, f: SoftFormat) u64 {
   if rounded >= (1 << f.fraction) {
     field = #cast(u64, e + f.bias) << f.fraction
   }
-  return sign | field | (rounded & ((1 << f.fraction)-1))
+  return sign | field | (rounded & ((1 << f.fraction) - 1))
 }
 fn soft_add(a: u64, b: u64, f: SoftFormat) u64 {
   x := soft_unpack(a, f)
@@ -115,10 +115,10 @@ fn soft_add(a: u64, b: u64, f: SoftFormat) u64 {
     y = temp
   }
   left := x.significand << 3
-  right := soft_jam(y.significand << 3, #cast(u64, x.exponent-y.exponent))
-  if x.sign == y.sign { return soft_pack(x.sign, x.exponent, left+right, f) }
+  right := soft_jam(y.significand << 3, #cast(u64, x.exponent - y.exponent))
+  if x.sign == y.sign { return soft_pack(x.sign, x.exponent, left + right, f) }
   if left == right { return 0 }
-  return soft_pack(x.sign, x.exponent, left-right, f)
+  return soft_pack(x.sign, x.exponent, left - right, f)
 }
 fn soft_mul(a: u64, b: u64, f: SoftFormat) u64 {
   x := soft_unpack(a, f)
@@ -141,11 +141,11 @@ fn soft_mul(a: u64, b: u64, f: SoftFormat) u64 {
   high := (x.significand >> 32) * (y.significand >> 32) + (cross1 >> 32) + (cross2 >> 32) + (middle >> 32)
   low = (low & 0xffffffff) | ((middle & 0xffffffff) << 32)
   shift := f.fraction - 3
-  sig := (low >> shift) | (high << (64-shift))
-  if (low & ((1 << shift)-1)) != 0 {
+  sig := (low >> shift) | (high << (64 - shift))
+  if (low & ((1 << shift) - 1)) != 0 {
     sig |= 1
   }
-  return soft_pack(sign, x.exponent+y.exponent, sig, f)
+  return soft_pack(sign, x.exponent + y.exponent, sig, f)
 }
 fn soft_div(a: u64, b: u64, f: SoftFormat) u64 {
   x := soft_unpack(a, f)
@@ -160,14 +160,14 @@ fn soft_div(a: u64, b: u64, f: SoftFormat) u64 {
   }
   if x.significand == 0 { return sign }
   remainder := x.significand
-  exponent := x.exponent-y.exponent
+  exponent := x.exponent - y.exponent
   if remainder < y.significand {
     remainder <<= 1
     exponent -= 1
   }
   quotient: u64 = 0
   // Leading bit plus fraction plus three rounding bits. Remainder < 2*y.
-  for i in 0..(f.fraction+4) {
+  for i in 0..(f.fraction + 4) {
     quotient <<= 1
     if remainder >= y.significand {
       remainder -= y.significand
@@ -204,8 +204,8 @@ fn soft_rem(a: u64, b: u64, f: SoftFormat) u64 {
 }
 // -1 less, 0 equal, 1 greater, 2 unordered. Magnitude encoding is monotonic.
 fn soft_compare(a: u64, b: u64, f: SoftFormat) i64 {
-  am := a & (f.sign-1)
-  bm := b & (f.sign-1)
+  am := a & (f.sign - 1)
+  bm := b & (f.sign - 1)
   if am > f.infinity || bm > f.infinity { return 2 }
   if a == b || (am == 0 && bm == 0) { return 0 }
   negative := (a & f.sign) != 0
@@ -226,9 +226,9 @@ fn soft_convert(a: u64, source: SoftFormat, dest: SoftFormat) u64 {
   if x.kind == 1 { return sign | dest.infinity }
   sig := x.significand << 3
   if dest.fraction > source.fraction {
-    sig <<= dest.fraction-source.fraction
+    sig <<= dest.fraction - source.fraction
   } else {
-    sig = soft_jam(sig, source.fraction-dest.fraction)
+    sig = soft_jam(sig, source.fraction - dest.fraction)
   }
   return soft_pack(sign, x.exponent, sig, dest)
 }
@@ -247,9 +247,9 @@ fn soft_from_integer(magnitude: u64, negative: bool, f: SoftFormat) u64 {
   desired := f.fraction + 3
   sig := magnitude
   if #cast(u64, exponent) > desired {
-    sig = soft_jam(sig, #cast(u64, exponent)-desired)
+    sig = soft_jam(sig, #cast(u64, exponent) - desired)
   } else {
-    sig <<= desired-#cast(u64, exponent)
+    sig <<= desired - #cast(u64, exponent)
   }
   return soft_pack(sign, exponent, sig, f)
 }
@@ -267,9 +267,9 @@ fn soft_to_integer(a: u64, signed: bool, f: SoftFormat) u64 {
   if x.exponent > 63 { return invalid }
   magnitude := x.significand
   if #cast(u64, x.exponent) > f.fraction {
-    magnitude <<= #cast(u64, x.exponent)-f.fraction
+    magnitude <<= #cast(u64, x.exponent) - f.fraction
   } else {
-    magnitude >>= f.fraction-#cast(u64, x.exponent)
+    magnitude >>= f.fraction - #cast(u64, x.exponent)
   }
   if signed {
     if x.sign == 0 && magnitude >= invalid { return invalid }

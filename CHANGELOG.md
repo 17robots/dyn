@@ -12,6 +12,16 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## 0.1.0-preview.44
+
+No language changes.
+
+- `dyn fmt` spaces binary operators, assignments and `:=` (`a != b`, `total += 1`, `x := y`)
+  and puts a space after a declared name's colon (`name: type`, `field: value`). Unary
+  operators, pointer types, generics, strings and comments keep their text. Like the rest of
+  `dyn fmt`, it only inserts whitespace. Run `dyn fmt` to update code that wrote these compact;
+  `dyn fmt --check` reports it until then.
+
 ## 0.1.0-preview.43
 
 No breaking changes.

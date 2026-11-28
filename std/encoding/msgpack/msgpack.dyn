@@ -145,7 +145,7 @@ pub fn next(state: *Reader) Token!parse.ParseErr {
   }
   if size > state.source.len - at { fail failed(state, at, Problem.Invalid) }
   if size != 0 {
-    raw := number(state.source[at..at+size])
+    raw := number(state.source[at..at + size])
     at += size
     if token.kind == Kind.Float {
       if size == 4 {
@@ -168,7 +168,7 @@ pub fn next(state: *Reader) Token!parse.ParseErr {
   if payload {
     if token.value > (state.source.len - at) { fail failed(state, at, Problem.Invalid) }
     count := #cast(usize, token.value)
-    token.bytes = state.source[at..at+count]
+    token.bytes = state.source[at..at + count]
     at += count
     token.value = 0
   }

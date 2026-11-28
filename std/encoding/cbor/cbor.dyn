@@ -140,7 +140,7 @@ pub fn next(state: *Reader) Token!parse.ParseErr {
     count := #cast(usize, 1) << #cast(usize, info - 24)
     if count > state.source.len - at { fail failed(state, at, Problem.Invalid) }
     value = 0
-    for byte in state.source[at..at+count] {
+    for byte in state.source[at..at + count] {
       value = (value << 8) | byte
     }
     at += count
@@ -174,7 +174,7 @@ pub fn next(state: *Reader) Token!parse.ParseErr {
   if !token.indefinite && (token.kind == Kind.Bytes || token.kind == Kind.Text) {
     if value > (state.source.len - at) { fail failed(state, at, Problem.Invalid) }
     count := #cast(usize, value)
-    token.bytes = state.source[at..at+count]
+    token.bytes = state.source[at..at + count]
     token.value = 0
     at += count
   }

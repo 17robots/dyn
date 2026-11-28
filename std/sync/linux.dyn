@@ -21,7 +21,7 @@ fn native_mutex_unlock(value: *Mutex) {
 }
 
 fn native_wait_timeout(address: *AtomicU32, expected: u32, duration: i64) isize {
-  request := time.Instant{seconds:duration / time.Second, nanoseconds:duration % time.Second}
+  request := time.Instant{seconds: duration / time.Second, nanoseconds: duration % time.Second}
   code := #syscall(sys.Futex, address, 0, expected, &request, 0, 0)
   if code == -110 { return 1 }
   if code == -11 { return 0 }
