@@ -1,0 +1,101 @@
+#target(kernel: windows)
+use io "std/io"
+// Tree removal by path: Win32 has no handle-relative open, so the walk keeps
+// the current directory's path in one buffer and each frame records its
+// path's length there. Every name is opened with
+// FILE_FLAG_OPEN_REPARSE_POINT, so a link or junction is removed itself and
+// never entered.
+
+// FindFirstFileW needs room for one name of 260 UTF-16 units as UTF-8.
+const removal_scratch: usize = 1040
+
+// Deletes path by handle: POSIX semantics (gone at once even while others
+// hold it open) and read-only files included where the system offers
+// FILE_DISPOSITION_INFO_EX, else the classic disposition after clearing
+// read-only. A real directory is left alone with is_directory set unless
+// directories is true, when only an empty one goes.
+fn delete_path(path: []const u8, directories: bool, is_directory: *bool) isize {
+  // DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES.
+  handle := attribute_handle(path, 65920, true)
+  if handle < 0 { return handle }
+  defer _ = win_close(pointer(handle))
+  data: [52]u8
+  if win_information(pointer(handle), &data[0]) == 0 { return last_error() }
+  attributes := word32(data[..], 0)
+  if (attributes & 16) != 0 && (attributes & 1024) == 0 && !directories {
+    is_directory.* = true
+    return 0
+  }
+  // FILE_DISPOSITION_DELETE | POSIX_SEMANTICS | IGNORE_READONLY_ATTRIBUTE.
+  flags: u32 = 19
+  if win_set_information(pointer(handle), 21, &flags, 4) != 0 { return 0 }
+  error := win_error()
+  // Older systems and other file systems lack the extended class.
+  if error != 87 && error != 50 && error != 1 && error != 124 { return 0 - #cast(isize, error) }
+  if (attributes & 1) != 0 {
+    code := set_read_only(pointer(handle), false)
+    if code < 0 { return code }
+  }
+  delete: u32 = 1
+  return wide_result(win_set_information(pointer(handle), 4, &delete, 1))
+}
+
+// Removes path and everything under it, without following symbolic links.
+// Requires RemovalScratch scratch bytes per frame (less on Linux and
+// Windows: see RemovalScratch); the depth is at
+// most frames.len. Depth or capacity failures may leave a partly removed
+// tree, and concurrent changes may make it fail.
+// Too little scratch fails with InvalidInput, a tree deeper than frames
+// with Capacity.
+pub fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) !io.IoErr {
+  if frames.len == 0 || scratch.len / frames.len < removal_scratch { fail .InvalidInput }
+  stride := scratch.len / frames.len
+  current: [32768]u8
+  if path.len == 0 { fail .InvalidInput }
+  if path.len >= current.len { fail native_err(-206) }
+  for at in 0..path.len {
+    current[at] = path[at]
+  }
+  descend := false
+  try check(delete_path(path, false, &descend))
+  if !descend { return }
+  root := try open_directory(path, scratch[..stride])
+  frames[0] = RemovalFrame{ directory: root, name: path, parent: #cast(isize, path.len) }
+  depth: usize = 1
+  defer {
+    for depth > 0 {
+      depth -= 1
+      close_directory(&frames[depth].directory)
+    }
+  }
+  for depth > 0 {
+    frame := &frames[depth - 1]
+    own := #cast(usize, frame.parent)
+    item: DirectoryEntry
+    try check(native_directory_next(&frame.directory, &item))
+    if item.name.len == 0 {
+      // Close the listing first: it holds the directory open.
+      close_directory(&frame.directory)
+      unused := false
+      try check(delete_path(current[..own], true, &unused))
+      depth -= 1
+      continue
+    }
+    child := own + 1 + item.name.len
+    if child >= current.len { fail native_err(-206) }
+    current[own] = '\\'
+    for at in 0..item.name.len {
+      current[own + 1 + at] = item.name[at]
+    }
+    is_directory := false
+    removed := delete_path(current[..child], false, &is_directory)
+    // Already gone.
+    if removed == -2 || removed == -3 { continue }
+    try check(removed)
+    if !is_directory { continue }
+    if depth == frames.len { fail .Capacity }
+    opened := try open_directory(current[..child], scratch[depth * stride..(depth + 1) * stride])
+    frames[depth] = RemovalFrame{ directory: opened, name: item.name, parent: #cast(isize, child) }
+    depth += 1
+  }
+}

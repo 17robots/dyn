@@ -1043,7 +1043,7 @@ Layer: heap
 Layer: std
 
 - `struct File { descriptor: isize, active: bool, ended: bool, path: []const u8 }`: Files and directories.
-- `struct Metadata { size: u64, inode: u64, device: u64, mode: u16 }`: Size, inode, device and the POSIX mode (type and permission bits).
+- `struct Metadata { size: u64, inode: u64, device: u64, mode: u16, modified_seconds: i64, modified_nanoseconds: u32, changed_seconds: i64, changed_nanoseconds: u32, }`: Size, inode, device and the POSIX mode (type and permission bits), then when the contents were last modified and when the file last changed ...
 - `enum EntryKind { Unknown, File, Directory, Symlink, Other }`: What a directory entry names.
 - `struct DirectoryEntry { name: []const u8, kind: EntryKind }`: One directory entry.
 - `fn is_open(file: *const File) bool`
@@ -1068,35 +1068,47 @@ Layer: std
 - `fn file_metadata(file: *const File) Metadata!io.IoErr`: Metadata for an open file.
 - `fn is_directory(info: Metadata) bool`: Whether info describes a directory or a regular file.
 - `fn is_file(info: Metadata) bool`
+- `fn is_symbolic_link(info: Metadata) bool`: Whether info, from link_metadata, describes a symbolic link (on Windows, a symbolic link or a junction).
+- `fn same_file(a: Metadata, b: Metadata) bool`: Whether a and b describe the same file: the same device and inode.
+- `fn unchanged(before: Metadata, after: Metadata) bool`: Whether after describes the file before did, not replaced and not written or changed since: the same file, size, modification and change ...
 - `fn remove(path: []const u8) !io.IoErr`: Removes the file at path.
 - `fn rename(old_path: []const u8, new_path: []const u8) !io.IoErr`: Renames old_path to new_path, replacing new_path when it exists.
 - `fn make_directory(path: []const u8) !io.IoErr`: Creates the directory path, readable by everyone and writable by its owner (0o755).
 - `fn make_directory_mode(path: []const u8, mode: usize) !io.IoErr`: Like make_directory, with the permission bits mode (ignored on Windows), such as 0o700 for a directory only its owner may enter.
 - `fn make_directory_exclusive(path: []const u8, mode: usize) !io.IoErr`: Creates the directory path with mode;
 - `fn remove_directory(path: []const u8) !io.IoErr`: Removes the empty directory path.
+- `struct Directory { path: []const u8, ended: bool, storage: []u8, state: DirectoryState }`: An open directory, from open_directory.
 - `fn open_directory(path: []const u8, storage: []u8) Directory!io.IoErr`: Opens the directory path for listing with directory_next.
 - `fn directory_next(directory: *Directory) DirectoryEntry!io.IoErr`: The next entry, without "." and "..".
+- `fn close_directory(directory: *Directory)`: Closes the directory.
 - `fn list(arena: *memory.Arena, path: []const u8) []DirectoryEntry!io.IoErr`: The names in directory path, copied into arena, without "." and "..".
-- `enum AppDirectory { Home, Config, Cache, Data, Runtime }`
-- `struct Directory { file: File, storage: []u8, offset: usize, used: usize, path: []const u8, // Set by directory_next when it returns no entry. ended: bool, }`
-- `fn close_directory(directory: *Directory)`
+- `fn link_metadata(path: []const u8) Metadata!io.IoErr`: Metadata for path itself: a symbolic link is described as a link (see is_symbolic_link), not as what it points at.
+- `fn open_no_follow(path: []const u8) File!io.IoErr`: Opens path for reading, like open, but fails with InvalidInput when path itself is a symbolic link (on Windows, a symbolic link or a ...
+- `fn create_private(path: []const u8) File!io.IoErr`: Creates path for writing, readable and writable by its owner only, and fails with AlreadyExists when path exists.
+- `fn create_private_executable(path: []const u8) File!io.IoErr`: Like create_private, and the owner may execute the file: mode 0o700, or the Windows owner also holds FILE_EXECUTE.
+- `fn rename_exclusive(old_path: []const u8, new_path: []const u8) !io.IoErr`: Renames old_path to new_path like rename, but fails with AlreadyExists instead of replacing anything at new_path.
+- `fn set_permissions(file: *File, mode: usize) !io.IoErr`: Sets the permission bits of an open file to mode, at most 0o7777 (more fails with InvalidInput).
+- `fn preserve_permissions(file: *File, source_path: []const u8) !io.IoErr`: Gives file the permissions of the file at source_path (following links), as an atomic save does for the temporary that replaces source_path.
+- `fn is_executable(path: []const u8) bool`: Whether path (following links) is a regular file this process may run.
+- `fn copy_range(source: *File, offset: u64, destination: *File, length: u64, scratch: []u8) u64!io.IoErr`: Copies length bytes of source, starting at offset, to destination at its position, and advances destination's position past them.
+- `fn clone_file(source: *File, path: []const u8, scratch: []u8) File!io.IoErr`: Creates path holding a copy of source's contents and returns it open for writing, positioned at its start.
 - `fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) usize!io.IoErr`: Copies source to destination, replacing it, and returns the bytes copied.
 - `fn symbolic_link(target: []const u8, link: []const u8) !io.IoErr`: Creates the symbolic link link pointing at target.
+- `fn read_link(arena: *memory.Arena, path: []const u8) []u8!io.IoErr`: The target of the symbolic link at path, in arena.
 - `fn sync_directory(path: []const u8) !io.IoErr`: Makes a directory's entries durable, such as a rename into it.
+- `fn lock(file: *File, operation: usize) !io.IoErr`: Locks file with operation: LOCK_SH (1) shared or LOCK_EX (2) exclusive, either with LOCK_NB (4) to fail with WouldBlock instead of waiting;
+- `fn truncate(path: []const u8, length: usize) !io.IoErr`: Sets the length of the file at path.
 - `struct AtomicFile { file: File, destination: []const u8, temporary: []const u8, active: bool, }`: A file written under a temporary name and renamed onto its destination when committed, so the destination is never partly written.
 - `fn atomic_begin(destination: []const u8, temporary: []const u8) AtomicFile!io.IoErr`: Both paths are borrowed until commit or abort.
 - `fn atomic_commit(transaction: *AtomicFile) !io.IoErr`: Syncs and closes the temporary file and renames it onto the destination.
-- `fn atomic_commit_durable(transaction: *AtomicFile, parent_directory: []const u8) !io.IoErr`: Also syncs the parent directory, making the committed rename durable across power loss on Linux file systems that honor fsync for ...
+- `fn atomic_commit_durable(transaction: *AtomicFile, parent_directory: []const u8) !io.IoErr`: Also syncs the parent directory, making the committed rename durable across power loss on file systems that honor fsync for directories ...
 - `fn atomic_abort(transaction: *AtomicFile)`: Closes and removes the temporary file.
 - `fn write_atomic(destination: []const u8, temporary: []const u8, source: []const u8) !io.IoErr`: Writes source to destination through the sibling temporary file and renames it into place, so destination is either the old file or all of ...
-- `fn lock(file: *File, operation: usize) !io.IoErr`: Locks file with flock(2): operation is LOCK_SH (1), LOCK_EX (2), or either with LOCK_NB (4);
-- `fn truncate(path: []const u8, length: usize) !io.IoErr`: Sets the length of the file at path.
-- `fn read_link(arena: *mem.Arena, path: []const u8) []u8!io.IoErr`: The target of the symbolic link at path, in arena.
-- `fn app_directory(arena: *mem.Arena, kind: AppDirectory) []u8!io.IoErr`: The per-user directory of kind, in arena.
-- `struct Directory { file: File, storage: []u8, offset: usize, used: usize, base: i64, path: []const u8, ended: bool }`: Directory listing through getdirentries64, with the Linux API shape.
-- `struct RemovalFrame { directory: Directory, name: []const u8, parent: isize }`: Scratch frame storage for iterative, descriptor-relative tree removal.
+- `enum AppDirectory { Home, Config, Cache, Data, Runtime }`: A per-user directory.
+- `fn app_directory(arena: *memory.Arena, kind: AppDirectory) []u8!io.IoErr`: The per-user directory of kind, in arena.
+- `const RemovalScratch: usize = 1048`: Scratch bytes per frame that remove_tree accepts on every platform: enough for one directory read of the longest name.
+- `struct RemovalFrame { directory: Directory, name: []const u8, parent: isize }`: One directory remove_tree is inside: name borrows the parent frame's directory storage, and parent is the parent's descriptor (on Windows ...
 - `fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) !io.IoErr`: Removes path and everything under it, without following symbolic links.
-- `struct Directory { handle: rawptr, storage: []u8, data: [592]u8, pending: bool, active: bool, path: []const u8, ended: bool }`: Directory listing through FindFirstFileW, with the Linux API shape.
 
 ## std/fs/capability
 
@@ -2188,8 +2200,8 @@ Layer: std
 - `const Ftruncate: u64 = 77`
 - `const Getcwd: u64 = 79`
 - `const Chdir: u64 = 80`
-- `const Fchdir: u64 = 81`
 - `const Fchmod: u64 = 91`
+- `const Fchdir: u64 = 81`
 - `const Fchown: u64 = 93`
 - `const Umask: u64 = 95`
 - `const Getrusage: u64 = 98`
@@ -2234,8 +2246,8 @@ Layer: std
 - `const Linkat: u64 = 265`
 - `const Symlinkat: u64 = 266`
 - `const Readlinkat: u64 = 267`
-- `const Fchmodat: u64 = 268`
 - `const Faccessat: u64 = 269`
+- `const Fchmodat: u64 = 268`
 - `const Pselect6: u64 = 270`
 - `const Ppoll: u64 = 271`
 - `const SetRobustList: u64 = 273`
@@ -2251,12 +2263,12 @@ Layer: std
 - `const Dup3: u64 = 292`
 - `const Pipe2: u64 = 293`
 - `const InotifyInit1: u64 = 294`
+- `const Renameat2: u64 = 316`
 - `const Prlimit64: u64 = 302`
 - `const Syncfs: u64 = 306`
-- `const Renameat2: u64 = 316`
 - `const Getrandom: u64 = 318`
-- `const MemfdCreate: u64 = 319`
 - `const CopyFileRange: u64 = 326`
+- `const MemfdCreate: u64 = 319`
 - `const Preadv2: u64 = 327`
 - `const Pwritev2: u64 = 328`
 - `const Statx: u64 = 332`
@@ -2294,13 +2306,17 @@ Layer: std
 - `const Write: u64 = 4`
 - `const Open: u64 = 5`
 - `const Close: u64 = 6`
+- `const Link: u64 = 9`
+- `const Unlink: u64 = 10`
 - `const Recvmsg: u64 = 27`
 - `const Recvfrom: u64 = 29`
 - `const Accept: u64 = 30`
 - `const Getpeername: u64 = 31`
 - `const Getsockname: u64 = 32`
+- `const Access: u64 = 33`
 - `const Sigaction: u64 = 46`
 - `const Ioctl: u64 = 54`
+- `const Symlink: u64 = 57`
 - `const Readlink: u64 = 58`
 - `const Munmap: u64 = 73`
 - `const Mprotect: u64 = 74`
@@ -2312,18 +2328,29 @@ Layer: std
 - `const Setsockopt: u64 = 105`
 - `const Listen: u64 = 106`
 - `const Getsockopt: u64 = 118`
+- `const Fchmod: u64 = 124`
 - `const Rename: u64 = 128`
+- `const Flock: u64 = 131`
 - `const Sendto: u64 = 133`
 - `const Shutdown: u64 = 134`
+- `const Mkdir: u64 = 136`
+- `const Rmdir: u64 = 137`
 - `const Mmap: u64 = 197`
 - `const Lseek: u64 = 199`
+- `const Truncate: u64 = 200`
+- `const Ftruncate: u64 = 201`
 - `const Poll: u64 = 230`
 - `const Stat64: u64 = 338`
 - `const Fstat64: u64 = 339`
+- `const Lstat64: u64 = 340`
 - `const Getdirentries64: u64 = 344`
 - `const Kqueue: u64 = 362`
 - `const Kevent: u64 = 363`
 - `const ThreadSelfid: u64 = 372`
+- `const Openat: u64 = 463`
+- `const Unlinkat: u64 = 472`
+- `const RenameatxNp: u64 = 488`
+- `const Fclonefileat: u64 = 517`
 
 ## std/os/wasi
 

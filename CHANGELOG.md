@@ -28,6 +28,35 @@ servers so they pick up the new `dyn`.
   `MemfdCreate`, `Pread64`, `Pwrite64`, `Readv`, `Writev`, `Faccessat2`, `Dup3`,
   `EpollPwait2`, `IoUringSetup` and others.
 
+## Unreleased
+
+Breaking for code that read `fs.Directory`'s fields: `std/fs`. No language changes.
+
+- `std/fs` is the same on Linux, macOS and Windows. `app_directory`, the
+  atomic-file functions, `lock`, `truncate`, `read_link`, `copy_file`,
+  `sync_directory`, `symbolic_link` and `remove_tree` were Linux-only and now
+  work everywhere; each documents what differs (Windows locks are
+  mandatory, `sync_directory` only checks the directory there, and a
+  symbolic link needs Developer Mode or the privilege). `fs.Directory` has
+  one shape everywhere, `{ path, ended, storage, state }`; the platform's
+  fields moved into `state`. `remove_tree` needs `fs.RemovalScratch` bytes
+  per frame on every platform (Linux still accepts 280).
+- New: `create_private` and `create_private_executable` (owner-only at
+  creation: 0o600 or 0o700, or a protected owner DACL on Windows),
+  `rename_exclusive` (fails with `AlreadyExists` instead of replacing),
+  `open_no_follow`, `link_metadata` and `is_symbolic_link`,
+  `set_permissions`, `preserve_permissions`, `is_executable`, `copy_range`
+  (kernel copy or ReFS block cloning) and `clone_file` (copy-on-write clone
+  on Btrfs, XFS, APFS and ReFS, a copy elsewhere).
+- `fs.Metadata` gains `modified_seconds`, `modified_nanoseconds`,
+  `changed_seconds` and `changed_nanoseconds` after its existing fields;
+  `fs.same_file` and `fs.unchanged` compare two reads to tell whether a file
+  was replaced or rewritten. On Windows `metadata(path)` now fills `inode`
+  and `device` too, and on Linux it no longer opens the file, so a FIFO or a
+  file without read permission reports instead of blocking or failing.
+- Linux AArch64 also no longer follows a symbolic link to a directory inside
+  a tree given to `remove_tree`: it used x86-64 open flags there.
+
 ## 0.1.0-preview.45
 
 Breaking: `std/encoding/json` and `std/encoding/json/read`.

@@ -642,6 +642,72 @@ WriteFile:
     br x16
 .global dyn_win_arena_last_error
 .set dyn_win_arena_last_error, dyn_win_last_error
+// std/fs: permissions, links, locks, block cloning and environment.
+.global dyn_fs_information_ex
+dyn_fs_information_ex:
+    adrp x16, __imp_GetFileInformationByHandleEx
+    ldr x16, [x16, :lo12:__imp_GetFileInformationByHandleEx]
+    br x16
+.global dyn_fs_set_information
+dyn_fs_set_information:
+    adrp x16, __imp_SetFileInformationByHandle
+    ldr x16, [x16, :lo12:__imp_SetFileInformationByHandle]
+    br x16
+.global dyn_fs_lock
+dyn_fs_lock:
+    adrp x16, __imp_LockFileEx
+    ldr x16, [x16, :lo12:__imp_LockFileEx]
+    br x16
+.global dyn_fs_unlock
+dyn_fs_unlock:
+    adrp x16, __imp_UnlockFileEx
+    ldr x16, [x16, :lo12:__imp_UnlockFileEx]
+    br x16
+.global dyn_fs_symbolic_link
+dyn_fs_symbolic_link:
+    adrp x16, __imp_CreateSymbolicLinkW
+    ldr x16, [x16, :lo12:__imp_CreateSymbolicLinkW]
+    br x16
+.global dyn_fs_control
+dyn_fs_control:
+    adrp x16, __imp_DeviceIoControl
+    ldr x16, [x16, :lo12:__imp_DeviceIoControl]
+    br x16
+.global dyn_fs_volume
+dyn_fs_volume:
+    adrp x16, __imp_GetVolumeInformationByHandleW
+    ldr x16, [x16, :lo12:__imp_GetVolumeInformationByHandleW]
+    br x16
+.global dyn_fs_reopen
+dyn_fs_reopen:
+    adrp x16, __imp_ReOpenFile
+    ldr x16, [x16, :lo12:__imp_ReOpenFile]
+    br x16
+.global dyn_fs_local_free
+dyn_fs_local_free:
+    adrp x16, __imp_LocalFree
+    ldr x16, [x16, :lo12:__imp_LocalFree]
+    br x16
+.global dyn_fs_environment
+dyn_fs_environment:
+    adrp x16, __imp_GetEnvironmentVariableW
+    ldr x16, [x16, :lo12:__imp_GetEnvironmentVariableW]
+    br x16
+.global dyn_fs_set_error
+dyn_fs_set_error:
+    adrp x16, __imp_SetLastError
+    ldr x16, [x16, :lo12:__imp_SetLastError]
+    br x16
+.global dyn_fs_get_security
+dyn_fs_get_security:
+    adrp x16, __imp_GetSecurityInfo
+    ldr x16, [x16, :lo12:__imp_GetSecurityInfo]
+    br x16
+.global dyn_fs_set_security
+dyn_fs_set_security:
+    adrp x16, __imp_SetSecurityInfo
+    ldr x16, [x16, :lo12:__imp_SetSecurityInfo]
+    br x16
 .section .idata$2,"dw"
 .p2align 2
     .rva kernel_lookup
@@ -664,6 +730,12 @@ WriteFile:
     .long 0
     .rva crypto_name
     .rva crypto_iat
+    // std/fs: access control lists.
+    .rva advapi_lookup
+    .long 0
+    .long 0
+    .rva advapi_name
+    .rva advapi_iat
     // GNU PE linkers append the terminating descriptor. Supplying it here
     // would hide descriptors contributed by user import libraries.
 
@@ -738,6 +810,16 @@ kernel_lookup:
     thunk GetOverlappedResult
     thunk CancelIoEx
     thunk SetLastError
+    // std/fs
+    thunk GetFileInformationByHandleEx
+    thunk SetFileInformationByHandle
+    thunk LockFileEx
+    thunk UnlockFileEx
+    thunk CreateSymbolicLinkW
+    thunk DeviceIoControl
+    thunk GetVolumeInformationByHandleW
+    thunk ReOpenFile
+    thunk LocalFree
     .quad 0
 winsock_lookup:
     thunk WSAStartup
@@ -769,6 +851,12 @@ sync_lookup:
 
 crypto_lookup:
     thunk BCryptGenRandom
+    .quad 0
+
+// std/fs
+advapi_lookup:
+    thunk GetSecurityInfo
+    thunk SetSecurityInfo
     .quad 0
 
 .section .idata$5,"dw"
@@ -846,6 +934,16 @@ iat ReadDirectoryChangesW
 iat GetOverlappedResult
 iat CancelIoEx
 iat SetLastError
+// std/fs
+iat GetFileInformationByHandleEx
+iat SetFileInformationByHandle
+iat LockFileEx
+iat UnlockFileEx
+iat CreateSymbolicLinkW
+iat DeviceIoControl
+iat GetVolumeInformationByHandleW
+iat ReOpenFile
+iat LocalFree
     .quad 0
 winsock_iat:
 iat WSAStartup
@@ -877,6 +975,12 @@ iat WakeByAddressAll
 
 crypto_iat:
 iat BCryptGenRandom
+    .quad 0
+
+// std/fs
+advapi_iat:
+iat GetSecurityInfo
+iat SetSecurityInfo
     .quad 0
 
 .section .idata$6,"dw"
@@ -947,6 +1051,16 @@ hint ReadDirectoryChangesW
 hint GetOverlappedResult
 hint CancelIoEx
 hint SetLastError
+// std/fs
+hint GetFileInformationByHandleEx
+hint SetFileInformationByHandle
+hint LockFileEx
+hint UnlockFileEx
+hint CreateSymbolicLinkW
+hint DeviceIoControl
+hint GetVolumeInformationByHandleW
+hint ReOpenFile
+hint LocalFree
 hint WSAStartup
 hint socket
 hint closesocket
@@ -972,6 +1086,10 @@ hint WakeByAddressAll
 sync_name: .asciz "api-ms-win-core-synch-l1-2-0.dll"
 hint BCryptGenRandom
 crypto_name: .asciz "bcrypt.dll"
+// std/fs
+hint GetSecurityInfo
+hint SetSecurityInfo
+advapi_name: .asciz "ADVAPI32.dll"
 kernel_name: .asciz "KERNEL32.dll"
 winsock_name: .asciz "WS2_32.dll"
 

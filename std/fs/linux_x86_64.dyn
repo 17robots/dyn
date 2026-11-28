@@ -1,4 +1,22 @@
 #target(kernel: linux, arch: x86_64)
+use "std/os/linux/sys"
 
-// O_DIRECTORY.
+// O_DIRECTORY and O_NOFOLLOW.
 const directory_flag: usize = 65536
+const no_follow_flag: usize = 131072
+
+// renameat2 with RENAME_NOREPLACE.
+fn rename_no_replace(old_path: *const u8, new_path: *const u8) isize {
+  return #syscall(sys.Renameat2, -100, old_path, -100, new_path, 1)
+}
+fn change_mode(handle: isize, mode: usize) isize {
+  return #syscall(sys.Fchmod, handle, mode)
+}
+// faccessat(AT_FDCWD, path, X_OK) with the real user and group, as access.
+fn access_execute(path: *const u8, _info: Metadata) bool {
+  return #syscall(sys.Faccessat, -100, path, 1) == 0
+}
+// The source offset advances in offset; the destination position moves.
+fn copy_file_range(source: isize, offset: *i64, destination: isize, length: usize) isize {
+  return #syscall(sys.CopyFileRange, source, offset, destination, 0, length, 0)
+}

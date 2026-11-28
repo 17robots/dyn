@@ -1,4 +1,21 @@
 #target(kernel: linux, arch: riscv64)
 
-// O_DIRECTORY.
+// O_DIRECTORY and O_NOFOLLOW.
 const directory_flag: usize = 65536
+const no_follow_flag: usize = 131072
+
+// The compiler maps no renameat2, fchmod, faccessat or copy_file_range for
+// this architecture yet: each reports ENOSYS, and callers fall back.
+fn rename_no_replace(_old_path: *const u8, _new_path: *const u8) isize {
+  return -38
+}
+fn change_mode(_handle: isize, _mode: usize) isize {
+  return -38
+}
+// Any execute bit, without access(2).
+fn access_execute(_path: *const u8, info: Metadata) bool {
+  return (info.mode & 0o111) != 0
+}
+fn copy_file_range(_source: isize, _offset: *i64, _destination: isize, _length: usize) isize {
+  return -38
+}

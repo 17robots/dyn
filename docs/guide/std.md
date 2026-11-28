@@ -126,7 +126,7 @@ between the program image and the stack (see [bare metal](bare-metal.md)).
 | --- | --- |
 | `std/io` | `Reader`/`Writer` callbacks, standard streams and `print`/`println` |
 | `std/bufio` | Buffered readers and writers over caller storage |
-| `std/fs` | Files, directories, metadata, atomic writes, locks and read-only mappings |
+| `std/fs` | Files, directories, metadata, links, permissions, private files, atomic writes, clones, locks and read-only mappings |
 | `std/fs/capability` | File access limited to a directory descriptor |
 | `std/fs/watch` | File watching: inotify, kqueue or ReadDirectoryChangesW |
 | `std/path` | Lexical slash-separated paths |
@@ -188,7 +188,9 @@ between the program image and the stack (see [bare metal](bare-metal.md)).
 
 Linux x86-64 has the broadest coverage, with Linux AArch64, macOS AArch64 and
 Windows x86-64 close behind. Threads, sync, processes and file watching work on
-all four, and so do `std/terminal` and `std/dynlib`. On Windows,
+all four, and so do `std/terminal` and `std/dynlib`. `std/fs` has one interface on
+Linux, macOS and Windows; where a system cannot do the same thing, the function's
+comment says what it does there. On Windows,
 `std/terminal` uses console modes and `std/dynlib` reports `GetLastError`
 codes instead of loader messages. On WASI, `std/terminal` reports
 `Unsupported` and only `key_decode` is useful. On wasm32, see

@@ -1,0 +1,19 @@
+#target(family: unix)
+// Linux and macOS report an entry's type as the same d_type numbers.
+fn entry_kind(d_type: u8) EntryKind {
+  case d_type {
+    0 => { return .Unknown }
+    4 => { return .Directory }
+    8 => { return .File }
+    10 => { return .Symlink }
+    _ => { return .Other }
+  }
+}
+
+// Copies the permission bits 0o777 of source_path (following links).
+fn native_preserve_permissions(file: *const File, source_path: []const u8) isize {
+  info: Metadata
+  code := native_metadata(source_path, &info)
+  if code < 0 { return code }
+  return native_set_permissions(file, #cast(usize, info.mode) & 0o777)
+}

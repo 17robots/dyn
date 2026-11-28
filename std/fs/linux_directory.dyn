@@ -1,0 +1,305 @@
+#target(kernel: linux)
+use io "std/io"
+use mem "std/mem"
+use cstrings "std/c"
+use platform "std/os/linux"
+use "std/os/linux/sys"
+
+// getdents64 state: the directory's descriptor and the records in storage.
+struct DirectoryState { file: File, offset: usize, used: usize }
+
+fn terminated(path: []const u8, storage: []u8) *const u8 {
+  if path.len == 0 { return nil }
+  return cstrings.string_into(storage, path) catch nil
+}
+
+fn native_open_directory(path: []const u8, storage: []u8, directory: *Directory) isize {
+  if storage.len < 24 { return -22 }
+  opened := open_flags(path, directory_flag, 0)
+  if opened < 0 { return opened }
+  directory.* = Directory{ storage: storage, state: DirectoryState{ file: owned_file(opened) } }
+  return 0
+}
+
+// Entry name borrows directory storage and may be invalidated by next refill.
+fn native_directory_next(directory: *Directory, entry: *DirectoryEntry) isize {
+  state := &directory.state
+  if !is_open(&state.file) || directory.storage.len < 24 { return -9 }
+  for {
+    if state.offset >= state.used {
+      value := #syscall(sys.Getdents64, state.file.descriptor, &directory.storage[0], directory.storage.len)
+      for value == -4 {
+        value = #syscall(sys.Getdents64, state.file.descriptor, &directory.storage[0], directory.storage.len)
+      }
+      if value < 0 { return value }
+      if value == 0 { return 0 }
+      state.offset = 0
+      state.used = #cast(usize, value)
+    }
+    if state.offset + 19 > state.used { return -5 }
+    low := #cast(usize, directory.storage[state.offset + 16])
+    high := #cast(usize, directory.storage[state.offset + 17])
+    record_length := low + high * 256
+    if record_length < 20 || state.offset + record_length > state.used { return -5 }
+    name_start := state.offset + 19
+    name_end := name_start
+    for name_end < state.offset + record_length && directory.storage[name_end] != 0 {
+      name_end += 1
+    }
+    kind := directory.storage[state.offset + 18]
+    state.offset += record_length
+    name := directory.storage[name_start..name_end]
+    dot := name.len == 1 && name[0] == '.'
+    dot_dot := name.len == 2 && name[0] == '.' && name[1] == '.'
+    if !dot && !dot_dot {
+      entry.* = DirectoryEntry{ name: name, kind: entry_kind(kind) }
+      return 0
+    }
+  }
+  return 0
+}
+
+fn native_close_directory(directory: *Directory) {
+  directory.state.offset = 0
+  directory.state.used = 0
+  close(&directory.state.file)
+}
+
+// statx has one fixed layout on supported Linux architectures (Linux 4.11+):
+// raw[3] holds the mode, raw[4] the inode, raw[5] the size, raw[12..14] the
+// change time and raw[14..16] the modification time, raw[17] the device.
+// Missing STATX_TYPE, STATX_INO or STATX_SIZE fails; missing times read 0.
+fn statx_metadata(directory: isize, path: *const u8, flags: usize, info: *Metadata) isize {
+  raw: [32]u64
+  result := #syscall(sys.Statx, directory, path, flags, 2047, &raw[0])
+  if result < 0 { return result }
+  if (raw[0] & 769) != 769 { return -95 }
+  info.* = Metadata{ size: raw[5], inode: raw[4], device: raw[17], mode: #cast(u16, (raw[3] >> 32)) }
+  if (raw[0] & 64) != 0 {
+    info.modified_seconds = #bitcast(i64, raw[14])
+    info.modified_nanoseconds = #cast(u32, raw[15] & 4294967295)
+  }
+  if (raw[0] & 128) != 0 {
+    info.changed_seconds = #bitcast(i64, raw[12])
+    info.changed_nanoseconds = #cast(u32, raw[13] & 4294967295)
+  }
+  return 0
+}
+// Descriptor lookup avoids path replacement races and does not change file
+// position.
+fn native_file_metadata(file: *const File, info: *Metadata) isize {
+  if !is_open(file) { return -9 }
+  empty: [1]u8
+  // AT_EMPTY_PATH.
+  return statx_metadata(file.descriptor, &empty[0], 4096, info)
+}
+// By path, so a file that cannot be opened, or a FIFO, still reports.
+fn path_metadata(path: []const u8, flags: usize, info: *Metadata) isize {
+  storage: [4096 + mem.ArenaBufferOverhead]u8
+  raw := terminated(path, storage[..])
+  if raw == nil { return -36 }
+  return statx_metadata(-100, raw, flags, info)
+}
+fn native_metadata(path: []const u8, info: *Metadata) isize {
+  return path_metadata(path, 0, info)
+}
+fn native_link_metadata(path: []const u8, info: *Metadata) isize {
+  // AT_SYMLINK_NOFOLLOW.
+  return path_metadata(path, 256, info)
+}
+
+fn native_remove(path: []const u8) isize {
+  storage: [4096 + mem.ArenaBufferOverhead]u8
+  raw := terminated(path, storage[..])
+  if raw == nil { return -36 }
+  return #syscall(sys.Unlinkat, -100, raw, 0)
+}
+fn native_remove_directory(path: []const u8) isize {
+  storage: [4096 + mem.ArenaBufferOverhead]u8
+  raw := terminated(path, storage[..])
+  if raw == nil { return -36 }
+  return #syscall(sys.Unlinkat, -100, raw, 512)
+}
+fn native_make_directory(path: []const u8, mode: usize) isize {
+  storage: [4096 + mem.ArenaBufferOverhead]u8
+  raw := terminated(path, storage[..])
+  if raw == nil { return -36 }
+  return #syscall(sys.Mkdirat, -100, raw, mode)
+}
+fn native_rename(old_path: []const u8, new_path: []const u8) isize {
+  old_storage: [4096 + mem.ArenaBufferOverhead]u8
+  new_storage: [4096 + mem.ArenaBufferOverhead]u8
+  old_raw := terminated(old_path, old_storage[..])
+  new_raw := terminated(new_path, new_storage[..])
+  if old_raw == nil || new_raw == nil { return -36 }
+  // renameat2 with no flags: riscv64 has no renameat.
+  return #syscall(sys.Renameat2, -100, old_raw, -100, new_raw, 0)
+}
+// renameat2 RENAME_NOREPLACE where the architecture and file system have
+// it; otherwise a hard link and an unlink, which fail for directories.
+fn native_rename_exclusive(old_path: []const u8, new_path: []const u8) isize {
+  old_storage: [4096 + mem.ArenaBufferOverhead]u8
+  new_storage: [4096 + mem.ArenaBufferOverhead]u8
+  old_raw := terminated(old_path, old_storage[..])
+  new_raw := terminated(new_path, new_storage[..])
+  if old_raw == nil || new_raw == nil { return -36 }
+  code := rename_no_replace(old_raw, new_raw)
+  // ENOSYS, or EINVAL from a file system without the flag.
+  if code != -38 && code != -22 { return code }
+  linked := #syscall(sys.Linkat, -100, old_raw, -100, new_raw, 0)
+  // EPERM: a directory, or a file system without hard links.
+  if linked == -1 { return -95 }
+  if linked < 0 { return linked }
+  removed := #syscall(sys.Unlinkat, -100, old_raw, 0)
+  if removed < 0 {
+    _ = #syscall(sys.Unlinkat, -100, new_raw, 0)
+  }
+  return removed
+}
+
+fn native_open_no_follow(path: []const u8) isize {
+  opened := open_flags(path, no_follow_flag, 0)
+  // ELOOP: path is a symbolic link.
+  if opened == -40 { return -22 }
+  return opened
+}
+// O_WRONLY | O_CREAT | O_EXCL with an owner-only mode.
+fn native_create_private(path: []const u8, executable: bool) isize {
+  mode: usize = 0o600
+  if executable {
+    mode = 0o700
+  }
+  return open_flags(path, 193, mode)
+}
+fn native_set_permissions(file: *const File, mode: usize) isize {
+  return change_mode(file.descriptor, mode)
+}
+fn native_executable(path: []const u8, info: Metadata) bool {
+  storage: [4096 + mem.ArenaBufferOverhead]u8
+  raw := terminated(path, storage[..])
+  if raw == nil { return false }
+  return access_execute(raw, info)
+}
+
+// copy_file_range from offset to destination's position. Returns how much
+// it copied: short when the kernel or file system cannot (EXDEV, EINVAL,
+// ENOSYS, EOPNOTSUPP, EBADF), so copy_range writes the rest.
+fn native_copy_range(source: *File, offset: u64, destination: *File, length: u64, _scratch: []u8) u64!io.IoErr {
+  position := #cast(i64, offset)
+  done: u64 = 0
+  for done < length {
+    part := length - done
+    if part > 1073741824 {
+      part = 1073741824
+    }
+    copied := copy_file_range(source.descriptor, &position, destination.descriptor, #cast(usize, part))
+    if copied == -4 { continue }
+    if copied == -18 || copied == -22 || copied == -38 || copied == -95 || copied == -9 || copied == 0 { return done }
+    if copied < 0 { fail native_err(copied) }
+    done += #cast(u64, copied)
+  }
+  return done
+}
+// FICLONE (_IOW(0x94, 9, int)) shares source's extents with a new file; a
+// file system that cannot leaves the new file empty for copy_range.
+fn native_clone(source: *const File, path: []const u8, mode: usize, cloned: *bool) isize {
+  created := open_flags(path, 193, mode)
+  if created < 0 { return created }
+  shared := #syscall(sys.Ioctl, created, 1074041865, source.descriptor)
+  if shared == 0 {
+    cloned.* = true
+    return created
+  }
+  // EOPNOTSUPP, EXDEV, EINVAL, ENOTTY, ENOSYS, EPERM: not cloneable here.
+  if shared == -95 || shared == -18 || shared == -22 || shared == -25 || shared == -38 || shared == -1 { return created }
+  _ = native_close(created)
+  _ = native_remove(path)
+  return shared
+}
+
+fn native_symbolic_link(target: []const u8, link: []const u8) isize {
+  target_storage: [4096 + mem.ArenaBufferOverhead]u8
+  link_storage: [4096 + mem.ArenaBufferOverhead]u8
+  target_raw := terminated(target, target_storage[..])
+  link_raw := terminated(link, link_storage[..])
+  if target_raw == nil || link_raw == nil { return -36 }
+  return #syscall(sys.Symlinkat, target_raw, -100, link_raw)
+}
+fn native_read_link(path: []const u8, destination: []u8) isize {
+  storage: [4096 + mem.ArenaBufferOverhead]u8
+  raw := terminated(path, storage[..])
+  if raw == nil { return -36 }
+  return #syscall(sys.Readlinkat, -100, raw, &destination[0], destination.len)
+}
+fn native_sync_directory(path: []const u8) isize {
+  opened := open_flags(path, directory_flag, 0)
+  if opened < 0 { return opened }
+  code := #syscall(sys.Fsync, opened)
+  _ = native_close(opened)
+  return code
+}
+fn native_lock(handle: isize, operation: usize) isize {
+  value := #syscall(sys.Flock, handle, operation)
+  for value == -4 {
+    value = #syscall(sys.Flock, handle, operation)
+  }
+  return value
+}
+fn native_truncate(path: []const u8, length: u64) isize {
+  storage: [4096 + mem.ArenaBufferOverhead]u8
+  name := terminated(path, storage[..])
+  if name == nil { return -36 }
+  return #syscall(sys.Truncate, name, length)
+}
+fn native_resize(handle: isize, length: u64) isize {
+  return #syscall(sys.Ftruncate, handle, length)
+}
+
+fn native_environment(variable: []const u8, destination: []u8) []u8!io.IoErr {
+  return try platform.environment_get(variable, destination)
+}
+fn native_app_directory(kind: AppDirectory, destination: []u8) []u8!io.IoErr {
+  case kind {
+    .Home => { return try environment_into("HOME", destination) }
+    .Runtime => { return try environment_into("XDG_RUNTIME_DIR", destination) }
+    _ => {}
+  }
+  variable: []const u8 = "XDG_CONFIG_HOME"
+  suffix: []const u8 = "/.config"
+  if kind == AppDirectory.Cache {
+    variable = "XDG_CACHE_HOME"
+    suffix = "/.cache"
+  } else if kind == AppDirectory.Data {
+    variable = "XDG_DATA_HOME"
+    suffix = "/.local/share"
+  }
+  configured := environment_into(variable, destination) catch destination[..0]
+  if configured.len > 0 { return configured }
+  return try environment_joined("HOME", suffix, destination)
+}
+
+// Tree removal primitives, relative to a parent directory descriptor.
+const current_directory: isize = -100
+const remove_directory_flag: usize = 512
+const link_loop_error: isize = -40
+// At least one getdents64 record for the longest name (255 bytes).
+const removal_scratch: usize = 280
+fn native_unlink_at(parent: isize, name: []const u8, flags: usize) isize {
+  storage: [4096]u8
+  raw := terminated(name, storage[..])
+  if raw == nil { return -36 }
+  return #syscall(sys.Unlinkat, parent, raw, flags)
+}
+// O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC. Never descends through symlinks.
+fn native_open_directory_at(parent: isize, name: []const u8) isize {
+  storage: [4096]u8
+  raw := terminated(name, storage[..])
+  if raw == nil { return -36 }
+  return #syscall(sys.Openat, parent, raw, directory_flag | no_follow_flag | 524288, 0)
+}
+fn directory_handle(directory: *const Directory) isize {
+  return directory.state.file.descriptor
+}
+fn directory_state_at(descriptor: isize) DirectoryState {
+  return DirectoryState{ file: adopt_handle(descriptor) }
+}

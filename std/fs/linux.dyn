@@ -14,6 +14,7 @@ fn native_open(path: []const u8, mode: u8) isize {
   if mode == 1 { return open_flags(path, 577, 420) }
   if mode == 2 { return open_flags(path, 1089, 420) }
   if mode == 3 { return open_flags(path, 193, 420) }
+  if mode == 4 { return open_flags(path, 65, 420) }
   return open_flags(path, 0, 0)
 }
 fn native_close(handle: isize) isize {

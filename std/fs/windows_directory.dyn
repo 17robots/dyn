@@ -1,14 +1,15 @@
 #target(kernel: windows)
+use io "std/io"
+use utf8 "std/unicode/utf8"
+use utf16 "std/unicode/utf16"
 
 extern fn find_first "dyn_fs_find_first"(pattern: *const u16, data: *u8) rawptr
 extern fn find_next "dyn_fs_find_next"(handle: rawptr, data: *u8) i32
 extern fn find_close "dyn_fs_find_close"(handle: rawptr) i32
 
-// Directory listing through FindFirstFileW, with the Linux API shape. Entry
-// names are UTF-8 in caller storage; kinds use dirent values: 4 directory,
-// 8 regular file, 10 reparse point (links).
-// ended is set by directory_next when it returns no entry.
-pub struct Directory { handle: rawptr, storage: []u8, data: [592]u8, pending: bool, active: bool, path: []const u8, ended: bool }
+// Directory listing through FindFirstFileW. Entry names are UTF-8 in caller
+// storage; reparse points (links) list as Symlink.
+struct DirectoryState { handle: rawptr, data: [592]u8, pending: bool, active: bool }
 
 fn native_open_directory(path: []const u8, storage: []u8, directory: *Directory) isize {
   if storage.len < 1040 || path.len == 0 || path.len > 32000 { return -87 }
@@ -28,40 +29,39 @@ fn native_open_directory(path: []const u8, storage: []u8, directory: *Directory)
   }
   wide[count] = '*'
   wide[count + 1] = 0
-  result := Directory{ storage: storage, pending: true, active: true }
-  handle := find_first(&wide[0], &result.data[0])
+  result := Directory{ storage: storage, state: DirectoryState{ pending: true, active: true } }
+  handle := find_first(&wide[0], &result.state.data[0])
   if handle == #cast(rawptr, #cast(usize, -1)) {
     code := last_error()
     // An empty directory reports no files.
     if code == -2 || code == -18 {
-      result.pending = false
+      result.state.pending = false
       directory.* = result
       return 0
     }
     return code
   }
-  result.handle = handle
+  result.state.handle = handle
   directory.* = result
   return 0
 }
 
 // Entry name borrows directory storage until the next call.
 fn native_directory_next(directory: *Directory, entry: *DirectoryEntry) isize {
-  if !directory.active { return -6 }
+  state := &directory.state
+  if !state.active { return -6 }
   for true {
-    if !directory.pending {
-      if directory.handle == nil || find_next(directory.handle, &directory.data[0]) == 0 {
-        return 0
-      }
+    if !state.pending {
+      if state.handle == nil || find_next(state.handle, &state.data[0]) == 0 { return 0 }
     }
-    directory.pending = false
-    attributes := #cast(u32, directory.data[0]) | #cast(u32, directory.data[1]) << 8 | #cast(u32, directory.data[2]) << 16
+    state.pending = false
+    attributes := #cast(u32, state.data[0]) | #cast(u32, state.data[1]) << 8 | #cast(u32, state.data[2]) << 16
     used: usize = 0
     index: usize = 44
     units: [260]u16
     count: usize = 0
     for count < 260 {
-      unit := #cast(u16, directory.data[index]) | #cast(u16, directory.data[index + 1]) << 8
+      unit := #cast(u16, state.data[index]) | #cast(u16, state.data[index + 1]) << 8
       if unit == 0 { break }
       units[count] = unit
       count += 1
@@ -92,9 +92,9 @@ fn native_directory_next(directory: *Directory, entry: *DirectoryEntry) isize {
   return 0
 }
 
-pub fn close_directory(directory: *Directory) {
-  if directory.handle != nil {
-    _ = find_close(directory.handle)
+fn native_close_directory(directory: *Directory) {
+  if directory.state.handle != nil {
+    _ = find_close(directory.state.handle)
   }
   directory.* = Directory{}
 }
@@ -105,10 +105,12 @@ extern fn win_remove_directory "dyn_fs_remove_directory"(path: *const u16) i32
 extern fn win_move "dyn_fs_move"(from: *const u16, to: *const u16, flags: u32) i32
 extern fn win_attributes "dyn_fs_attributes"(path: *const u16, level: i32, data: *u8) i32
 extern fn win_information "dyn_fs_information"(handle: rawptr, data: *u8) i32
+extern fn win_information_ex "dyn_fs_information_ex"(handle: rawptr, class: u32, data: rawptr, size: u32) i32
+extern fn win_set_information "dyn_fs_set_information"(handle: rawptr, class: u32, data: rawptr, size: u32) i32
 
-// Metadata on Windows: size, file index, volume serial and a POSIX-style
-// mode: 0o040000 for directories, 0o100000 for files, with write bits unless
-// read-only.
+// Metadata on Windows: size, file index, volume serial, times and a
+// POSIX-style mode: 0o040000 for directories, 0o100000 for files, with write
+// bits unless read-only.
 
 struct WidePath { units: [32768]u16, ok: bool }
 
@@ -130,6 +132,9 @@ fn wide_path(path: []const u8, output: *WidePath) {
 fn word32(bytes: []const u8, at: usize) u32 {
   return #cast(u32, bytes[at]) | #cast(u32, bytes[at + 1]) << 8 | #cast(u32, bytes[at + 2]) << 16 | #cast(u32, bytes[at + 3]) << 24
 }
+fn word64(bytes: []const u8, at: usize) u64 {
+  return #cast(u64, word32(bytes, at)) | #cast(u64, word32(bytes, at + 4)) << 32
+}
 
 fn mode_of(attributes: u32) u16 {
   mode: u16 = 0o100444
@@ -142,7 +147,89 @@ fn mode_of(attributes: u32) u16 {
   return mode
 }
 
-fn native_metadata(path: []const u8, info: *Metadata) isize {
+// A FILETIME (100 ns ticks since 1601) as seconds and nanoseconds since 1970.
+fn set_modified(info: *Metadata, ticks: u64) {
+  value := #bitcast(i64, ticks) - 116444736000000000
+  seconds := value / 10000000
+  rest := value % 10000000
+  if rest < 0 {
+    seconds -= 1
+    rest += 10000000
+  }
+  info.modified_seconds = seconds
+  info.modified_nanoseconds = #cast(u32, rest * 100)
+}
+fn set_changed(info: *Metadata, ticks: u64) {
+  value := #bitcast(i64, ticks) - 116444736000000000
+  seconds := value / 10000000
+  rest := value % 10000000
+  if rest < 0 {
+    seconds -= 1
+    rest += 10000000
+  }
+  info.changed_seconds = seconds
+  info.changed_nanoseconds = #cast(u32, rest * 100)
+}
+
+// IO_REPARSE_TAG_SYMLINK or IO_REPARSE_TAG_MOUNT_POINT (a junction).
+fn link_tag(handle: rawptr) bool {
+  // FILE_ATTRIBUTE_TAG_INFO: attributes, reparse tag.
+  tag: [2]u32
+  if win_information_ex(handle, 9, &tag[0], 8) == 0 { return false }
+  if (tag[0] & 1024) == 0 { return false }
+  return tag[1] == 2684354572 || tag[1] == 2684354563
+}
+
+// BY_HANDLE_FILE_INFORMATION, with the change time from FILE_BASIC_INFO
+// where the file system reports one (else the last write time).
+fn handle_metadata(handle: rawptr, link: bool, info: *Metadata) isize {
+  data: [52]u8
+  if win_information(handle, &data[0]) == 0 { return last_error() }
+  attributes := word32(data[..], 0)
+  info.* = Metadata{ size: #cast(u64, word32(data[..], 32)) << 32 | #cast(u64, word32(data[..], 36)), inode: #cast(u64, word32(data[..], 44)) << 32 | #cast(u64, word32(data[..], 48)), device: word32(data[..], 28), mode: mode_of(attributes) }
+  written := word64(data[..], 20)
+  changed := written
+  // FILE_BASIC_INFO: creation, access, write and change times, attributes.
+  basic: [5]u64
+  if win_information_ex(handle, 0, &basic[0], 40) != 0 && basic[3] != 0 {
+    changed = basic[3]
+  }
+  set_modified(info, written)
+  set_changed(info, changed)
+  if link && (attributes & 1024) != 0 && link_tag(handle) {
+    info.mode = 0o120000 | (info.mode & 0o777)
+  }
+  return 0
+}
+
+// Opens path only to read attributes. FILE_FLAG_BACKUP_SEMANTICS opens
+// directories too; with link, FILE_FLAG_OPEN_REPARSE_POINT opens a link
+// itself.
+fn attribute_handle(path: []const u8, access: u32, link: bool) isize {
+  wide := WidePath{}
+  wide_path(path, &wide)
+  if !wide.ok { return -123 }
+  flags: u32 = 33554432
+  if link {
+    flags |= 2097152
+  }
+  handle := #cast(isize, #cast(usize, win_open(&wide.units[0], access, 7, nil, 3, flags, nil)))
+  if !native_valid(handle) { return last_error() }
+  return handle
+}
+
+fn path_metadata(path: []const u8, link: bool, info: *Metadata) isize {
+  // FILE_READ_ATTRIBUTES.
+  handle := attribute_handle(path, 128, link)
+  if handle == -32 { return attribute_metadata(path, info) }
+  if handle < 0 { return handle }
+  code := handle_metadata(pointer(handle), link, info)
+  _ = win_close(pointer(handle))
+  return code
+}
+// A file another process holds without sharing still has attributes, but
+// no identity or change time.
+fn attribute_metadata(path: []const u8, info: *Metadata) isize {
   wide := WidePath{}
   wide_path(path, &wide)
   if !wide.ok { return -123 }
@@ -152,17 +239,21 @@ fn native_metadata(path: []const u8, info: *Metadata) isize {
   attributes := word32(data[..], 0)
   size := #cast(u64, word32(data[..], 28)) << 32 | #cast(u64, word32(data[..], 32))
   info.* = Metadata{ size: size, mode: mode_of(attributes) }
+  set_modified(info, word64(data[..], 20))
+  set_changed(info, word64(data[..], 20))
   return 0
+}
+
+fn native_metadata(path: []const u8, info: *Metadata) isize {
+  return path_metadata(path, false, info)
+}
+fn native_link_metadata(path: []const u8, info: *Metadata) isize {
+  return path_metadata(path, true, info)
 }
 
 fn native_file_metadata(file: *const File, info: *Metadata) isize {
   if !is_open(file) { return -6 }
-  // BY_HANDLE_FILE_INFORMATION.
-  data: [52]u8
-  if win_information(pointer(file.descriptor), &data[0]) == 0 { return last_error() }
-  attributes := word32(data[..], 0)
-  info.* = Metadata{ size: #cast(u64, word32(data[..], 32)) << 32 | #cast(u64, word32(data[..], 36)), inode: #cast(u64, word32(data[..], 44)) << 32 | #cast(u64, word32(data[..], 48)), device: word32(data[..], 28), mode: mode_of(attributes) }
-  return 0
+  return handle_metadata(pointer(file.descriptor), false, info)
 }
 
 fn wide_result(ok: i32) isize {
@@ -201,4 +292,56 @@ fn native_rename(old_path: []const u8, new_path: []const u8) isize {
   if !from.ok || !to.ok { return -123 }
   // MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED.
   return wide_result(win_move(&from.units[0], &to.units[0], 3))
+}
+// Without MOVEFILE_REPLACE_EXISTING an existing destination fails, and
+// without MOVEFILE_COPY_ALLOWED a move stays one step on one volume.
+fn native_rename_exclusive(old_path: []const u8, new_path: []const u8) isize {
+  from := WidePath{}
+  to := WidePath{}
+  wide_path(old_path, &from)
+  wide_path(new_path, &to)
+  if !from.ok || !to.ok { return -123 }
+  return wide_result(win_move(&from.units[0], &to.units[0], 0))
+}
+
+// Opens for reading without following a final link; a symbolic link or
+// junction fails with ERROR_INVALID_PARAMETER (InvalidInput).
+fn native_open_no_follow(path: []const u8) isize {
+  wide := WidePath{}
+  wide_path(path, &wide)
+  if !wide.ok { return -123 }
+  // GENERIC_READ, FILE_FLAG_OPEN_REPARSE_POINT | FILE_ATTRIBUTE_NORMAL.
+  handle := #cast(isize, #cast(usize, win_open(&wide.units[0], 2147483648, 7, nil, 3, 2097280, nil)))
+  if !native_valid(handle) { return last_error() }
+  if link_tag(pointer(handle)) {
+    _ = win_close(pointer(handle))
+    return -87
+  }
+  return handle
+}
+
+// FILE_END_OF_FILE_INFO.
+fn native_resize(handle: isize, length: u64) isize {
+  end := length
+  return wide_result(win_set_information(pointer(handle), 6, &end, 8))
+}
+fn native_truncate(path: []const u8, length: u64) isize {
+  wide := WidePath{}
+  wide_path(path, &wide)
+  if !wide.ok { return -123 }
+  // GENERIC_WRITE on an existing file.
+  handle := #cast(isize, #cast(usize, win_open(&wide.units[0], 1073741824, 7, nil, 3, 128, nil)))
+  if !native_valid(handle) { return last_error() }
+  code := native_resize(handle, length)
+  _ = win_close(pointer(handle))
+  return code
+}
+
+// Windows has no directory sync; NTFS journals the rename itself.
+fn native_sync_directory(path: []const u8) isize {
+  info: Metadata
+  code := native_metadata(path, &info)
+  if code < 0 { return code }
+  if !is_directory(info) { return -3 }
+  return 0
 }

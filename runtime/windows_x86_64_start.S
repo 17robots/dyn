@@ -152,6 +152,20 @@ import_jump dyn_win_free_library, FreeLibrary
 import_jump dyn_win_last_error, GetLastError
 .global dyn_win_arena_last_error
 .set dyn_win_arena_last_error, dyn_win_last_error
+// std/fs: permissions, links, locks, block cloning and environment.
+import_jump dyn_fs_information_ex, GetFileInformationByHandleEx
+import_jump dyn_fs_set_information, SetFileInformationByHandle
+import_jump dyn_fs_lock, LockFileEx
+import_jump dyn_fs_unlock, UnlockFileEx
+import_jump dyn_fs_symbolic_link, CreateSymbolicLinkW
+import_jump dyn_fs_control, DeviceIoControl
+import_jump dyn_fs_volume, GetVolumeInformationByHandleW
+import_jump dyn_fs_reopen, ReOpenFile
+import_jump dyn_fs_local_free, LocalFree
+import_jump dyn_fs_environment, GetEnvironmentVariableW
+import_jump dyn_fs_set_error, SetLastError
+import_jump dyn_fs_get_security, GetSecurityInfo
+import_jump dyn_fs_set_security, SetSecurityInfo
 import_jump dyn_win_socket_startup, WSAStartup
 import_jump dyn_win_socket, socket
 import_jump dyn_win_close_socket, closesocket
@@ -243,6 +257,12 @@ import_jump dyn_stdio_error, GetLastError
     .long 0
     .rva crypto_name
     .rva crypto_iat
+    // std/fs: access control lists.
+    .rva advapi_lookup
+    .long 0
+    .long 0
+    .rva advapi_name
+    .rva advapi_iat
     // GNU PE linkers append the terminating descriptor. Supplying it here
     // would hide descriptors contributed by user import libraries.
 
@@ -317,6 +337,16 @@ kernel_lookup:
     thunk GetOverlappedResult
     thunk CancelIoEx
     thunk SetLastError
+    // std/fs
+    thunk GetFileInformationByHandleEx
+    thunk SetFileInformationByHandle
+    thunk LockFileEx
+    thunk UnlockFileEx
+    thunk CreateSymbolicLinkW
+    thunk DeviceIoControl
+    thunk GetVolumeInformationByHandleW
+    thunk ReOpenFile
+    thunk LocalFree
     .quad 0
 winsock_lookup:
     thunk WSAStartup
@@ -348,6 +378,12 @@ sync_lookup:
 
 crypto_lookup:
     thunk BCryptGenRandom
+    .quad 0
+
+// std/fs
+advapi_lookup:
+    thunk GetSecurityInfo
+    thunk SetSecurityInfo
     .quad 0
 
 .section .idata$5,"dw"
@@ -425,6 +461,16 @@ iat ReadDirectoryChangesW
 iat GetOverlappedResult
 iat CancelIoEx
 iat SetLastError
+// std/fs
+iat GetFileInformationByHandleEx
+iat SetFileInformationByHandle
+iat LockFileEx
+iat UnlockFileEx
+iat CreateSymbolicLinkW
+iat DeviceIoControl
+iat GetVolumeInformationByHandleW
+iat ReOpenFile
+iat LocalFree
     .quad 0
 winsock_iat:
 iat WSAStartup
@@ -456,6 +502,12 @@ iat WakeByAddressAll
 
 crypto_iat:
 iat BCryptGenRandom
+    .quad 0
+
+// std/fs
+advapi_iat:
+iat GetSecurityInfo
+iat SetSecurityInfo
     .quad 0
 
 .section .idata$6,"dw"
@@ -526,6 +578,16 @@ hint ReadDirectoryChangesW
 hint GetOverlappedResult
 hint CancelIoEx
 hint SetLastError
+// std/fs
+hint GetFileInformationByHandleEx
+hint SetFileInformationByHandle
+hint LockFileEx
+hint UnlockFileEx
+hint CreateSymbolicLinkW
+hint DeviceIoControl
+hint GetVolumeInformationByHandleW
+hint ReOpenFile
+hint LocalFree
 hint WSAStartup
 hint socket
 hint closesocket
@@ -551,6 +613,10 @@ hint WakeByAddressAll
 sync_name: .asciz "api-ms-win-core-synch-l1-2-0.dll"
 hint BCryptGenRandom
 crypto_name: .asciz "bcrypt.dll"
+// std/fs
+hint GetSecurityInfo
+hint SetSecurityInfo
+advapi_name: .asciz "ADVAPI32.dll"
 kernel_name: .asciz "KERNEL32.dll"
 winsock_name: .asciz "WS2_32.dll"
 
