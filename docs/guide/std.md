@@ -133,13 +133,14 @@ between the program image and the stack (see [bare metal](bare-metal.md)).
 | `std/process` | Spawn, capture, process trees, nonblocking pipes, PATH lookup, shell and Windows quoting, environment and arguments |
 | `std/process/pty` | Pseudo-terminals: a child on a terminal this program reads, types into and resizes; POSIX ptys and Windows ConPTY |
 | `std/process/signal` | Interrupt, terminate and hangup signals as queued events, read with `poll` or `wait` |
+| `std/process/signal` | Interrupt, terminate, hangup, window-change, suspend and continue signals as queued events, read with `poll` or `wait`; `stop_job` for job control |
 | `std/thread`, `std/sync` | Arena-backed thread handles, scopes that join every thread; portable synchronization and bounded channels |
 | `std/thread/pool` | Fixed worker pool over a bounded arena queue with typed `submit`, and wait groups |
 | `std/fiber` | Linux stackful fibers: `resume`/`yield_now`, guarded stacks, isolated fibers whose panics stop only the fiber |
 | `std/cache` | Per-worker copies of shared data: writers call `changed`, each worker rebuilds when `stale` says so |
 | `std/time` | Monotonic and realtime clocks, durations, deadlines, calendar dates and UTC ISO-8601 |
 | `std/time/zone` | Time zones from TZif files, POSIX rules or the Windows zone; local time, strftime-style formatting and RFC 3339 |
-| `std/terminal` | Raw mode, terminal size and key decoding |
+| `std/terminal` | Raw mode, terminal size, key decoding, virtual-terminal sequences on Windows, and full-screen sessions: alternate screen, bracketed paste, mouse and kitty keyboard modes, suspend to the shell and restore on a crash |
 | `std/dynlib` | Dynamic library loading (on Linux, link libc explicitly) |
 | `std/os/linux`, `macos`, `windows`, `wasi` | Platform services; prefer the portable packages above |
 | `std/parse` | Shared failures for parsers, decoders and stream decoders |

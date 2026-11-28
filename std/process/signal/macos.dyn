@@ -1,12 +1,27 @@
 use io "std/io"
 use "std/os/macos/sys"
+use sync "std/sync"
 #target(kernel: darwin)
 
 // Watched signals are ignored and read from a kqueue with EVFILT_SIGNAL, which
-// still records ignored signals. Numbers: SIGHUP 1, SIGINT 2, SIGTERM 15.
+// still records ignored signals. Numbers: SIGHUP 1, SIGINT 2, SIGTERM 15,
+// SIGTSTP 18, SIGCONT 19, SIGWINCH 28. An ignored SIGTSTP does not stop the
+// process; an ignored SIGCONT still continues it.
 struct Event { ident: u64, filter: i16, flags: u16, filter_flags: u32, data: i64, user: u64 }
 struct Action { handler: usize, trampoline: usize, mask: u32, flags: i32 }
 struct Timeout { seconds: i64, nanoseconds: i64 }
+// libSystem's struct sigaction. Its sigaction also supplies the trampoline a
+// handler needs, so a disposition read here can be written back unchanged.
+struct Disposition { handler: usize, mask: u32, flags: i32 }
+
+extern fn native_sigaction "sigaction"(number: i32, action: rawptr, previous: rawptr) i32
+extern fn native_kill "kill"(process: i32, number: i32) i32
+extern fn native_errno "__error"() *i32
+
+// Watches that include Suspend, and SIGTSTPs that stop_job sent while one
+// existed: kqueue records those too, and platform_next drops them.
+suspend_watches: sync.AtomicU32
+stops_sent: sync.AtomicU32
 
 fn set_action(number: u64, handler: usize) isize {
   action := Action{ handler: handler }
@@ -27,15 +42,27 @@ fn numbers(set: Set, storage: []u64) usize {
     storage[count] = 15
     count += 1
   }
+  if set.suspend {
+    storage[count] = 18
+    count += 1
+  }
+  if set.continue {
+    storage[count] = 19
+    count += 1
+  }
+  if set.window_change {
+    storage[count] = 28
+    count += 1
+  }
   return count
 }
 
 fn platform_watch(set: Set) Watch!io.IoErr {
-  chosen: [3]u64
+  chosen: [6]u64
   count := numbers(set, chosen[..])
   queue := #syscall(sys.Kqueue)
   if queue < 0 { fail io.darwin_err(queue) }
-  changes: [3]Event
+  changes: [6]Event
   for i in 0..count {
     // EVFILT_SIGNAL is -6; EV_ADD is 1.
     changes[i] = Event{ ident: chosen[i], filter: -6, flags: 1 }
@@ -49,7 +76,20 @@ fn platform_watch(set: Set) Watch!io.IoErr {
     // SIG_IGN is 1.
     _ = set_action(chosen[i], 1)
   }
+  if set.suspend {
+    _ = sync.fetch_add_u32(&suspend_watches, 1)
+  }
   return Watch{ handle: queue, set: set, active: true }
+}
+
+// Takes one SIGTSTP that stop_job sent, if any is outstanding.
+fn take_stop() bool {
+  for true {
+    sent := sync.load_u32(&stops_sent)
+    if sent == 0 { return false }
+    if sync.compare_exchange_u32(&stops_sent, sent, sent - 1) { return true }
+  }
+  return false
 }
 
 fn platform_next(state: *Watch, block: bool) Kind!io.IoErr {
@@ -70,21 +110,71 @@ fn platform_next(state: *Watch, block: bool) Kind!io.IoErr {
         kind = Kind.Interrupt
       } else if event.ident == 15 {
         kind = Kind.Terminate
+      } else if event.ident == 18 {
+        kind = Kind.Suspend
+        // data counts the SIGTSTPs since the last report.
+        remaining := event.data
+        for remaining > 0 && take_stop() {
+          remaining -= 1
+        }
+        if remaining <= 0 {
+          kind = Kind.None
+        }
+      } else if event.ident == 19 {
+        kind = Kind.Continue
+      } else if event.ident == 28 {
+        kind = Kind.WindowChange
       }
-      return kind
+      if kind != Kind.None { return kind }
+    } else {
+      if code == 0 && !block { return Kind.None }
+      if code < 0 && code != -4 { fail io.darwin_err(code) }
     }
-    if code == 0 && !block { return Kind.None }
-    if code < 0 && code != -4 { fail io.darwin_err(code) }
   }
   return Kind.None
 }
 
 fn platform_close(state: *Watch) bool {
-  chosen: [3]u64
+  chosen: [6]u64
   count := numbers(state.set, chosen[..])
   for i in 0..count {
     _ = set_action(chosen[i], 0)
   }
   code := #syscall(sys.Close, state.handle)
+  if state.set.suspend {
+    _ = sync.fetch_add_u32(&suspend_watches, 4294967295)
+  }
   return code >= 0
+}
+
+fn last_errno() io.IoErr {
+  return io.darwin_err(0 - #cast(isize, native_errno().*))
+}
+
+// A watch leaves SIGTSTP ignored; the default action stops the process group
+// until SIGCONT, which kill(0, ...) delivers before it returns.
+fn platform_stop() !io.IoErr {
+  previous: Disposition
+  if native_sigaction(18, nil, &previous) != 0 { fail last_errno() }
+  changed := previous.handler != 0
+  if changed {
+    standard := Disposition{}
+    if native_sigaction(18, &standard, nil) != 0 { fail last_errno() }
+  }
+  counted := sync.load_u32(&suspend_watches) != 0
+  if counted {
+    _ = sync.fetch_add_u32(&stops_sent, 1)
+  }
+  sent := native_kill(0, 18)
+  failure: i32 = 0
+  if sent != 0 {
+    failure = native_errno().*
+    if counted {
+      _ = take_stop()
+    }
+  }
+  if changed {
+    _ = native_sigaction(18, &previous, nil)
+  }
+  if sent != 0 { fail io.darwin_err(0 - #cast(isize, failure)) }
 }

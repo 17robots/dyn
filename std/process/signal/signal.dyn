@@ -7,10 +7,29 @@ use io "std/io"
 // Interrupt is SIGINT or Ctrl-C (and Ctrl-Break on Windows). Terminate is
 // SIGTERM, or a console close, logoff or shutdown event on Windows. Hangup is
 // SIGHUP and never arrives on Windows.
-pub enum Kind { None, Interrupt, Terminate, Hangup }
+//
+// WindowChange is SIGWINCH: the controlling terminal changed size. On Windows
+// a watch notices the console window's size changing on its own, within 100
+// milliseconds, because the console reports resizes only as input records,
+// which belong to whoever reads standard input.
+//
+// Suspend is SIGTSTP, a stop request such as Ctrl-Z in a cooked terminal.
+// While it is watched it no longer stops the process: the program chooses
+// when to stop, usually by restoring its terminal and calling stop_job.
+// Continue is SIGCONT, sent when a stopped job resumes (fg or bg); the
+// process continues whether or not it is watched. Neither arrives on
+// Windows, which has no job control.
+pub enum Kind { None, Interrupt, Terminate, Hangup, WindowChange, Suspend, Continue }
 
 // Kinds to watch.
-pub struct Set { interrupt: bool, terminate: bool, hangup: bool }
+pub struct Set {
+  interrupt: bool,
+  terminate: bool,
+  hangup: bool,
+  window_change: bool,
+  suspend: bool,
+  continue: bool,
+}
 
 // An open watch. handle is the readable descriptor (signalfd or kqueue) or the
 // Windows event handle, for use with an event loop.
@@ -18,7 +37,9 @@ pub struct Watch { handle: isize, set: Set, active: bool }
 
 // Fails with InvalidInput when set chooses no signal.
 pub fn watch(set: Set) Watch!io.IoErr {
-  if !set.interrupt && !set.terminate && !set.hangup { fail .InvalidInput }
+  if !set.interrupt && !set.terminate && !set.hangup && !set.window_change && !set.suspend && !set.continue {
+    fail .InvalidInput
+  }
   return try platform_watch(set)
 }
 
@@ -44,4 +65,15 @@ pub fn close(state: *Watch) {
   if platform_close(state) {
     state.* = Watch{}
   }
+}
+
+// Stops the process's job the way Ctrl-Z does in a cooked terminal: sends
+// SIGTSTP with its default action to the process group, and returns once the
+// job is continued. It works while Suspend is watched; a watch does not
+// report the Suspend this sends, but does report the Continue that follows.
+// A process in an orphaned process group is not stopped, and returns at
+// once. Restore the terminal first; see terminal.suspend. Fails with
+// Unsupported on Windows, which has no job control.
+pub fn stop_job() !io.IoErr {
+  try platform_stop()
 }

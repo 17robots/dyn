@@ -1,0 +1,9 @@
+#target(kernel: linux, arch: riscv64)
+
+// The kernel's struct sigaction has no restorer: returns go through the
+// vDSO's rt_sigreturn.
+struct Action { handler: usize, flags: u64, mask: u64 }
+
+fn crash_action(handler: usize, _previous: *const Action) Action {
+  return Action{ handler: handler, flags: crash_flags }
+}

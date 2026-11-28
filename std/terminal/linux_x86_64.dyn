@@ -1,0 +1,17 @@
+#target(kernel: linux, arch: x86_64)
+
+// The kernel's struct sigaction. x86-64 requires SA_RESTORER and a restorer
+// that calls rt_sigreturn.
+struct Action { handler: usize, flags: u64, restorer: usize, mask: u64 }
+const restorer_flag: u64 = 67108864
+
+// The previous handler's restorer, so the handler can return through it after
+// calling that handler. With no previous handler the session's never returns,
+// and the restorer is never used.
+fn crash_action(handler: usize, previous: *const Action) Action {
+  restorer := handler
+  if (previous.flags & restorer_flag) != 0 {
+    restorer = previous.restorer
+  }
+  return Action{ handler: handler, flags: crash_flags | restorer_flag, restorer: restorer }
+}

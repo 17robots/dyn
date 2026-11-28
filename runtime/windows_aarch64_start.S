@@ -641,6 +641,57 @@ dyn_stdio_error:
     adrp x16, __imp_GetLastError
     ldr x16, [x16, :lo12:__imp_GetLastError]
     br x16
+// std/terminal sessions and std/process/signal window changes.
+.global dyn_terminal_write
+dyn_terminal_write:
+    adrp x16, __imp_WriteFile
+    ldr x16, [x16, :lo12:__imp_WriteFile]
+    br x16
+.global dyn_terminal_input_page
+dyn_terminal_input_page:
+    adrp x16, __imp_GetConsoleCP
+    ldr x16, [x16, :lo12:__imp_GetConsoleCP]
+    br x16
+.global dyn_terminal_output_page
+dyn_terminal_output_page:
+    adrp x16, __imp_GetConsoleOutputCP
+    ldr x16, [x16, :lo12:__imp_GetConsoleOutputCP]
+    br x16
+.global dyn_terminal_set_input_page
+dyn_terminal_set_input_page:
+    adrp x16, __imp_SetConsoleCP
+    ldr x16, [x16, :lo12:__imp_SetConsoleCP]
+    br x16
+.global dyn_terminal_set_output_page
+dyn_terminal_set_output_page:
+    adrp x16, __imp_SetConsoleOutputCP
+    ldr x16, [x16, :lo12:__imp_SetConsoleOutputCP]
+    br x16
+.global dyn_terminal_control_handler
+dyn_terminal_control_handler:
+    adrp x16, __imp_SetConsoleCtrlHandler
+    ldr x16, [x16, :lo12:__imp_SetConsoleCtrlHandler]
+    br x16
+.global dyn_terminal_exception_filter
+dyn_terminal_exception_filter:
+    adrp x16, __imp_SetUnhandledExceptionFilter
+    ldr x16, [x16, :lo12:__imp_SetUnhandledExceptionFilter]
+    br x16
+.global dyn_terminal_create_process
+dyn_terminal_create_process:
+    adrp x16, __imp_CreateProcessW
+    ldr x16, [x16, :lo12:__imp_CreateProcessW]
+    br x16
+.global dyn_terminal_environment
+dyn_terminal_environment:
+    adrp x16, __imp_GetEnvironmentVariableW
+    ldr x16, [x16, :lo12:__imp_GetEnvironmentVariableW]
+    br x16
+.global dyn_signal_buffer_info
+dyn_signal_buffer_info:
+    adrp x16, __imp_GetConsoleScreenBufferInfo
+    ldr x16, [x16, :lo12:__imp_GetConsoleScreenBufferInfo]
+    br x16
 // std/process/pty: pseudoconsole pipes, job objects and the lazy ConPTY lookup.
 .global dyn_pty_pipe
 dyn_pty_pipe:
@@ -974,6 +1025,11 @@ kernel_lookup:
     thunk GetOverlappedResult
     thunk CancelIoEx
     thunk SetLastError
+    // std/terminal: console code pages.
+    thunk GetConsoleCP
+    thunk GetConsoleOutputCP
+    thunk SetConsoleCP
+    thunk SetConsoleOutputCP
     // std/process: process trees and nonblocking pipes.
     // std/fs
     thunk GetFileInformationByHandleEx
@@ -1106,6 +1162,11 @@ iat ReadDirectoryChangesW
 iat GetOverlappedResult
 iat CancelIoEx
 iat SetLastError
+// std/terminal: console code pages.
+iat GetConsoleCP
+iat GetConsoleOutputCP
+iat SetConsoleCP
+iat SetConsoleOutputCP
 // std/process: process trees and nonblocking pipes.
 // std/fs
 iat GetFileInformationByHandleEx
@@ -1231,6 +1292,11 @@ hint ReadDirectoryChangesW
 hint GetOverlappedResult
 hint CancelIoEx
 hint SetLastError
+// std/terminal: console code pages.
+hint GetConsoleCP
+hint GetConsoleOutputCP
+hint SetConsoleCP
+hint SetConsoleOutputCP
 // std/process: process trees and nonblocking pipes.
 // std/fs
 hint GetFileInformationByHandleEx

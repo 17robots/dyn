@@ -23,6 +23,311 @@ pub fn raw(descriptor: isize) State!io.IoErr {
   return saved
 }
 
+// Turns on escape-sequence handling for descriptor and returns the previous
+// settings, to pass to restore. On Windows an output stream (1 or 2) gains
+// virtual-terminal processing and any other descriptor virtual-terminal
+// input, while line editing and echo stay as they were. Linux and macOS
+// terminals always handle sequences, so there it only checks that descriptor
+// is a terminal. Fails when descriptor is not a terminal, or on a Windows
+// console too old for virtual-terminal sequences.
+pub fn virtual_terminal(descriptor: isize) State!io.IoErr {
+  saved := try read_state(descriptor)
+  changed := saved
+  if make_virtual(descriptor, &changed) {
+    try restore(descriptor, &changed)
+  }
+  return saved
+}
+
+// What a session turns on at enter and off again at leave, besides raw
+// input. Each is a DEC private mode or a kitty keyboard flag; a terminal that
+// does not know one ignores it.
+pub struct Modes {
+  // The alternate screen (mode 1049): the shell's screen and scrollback come
+  // back at leave.
+  alternate_screen: bool,
+  // Hides the cursor (mode 25) until leave.
+  hide_cursor: bool,
+  // Bracketed paste (mode 2004): pasted text arrives between ESC [200~ and
+  // ESC [201~.
+  bracketed_paste: bool,
+  // SGR mouse reports (modes 1000, 1002 and 1006): presses, releases, the
+  // wheel and motion with a button held, as ESC [< b;x;y M or m.
+  mouse: bool,
+  // With mouse, motion with no button held as well (mode 1003).
+  mouse_motion: bool,
+  // The kitty keyboard protocol's first flag (CSI > 1 u): unambiguous escape
+  // codes for keys such as Escape, Alt+key and Ctrl+I. Terminals without it
+  // keep sending legacy keys.
+  kitty_keyboard: bool,
+  // Restore the terminal when the process dies of a panic, a fatal signal or
+  // an unhandled exception. See crash_restore for what is guaranteed.
+  crash_restore: bool,
+}
+
+// A terminal taken over by enter. A zero Session is inactive. The saved
+// settings are private to each platform: termios of input on Linux and
+// macOS; console modes and code pages of input and output on Windows.
+pub struct Session {
+  input: isize,
+  output: isize,
+  modes: Modes,
+  saved_input: State,
+  saved_output: State,
+  active: bool,
+}
+
+// Takes over a terminal for a full-screen program: raw input (as raw does),
+// then the chosen modes on output. On Windows input also gets
+// virtual-terminal key sequences, output gets virtual-terminal processing
+// without automatic carriage returns, and both use the UTF-8 code page.
+// input and output are usually 0 and 1 and must be the same terminal. With
+// modes.crash_restore, at most one session at a time restores on a crash.
+//
+// Fails with InvalidInput when session is nil or active, or when
+// modes.crash_restore is set while another session holds it; fails when
+// either descriptor is not a terminal or a write fails. On failure session is
+// unchanged and the terminal is as it was. Call enter, leave and suspend from
+// one thread at a time.
+pub fn enter(session: *Session, input: isize, output: isize, modes: Modes) !io.IoErr {
+  if session == nil || session.active { fail .InvalidInput }
+  staged := Session{ input: input, output: output, modes: modes }
+  try session_save(&staged)
+  if modes.crash_restore {
+    if !crash_claim() { fail .InvalidInput }
+    crash_arm(&staged)
+  }
+  session_raw(&staged) catch err {
+    crash_disarm(modes)
+    fail err
+  }
+  storage: [64]u8
+  length := enter_sequence(modes, storage[..])
+  write_all(output, storage[..length]) catch err {
+    // Part of the sequence may be out already; turning every mode off again
+    // is harmless.
+    length = leave_sequence(modes, storage[..])
+    write_all(output, storage[..length]) catch {}
+    session_restore(&staged) catch {}
+    crash_disarm(modes)
+    fail err
+  }
+  staged.active = true
+  session.* = staged
+}
+
+// Gives the terminal back: writes the sequence that turns the session's
+// modes off and resets colors and attributes, then restores the settings
+// enter found. Every step is tried and the first failure is reported; the
+// session is inactive afterwards either way. Leaving a nil, zero or inactive
+// session does nothing.
+pub fn leave(session: *Session) !io.IoErr {
+  if session == nil || !session.active { return }
+  storage: [64]u8
+  length := leave_sequence(session.modes, storage[..])
+  failed := false
+  failure := io.IoErr.InvalidInput
+  write_all(session.output, storage[..length]) catch err {
+    failed = true
+    failure = err
+  }
+  session_restore(session) catch err {
+    if !failed {
+      failed = true
+      failure = err
+    }
+  }
+  crash_disarm(session.modes)
+  session.active = false
+  if failed { fail failure }
+}
+
+// Hands the terminal to the shell until the user resumes the program. It
+// leaves, then on Linux and macOS stops the job (signal.stop_job) and enters
+// again with the same descriptors and modes when the job continues. Windows
+// has no job control: there it runs the command interpreter (%ComSpec%, else
+// cmd.exe) in the console, ignoring Ctrl-C and Ctrl-Break meanwhile, and
+// enters again when that exits. Settings are read afresh on the way back, so
+// changes made in the shell (stty) are what the final leave restores.
+//
+// Call it when Suspend arrives on a signal watch, or for the program's own
+// suspend key (Ctrl-Z is a plain byte in raw mode). The terminal may have
+// been resized meanwhile: redraw everything at size(output) afterwards.
+// Fails with InvalidInput when session is inactive. When leaving fails the
+// job is not stopped and session is inactive; when entering again fails the
+// session is inactive with the terminal restored.
+pub fn suspend(session: *Session) !io.IoErr {
+  if session == nil || !session.active { fail .InvalidInput }
+  input := session.input
+  output := session.output
+  modes := session.modes
+  try leave(session)
+  failed := false
+  failure := io.IoErr.InvalidInput
+  pause() catch err {
+    failed = true
+    failure = err
+  }
+  try enter(session, input, output, modes)
+  if failed { fail failure }
+}
+
+// Restores the terminal of the session that entered with
+// modes.crash_restore: writes its leave sequence and puts back the settings
+// enter found, at most once until that session enters again. It does nothing
+// when no such session is active.
+//
+// It is async-signal-safe: it reads only memory written before enter
+// returned and makes only write and terminal-control calls, with no locks or
+// allocation, so a program's own fatal-signal handler or panic handler may
+// call it. With modes.crash_restore, enter arranges for it to run first:
+// - on a panic, through the process panic hook, which then runs the hook it
+//   replaced. A panic.set_handler call after enter replaces this; call
+//   crash_restore from that handler instead.
+// - on Linux and macOS, from a handler for SIGHUP, SIGINT, SIGQUIT, SIGILL,
+//   SIGTRAP, SIGABRT, SIGBUS, SIGFPE, SIGSEGV, SIGPIPE, SIGTERM, SIGXCPU,
+//   SIGXFSZ and SIGSYS (SIGEMT too on macOS). A signal that is ignored when
+//   enter runs is left alone, and a blocked one (watched with
+//   std/process/signal on Linux) never reaches the handler. A signal with
+//   the default action is then re-raised with it, so the process still dies
+//   of that signal (with a core dump where the system makes one), from kill
+//   rather than the original fault. A handler that was already installed
+//   runs next with the original signal information and context, and may
+//   recover; the terminal is restored all the same. leave puts the previous
+//   handlers back unless something replaced the session's.
+// - on Windows, from an unhandled-exception filter, which then calls the
+//   filter it replaced or lets the system end the process, and from a
+//   console control handler for close, logoff and shutdown.
+//
+// Not covered: SIGKILL, a stop by SIGSTOP, ExitProcess or exit without
+// leave, Ctrl-Break with no signal watch on Windows, a stack overflow on a
+// thread with no alternate signal stack (debug programs set one up per
+// thread), exceptions that a debug Windows program reports before the
+// unhandled filter runs, and signal handlers or exception filters that
+// something installs after enter (a debug program reinstalls its
+// memory-fault handler whenever a thread starts). Restoring is best effort: a write to a terminal that no longer
+// accepts output is dropped.
+pub fn crash_restore() {
+  if !crash_take() { return }
+  write_all(crash_target.output, crash_sequence[..crash_length]) catch {}
+  session_restore(&crash_target) catch {}
+}
+
+// The session crash_restore restores. Each platform keeps two flags: claimed
+// from enter to leave (crash_claim, crash_release), and armed once
+// crash_target and crash_sequence are written, until the first restore takes
+// it (crash_set_armed, crash_take).
+crash_target: Session
+crash_sequence: [64]u8
+crash_length: usize
+panic_previous: fn(*const u8, u64)
+
+fn crash_panic(message: *const u8, length: u64) {
+  crash_restore()
+  previous := panic_previous
+  if previous != nil {
+    previous(message, length)
+  }
+}
+
+fn crash_arm(session: *const Session) {
+  crash_set_armed(false)
+  crash_target = session.*
+  crash_length = leave_sequence(session.modes, crash_sequence[..])
+  crash_set_armed(true)
+  panic_previous = swap_panic_hook(crash_panic)
+  crash_install()
+}
+
+// Undoes crash_arm when modes asked for it. A panic hook that replaced the
+// session's stays.
+fn crash_disarm(modes: Modes) {
+  if !modes.crash_restore { return }
+  crash_uninstall()
+  current := swap_panic_hook(panic_previous)
+  if #cast(usize, #cast(rawptr, current)) != #cast(usize, #cast(rawptr, crash_panic)) {
+    _ = swap_panic_hook(current)
+  }
+  panic_previous = nil
+  crash_set_armed(false)
+  crash_release()
+}
+
+fn append(storage: []u8, used: usize, text: []const u8) usize {
+  for byte, i in text {
+    storage[used + i] = byte
+  }
+  return used + text.len
+}
+
+// At most 50 bytes.
+fn enter_sequence(modes: Modes, storage: []u8) usize {
+  used: usize = 0
+  if modes.alternate_screen {
+    used = append(storage, used, "\x1b[?1049h")
+  }
+  if modes.hide_cursor {
+    used = append(storage, used, "\x1b[?25l")
+  }
+  if modes.bracketed_paste {
+    used = append(storage, used, "\x1b[?2004h")
+  }
+  if modes.mouse {
+    used = append(storage, used, "\x1b[?1000h\x1b[?1002h")
+    if modes.mouse_motion {
+      used = append(storage, used, "\x1b[?1003h")
+    }
+    used = append(storage, used, "\x1b[?1006h")
+  }
+  if modes.kitty_keyboard {
+    used = append(storage, used, "\x1b[>1u")
+  }
+  return used
+}
+
+// The modes of enter_sequence off, in reverse order, with SGR reset: at most
+// 62 bytes.
+fn leave_sequence(modes: Modes, storage: []u8) usize {
+  used: usize = 0
+  if modes.kitty_keyboard {
+    used = append(storage, used, "\x1b[<u")
+  }
+  if modes.mouse {
+    used = append(storage, used, "\x1b[?1006l")
+    if modes.mouse_motion {
+      used = append(storage, used, "\x1b[?1003l")
+    }
+    used = append(storage, used, "\x1b[?1002l\x1b[?1000l")
+  }
+  if modes.bracketed_paste {
+    used = append(storage, used, "\x1b[?2004l")
+  }
+  used = append(storage, used, "\x1b[0m")
+  if modes.hide_cursor {
+    used = append(storage, used, "\x1b[?25h")
+  }
+  if modes.alternate_screen {
+    used = append(storage, used, "\x1b[?1049l")
+  }
+  return used
+}
+
+// Writes every byte, retrying after a signal interrupts the write.
+fn write_all(descriptor: isize, bytes: []const u8) !io.IoErr {
+  done: usize = 0
+  for done < bytes.len {
+    count := write_some(descriptor, bytes[done..]) catch err {
+      case err {
+        .Interrupted => { continue }
+        _ => { fail err }
+      }
+    }
+    // A write that accepts nothing would never finish.
+    if count == 0 { fail .Unsupported }
+    done += count
+  }
+}
+
 pub enum KeyKind { Text, Escape, Up, Down, Left, Right, Home, End, Delete, Unknown, Incomplete }
 pub struct Key { kind: KeyKind, codepoint: u32, consumed: usize }
 // Recognizes UTF-8 text and common CSI cursor keys. Incomplete sequences consume

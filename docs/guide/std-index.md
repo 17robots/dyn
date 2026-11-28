@@ -2306,6 +2306,7 @@ Layer: std
 - `const Write: u64 = 4`
 - `const Open: u64 = 5`
 - `const Close: u64 = 6`
+- `const Getpid: u64 = 20`
 - `const Link: u64 = 9`
 - `const Unlink: u64 = 10`
 - `const Recvmsg: u64 = 27`
@@ -2315,6 +2316,7 @@ Layer: std
 - `const Getsockname: u64 = 32`
 - `const Access: u64 = 33`
 - `const Sigaction: u64 = 46`
+- `const Sigprocmask: u64 = 48`
 - `const Ioctl: u64 = 54`
 - `const Symlink: u64 = 57`
 - `const Readlink: u64 = 58`
@@ -2483,13 +2485,14 @@ Layer: std
 
 Layer: std
 
-- `enum Kind { None, Interrupt, Terminate, Hangup }`: Process signals as events, not handlers.
-- `struct Set { interrupt: bool, terminate: bool, hangup: bool }`: Kinds to watch.
+- `enum Kind { None, Interrupt, Terminate, Hangup, WindowChange, Suspend, Continue }`: Process signals as events, not handlers.
+- `struct Set { interrupt: bool, terminate: bool, hangup: bool, window_change: bool, suspend: bool, continue: bool, }`: Kinds to watch.
 - `struct Watch { handle: isize, set: Set, active: bool }`: An open watch.
 - `fn watch(set: Set) Watch!io.IoErr`: Fails with InvalidInput when set chooses no signal.
 - `fn poll(state: *Watch) Kind!io.IoErr`: The next pending signal without blocking;
 - `fn wait(state: *Watch) Kind!io.IoErr`: Blocks until a watched signal arrives.
 - `fn close(state: *Watch)`: Restores default signal behavior and releases the handle.
+- `fn stop_job() !io.IoErr`: Stops the process's job the way Ctrl-Z does in a cooked terminal: sends SIGTSTP with its default action to the process group, and returns ...
 
 ## std/profile
 
@@ -2783,6 +2786,13 @@ Layer: std
 - `struct Size { columns: usize, rows: usize }`
 - `fn is_attached(descriptor: isize) bool`: Descriptors 0, 1 and 2 are the standard streams on every platform.
 - `fn raw(descriptor: isize) State!io.IoErr`: Applies a small cfmakeraw equivalent: no echo, no line buffering, no signal keys, and on Windows virtual-terminal input or output.
+- `fn virtual_terminal(descriptor: isize) State!io.IoErr`: Turns on escape-sequence handling for descriptor and returns the previous settings, to pass to restore.
+- `struct Modes { // The alternate screen (mode 1049): the shell's screen and scrollback come // back at leave. alternate_screen: bool, // Hides the cursor (mode 25) until leave. hide_cursor: bool, // Bracketed paste (mode 2004): pasted text arrives between ESC [200~ and // ESC [201~. bracketed_paste: bool, // SGR mouse reports (modes 1000, 1002 and 1006): presses, releases, the // wheel and motion with a button held, as ESC [< b;x;y M or m. mouse: bool, // With mouse, motion with no button held as well (mode 1003). mouse_motion: bool, // The kitty keyboard protocol's first flag (CSI > 1 u): unambiguous escape // codes for keys such as Escape, Alt+key and Ctrl+I. Terminals without it // keep sending legacy keys. kitty_keyboard: bool, // Restore the terminal when the process dies of a panic, a fatal signal or // an unhandled exception. See crash_restore for what is guaranteed. crash_restore: bool, }`: What a session turns on at enter and off again at leave, besides raw input.
+- `struct Session { input: isize, output: isize, modes: Modes, saved_input: State, saved_output: State, active: bool, }`: A terminal taken over by enter.
+- `fn enter(session: *Session, input: isize, output: isize, modes: Modes) !io.IoErr`: Takes over a terminal for a full-screen program: raw input (as raw does), then the chosen modes on output.
+- `fn leave(session: *Session) !io.IoErr`: Gives the terminal back: writes the sequence that turns the session's modes off and resets colors and attributes, then restores the ...
+- `fn suspend(session: *Session) !io.IoErr`: Hands the terminal to the shell until the user resumes the program.
+- `fn crash_restore()`: Restores the terminal of the session that entered with modes.crash_restore: writes its leave sequence and puts back the settings enter ...
 - `enum KeyKind { Text, Escape, Up, Down, Left, Right, Home, End, Delete, Unknown, Incomplete }`
 - `struct Key { kind: KeyKind, codepoint: u32, consumed: usize }`
 - `fn key_decode(bytes: []const u8) Key`: Recognizes UTF-8 text and common CSI cursor keys.

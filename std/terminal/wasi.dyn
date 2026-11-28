@@ -18,3 +18,61 @@ fn make_raw(_descriptor: isize, _state: *State) {
 pub fn size(_descriptor: isize) Size!io.IoErr {
   fail .Unsupported
 }
+
+fn make_virtual(_descriptor: isize, _state: *State) bool {
+  return false
+}
+
+fn write_some(_descriptor: isize, _bytes: []const u8) usize!io.IoErr {
+  fail .Unsupported
+}
+
+fn session_save(_session: *Session) !io.IoErr {
+  fail .Unsupported
+}
+
+fn session_raw(_session: *Session) !io.IoErr {
+  fail .Unsupported
+}
+
+fn session_restore(_session: *const Session) !io.IoErr {
+  fail .Unsupported
+}
+
+fn pause() !io.IoErr {
+  fail .Unsupported
+}
+
+// A Wasm panic traps without reaching a hook, and there are no signals.
+fn swap_panic_hook(hook: fn(*const u8, u64)) fn(*const u8, u64) {
+  return hook
+}
+
+fn crash_install() {
+}
+
+fn crash_uninstall() {
+}
+
+crash_claimed: bool
+crash_armed: bool
+
+fn crash_claim() bool {
+  if crash_claimed { return false }
+  crash_claimed = true
+  return true
+}
+
+fn crash_release() {
+  crash_claimed = false
+}
+
+fn crash_set_armed(armed: bool) {
+  crash_armed = armed
+}
+
+fn crash_take() bool {
+  taken := crash_armed
+  crash_armed = false
+  return taken
+}

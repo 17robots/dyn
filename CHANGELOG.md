@@ -14,6 +14,24 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+Additions only: `std/terminal` and `std/process/signal`.
+
+- `terminal.enter(&session, 0, 1, terminal.Modes{ ... })` takes over a terminal for a
+  full-screen program: raw input, then any of `alternate_screen`, `hide_cursor`,
+  `bracketed_paste`, `mouse`, `mouse_motion` and `kitty_keyboard`; on Windows also
+  virtual-terminal input and output and the UTF-8 code page. `terminal.leave` restores
+  everything, and `terminal.suspend` leaves, stops the job (on Windows runs `%ComSpec%`)
+  and enters again. With `crash_restore: true` a panic, a fatal signal or an unhandled
+  Windows exception restores the terminal first; `terminal.crash_restore()` is
+  async-signal-safe for a program's own handlers. `terminal.virtual_terminal(descriptor)`
+  turns on Windows virtual-terminal processing or input alone.
+- `signal.Kind` gains `WindowChange` (SIGWINCH; console resizes on Windows), `Suspend`
+  (SIGTSTP) and `Continue` (SIGCONT), with matching `signal.Set` fields
+  `window_change`, `suspend` and `continue` that default to false. Existing kinds keep
+  their values. `signal.stop_job()` stops the process group as Ctrl-Z does.
+
+## Unreleased
+
 New: `std/process/pty`. No breaking changes.
 
 - `pty.spawn(arena, path, arguments, options)` starts a child on a pseudo-terminal of

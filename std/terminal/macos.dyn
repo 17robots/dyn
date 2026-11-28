@@ -43,3 +43,82 @@ pub fn size(descriptor: isize) Size!io.IoErr {
   columns := #cast(usize, bytes[2]) + #cast(usize, bytes[3]) * 256
   return Size{ columns: columns, rows: rows }
 }
+
+// Linux and macOS terminals interpret escape sequences in every mode.
+fn make_virtual(_descriptor: isize, _state: *State) bool {
+  return false
+}
+
+fn write_some(descriptor: isize, bytes: []const u8) usize!io.IoErr {
+  count := #syscall(sys.Write, descriptor, &bytes[0], bytes.len)
+  if count < 0 { fail io.darwin_err(count) }
+  return #cast(usize, count)
+}
+
+// Handlers go through libSystem's sigaction, which supplies the trampoline
+// that returns from a handler, so a previous disposition it reports can be
+// written back unchanged.
+struct Action { handler: usize, mask: u32, flags: i32 }
+extern fn native_sigaction "sigaction"(number: i32, action: rawptr, previous: rawptr) i32
+extern fn native_kill "kill"(process: i32, number: i32) i32
+extern fn native_exit "_exit"(code: i32)
+
+// The fatal signals crash_restore covers; bit n - 1 of crash_installed is
+// signal n while its handler is the session's.
+const crash_signals: [15]i32 = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 15, 24, 25]
+const handler_default: usize = 0
+const handler_ignore: usize = 1
+// SA_ONSTACK, SA_NODEFER and SA_SIGINFO: the handler is not blocked while it
+// runs, so the default action it re-raises is delivered at once.
+const crash_flags: i32 = 81
+crash_previous: [32]Action
+crash_installed: u32
+
+// Runs on the faulting or signalled thread, on its alternate stack when it
+// has one. sigaction, kill and _exit are async-signal-safe.
+fn crash_signal(number: i32, information: rawptr, context: rawptr) {
+  crash_restore()
+  index := #cast(usize, number) & 31
+  previous := crash_previous[index].handler
+  if previous != handler_default && previous != handler_ignore {
+    handler := #cast(fn(i32, rawptr, rawptr), #cast(rawptr, previous))
+    handler(number, information, context)
+    return
+  }
+  standard := Action{}
+  _ = native_sigaction(number, &standard, nil)
+  // SIG_UNBLOCK for this thread, in case the signal was blocked when it was
+  // forced.
+  bit: u32 = #cast(u32, 1) << (index - 1)
+  _ = #syscall(sys.Sigprocmask, 2, &bit, 0)
+  _ = native_kill(#cast(i32, #syscall(sys.Getpid)), number)
+  native_exit(128 + number)
+}
+
+fn crash_install() {
+  handler := #cast(usize, #cast(rawptr, crash_signal))
+  for number in crash_signals {
+    previous: Action
+    if native_sigaction(number, nil, &previous) != 0 { continue }
+    if previous.handler == handler_ignore || previous.handler == handler { continue }
+    crash_previous[number] = previous
+    action := Action{ handler: handler, flags: crash_flags }
+    if native_sigaction(number, &action, nil) == 0 {
+      crash_installed |= #cast(u32, 1) << (#cast(u32, number) - 1)
+    }
+  }
+}
+
+fn crash_uninstall() {
+  handler := #cast(usize, #cast(rawptr, crash_signal))
+  for number in crash_signals {
+    bit := #cast(u32, 1) << (#cast(u32, number) - 1)
+    if (crash_installed & bit) == 0 { continue }
+    crash_installed &= ~bit
+    current: Action
+    if native_sigaction(number, nil, &current) != 0 { continue }
+    if current.handler == handler {
+      _ = native_sigaction(number, &crash_previous[number], nil)
+    }
+  }
+}

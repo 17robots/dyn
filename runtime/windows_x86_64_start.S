@@ -266,6 +266,18 @@ import_jump dyn_pty_sleep, Sleep
 import_jump dyn_pty_library, LoadLibraryA
 import_jump dyn_pty_symbol, GetProcAddress
 
+// std/terminal sessions and std/process/signal window changes.
+import_jump dyn_terminal_write, WriteFile
+import_jump dyn_terminal_input_page, GetConsoleCP
+import_jump dyn_terminal_output_page, GetConsoleOutputCP
+import_jump dyn_terminal_set_input_page, SetConsoleCP
+import_jump dyn_terminal_set_output_page, SetConsoleOutputCP
+import_jump dyn_terminal_control_handler, SetConsoleCtrlHandler
+import_jump dyn_terminal_exception_filter, SetUnhandledExceptionFilter
+import_jump dyn_terminal_create_process, CreateProcessW
+import_jump dyn_terminal_environment, GetEnvironmentVariableW
+import_jump dyn_signal_buffer_info, GetConsoleScreenBufferInfo
+
 // Minimal PE import directory, avoiding SDK/import-library dependency while
 // retaining stable documented Win32 and Winsock entry points.
 .section .idata$2,"dw"
@@ -377,6 +389,11 @@ kernel_lookup:
     thunk GetOverlappedResult
     thunk CancelIoEx
     thunk SetLastError
+    // std/terminal: console code pages.
+    thunk GetConsoleCP
+    thunk GetConsoleOutputCP
+    thunk SetConsoleCP
+    thunk SetConsoleOutputCP
     // std/process: process trees and nonblocking pipes.
     // std/fs
     thunk GetFileInformationByHandleEx
@@ -509,6 +526,11 @@ iat ReadDirectoryChangesW
 iat GetOverlappedResult
 iat CancelIoEx
 iat SetLastError
+// std/terminal: console code pages.
+iat GetConsoleCP
+iat GetConsoleOutputCP
+iat SetConsoleCP
+iat SetConsoleOutputCP
 // std/process: process trees and nonblocking pipes.
 // std/fs
 iat GetFileInformationByHandleEx
@@ -634,6 +656,11 @@ hint ReadDirectoryChangesW
 hint GetOverlappedResult
 hint CancelIoEx
 hint SetLastError
+// std/terminal: console code pages.
+hint GetConsoleCP
+hint GetConsoleOutputCP
+hint SetConsoleCP
+hint SetConsoleOutputCP
 // std/process: process trees and nonblocking pipes.
 // std/fs
 hint GetFileInformationByHandleEx
